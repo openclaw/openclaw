@@ -91,7 +91,7 @@ describe("pairing cli", () => {
     registerPairingCli(program);
     await program.parseAsync(["pairing", "list", "telegram"], { from: "user" });
 
-    expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram");
+    expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram", undefined);
   });
 
   it("normalizes channel aliases", async () => {
@@ -104,7 +104,7 @@ describe("pairing cli", () => {
     await program.parseAsync(["pairing", "list", "imsg"], { from: "user" });
 
     expect(normalizeChannelId).toHaveBeenCalledWith("imsg");
-    expect(listChannelPairingRequests).toHaveBeenCalledWith("imessage");
+    expect(listChannelPairingRequests).toHaveBeenCalledWith("imessage", undefined);
   });
 
   it("accepts extension channels outside the registry", async () => {
@@ -117,7 +117,7 @@ describe("pairing cli", () => {
     await program.parseAsync(["pairing", "list", "zalo"], { from: "user" });
 
     expect(normalizeChannelId).toHaveBeenCalledWith("zalo");
-    expect(listChannelPairingRequests).toHaveBeenCalledWith("zalo");
+    expect(listChannelPairingRequests).toHaveBeenCalledWith("zalo", undefined);
   });
 
   it("labels Discord ids as discordUserId", async () => {
@@ -166,6 +166,7 @@ describe("pairing cli", () => {
 
     expect(approveChannelPairingCode).toHaveBeenCalledWith({
       channel: "telegram",
+      accountId: undefined,
       code: "ABCDEFGH",
     });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));

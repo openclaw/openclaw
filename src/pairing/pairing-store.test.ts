@@ -5,7 +5,13 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import { captureEnv } from "../test-utils/env.js";
-import { listChannelPairingRequests, upsertChannelPairingRequest } from "./pairing-store.js";
+import {
+  addChannelAllowFromStoreEntry,
+  approveChannelPairingCode,
+  listChannelPairingRequests,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "./pairing-store.js";
 
 let fixtureRoot = "";
 let caseId = 0;
@@ -139,6 +145,115 @@ describe("pairing store", () => {
       expect(listIds).toContain("+15550000002");
       expect(listIds).toContain("+15550000003");
       expect(listIds).not.toContain("+15550000004");
+    });
+  });
+
+  it("isolates allowFrom store by accountId", async () => {
+    await withTempStateDir(async () => {
+      // Add entry to account "yy"
+      await addChannelAllowFromStoreEntry({
+        channel: "telegram",
+        accountId: "yy",
+        entry: "user1",
+      });
+
+      // Account "yy" should have the entry
+      const yyList = await readChannelAllowFromStore("telegram", "yy");
+      expect(yyList).toContain("user1");
+
+      // Account "main" should NOT have the entry
+      const mainList = await readChannelAllowFromStore("telegram", "main");
+      expect(mainList).toHaveLength(0);
+
+      // No accountId (legacy) should NOT have the entry
+      const defaultList = await readChannelAllowFromStore("telegram");
+      expect(defaultList).toHaveLength(0);
+    });
+  });
+
+  it("isolates pairing requests by accountId", async () => {
+    await withTempStateDir(async () => {
+      const yyResult = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "yy",
+        id: "user1",
+      });
+      expect(yyResult.created).toBe(true);
+
+      // "main" account should have no requests
+      const mainRequests = await listChannelPairingRequests("telegram", "main");
+      expect(mainRequests).toHaveLength(0);
+
+      // "yy" account should have the request
+      const yyRequests = await listChannelPairingRequests("telegram", "yy");
+      expect(yyRequests).toHaveLength(1);
+      expect(yyRequests[0]?.id).toBe("user1");
+    });
+  });
+
+  it("approveChannelPairingCode with accountId only affects that account", async () => {
+    await withTempStateDir(async () => {
+      const { code } = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "yy",
+        id: "user1",
+      });
+
+      // Approve on "yy"
+      const approved = await approveChannelPairingCode({
+        channel: "telegram",
+        accountId: "yy",
+        code,
+      });
+      expect(approved).not.toBeNull();
+      expect(approved?.id).toBe("user1");
+
+      // "yy" allowFrom should have user1
+      const yyAllow = await readChannelAllowFromStore("telegram", "yy");
+      expect(yyAllow).toContain("user1");
+
+      // "main" allowFrom should be empty
+      const mainAllow = await readChannelAllowFromStore("telegram", "main");
+      expect(mainAllow).toHaveLength(0);
+    });
+  });
+
+  it("migrates legacy allowFrom entries when reading with accountId (before account file exists)", async () => {
+    await withTempStateDir(async (stateDir) => {
+      // Simulate existing legacy file (without accountId)
+      const oauthDir = resolveOAuthDir(process.env, stateDir);
+      await fs.mkdir(oauthDir, { recursive: true });
+      const legacyPath = path.join(oauthDir, "telegram-allowFrom.json");
+      await fs.writeFile(
+        legacyPath,
+        JSON.stringify({ version: 1, allowFrom: ["legacy_user1", "legacy_user2"] }),
+        "utf8",
+      );
+
+      // Reading with accountId (before account-specific file exists) should return legacy entries
+      const mainList = await readChannelAllowFromStore("telegram", "main");
+      expect(mainList).toContain("legacy_user1");
+      expect(mainList).toContain("legacy_user2");
+
+      // Add a new entry to account-specific store (creates the account file)
+      await addChannelAllowFromStoreEntry({
+        channel: "telegram",
+        accountId: "main",
+        entry: "new_user",
+      });
+
+      // After account-specific file exists, only account entries are returned
+      // (legacy file is no longer consulted, so removals work correctly)
+      const accountList = await readChannelAllowFromStore("telegram", "main");
+      expect(accountList).toContain("new_user");
+      expect(accountList).toHaveLength(1);
+      expect(accountList).not.toContain("legacy_user1");
+
+      // Legacy file without accountId should still work independently
+      const legacyList = await readChannelAllowFromStore("telegram");
+      expect(legacyList).toContain("legacy_user1");
+      expect(legacyList).toContain("legacy_user2");
+      expect(legacyList).not.toContain("new_user");
     });
   });
 });

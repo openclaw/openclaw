@@ -128,6 +128,7 @@ async function resolveTelegramCommandAuth(params: {
   bot: Bot;
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
+  accountId?: string;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   useAccessGroups: boolean;
@@ -143,6 +144,7 @@ async function resolveTelegramCommandAuth(params: {
     bot,
     cfg,
     telegramCfg,
+    accountId,
     allowFrom,
     groupAllowFrom,
     useAccessGroups,
@@ -372,6 +374,7 @@ export const registerTelegramNativeCommands = ({
             bot,
             cfg,
             telegramCfg,
+            accountId,
             allowFrom,
             groupAllowFrom,
             useAccessGroups,
@@ -624,6 +627,7 @@ export const registerTelegramNativeCommands = ({
             bot,
             cfg,
             telegramCfg,
+            accountId,
             allowFrom,
             groupAllowFrom,
             useAccessGroups,

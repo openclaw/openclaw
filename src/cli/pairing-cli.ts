@@ -66,6 +66,7 @@ export function registerPairingCli(program: Command) {
     .option("--channel <channel>", `Channel (${channels.join(", ")})`)
     .argument("[channel]", `Channel (${channels.join(", ")})`)
     .option("--json", "Print JSON", false)
+    .option("--account <account>", "Account ID (for multi-account isolation)")
     .action(async (channelArg, opts) => {
       const channelRaw = opts.channel ?? channelArg;
       if (!channelRaw) {
@@ -74,7 +75,8 @@ export function registerPairingCli(program: Command) {
         );
       }
       const channel = parseChannel(channelRaw, channels);
-      const requests = await listChannelPairingRequests(channel);
+      const accountId: string | undefined = opts.account;
+      const requests = await listChannelPairingRequests(channel, accountId);
       if (opts.json) {
         defaultRuntime.log(JSON.stringify({ channel, requests }, null, 2));
         return;
@@ -114,6 +116,7 @@ export function registerPairingCli(program: Command) {
     .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
+    .option("--account <account>", "Account ID (for multi-account isolation)")
     .action(async (codeOrChannel, code, opts) => {
       const channelRaw = opts.channel ?? codeOrChannel;
       const resolvedCode = opts.channel ? codeOrChannel : code;
@@ -128,8 +131,10 @@ export function registerPairingCli(program: Command) {
         );
       }
       const channel = parseChannel(channelRaw, channels);
+      const accountId: string | undefined = opts.account;
       const approved = await approveChannelPairingCode({
         channel,
+        accountId,
         code: String(resolvedCode),
       });
       if (!approved) {

@@ -356,7 +356,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const pairingChannels = listPairingChannels();
     const supportsStore = pairingChannels.includes(channelId);
     const storeAllowFrom = supportsStore
-      ? await readChannelAllowFromStore(channelId).catch(() => [])
+      ? await readChannelAllowFromStore(channelId, accountId).catch(() => [])
       : [];
 
     let dmAllowFrom: string[] = [];
@@ -669,9 +669,13 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
 
     if (shouldTouchStore) {
       if (parsed.action === "add") {
-        await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
+        await addChannelAllowFromStoreEntry({ channel: channelId, accountId, entry: parsed.entry });
       } else if (parsed.action === "remove") {
-        await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
+        await removeChannelAllowFromStoreEntry({
+          channel: channelId,
+          accountId,
+          entry: parsed.entry,
+        });
       }
     }
 
@@ -701,9 +705,9 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   }
 
   if (parsed.action === "add") {
-    await addChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
+    await addChannelAllowFromStoreEntry({ channel: channelId, accountId, entry: parsed.entry });
   } else if (parsed.action === "remove") {
-    await removeChannelAllowFromStoreEntry({ channel: channelId, entry: parsed.entry });
+    await removeChannelAllowFromStoreEntry({ channel: channelId, accountId, entry: parsed.entry });
   }
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";

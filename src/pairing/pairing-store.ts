@@ -62,15 +62,40 @@ function safeChannelKey(channel: PairingChannel): string {
   return safe;
 }
 
-function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-pairing.json`);
+/** Sanitize accountId for use in filenames (prevent path traversal). */
+function safeAccountKey(accountId: string | undefined): string | undefined {
+  if (!accountId) return undefined;
+  const raw = String(accountId).trim().toLowerCase();
+  if (!raw) return undefined;
+  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
+  if (!safe || safe === "_") return undefined;
+  return safe;
+}
+
+function buildStoreFilename(
+  channel: PairingChannel,
+  accountId?: string,
+  suffix: string = "",
+): string {
+  const channelKey = safeChannelKey(channel);
+  const accountKey = safeAccountKey(accountId);
+  return accountKey ? `${channelKey}-${accountKey}-${suffix}.json` : `${channelKey}-${suffix}.json`;
+}
+
+function resolvePairingPath(
+  channel: PairingChannel,
+  accountId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.join(resolveCredentialsDir(env), buildStoreFilename(channel, accountId, "pairing"));
 }
 
 function resolveAllowFromPath(
   channel: PairingChannel,
+  accountId?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-allowFrom.json`);
+  return path.join(resolveCredentialsDir(env), buildStoreFilename(channel, accountId, "allowFrom"));
 }
 
 async function readJsonFile<T>(
@@ -236,12 +261,13 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
 
 async function updateAllowFromStoreEntry(params: {
   channel: PairingChannel;
+  accountId?: string;
   entry: string | number;
   env?: NodeJS.ProcessEnv;
   apply: (current: string[], normalized: string) => string[] | null;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
   const env = params.env ?? process.env;
-  const filePath = resolveAllowFromPath(params.channel, env);
+  const filePath = resolveAllowFromPath(params.channel, params.accountId, env);
   return await withFileLock(
     filePath,
     { version: 1, allowFrom: [] } satisfies AllowFromStore,
@@ -266,23 +292,42 @@ async function updateAllowFromStoreEntry(params: {
 
 export async function readChannelAllowFromStore(
   channel: PairingChannel,
+  accountId?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
-  const filePath = resolveAllowFromPath(channel, env);
-  const { value } = await readJsonFile<AllowFromStore>(filePath, {
+  const filePath = resolveAllowFromPath(channel, accountId, env);
+  const { value, exists } = await readJsonFile<AllowFromStore>(filePath, {
     version: 1,
     allowFrom: [],
   });
+
+  // Migration fallback: if account-specific file doesn't exist and accountId was provided,
+  // also check the legacy global file (without accountId) and merge results.
+  // This ensures existing users don't lose access when upgrading.
+  // Once the account-specific file exists, we stop consulting the legacy file
+  // so that removals from the account-specific store take effect.
+  if (accountId && !exists) {
+    const legacyPath = resolveAllowFromPath(channel, undefined, env);
+    const { value: legacyValue } = await readJsonFile<AllowFromStore>(legacyPath, {
+      version: 1,
+      allowFrom: [],
+    });
+    const legacyEntries = normalizeAllowFromList(channel, legacyValue);
+    return legacyEntries;
+  }
+
   return normalizeAllowFromList(channel, value);
 }
 
 export async function addChannelAllowFromStoreEntry(params: {
   channel: PairingChannel;
+  accountId?: string;
   entry: string | number;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
   return await updateAllowFromStoreEntry({
     channel: params.channel,
+    accountId: params.accountId,
     entry: params.entry,
     env: params.env,
     apply: (current, normalized) => {
@@ -296,11 +341,13 @@ export async function addChannelAllowFromStoreEntry(params: {
 
 export async function removeChannelAllowFromStoreEntry(params: {
   channel: PairingChannel;
+  accountId?: string;
   entry: string | number;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
   return await updateAllowFromStoreEntry({
     channel: params.channel,
+    accountId: params.accountId,
     entry: params.entry,
     env: params.env,
     apply: (current, normalized) => {
@@ -315,9 +362,10 @@ export async function removeChannelAllowFromStoreEntry(params: {
 
 export async function listChannelPairingRequests(
   channel: PairingChannel,
+  accountId?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PairingRequest[]> {
-  const filePath = resolvePairingPath(channel, env);
+  const filePath = resolvePairingPath(channel, accountId, env);
   return await withFileLock(
     filePath,
     { version: 1, requests: [] } satisfies PairingStore,
@@ -358,6 +406,7 @@ export async function listChannelPairingRequests(
 
 export async function upsertChannelPairingRequest(params: {
   channel: PairingChannel;
+  accountId?: string;
   id: string | number;
   meta?: Record<string, string | undefined | null>;
   env?: NodeJS.ProcessEnv;
@@ -365,7 +414,7 @@ export async function upsertChannelPairingRequest(params: {
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ code: string; created: boolean }> {
   const env = params.env ?? process.env;
-  const filePath = resolvePairingPath(params.channel, env);
+  const filePath = resolvePairingPath(params.channel, params.accountId, env);
   return await withFileLock(
     filePath,
     { version: 1, requests: [] } satisfies PairingStore,
@@ -455,6 +504,7 @@ export async function upsertChannelPairingRequest(params: {
 
 export async function approveChannelPairingCode(params: {
   channel: PairingChannel;
+  accountId?: string;
   code: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ id: string; entry?: PairingRequest } | null> {
@@ -464,7 +514,7 @@ export async function approveChannelPairingCode(params: {
     return null;
   }
 
-  const filePath = resolvePairingPath(params.channel, env);
+  const filePath = resolvePairingPath(params.channel, params.accountId, env);
   return await withFileLock(
     filePath,
     { version: 1, requests: [] } satisfies PairingStore,
@@ -497,6 +547,7 @@ export async function approveChannelPairingCode(params: {
       } satisfies PairingStore);
       await addChannelAllowFromStoreEntry({
         channel: params.channel,
+        accountId: params.accountId,
         entry: entry.id,
         env,
       });
