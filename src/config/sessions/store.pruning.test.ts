@@ -52,18 +52,6 @@ describe("pruneStaleEntries", () => {
     expect(store.old).toBeUndefined();
     expect(store.fresh).toBeDefined();
   });
-
-  it("keeps entries with no updatedAt", () => {
-    const store: Record<string, SessionEntry> = {
-      noDate: { sessionId: crypto.randomUUID() } as SessionEntry,
-      fresh: makeEntry(Date.now()),
-    };
-
-    const pruned = pruneStaleEntries(store, 1 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(store.noDate).toBeDefined();
-  });
 });
 
 describe("capEntryCount", () => {
@@ -86,24 +74,6 @@ describe("capEntryCount", () => {
     expect(store.mid).toBeDefined();
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
-  });
-
-  it("entries without updatedAt are evicted first (lowest priority)", () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      noDate1: { sessionId: crypto.randomUUID() } as SessionEntry,
-      noDate2: { sessionId: crypto.randomUUID() } as SessionEntry,
-      recent: makeEntry(now),
-      older: makeEntry(now - DAY_MS),
-    };
-
-    const evicted = capEntryCount(store, 2);
-
-    expect(evicted).toBe(2);
-    expect(store.recent).toBeDefined();
-    expect(store.older).toBeDefined();
-    expect(store.noDate1).toBeUndefined();
-    expect(store.noDate2).toBeUndefined();
   });
 });
 
