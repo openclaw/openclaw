@@ -18,6 +18,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
+  filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
@@ -252,13 +253,17 @@ export function createFollowupRunner(params: {
         payloads: replyTaggedPayloads,
         sentTexts: runResult.messagingToolSentTexts ?? [],
       });
+      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
+        payloads: dedupedPayloads,
+        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
+      });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
         messageProvider: queued.run.messageProvider,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         originatingTo: queued.originatingTo,
         accountId: queued.run.agentAccountId,
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
+      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
         return;

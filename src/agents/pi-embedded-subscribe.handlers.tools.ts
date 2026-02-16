@@ -145,6 +145,11 @@ export async function handleToolExecutionStart(
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
         ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
       }
+      // Track media URL from messaging tool args (pending until tool_execution_end)
+      const mediaUrl = argsRecord.mediaUrl ?? argsRecord.path ?? argsRecord.filePath;
+      if (mediaUrl && typeof mediaUrl === "string") {
+        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrl);
+      }
     }
   }
 }
@@ -245,6 +250,14 @@ export async function handleToolExecutionEnd(
     ctx.state.pendingMessagingTargets.delete(toolCallId);
     if (!isToolError) {
       ctx.state.messagingToolSentTargets.push(pendingTarget);
+      ctx.trimMessagingToolSent();
+    }
+  }
+  const pendingMediaUrl = ctx.state.pendingMessagingMediaUrls.get(toolCallId);
+  if (pendingMediaUrl) {
+    ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+    if (!isToolError) {
+      ctx.state.messagingToolSentMediaUrls.push(pendingMediaUrl);
       ctx.trimMessagingToolSent();
     }
   }
