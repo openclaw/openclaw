@@ -23,6 +23,7 @@ describe("runCommandWithTimeout", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("ok");
+    expect(result.termination).toBe("exit");
   });
 
   it("merges custom env with process.env", async () => {
@@ -43,8 +44,58 @@ describe("runCommandWithTimeout", () => {
 
       expect(result.code).toBe(0);
       expect(result.stdout).toBe("base|ok");
+      expect(result.termination).toBe("exit");
     } finally {
       envSnapshot.restore();
     }
+  });
+
+  it("kills command when no output timeout elapses", async () => {
+    const startedAt = Date.now();
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      {
+        timeoutMs: 5_000,
+        noOutputTimeoutMs: 300,
+      },
+    );
+
+    const durationMs = Date.now() - startedAt;
+    expect(durationMs).toBeLessThan(2_500);
+    expect(result.termination).toBe("no-output-timeout");
+    expect(result.noOutputTimedOut).toBe(true);
+    expect(result.code).not.toBe(0);
+  });
+
+  it("resets no output timer when command keeps emitting output", async () => {
+    const result = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        'let i=0; const t=setInterval(() => { process.stdout.write("."); i += 1; if (i >= 5) { clearInterval(t); process.exit(0); } }, 50);',
+      ],
+      {
+        timeoutMs: 5_000,
+        noOutputTimeoutMs: 200,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.termination).toBe("exit");
+    expect(result.noOutputTimedOut).toBe(false);
+    expect(result.stdout.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("reports global timeout termination when overall timeout elapses", async () => {
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      {
+        timeoutMs: 200,
+      },
+    );
+
+    expect(result.termination).toBe("timeout");
+    expect(result.noOutputTimedOut).toBe(false);
+    expect(result.code).not.toBe(0);
   });
 });

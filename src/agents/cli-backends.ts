@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
+import {
+  CLI_FRESH_WATCHDOG_DEFAULTS,
+  CLI_RESUME_WATCHDOG_DEFAULTS,
+} from "./cli-watchdog-defaults.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
@@ -49,6 +53,12 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   systemPromptMode: "append",
   systemPromptWhen: "first",
   clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
+  reliability: {
+    watchdog: {
+      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+    },
+  },
   serialize: true,
 };
 
@@ -73,6 +83,12 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   sessionMode: "existing",
   imageArg: "--image",
   imageMode: "repeat",
+  reliability: {
+    watchdog: {
+      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+    },
+  },
   serialize: true,
 };
 
@@ -96,6 +112,10 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   if (!override) {
     return { ...base };
   }
+  const baseFresh = base.reliability?.watchdog?.fresh ?? {};
+  const baseResume = base.reliability?.watchdog?.resume ?? {};
+  const overrideFresh = override.reliability?.watchdog?.fresh ?? {};
+  const overrideResume = override.reliability?.watchdog?.resume ?? {};
   return {
     ...base,
     ...override,
@@ -106,6 +126,22 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
     sessionArgs: override.sessionArgs ?? base.sessionArgs,
     resumeArgs: override.resumeArgs ?? base.resumeArgs,
+    reliability: {
+      ...base.reliability,
+      ...override.reliability,
+      watchdog: {
+        ...base.reliability?.watchdog,
+        ...override.reliability?.watchdog,
+        fresh: {
+          ...baseFresh,
+          ...overrideFresh,
+        },
+        resume: {
+          ...baseResume,
+          ...overrideResume,
+        },
+      },
+    },
   };
 }
 
