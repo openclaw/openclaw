@@ -402,5 +402,42 @@ export async function handleTelegramAction(
     return jsonResult({ ok: true, ...stats });
   }
 
+  if (action === "sendPoll") {
+    const to = readStringParam(params, "to", { required: true });
+    const question = readStringParam(params, "question") ?? readStringParam(params, "pollQuestion");
+    if (!question) {
+      throw new Error("sendPoll requires 'question'");
+    }
+    const options = (params.options ?? params.pollOption) as string[] | undefined;
+    if (!options || options.length < 2) {
+      throw new Error("sendPoll requires at least 2 options");
+    }
+    const maxSelections =
+      typeof params.maxSelections === "number" ? params.maxSelections : undefined;
+    const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
+    const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+    const replyToMessageId = readNumberParam(params, "replyTo");
+    const messageThreadId = readNumberParam(params, "threadId");
+    const pollAccountId = readStringParam(params, "accountId");
+
+    const res = await sendPollTelegram(
+      to,
+      { question, options, maxSelections },
+      {
+        accountId: pollAccountId?.trim() || undefined,
+        replyToMessageId,
+        messageThreadId,
+        isAnonymous,
+        silent,
+      },
+    );
+    return jsonResult({
+      ok: true,
+      messageId: res.messageId,
+      chatId: res.chatId,
+      pollId: res.pollId,
+    });
+  }
+
   throw new Error(`Unsupported Telegram action: ${action}`);
 }

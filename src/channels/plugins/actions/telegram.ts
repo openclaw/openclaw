@@ -52,6 +52,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
+    if (gate("poll")) {
+      actions.add("poll");
+    }
     if (gate("reactions")) {
       actions.add("react");
     }
@@ -226,6 +229,31 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "searchSticker",
           query,
           limit: limit ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question =
+        readStringParam(params, "pollQuestion") ??
+        readStringParam(params, "question", { required: true });
+      const options =
+        readStringArrayParam(params, "pollOption") ?? readStringArrayParam(params, "options");
+      const threadId = readStringParam(params, "threadId");
+      const replyTo = readStringParam(params, "replyTo");
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      return await handleTelegramAction(
+        {
+          action: "sendPoll",
+          to,
+          question,
+          options,
+          replyTo: replyTo != null ? Number(replyTo) : undefined,
+          threadId: threadId != null ? Number(threadId) : undefined,
+          silent,
           accountId: accountId ?? undefined,
         },
         cfg,
