@@ -69,13 +69,4 @@ When implementing the sanitizer:
 
 ## Validation
 
-Once implemented, validate with:
-
-```bash
-# Run tests against the leak corpus
-pnpm vitest run src/telegram/sanitizer.test.ts
-
-# Manual smoke check
-# In any Telegram chat: /unknown_command
-# Expected: "Unknown command. Use /help."
-```
+Once implemented, create `src/telegram/sanitizer.test.ts` to validate against the leak corpus. Manual smoke test: send `/unknown_command` in Telegram and expect a static fallback response.
