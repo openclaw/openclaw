@@ -14,6 +14,19 @@ import { locked } from "./locked.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
 
+async function ensureLoadedForRead(state: CronServiceState) {
+  await ensureLoaded(state, { skipRecompute: true });
+  if (!state.store) {
+    return;
+  }
+  // Use the maintenance-only version so that read-only operations never
+  // advance a past-due nextRunAtMs without executing the job (#16156).
+  const changed = recomputeNextRunsForMaintenance(state);
+  if (changed) {
+    await persist(state);
+  }
+}
+
 export async function start(state: CronServiceState) {
   await locked(state, async () => {
     if (!state.deps.cronEnabled) {
@@ -54,15 +67,7 @@ export function stop(state: CronServiceState) {
 
 export async function status(state: CronServiceState) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
-    if (state.store) {
-      // Use the maintenance-only version so that read-only operations never
-      // advance a past-due nextRunAtMs without executing the job (#16156).
-      const changed = recomputeNextRunsForMaintenance(state);
-      if (changed) {
-        await persist(state);
-      }
-    }
+    await ensureLoadedForRead(state);
     return {
       enabled: state.deps.cronEnabled,
       storePath: state.deps.storePath,
@@ -74,15 +79,7 @@ export async function status(state: CronServiceState) {
 
 export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
-    if (state.store) {
-      // Use the maintenance-only version so that read-only operations never
-      // advance a past-due nextRunAtMs without executing the job (#16156).
-      const changed = recomputeNextRunsForMaintenance(state);
-      if (changed) {
-        await persist(state);
-      }
-    }
+    await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
     return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
