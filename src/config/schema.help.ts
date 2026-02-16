@@ -93,13 +93,18 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
-  "tools.web.search.urlAllowlist":
-    "Optional URL/domain allowlist for web_search. When configured, Brave search results are filtered to only include URLs from allowed domains.",
+  "tools.web.search.maxResults": "Default number of results to return (1-10).",
+  "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
+  "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.perplexity.apiKey":
+    "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var).",
+  "tools.web.search.perplexity.baseUrl":
+    "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
+  "tools.web.search.perplexity.model":
+    'Perplexity model override (default: "perplexity/sonar-pro").',
   "tools.web.urlAllowlist":
-    "Optional URL/domain allowlist shared by web_search and web_fetch. Accepts domain patterns like 'example.com', '*.github.com', 'docs.openclaw.ai'. When configured, only matching URLs are allowed.",
+    "Optional URL/domain allowlist shared by web_search and web_fetch. Accepts domain patterns like 'example.com', '*.github.com'. When configured, only matching URLs are allowed.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
-  "tools.web.fetch.urlAllowlist":
-    "Optional URL/domain allowlist for web_fetch. When configured, only URLs matching these patterns can be fetched.",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
     "Hard cap for web_fetch maxChars (applies to config and tool calls).",
