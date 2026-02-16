@@ -106,3 +106,58 @@ export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[]
     merge: mergeConsecutiveUserTurns,
   });
 }
+
+/**
+ * Validates strict turn ordering for providers that reject consecutive same-role messages.
+ * Merges any consecutive messages with the same role (user, assistant, developer, system, etc.).
+ * Used for MiniMax and similar strict APIs.
+ */
+export function validateStrictTurns(messages: AgentMessage[]): AgentMessage[] {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+
+  const result: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      result.push(msg);
+      continue;
+    }
+
+    const msgRole = (msg as { role?: unknown }).role as string | undefined;
+    if (!msgRole) {
+      result.push(msg);
+      continue;
+    }
+
+    const last = result[result.length - 1];
+    const lastRole =
+      last && typeof last === "object" ? (last as { role?: unknown }).role : undefined;
+
+    if (msgRole === lastRole && result.length > 0) {
+      const lastMsg = last as unknown as Record<string, unknown>;
+      const currentMsg = msg as unknown as Record<string, unknown>;
+      const toContentArray = (content: unknown): unknown[] => {
+        if (typeof content === "string") {
+          return [{ type: "text", text: content }];
+        }
+        return Array.isArray(content) ? content : [];
+      };
+      const lastContent = toContentArray(lastMsg.content);
+      const currentContent = toContentArray(currentMsg.content);
+      // Spread currentMsg (later message) to keep its metadata (timestamp, etc.).
+      // This differs from mergeConsecutiveAssistantTurns which selectively overlays;
+      // for strict-turn providers the simpler approach is sufficient.
+      result[result.length - 1] = {
+        ...currentMsg,
+        content: [...lastContent, ...currentContent],
+      } as AgentMessage;
+      continue;
+    }
+
+    result.push(msg);
+  }
+
+  return result;
+}

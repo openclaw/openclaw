@@ -18,6 +18,7 @@ export type TranscriptPolicy = {
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
+  validateStrictTurns: boolean;
   allowSyntheticToolResults: boolean;
 };
 
@@ -93,6 +94,7 @@ export function resolveTranscriptPolicy(params: {
     modelId,
   });
 
+  const isMinimax = provider === "minimax";
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
   const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
@@ -118,6 +120,11 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,
+    // MiniMax uses anthropic-messages API, so isAnthropic is also true.
+    // validateAnthropicTurns merges consecutive user messages first,
+    // then validateStrictTurns catches any remaining same-role pairs (developer, assistant, system).
+    // This two-layer composition is intentional.
+    validateStrictTurns: isMinimax,
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

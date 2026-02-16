@@ -4,6 +4,7 @@ import {
   mergeConsecutiveUserTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
+  validateStrictTurns,
 } from "./pi-embedded-helpers.js";
 
 describe("validateGeminiTurns", () => {
@@ -338,5 +339,95 @@ describe("mergeConsecutiveUserTurns", () => {
     const merged = mergeConsecutiveUserTurns(previous, current);
 
     expect(merged.timestamp).toBe(1000);
+  });
+});
+
+describe("validateStrictTurns", () => {
+  it("should return empty array unchanged", () => {
+    expect(validateStrictTurns([])).toEqual([]);
+  });
+
+  it("should return single message unchanged", () => {
+    const msgs: AgentMessage[] = [{ role: "user", content: "Hello" }];
+    expect(validateStrictTurns(msgs)).toEqual(msgs);
+  });
+
+  it("should merge consecutive user messages", () => {
+    const msgs: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "A" }] },
+      { role: "user", content: [{ type: "text", text: "B" }] },
+    ];
+    const result = validateStrictTurns(msgs);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "A" },
+        { type: "text", text: "B" },
+      ],
+    });
+  });
+
+  it("should merge consecutive assistant messages", () => {
+    const msgs: AgentMessage[] = [
+      { role: "assistant", content: [{ type: "text", text: "X" }] },
+      { role: "assistant", content: [{ type: "text", text: "Y" }] },
+    ];
+    const result = validateStrictTurns(msgs);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "X" },
+        { type: "text", text: "Y" },
+      ],
+    });
+  });
+
+  it("should merge consecutive developer messages", () => {
+    const msgs: AgentMessage[] = [
+      { role: "developer", content: [{ type: "text", text: "sys1" }] } as AgentMessage,
+      { role: "developer", content: [{ type: "text", text: "sys2" }] } as AgentMessage,
+    ];
+    const result = validateStrictTurns(msgs);
+    expect(result).toHaveLength(1);
+    expect((result[0] as { content: unknown[] }).content).toHaveLength(2);
+  });
+
+  it("should not merge different roles", () => {
+    const msgs: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "A" }] },
+      { role: "assistant", content: [{ type: "text", text: "B" }] },
+      { role: "user", content: [{ type: "text", text: "C" }] },
+    ];
+    const result = validateStrictTurns(msgs);
+    expect(result).toHaveLength(3);
+  });
+
+  it("should handle mixed consecutive and alternating", () => {
+    const msgs: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "A" }] },
+      { role: "user", content: [{ type: "text", text: "B" }] },
+      { role: "assistant", content: [{ type: "text", text: "C" }] },
+      { role: "assistant", content: [{ type: "text", text: "D" }] },
+      { role: "user", content: [{ type: "text", text: "E" }] },
+    ];
+    const result = validateStrictTurns(msgs);
+    expect(result).toHaveLength(3);
+    expect((result[0] as { content: unknown[] }).content).toHaveLength(2);
+    expect((result[1] as { content: unknown[] }).content).toHaveLength(2);
+  });
+
+  it("should merge consecutive developer messages with string content", () => {
+    const msgs: AgentMessage[] = [
+      { role: "developer", content: "System Prompt Part 1" } as AgentMessage,
+      { role: "developer", content: "System Prompt Part 2" } as AgentMessage,
+    ];
+    const result = validateStrictTurns(msgs);
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(2);
+    expect(content[0]).toMatchObject({ type: "text", text: "System Prompt Part 1" });
+    expect(content[1]).toMatchObject({ type: "text", text: "System Prompt Part 2" });
   });
 });

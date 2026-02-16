@@ -37,6 +37,7 @@ import {
   ensureSessionHeader,
   validateAnthropicTurns,
   validateGeminiTurns,
+  validateStrictTurns,
 } from "../pi-embedded-helpers.js";
 import {
   ensurePiCompactionReserveTokens,
@@ -567,9 +568,12 @@ export async function compactEmbeddedPiSessionDirect(
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)
           : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
+        const validatedAnthropic = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
+        const validated = transcriptPolicy.validateStrictTurns
+          ? validateStrictTurns(validatedAnthropic)
+          : validatedAnthropic;
         // Capture full message history BEFORE limiting — plugins need the complete conversation
         const preCompactionMessages = [...session.messages];
         const truncated = limitHistoryTurns(

@@ -57,6 +57,7 @@ export {
   mergeConsecutiveUserTurns,
   validateAnthropicTurns,
   validateGeminiTurns,
+  validateStrictTurns,
 } from "./pi-embedded-helpers/turns.js";
 export type { EmbeddedContextFile, FailoverReason } from "./pi-embedded-helpers/types.js";
 
