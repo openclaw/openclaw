@@ -509,4 +509,43 @@ export const usageStylesPart3 = `
       height: 22px;
     }
   }
+
+  /* ===== CHART AXIS ===== */
+  .ts-axis-label {
+    font-size: 5px;
+    fill: var(--text-muted);
+  }
+
+  /* ===== RANGE SELECTION HANDLES ===== */
+  .chart-handle-zone {
+    position: absolute;
+    top: 0;
+    width: 16px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+    transform: translateX(-50%);
+  }
+
+  .timeseries-chart-wrapper {
+    position: relative;
+  }
+
+  .timeseries-reset-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    margin-left: 8px;
+  }
+
+  .timeseries-reset-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
 `;
