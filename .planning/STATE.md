@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-15)
 ## Current Position
 
 Phase: 5 of 5 (Tamper-Evident Audit Infrastructure)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-16 — Completed 05-01 (Hash-chained audit log)
+Plan: 2 of 2 in current phase
+Status: Complete
+Last activity: 2026-02-16 — Completed 05-02 (CLI verify + startup verification)
 
-Progress: [████████████████░░░░] 89%
+Progress: [████████████████████] 100%
 
 ## Performance Metrics
 
@@ -32,7 +32,7 @@ Progress: [████████████████░░░░] 89%
 | 02    | 2/2   | 12min | 6min     |
 | 03    | 2/2   | 8min  | 4min     |
 | 04    | 2/2   | 10min | 5min     |
-| 05    | 1/2   | 5min  | 5min     |
+| 05    | 2/2   | 8min  | 4min     |
 
 **Recent Trend:**
 
@@ -46,6 +46,7 @@ _Updated after each plan completion_
 | Phase 04 P01 | 3min | 2 tasks | 5 files |
 | Phase 04 P02 | 7min | 2 tasks | 11 files |
 | Phase 05 P01 | 5min | 2 tasks | 6 files |
+| Phase 05 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,8 @@ Recent decisions affecting current work:
 - [05-01]: Promise-chain serialization for concurrent audit write safety (same pattern as cron/run-log.ts)
 - [05-01]: Explicit key ordering in canonicalize() to prevent hash mismatches from object construction order
 - [05-01]: Truncated last line treated as warning not failure in verifier (crash tolerance)
+- [05-02]: Non-blocking startup verification via .then() to avoid delaying gateway boot
+- [05-02]: Tamper detection emits policy.violation security event at critical severity
 
 ### Pending Todos
 
@@ -86,5 +89,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 05-01-PLAN.md
+Stopped at: Completed 05-02-PLAN.md — All phases complete
 Resume file: None
