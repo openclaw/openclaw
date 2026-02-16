@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------- mocks ----------
 
@@ -166,6 +166,8 @@ vi.mock("../../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
+const { runCronIsolatedAgentTurn } = await import("./run.js");
+
 // ---------- helpers ----------
 
 function makeJob(overrides?: Record<string, unknown>) {
@@ -193,8 +195,11 @@ function makeParams(overrides?: Record<string, unknown>) {
 // ---------- tests ----------
 
 describe("runCronIsolatedAgentTurn — skill filter", () => {
+  let previousFastTestEnv: string | undefined;
   beforeEach(() => {
     vi.clearAllMocks();
+    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    delete process.env.OPENCLAW_TEST_FAST;
     buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "<available_skills></available_skills>",
       resolvedSkills: [],
@@ -216,10 +221,16 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
   });
 
+  afterEach(() => {
+    if (previousFastTestEnv == null) {
+      delete process.env.OPENCLAW_TEST_FAST;
+      return;
+    }
+    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+  });
+
   it("passes agent-level skillFilter to buildWorkspaceSkillSnapshot", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue(["meme-factory", "weather"]);
-
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
 
     const result = await runCronIsolatedAgentTurn(
       makeParams({
@@ -239,8 +250,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("omits skillFilter when agent has no skills config", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue(undefined);
 
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
-
     const result = await runCronIsolatedAgentTurn(
       makeParams({
         cfg: { agents: { list: [{ id: "general" }] } },
@@ -257,8 +266,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("passes empty skillFilter when agent explicitly disables all skills", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([]);
 
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
-
     const result = await runCronIsolatedAgentTurn(
       makeParams({
         cfg: { agents: { list: [{ id: "silent", skills: [] }] } },
@@ -270,5 +277,69 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
     // Explicit empty skills list should forward [] to filter out all skills
     expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("skillFilter", []);
+  });
+
+  it("refreshes cached snapshot when skillFilter changes without version bump", async () => {
+    resolveAgentSkillsFilterMock.mockReturnValue(["weather"]);
+    resolveCronSessionMock.mockReturnValue({
+      storePath: "/tmp/store.json",
+      store: {},
+      sessionEntry: {
+        sessionId: "test-session-id",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill>meme-factory</skill></available_skills>",
+          skills: [{ name: "meme-factory" }],
+          version: 42,
+        },
+      },
+      systemSent: false,
+      isNewSession: true,
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: { agents: { list: [{ id: "weather-bot", skills: ["weather"] }] } },
+        agentId: "weather-bot",
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("skillFilter", [
+      "weather",
+    ]);
+  });
+
+  it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
+    resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
+    resolveCronSessionMock.mockReturnValue({
+      storePath: "/tmp/store.json",
+      store: {},
+      sessionEntry: {
+        sessionId: "test-session-id",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill>weather</skill></available_skills>",
+          skills: [{ name: "weather" }],
+          skillFilter: ["meme-factory", "weather"],
+          version: 42,
+        },
+      },
+      systemSent: false,
+      isNewSession: true,
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: { agents: { list: [{ id: "weather-bot", skills: ["weather", "meme-factory"] }] } },
+        agentId: "weather-bot",
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 });

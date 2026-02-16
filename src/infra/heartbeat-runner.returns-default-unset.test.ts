@@ -924,7 +924,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("loads the default agent session from templated stores", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await createCaseDir("openclaw-hb");
     const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
@@ -983,12 +983,11 @@ describe("runHeartbeatOnce", () => {
       );
     } finally {
       replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("skips heartbeat when HEARTBEAT.md is effectively empty (saves API calls)", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1055,12 +1054,11 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).not.toHaveBeenCalled();
     } finally {
       replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("does not skip wake-triggered heartbeat when HEARTBEAT.md is effectively empty", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1123,12 +1121,11 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
     } finally {
       replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("does not skip hook-triggered heartbeat when HEARTBEAT.md is effectively empty", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1191,12 +1188,11 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
     } finally {
       replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("runs heartbeat when HEARTBEAT.md has actionable content", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1261,12 +1257,11 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
     } finally {
       replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("runs heartbeat when HEARTBEAT.md does not exist (lets LLM decide)", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
+    const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -1324,7 +1319,6 @@ describe("runHeartbeatOnce", () => {
       expect(replySpy).toHaveBeenCalled();
     } finally {
       replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 });

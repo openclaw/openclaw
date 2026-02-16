@@ -69,7 +69,7 @@ describe("createTelegramBot", () => {
       globalThis.fetch = originalFetch;
     }
   });
-  it("passes timeoutSeconds even without a custom fetch", () => {
+  it("applies global and per-account timeoutSeconds", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 60 },
@@ -82,8 +82,8 @@ describe("createTelegramBot", () => {
         client: expect.objectContaining({ timeoutSeconds: 60 }),
       }),
     );
-  });
-  it("prefers per-account timeoutSeconds overrides", () => {
+    botCtorSpy.mockClear();
+
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
