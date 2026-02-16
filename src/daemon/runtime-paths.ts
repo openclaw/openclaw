@@ -152,10 +152,21 @@ export async function resolvePreferredNodePath(params: {
   runtime?: string;
   platform?: NodeJS.Platform;
   execFile?: ExecFileAsync;
+  processExecPath?: string;
 }): Promise<string | undefined> {
   if (params.runtime !== "node") {
     return undefined;
   }
+  const execFileImpl = params.execFile ?? (promisify(execFile) as unknown as ExecFileAsync);
+
+  // Prefer the node that is actually running the install command (e.g. fnm/nvm managed).
+  if (params.processExecPath) {
+    const version = await resolveNodeVersion(params.processExecPath, execFileImpl);
+    if (version && isSupportedNodeVersion(version)) {
+      return params.processExecPath;
+    }
+  }
+
   const systemNode = await resolveSystemNodeInfo(params);
   if (!systemNode?.supported) {
     return undefined;

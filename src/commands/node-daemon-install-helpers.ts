@@ -37,6 +37,7 @@ export async function buildNodeInstallPlan(params: {
     (await resolvePreferredNodePath({
       env: params.env,
       runtime: params.runtime,
+      processExecPath: process.execPath,
     }));
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
