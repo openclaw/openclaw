@@ -64,6 +64,8 @@ export type RunEmbeddedPiAgentParams = {
   images?: ImageContent[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
+  /** Optional MCP server definitions (ACP mcpServers) for embedded tool exposure. */
+  mcpServers?: unknown[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
   provider?: string;

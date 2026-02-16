@@ -1,3 +1,4 @@
+import type { McpServer } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { parseSessionMeta, resolveSessionKey } from "./session-mapper.js";
@@ -76,5 +77,26 @@ describe("acp session manager", () => {
     const cancelled = store.cancelActiveRun(session.sessionId);
     expect(cancelled).toBe(true);
     expect(store.getSessionByRunId("run-1")).toBeUndefined();
+  });
+
+
+  it("stores ACP mcpServers in session state", () => {
+    const mcpServers = [
+      {
+        name: "lean-lsp",
+        command: "lean-lsp-mcp",
+        args: ["--stdio"],
+        env: [{ name: "LEAN_PATH", value: "/tmp/lean" }],
+      },
+    ] satisfies McpServer[];
+
+    const session = store.createSession({
+      sessionKey: "acp:test",
+      cwd: "/tmp",
+      mcpServers,
+    });
+
+    expect(session.mcpServers).toEqual(mcpServers);
+    expect(store.getSession(session.sessionId)?.mcpServers).toEqual(mcpServers);
   });
 });

@@ -88,6 +88,8 @@ export const HeartbeatSchema = z
   })
   .optional();
 
+export const McpServersSchema = z.array(z.unknown()).optional();
+
 export const SandboxDockerSchema = z
   .object({
     image: z.string().optional(),
@@ -592,6 +594,7 @@ export const AgentEntrySchema = z
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
+    mcpServers: McpServersSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
     subagents: z

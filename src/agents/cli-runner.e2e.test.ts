@@ -95,6 +95,86 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.scopeKey).toContain("thread-123");
   });
 
+
+  it("injects ACP mcpServers for claude-cli runs", async () => {
+    let mcpConfigPath = "";
+
+    supervisorSpawnMock.mockImplementationOnce(async (input: { argv?: string[] }) => {
+      const argv = input.argv ?? [];
+      expect(argv).toContain("--strict-mcp-config");
+
+      const flagIndex = argv.indexOf("--mcp-config");
+      if (flagIndex > -1 && typeof argv[flagIndex + 1] === "string") {
+        mcpConfigPath = argv[flagIndex + 1] as string;
+      } else {
+        const inline = argv.find((entry) => entry.startsWith("--mcp-config="));
+        mcpConfigPath = inline ? inline.slice("--mcp-config=".length) : "";
+      }
+
+      expect(mcpConfigPath).toBeTruthy();
+      const parsed = JSON.parse(await fs.readFile(mcpConfigPath, "utf8"));
+      expect(parsed).toEqual({
+        mcpServers: {
+          "lean-lsp": {
+            type: "stdio",
+            command: "lean-lsp-mcp",
+            args: ["--stdio"],
+            env: {
+              LEAN_PATH: "/tmp/lean",
+            },
+          },
+          wiki: {
+            type: "sse",
+            url: "https://example.com/mcp-sse",
+            headers: {
+              Authorization: "Bearer test",
+            },
+          },
+        },
+      });
+
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 30,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-mcp-1",
+      mcpServers: [
+        {
+          name: "lean-lsp",
+          command: "lean-lsp-mcp",
+          args: ["--stdio"],
+          env: [{ name: "LEAN_PATH", value: "/tmp/lean" }],
+        },
+        {
+          type: "sse",
+          name: "wiki",
+          url: "https://example.com/mcp-sse",
+          headers: [{ name: "Authorization", value: "Bearer test" }],
+        },
+      ],
+    });
+
+    expect(result.payloads?.[0]?.text).toBe("ok");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    await expect(fs.access(mcpConfigPath)).rejects.toThrow();
+  });
+
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

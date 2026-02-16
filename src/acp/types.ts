@@ -1,4 +1,4 @@
-import type { SessionId } from "@agentclientprotocol/sdk";
+import type { McpServer, SessionId } from "@agentclientprotocol/sdk";
 import { VERSION } from "../version.js";
 
 export type AcpSession = {
@@ -6,6 +6,7 @@ export type AcpSession = {
   sessionKey: string;
   cwd: string;
   createdAt: number;
+  mcpServers: McpServer[];
   abortController: AbortController | null;
   activeRunId: string | null;
 };

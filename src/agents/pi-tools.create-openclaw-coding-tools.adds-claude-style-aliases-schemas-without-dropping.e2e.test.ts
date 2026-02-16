@@ -279,6 +279,7 @@ describe("createOpenClawCodingTools", () => {
       "cron",
       "message",
       "gateway",
+      "lean",
       "agents_list",
       "sessions_list",
       "sessions_history",

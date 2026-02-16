@@ -171,6 +171,7 @@ export function createFollowupRunner(params: {
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,
+              mcpServers: opts?.mcpServers,
               blockReplyBreak: queued.run.blockReplyBreak,
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {

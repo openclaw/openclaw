@@ -121,10 +121,6 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
-    if (params.mcpServers.length > 0) {
-      this.log(`ignoring ${params.mcpServers.length} MCP servers`);
-    }
-
     const sessionId = randomUUID();
     const meta = parseSessionMeta(params._meta);
     const sessionKey = await resolveSessionKey({
@@ -144,6 +140,7 @@ export class AcpGatewayAgent implements Agent {
       sessionId,
       sessionKey,
       cwd: params.cwd,
+      mcpServers: params.mcpServers,
     });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     await this.sendAvailableCommands(session.sessionId);
@@ -151,10 +148,6 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
-    if (params.mcpServers.length > 0) {
-      this.log(`ignoring ${params.mcpServers.length} MCP servers`);
-    }
-
     const meta = parseSessionMeta(params._meta);
     const sessionKey = await resolveSessionKey({
       meta,
@@ -173,6 +166,7 @@ export class AcpGatewayAgent implements Agent {
       sessionId: params.sessionId,
       sessionKey,
       cwd: params.cwd,
+      mcpServers: params.mcpServers,
     });
     this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
     await this.sendAvailableCommands(session.sessionId);
@@ -263,6 +257,7 @@ export class AcpGatewayAgent implements Agent {
             thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
             deliver: readBool(params._meta, ["deliver"]),
             timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+            mcpServers: session.mcpServers.length > 0 ? session.mcpServers : undefined,
           },
           { expectFinal: true },
         )

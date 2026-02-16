@@ -47,6 +47,8 @@ import {
   ensurePiCompactionReserveTokens,
   resolveCompactionReserveTokensFloor,
 } from "../../pi-settings.js";
+import { initMcpRuntime } from "../../mcp-client.js";
+import { toMcpToolDefinitions } from "../../mcp-tool-adapter.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
@@ -492,6 +494,7 @@ export async function runEmbeddedAttempt(
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    let mcpCleanup: (() => Promise<void>) | undefined;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -568,7 +571,27 @@ export async function runEmbeddedAttempt(
           )
         : [];
 
-      const allCustomTools = [...customTools, ...clientToolDefs];
+      const existingToolNames = new Set<string>([
+        ...builtInTools.map((tool) => tool.name),
+        ...customTools.map((tool) => tool.name),
+        ...clientToolDefs.map((tool) => tool.name),
+      ]);
+
+      let mcpToolDefs: ReturnType<typeof toMcpToolDefinitions> = [];
+      if (Array.isArray(params.mcpServers) && params.mcpServers.length > 0) {
+        try {
+          const mcpRuntime = await initMcpRuntime({
+            mcpServers: params.mcpServers,
+            existingToolNames,
+          });
+          mcpCleanup = mcpRuntime.cleanup;
+          mcpToolDefs = toMcpToolDefinitions(mcpRuntime.tools);
+        } catch (error) {
+          log.warn(`mcp runtime init failed: ${describeUnknownError(error)}`);
+        }
+      }
+
+      const allCustomTools = [...customTools, ...clientToolDefs, ...mcpToolDefs];
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
@@ -1256,6 +1279,13 @@ export async function runEmbeddedAttempt(
         sessionManager,
       });
       session?.dispose();
+      if (mcpCleanup) {
+        try {
+          await mcpCleanup();
+        } catch (error) {
+          log.warn(`mcp cleanup failed: ${describeUnknownError(error)}`);
+        }
+      }
       await sessionLock.release();
     }
   } finally {

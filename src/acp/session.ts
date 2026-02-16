@@ -1,8 +1,14 @@
+import type { McpServer } from "@agentclientprotocol/sdk";
 import { randomUUID } from "node:crypto";
 import type { AcpSession } from "./types.js";
 
 export type AcpSessionStore = {
-  createSession: (params: { sessionKey: string; cwd: string; sessionId?: string }) => AcpSession;
+  createSession: (params: {
+    sessionKey: string;
+    cwd: string;
+    sessionId?: string;
+    mcpServers?: McpServer[];
+  }) => AcpSession;
   getSession: (sessionId: string) => AcpSession | undefined;
   getSessionByRunId: (runId: string) => AcpSession | undefined;
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
@@ -22,6 +28,7 @@ export function createInMemorySessionStore(): AcpSessionStore {
       sessionKey: params.sessionKey,
       cwd: params.cwd,
       createdAt: Date.now(),
+      mcpServers: [...(params.mcpServers ?? [])],
       abortController: null,
       activeRunId: null,
     };

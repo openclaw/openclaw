@@ -3,6 +3,7 @@ import {
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentModelSchema,
+  McpServersSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
@@ -65,6 +66,7 @@ export const AgentDefaultsSchema = z
     envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
+    mcpServers: McpServersSchema,
     memorySearch: MemorySearchSchema,
     contextPruning: z
       .object({

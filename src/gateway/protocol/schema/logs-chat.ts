@@ -39,6 +39,7 @@ export const ChatSendParamsSchema = Type.Object(
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    mcpServers: Type.Optional(Type.Array(Type.Unknown())),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

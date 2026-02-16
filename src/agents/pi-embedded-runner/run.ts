@@ -4,6 +4,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { resolveAgentMcpServers } from "../agent-scope.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
@@ -204,6 +205,11 @@ export async function runEmbeddedPiAgent(
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+      const resolvedMcpServers =
+        params.mcpServers ??
+        (params.config
+          ? resolveAgentMcpServers(params.config, workspaceResolution.agentId)
+          : undefined);
       await ensureOpenClawModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
@@ -497,6 +503,8 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             images: params.images,
+            clientTools: params.clientTools,
+            mcpServers: resolvedMcpServers,
             disableTools: params.disableTools,
             provider,
             modelId,

@@ -1,5 +1,8 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
@@ -9,6 +12,7 @@ import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { isRecord, parseMcpServers, type McpServerConfig } from "./mcp-common.js";
 import {
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
@@ -32,6 +36,161 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js"
 
 const log = createSubsystemLogger("agent/claude-cli");
 
+
+function readMcpConfigArg(args: string[]): { path: string; index: number; inline: boolean } | null {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === "--mcp-config") {
+      const pathValue = args[i + 1];
+      if (typeof pathValue === "string" && pathValue.trim()) {
+        return {
+          path: pathValue,
+          index: i,
+          inline: false,
+        };
+      }
+      continue;
+    }
+    if (arg.startsWith("--mcp-config=")) {
+      const pathValue = arg.slice("--mcp-config=".length).trim();
+      if (!pathValue) {
+        continue;
+      }
+      return {
+        path: pathValue,
+        index: i,
+        inline: true,
+      };
+    }
+  }
+  return null;
+}
+
+async function readExistingMcpServers(
+  configPath: string,
+): Promise<Record<string, McpServerConfig>> {
+  try {
+    const raw = await fs.readFile(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed) || !isRecord(parsed.mcpServers)) {
+      return {};
+    }
+    const out: Record<string, McpServerConfig> = {};
+    for (const [name, value] of Object.entries(parsed.mcpServers)) {
+      if (!isRecord(value) || !name.trim()) {
+        continue;
+      }
+      const type = typeof value.type === "string" ? value.type.trim().toLowerCase() : "";
+      if (type === "http" || type === "sse") {
+        const url = typeof value.url === "string" ? value.url.trim() : "";
+        if (!url) {
+          continue;
+        }
+        const headers = isRecord(value.headers)
+          ? Object.fromEntries(
+              Object.entries(value.headers).filter(
+                (entry): entry is [string, string] =>
+                  typeof entry[0] === "string" && typeof entry[1] === "string",
+              ),
+            )
+          : undefined;
+        out[name] = {
+          type,
+          url,
+          ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+        };
+        continue;
+      }
+
+      const command = typeof value.command === "string" ? value.command.trim() : "";
+      if (!command) {
+        continue;
+      }
+      const args = Array.isArray(value.args)
+        ? value.args.filter((entry): entry is string => typeof entry === "string")
+        : undefined;
+      const env = isRecord(value.env)
+        ? Object.fromEntries(
+            Object.entries(value.env).filter(
+              (entry): entry is [string, string] =>
+                typeof entry[0] === "string" && typeof entry[1] === "string",
+            ),
+          )
+        : undefined;
+      out[name] = {
+        type: "stdio",
+        command,
+        ...(args && args.length > 0 ? { args } : {}),
+        ...(env && Object.keys(env).length > 0 ? { env } : {}),
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function withMcpConfigArgs(args: string[], configPath: string): string[] {
+  const next = [...args];
+  const existing = readMcpConfigArg(next);
+  if (existing) {
+    if (existing.inline) {
+      next[existing.index] = `--mcp-config=${configPath}`;
+    } else if (existing.index + 1 < next.length) {
+      next[existing.index + 1] = configPath;
+    }
+  } else {
+    next.push("--mcp-config", configPath);
+  }
+
+  if (!next.includes("--strict-mcp-config")) {
+    next.push("--strict-mcp-config");
+  }
+  return next;
+}
+
+async function prepareCliMcpConfig(params: {
+  backendId: string;
+  args: string[];
+  mcpServers?: unknown[];
+}): Promise<{ args: string[]; cleanup?: () => Promise<void> }> {
+  if (params.backendId !== "claude-cli") {
+    return { args: params.args };
+  }
+
+  const incoming = parseMcpServers(params.mcpServers);
+  if (Object.keys(incoming).length === 0) {
+    return { args: params.args };
+  }
+
+  const existingConfig = readMcpConfigArg(params.args);
+  let mergedServers = incoming;
+  if (existingConfig) {
+    const existingServers = await readExistingMcpServers(existingConfig.path);
+    if (Object.keys(existingServers).length > 0) {
+      mergedServers = {
+        ...existingServers,
+        ...incoming,
+      };
+    }
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
+  const configPath = path.join(tempDir, "mcp-config.json");
+  await fs.writeFile(configPath, `${JSON.stringify({ mcpServers: mergedServers }, null, 2)}\n`, {
+    mode: 0o600,
+  });
+
+  log.info(`cli mcp config: servers=${Object.keys(mergedServers).length} backend=${params.backendId}`);
+
+  return {
+    args: withMcpConfigArgs(params.args, configPath),
+    cleanup: async () => {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  };
+}
+
 export async function runCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
@@ -50,6 +209,7 @@ export async function runCliAgent(params: {
   ownerNumbers?: string[];
   cliSessionId?: string;
   images?: ImageContent[];
+  mcpServers?: unknown[];
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -127,9 +287,9 @@ export async function runCliAgent(params: {
   });
   const useResume = Boolean(
     params.cliSessionId &&
-    cliSessionIdToSend &&
-    backend.resumeArgs &&
-    backend.resumeArgs.length > 0,
+      cliSessionIdToSend &&
+      backend.resumeArgs &&
+      backend.resumeArgs.length > 0,
   );
   const sessionIdSent = cliSessionIdToSend
     ? useResume || Boolean(backend.sessionArg) || Boolean(backend.sessionArgs?.length)
@@ -144,6 +304,7 @@ export async function runCliAgent(params: {
 
   let imagePaths: string[] | undefined;
   let cleanupImages: (() => Promise<void>) | undefined;
+  let cleanupMcpConfig: (() => Promise<void>) | undefined;
   let prompt = params.prompt;
   if (params.images && params.images.length > 0) {
     const imagePayload = await writeCliImages(params.images);
@@ -163,7 +324,7 @@ export async function runCliAgent(params: {
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", cliSessionIdToSend ?? ""))
     : baseArgs;
-  const args = buildCliArgs({
+  let args = buildCliArgs({
     backend,
     baseArgs: resolvedArgs,
     modelId: normalizedModel,
@@ -173,6 +334,14 @@ export async function runCliAgent(params: {
     promptArg: argsPrompt,
     useResume,
   });
+
+  const mcpConfig = await prepareCliMcpConfig({
+    backendId: backendResolved.id,
+    args,
+    mcpServers: params.mcpServers,
+  });
+  args = mcpConfig.args;
+  cleanupMcpConfig = mcpConfig.cleanup;
 
   const serialize = backend.serialize ?? true;
   const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
@@ -351,8 +520,14 @@ export async function runCliAgent(params: {
     }
     throw err;
   } finally {
-    if (cleanupImages) {
-      await cleanupImages();
+    try {
+      if (cleanupMcpConfig) {
+        await cleanupMcpConfig();
+      }
+    } finally {
+      if (cleanupImages) {
+        await cleanupImages();
+      }
     }
   }
 }
@@ -374,6 +549,7 @@ export async function runClaudeCliAgent(params: {
   ownerNumbers?: string[];
   claudeSessionId?: string;
   images?: ImageContent[];
+  mcpServers?: unknown[];
 }): Promise<EmbeddedPiRunResult> {
   return runCliAgent({
     sessionId: params.sessionId,
@@ -392,5 +568,6 @@ export async function runClaudeCliAgent(params: {
     ownerNumbers: params.ownerNumbers,
     cliSessionId: params.claudeSessionId,
     images: params.images,
+    mcpServers: params.mcpServers,
   });
 }
