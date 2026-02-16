@@ -172,11 +172,13 @@ if [[ "$FULL_RESET" -eq 1 ]]; then
   rm -f "${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist"
   log "==> remove ~/.openclaw"
   rm -rf "${HOME}/.openclaw"
-  log "==> reset onboarding state"
-  defaults delete ai.openclaw 2>/dev/null || true
+  log "==> reset onboarding state (release + debug)"
+  defaults delete ai.openclaw.mac 2>/dev/null || true
+  defaults delete ai.openclaw.mac.debug 2>/dev/null || true
 elif [[ "$RESET_ONBOARDING" -eq 1 ]]; then
-  log "==> reset onboarding state"
-  defaults delete ai.openclaw 2>/dev/null || true
+  log "==> reset onboarding state (release + debug)"
+  defaults delete ai.openclaw.mac 2>/dev/null || true
+  defaults delete ai.openclaw.mac.debug 2>/dev/null || true
 fi
 
 # When only resetting state (no other build flags), skip the full rebuild.
