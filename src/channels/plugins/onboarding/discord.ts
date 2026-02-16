@@ -17,14 +17,23 @@ import { resolveDiscordUserAllowlist } from "../../../discord/resolve-users.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { promptChannelAccessConfig } from "./channel-access.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import { promptAccountId } from "./helpers.js";
+
+function addDiscordWildcardAllowFrom(allowFrom?: string[] | null): string[] {
+  const next = (allowFrom ?? []).map((entry) => entry.trim()).filter(Boolean);
+  if (!next.includes("*")) {
+    next.push("*");
+  }
+  return next;
+}
 
 const channel = "discord" as const;
 
 function setDiscordDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
   const existingAllowFrom =
     cfg.channels?.discord?.allowFrom ?? cfg.channels?.discord?.dm?.allowFrom;
-  const allowFrom = dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+  const allowFrom =
+    dmPolicy === "open" ? addDiscordWildcardAllowFrom(existingAllowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -55,10 +64,10 @@ async function noteDiscordTokenHelp(prompter: WizardPrompter): Promise<void> {
   );
 }
 
-function setDiscordGroupPolicy(
+function patchDiscordConfigForAccount(
   cfg: OpenClawConfig,
   accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
+  patch: Record<string, unknown>,
 ): OpenClawConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -68,7 +77,7 @@ function setDiscordGroupPolicy(
         discord: {
           ...cfg.channels?.discord,
           enabled: true,
-          groupPolicy,
+          ...patch,
         },
       },
     };
@@ -85,12 +94,20 @@ function setDiscordGroupPolicy(
           [accountId]: {
             ...cfg.channels?.discord?.accounts?.[accountId],
             enabled: cfg.channels?.discord?.accounts?.[accountId]?.enabled ?? true,
-            groupPolicy,
+            ...patch,
           },
         },
       },
     },
   };
+}
+
+function setDiscordGroupPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  groupPolicy: "open" | "allowlist" | "disabled",
+): OpenClawConfig {
+  return patchDiscordConfigForAccount(cfg, accountId, { groupPolicy });
 }
 
 function setDiscordGuildChannelAllowlist(
@@ -117,37 +134,7 @@ function setDiscordGuildChannelAllowlist(
       guilds[guildKey] = existing;
     }
   }
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        discord: {
-          ...cfg.channels?.discord,
-          enabled: true,
-          guilds,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      discord: {
-        ...cfg.channels?.discord,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.discord?.accounts,
-          [accountId]: {
-            ...cfg.channels?.discord?.accounts?.[accountId],
-            enabled: cfg.channels?.discord?.accounts?.[accountId]?.enabled ?? true,
-            guilds,
-          },
-        },
-      },
-    },
-  };
+  return patchDiscordConfigForAccount(cfg, accountId, { guilds });
 }
 
 function setDiscordAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {

@@ -27,9 +27,10 @@ import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   formatDurationCompact,
-  formatTokenShort,
+  formatTokenUsageDisplay,
   truncateLine,
 } from "../../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -95,63 +96,6 @@ function resolveModelDisplay(
     return combined.slice(slash + 1);
   }
   return combined;
-}
-
-function resolveTotalTokens(entry?: {
-  totalTokens?: unknown;
-  inputTokens?: unknown;
-  outputTokens?: unknown;
-}) {
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
-    return entry.totalTokens;
-  }
-  const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
-  const total = input + output;
-  return total > 0 ? total : undefined;
-}
-
-function resolveIoTokens(entry?: { inputTokens?: unknown; outputTokens?: unknown }) {
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  const input =
-    typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
-      ? entry.inputTokens
-      : 0;
-  const output =
-    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
-      ? entry.outputTokens
-      : 0;
-  const total = input + output;
-  if (total <= 0) {
-    return undefined;
-  }
-  return { input, output, total };
-}
-
-function resolveUsageDisplay(entry?: {
-  totalTokens?: unknown;
-  inputTokens?: unknown;
-  outputTokens?: unknown;
-}) {
-  const io = resolveIoTokens(entry);
-  const promptCache = resolveTotalTokens(entry);
-  const parts: string[] = [];
-  if (io) {
-    const input = formatTokenShort(io.input) ?? "0";
-    const output = formatTokenShort(io.output) ?? "0";
-    parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
-  } else if (typeof promptCache === "number" && promptCache > 0) {
-    parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
-  }
-  if (typeof promptCache === "number" && io && promptCache > io.total) {
-    parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
-  }
-  return parts.join(", ");
 }
 
 function resolveDisplayStatus(entry: SubagentRunRecord) {
@@ -259,45 +203,15 @@ function buildSubagentsHelp() {
 type ChatMessage = {
   role?: unknown;
   content?: unknown;
-  name?: unknown;
-  toolName?: unknown;
 };
-
-function normalizeMessageText(text: string) {
-  return text.replace(/\s+/g, " ").trim();
-}
 
 export function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
   const shouldSanitize = role === "assistant";
-  const content = message.content;
-  if (typeof content === "string") {
-    const normalized = normalizeMessageText(
-      shouldSanitize ? sanitizeTextContent(content) : content,
-    );
-    return normalized ? { role, text: normalized } : null;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const chunks: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    if ((block as { type?: unknown }).type !== "text") {
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text === "string") {
-      const value = shouldSanitize ? sanitizeTextContent(text) : text;
-      if (value.trim()) {
-        chunks.push(value);
-      }
-    }
-  }
-  const joined = normalizeMessageText(chunks.join(" "));
-  return joined ? { role, text: joined } : null;
+  const text = extractTextFromChatContent(message.content, {
+    sanitizeText: shouldSanitize ? sanitizeTextContent : undefined,
+  });
+  return text ? { role, text } : null;
 }
 
 function formatLogLines(messages: ChatMessage[]) {
@@ -394,7 +308,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
           entry.childSessionKey,
           storeCache,
         );
-        const usageText = resolveUsageDisplay(sessionEntry);
+        const usageText = formatTokenUsageDisplay(sessionEntry);
         const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
         const task = formatTaskPreview(entry.task);
         const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
@@ -411,7 +325,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
           entry.childSessionKey,
           storeCache,
         );
-        const usageText = resolveUsageDisplay(sessionEntry);
+        const usageText = formatTokenUsageDisplay(sessionEntry);
         const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
         const task = formatTaskPreview(entry.task);
         const runtime = formatDurationCompact(

@@ -1042,6 +1042,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let spawndepth: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -1059,6 +1060,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
+        spawndepth: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?
     ) {
@@ -1075,6 +1077,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.spawndepth = spawndepth
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -1092,6 +1095,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case spawndepth = "spawnDepth"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
@@ -2090,7 +2094,7 @@ public struct CronJob: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let delivery: [String: AnyCodable]?
+    public let delivery: AnyCodable?
     public let state: [String: AnyCodable]
 
     public init(
@@ -2106,7 +2110,7 @@ public struct CronJob: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        delivery: [String: AnyCodable]?,
+        delivery: AnyCodable?,
         state: [String: AnyCodable]
     ) {
         self.id = id
@@ -2168,7 +2172,7 @@ public struct CronAddParams: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let delivery: [String: AnyCodable]?
+    public let delivery: AnyCodable?
 
     public init(
         name: String,
@@ -2180,7 +2184,7 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        delivery: [String: AnyCodable]?
+        delivery: AnyCodable?
     ) {
         self.name = name
         self.agentid = agentid

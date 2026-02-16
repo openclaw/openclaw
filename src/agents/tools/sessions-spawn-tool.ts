@@ -28,6 +28,8 @@ const SessionsSpawnToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  // Back-compat: older callers used timeoutSeconds for this tool.
+  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
 });
 
@@ -97,9 +99,15 @@ export function createSessionsSpawnTool(opts?: {
       });
       // Default to 0 (no timeout) when omitted. Sub-agent runs are long-lived
       // by default and should not inherit the main agent 600s timeout.
+      const timeoutSecondsCandidate =
+        typeof params.runTimeoutSeconds === "number"
+          ? params.runTimeoutSeconds
+          : typeof params.timeoutSeconds === "number"
+            ? params.timeoutSeconds
+            : undefined;
       const runTimeoutSeconds =
-        typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
-          ? Math.max(0, Math.floor(params.runTimeoutSeconds))
+        typeof timeoutSecondsCandidate === "number" && Number.isFinite(timeoutSecondsCandidate)
+          ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : 0;
       let modelWarning: string | undefined;
       let modelApplied = false;

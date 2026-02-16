@@ -47,13 +47,86 @@ describe("runGatewayUpdate", () => {
     // Shared fixtureRoot cleaned up in afterAll.
   });
 
-  it("skips git update when worktree is dirty", async () => {
+  function createStableTagRunner(params: {
+    stableTag: string;
+    uiIndexPath: string;
+    onDoctor?: () => Promise<void>;
+    onUiBuild?: (count: number) => Promise<void>;
+  }) {
+    const calls: string[] = [];
+    let uiBuildCount = 0;
+    const doctorKey = `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`;
+
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
+        return { stdout: `${params.stableTag}\n`, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} checkout --detach ${params.stableTag}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm build") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm ui:build") {
+        uiBuildCount += 1;
+        await params.onUiBuild?.(uiBuildCount);
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === doctorKey) {
+        await params.onDoctor?.();
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    return {
+      runCommand,
+      calls,
+      doctorKey,
+      getUiBuildCount: () => uiBuildCount,
+    };
+  }
+
+  async function setupGitCheckout(options?: { packageManager?: string }) {
     await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+    const pkg: Record<string, string> = { name: "openclaw", version: "1.0.0" };
+    if (options?.packageManager) {
+      pkg.packageManager = options.packageManager;
+    }
+    await fs.writeFile(path.join(tempDir, "package.json"), JSON.stringify(pkg), "utf-8");
+  }
+
+  async function setupUiIndex() {
+    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
+    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
+    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    return uiIndexPath;
+  }
+
+  async function removeControlUiAssets() {
+    await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
+  }
+
+  it("skips git update when worktree is dirty", async () => {
+    await setupGitCheckout();
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
@@ -73,12 +146,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("aborts rebase on failure", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+    await setupGitCheckout();
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
@@ -106,15 +174,8 @@ describe("runGatewayUpdate", () => {
   });
 
   it("uses stable tag when beta tag is older than release", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupUiIndex();
     const stableTag = "v1.0.1-1";
     const betaTag = "v1.0.0-beta.2";
     const { runner, calls } = createRunner({
@@ -185,29 +246,18 @@ describe("runGatewayUpdate", () => {
       "utf-8",
     );
 
-    const calls: string[] = [];
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        return { stdout: nodeModules, stderr: "", code: 0 };
-      }
-      if (key === params.expectedInstallCommand) {
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: params.expectedInstallCommand,
+      onInstall: async () => {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
-        return { stdout: "ok", stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+      },
+    });
 
     const result = await runGatewayUpdate({
       cwd: pkgRoot,
@@ -219,6 +269,37 @@ describe("runGatewayUpdate", () => {
 
     return { calls, result };
   }
+
+  const createGlobalInstallHarness = (params: {
+    pkgRoot: string;
+    npmRootOutput?: string;
+    installCommand: string;
+    onInstall?: () => Promise<void>;
+  }) => {
+    const calls: string[] = [];
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        if (params.npmRootOutput) {
+          return { stdout: params.npmRootOutput, stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === params.installCommand) {
+        await params.onInstall?.();
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+    return { calls, runCommand };
+  };
 
   it.each([
     {
@@ -306,29 +387,17 @@ describe("runGatewayUpdate", () => {
         "utf-8",
       );
 
-      const calls: string[] = [];
-      const runCommand = async (argv: string[]) => {
-        const key = argv.join(" ");
-        calls.push(key);
-        if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-          return { stdout: "", stderr: "not a git repository", code: 128 };
-        }
-        if (key === "npm root -g") {
-          return { stdout: "", stderr: "", code: 1 };
-        }
-        if (key === "pnpm root -g") {
-          return { stdout: "", stderr: "", code: 1 };
-        }
-        if (key === "bun add -g openclaw@latest") {
+      const { calls, runCommand } = createGlobalInstallHarness({
+        pkgRoot,
+        installCommand: "bun add -g openclaw@latest",
+        onInstall: async () => {
           await fs.writeFile(
             path.join(pkgRoot, "package.json"),
             JSON.stringify({ name: "openclaw", version: "2.0.0" }),
             "utf-8",
           );
-          return { stdout: "ok", stderr: "", code: 0 };
-        }
-        return { stdout: "", stderr: "", code: 0 };
-      };
+        },
+      });
 
       const result = await runGatewayUpdate({
         cwd: pkgRoot,
@@ -371,12 +440,7 @@ describe("runGatewayUpdate", () => {
   });
 
   it("fails with a clear reason when openclaw.mjs is missing", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
     await fs.rm(path.join(tempDir, "openclaw.mjs"), { force: true });
 
     const stableTag = "v1.0.1-1";
@@ -405,61 +469,19 @@ describe("runGatewayUpdate", () => {
   });
 
   it("repairs UI assets when doctor run removes control-ui files", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const uiIndexPath = await setupUiIndex();
 
     const stableTag = "v1.0.1-1";
-    const calls: string[] = [];
-    let uiBuildCount = 0;
-
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
-        return { stdout: tempDir, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse HEAD`) {
-        return { stdout: "abc123", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
-        return { stdout: `${stableTag}\n`, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm install") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm build") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm ui:build") {
-        uiBuildCount += 1;
+    const { runCommand, calls, doctorKey, getUiBuildCount } = createStableTagRunner({
+      stableTag,
+      uiIndexPath,
+      onUiBuild: async (count) => {
         await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-        await fs.writeFile(uiIndexPath, `<html>${uiBuildCount}</html>`, "utf-8");
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (
-        key === `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`
-      ) {
-        await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+        await fs.writeFile(uiIndexPath, `<html>${count}</html>`, "utf-8");
+      },
+      onDoctor: removeControlUiAssets,
+    });
 
     const result = await runGatewayUpdate({
       cwd: tempDir,
@@ -469,68 +491,27 @@ describe("runGatewayUpdate", () => {
     });
 
     expect(result.status).toBe("ok");
-    expect(uiBuildCount).toBe(2);
+    expect(getUiBuildCount()).toBe(2);
     expect(await pathExists(uiIndexPath)).toBe(true);
-    expect(calls).toContain(
-      `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`,
-    );
+    expect(calls).toContain(doctorKey);
   });
 
   it("fails when UI assets are still missing after post-doctor repair", async () => {
-    await fs.mkdir(path.join(tempDir, ".git"));
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
-      "utf-8",
-    );
-    const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
-    await fs.writeFile(uiIndexPath, "<html></html>", "utf-8");
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    const uiIndexPath = await setupUiIndex();
 
     const stableTag = "v1.0.1-1";
-    let uiBuildCount = 0;
-    const runCommand = async (argv: string[]) => {
-      const key = argv.join(" ");
-      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
-        return { stdout: tempDir, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} rev-parse HEAD`) {
-        return { stdout: "abc123", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
-        return { stdout: `${stableTag}\n`, stderr: "", code: 0 };
-      }
-      if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm install") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm build") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (key === "pnpm ui:build") {
-        uiBuildCount += 1;
-        if (uiBuildCount === 1) {
+    const { runCommand } = createStableTagRunner({
+      stableTag,
+      uiIndexPath,
+      onUiBuild: async (count) => {
+        if (count === 1) {
           await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });
           await fs.writeFile(uiIndexPath, "<html>built</html>", "utf-8");
         }
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (
-        key === `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`
-      ) {
-        await fs.rm(path.join(tempDir, "dist", "control-ui"), { recursive: true, force: true });
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      return { stdout: "", stderr: "", code: 0 };
-    };
+      },
+      onDoctor: removeControlUiAssets,
+    });
 
     const result = await runGatewayUpdate({
       cwd: tempDir,

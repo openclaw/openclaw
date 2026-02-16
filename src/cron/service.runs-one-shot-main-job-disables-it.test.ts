@@ -1,18 +1,200 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
-import {
-  createCronStoreHarness,
-  createNoopLogger,
-  installCronTestHooks,
-} from "./service.test-harness.js";
+import { createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
+
+type FakeFsEntry =
+  | { kind: "file"; content: string; mtimeMs: number }
+  | { kind: "dir"; mtimeMs: number };
+
+const fsState = vi.hoisted(() => ({
+  entries: new Map<string, FakeFsEntry>(),
+  nowMs: 0,
+  fixtureCount: 0,
+}));
+
+const abs = (p: string) => path.resolve(p);
+const fixturesRoot = abs(path.join("__openclaw_vitest__", "cron", "runs-one-shot"));
+const isFixturePath = (p: string) => {
+  const resolved = abs(p);
+  const rootPrefix = `${fixturesRoot}${path.sep}`;
+  return resolved === fixturesRoot || resolved.startsWith(rootPrefix);
+};
+
+function bumpMtimeMs() {
+  fsState.nowMs += 1;
+  return fsState.nowMs;
+}
+
+function ensureDir(dirPath: string) {
+  let current = abs(dirPath);
+  while (true) {
+    if (!fsState.entries.has(current)) {
+      fsState.entries.set(current, { kind: "dir", mtimeMs: bumpMtimeMs() });
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+}
+
+function setFile(filePath: string, content: string) {
+  const resolved = abs(filePath);
+  ensureDir(path.dirname(resolved));
+  fsState.entries.set(resolved, { kind: "file", content, mtimeMs: bumpMtimeMs() });
+}
+
+async function makeStorePath() {
+  const dir = path.join(fixturesRoot, `case-${fsState.fixtureCount++}`);
+  ensureDir(dir);
+  const storePath = path.join(dir, "cron", "jobs.json");
+  ensureDir(path.dirname(storePath));
+  return { storePath, cleanup: async () => {} };
+}
+
+function writeStoreFile(storePath: string, payload: unknown) {
+  setFile(storePath, JSON.stringify(payload, null, 2));
+}
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const pathMod = await import("node:path");
+  const absInMock = (p: string) => pathMod.resolve(p);
+  const isFixtureInMock = (p: string) => {
+    const resolved = absInMock(p);
+    const rootPrefix = `${absInMock(fixturesRoot)}${pathMod.sep}`;
+    return resolved === absInMock(fixturesRoot) || resolved.startsWith(rootPrefix);
+  };
+
+  const mkErr = (code: string, message: string) => Object.assign(new Error(message), { code });
+
+  const promises = {
+    ...actual.promises,
+    mkdir: async (p: string) => {
+      if (!isFixtureInMock(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.mkdir as any)(p, { recursive: true });
+      }
+      ensureDir(p);
+    },
+    readFile: async (p: string) => {
+      if (!isFixtureInMock(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.readFile as any)(p, "utf-8");
+      }
+      const entry = fsState.entries.get(absInMock(p));
+      if (!entry || entry.kind !== "file") {
+        throw mkErr("ENOENT", `ENOENT: no such file or directory, open '${p}'`);
+      }
+      return entry.content;
+    },
+    writeFile: async (p: string, data: string | Uint8Array) => {
+      if (!isFixtureInMock(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.writeFile as any)(p, data, "utf-8");
+      }
+      const content = typeof data === "string" ? data : Buffer.from(data).toString("utf-8");
+      setFile(p, content);
+    },
+    rename: async (from: string, to: string) => {
+      if (!isFixtureInMock(from) || !isFixtureInMock(to)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.rename as any)(from, to);
+      }
+      const fromAbs = absInMock(from);
+      const toAbs = absInMock(to);
+      const entry = fsState.entries.get(fromAbs);
+      if (!entry || entry.kind !== "file") {
+        throw mkErr("ENOENT", `ENOENT: no such file or directory, rename '${from}' -> '${to}'`);
+      }
+      ensureDir(pathMod.dirname(toAbs));
+      fsState.entries.delete(fromAbs);
+      fsState.entries.set(toAbs, { ...entry, mtimeMs: bumpMtimeMs() });
+    },
+    copyFile: async (from: string, to: string) => {
+      if (!isFixtureInMock(from) || !isFixtureInMock(to)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.copyFile as any)(from, to);
+      }
+      const entry = fsState.entries.get(absInMock(from));
+      if (!entry || entry.kind !== "file") {
+        throw mkErr("ENOENT", `ENOENT: no such file or directory, copyfile '${from}' -> '${to}'`);
+      }
+      setFile(to, entry.content);
+    },
+    stat: async (p: string) => {
+      if (!isFixtureInMock(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.stat as any)(p);
+      }
+      const entry = fsState.entries.get(absInMock(p));
+      if (!entry) {
+        throw mkErr("ENOENT", `ENOENT: no such file or directory, stat '${p}'`);
+      }
+      return {
+        mtimeMs: entry.mtimeMs,
+        isDirectory: () => entry.kind === "dir",
+        isFile: () => entry.kind === "file",
+      };
+    },
+    access: async (p: string) => {
+      if (!isFixtureInMock(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.access as any)(p);
+      }
+      const entry = fsState.entries.get(absInMock(p));
+      if (!entry) {
+        throw mkErr("ENOENT", `ENOENT: no such file or directory, access '${p}'`);
+      }
+    },
+    unlink: async (p: string) => {
+      if (!isFixtureInMock(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.promises.unlink as any)(p);
+      }
+      fsState.entries.delete(absInMock(p));
+    },
+  } satisfies typeof actual.promises;
+
+  const wrapped = { ...actual, promises };
+  return { ...wrapped, default: wrapped };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const wrapped = {
+    ...actual,
+    mkdir: async (p: string, _opts?: unknown) => {
+      if (!isFixturePath(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.mkdir as any)(p, { recursive: true });
+      }
+      ensureDir(p);
+    },
+    writeFile: async (p: string, data: string, _enc?: unknown) => {
+      if (!isFixturePath(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return await (actual.writeFile as any)(p, data, "utf-8");
+      }
+      setFile(p, data);
+    },
+  };
+  return { ...wrapped, default: wrapped };
+});
+
+beforeEach(() => {
+  fsState.entries.clear();
+  fsState.nowMs = 0;
+  fsState.fixtureCount = 0;
+  ensureDir(fixturesRoot);
+});
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -56,24 +238,84 @@ function createCronEventHarness() {
   return { onEvent, waitFor, events };
 }
 
+async function createMainOneShotHarness() {
+  ensureDir(fixturesRoot);
+  const store = await makeStorePath();
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeatNow = vi.fn();
+  const events = createCronEventHarness();
+
+  const cron = new CronService({
+    storePath: store.storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    onEvent: events.onEvent,
+  });
+  await cron.start();
+  return { store, cron, enqueueSystemEvent, requestHeartbeatNow, events };
+}
+
+async function createIsolatedAnnounceHarness(runIsolatedAgentJob: ReturnType<typeof vi.fn>) {
+  ensureDir(fixturesRoot);
+  const store = await makeStorePath();
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeatNow = vi.fn();
+  const events = createCronEventHarness();
+
+  const cron = new CronService({
+    storePath: store.storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    runIsolatedAgentJob,
+    onEvent: events.onEvent,
+  });
+
+  await cron.start();
+  return { store, cron, enqueueSystemEvent, requestHeartbeatNow, events };
+}
+
+async function addDefaultIsolatedAnnounceJob(cron: CronService, name: string) {
+  const runAt = new Date("2025-12-13T00:00:01.000Z");
+  const job = await cron.add({
+    enabled: true,
+    name,
+    schedule: { kind: "at", at: runAt.toISOString() },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "do it" },
+    delivery: { mode: "announce" },
+  });
+  return { job, runAt };
+}
+
+async function loadLegacyDeliveryMigration(rawJob: Record<string, unknown>) {
+  ensureDir(fixturesRoot);
+  const store = await makeStorePath();
+  writeStoreFile(store.storePath, { version: 1, jobs: [rawJob] });
+
+  const cron = new CronService({
+    storePath: store.storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+  });
+  await cron.start();
+  const jobs = await cron.list({ includeDisabled: true });
+  const job = jobs.find((j) => j.id === rawJob.id);
+  return { store, cron, job };
+}
+
 describe("CronService", () => {
   it("runs a one-shot main job and disables it after success when requested", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const events = createCronEventHarness();
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createMainOneShotHarness();
     const atMs = Date.parse("2025-12-13T00:00:02.000Z");
     const job = await cron.add({
       name: "one-shot hello",
@@ -106,22 +348,8 @@ describe("CronService", () => {
   });
 
   it("runs a one-shot job and deletes it after success by default", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const events = createCronEventHarness();
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createMainOneShotHarness();
     const atMs = Date.parse("2025-12-13T00:00:02.000Z");
     const job = await cron.add({
       name: "one-shot delete",
@@ -149,6 +377,7 @@ describe("CronService", () => {
   });
 
   it("wakeMode now waits for heartbeat completion when available", async () => {
+    ensureDir(fixturesRoot);
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -216,6 +445,7 @@ describe("CronService", () => {
   });
 
   it("passes agentId to runHeartbeatOnce for main-session wakeMode now jobs", async () => {
+    ensureDir(fixturesRoot);
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -265,6 +495,7 @@ describe("CronService", () => {
   });
 
   it("wakeMode now falls back to queued heartbeat when main lane stays busy", async () => {
+    ensureDir(fixturesRoot);
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -315,38 +546,12 @@ describe("CronService", () => {
   });
 
   it("runs an isolated job and posts summary to main", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const runIsolatedAgentJob = vi.fn(async () => ({
-      status: "ok" as const,
-      summary: "done",
-    }));
-    const events = createCronEventHarness();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { job, runAt } = await addDefaultIsolatedAnnounceJob(cron, "weekly");
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob,
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    const job = await cron.add({
-      enabled: true,
-      name: "weekly",
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce" },
-    });
-
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    vi.setSystemTime(runAt);
     await vi.runOnlyPendingTimersAsync();
 
     await events.waitFor(
@@ -363,39 +568,16 @@ describe("CronService", () => {
   });
 
   it("does not post isolated summary to main when run already delivered output", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",
       delivered: true,
     }));
-    const events = createCronEventHarness();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob,
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    const job = await cron.add({
-      enabled: true,
-      name: "weekly delivered",
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce" },
-    });
-
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    const { job, runAt } = await addDefaultIsolatedAnnounceJob(cron, "weekly delivered");
+    vi.setSystemTime(runAt);
     await vi.runOnlyPendingTimersAsync();
 
     await events.waitFor(
@@ -409,10 +591,6 @@ describe("CronService", () => {
   });
 
   it("migrates legacy payload.provider to payload.channel on load", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-
     const rawJob = {
       id: "legacy-1",
       name: "legacy",
@@ -431,26 +609,7 @@ describe("CronService", () => {
       },
       state: {},
     };
-
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [rawJob] }, null, 2),
-      "utf-8",
-    );
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((j) => j.id === rawJob.id);
+    const { store, cron, job } = await loadLegacyDeliveryMigration(rawJob);
     // Legacy delivery fields are migrated to the top-level delivery object
     const delivery = job?.delivery as unknown as Record<string, unknown>;
     expect(delivery?.channel).toBe("telegram");
@@ -463,10 +622,6 @@ describe("CronService", () => {
   });
 
   it("canonicalizes payload.channel casing on load", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-
     const rawJob = {
       id: "legacy-2",
       name: "legacy",
@@ -485,26 +640,7 @@ describe("CronService", () => {
       },
       state: {},
     };
-
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [rawJob] }, null, 2),
-      "utf-8",
-    );
-
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((j) => j.id === rawJob.id);
+    const { store, cron, job } = await loadLegacyDeliveryMigration(rawJob);
     // Legacy delivery fields are migrated to the top-level delivery object
     const delivery = job?.delivery as unknown as Record<string, unknown>;
     expect(delivery?.channel).toBe("telegram");
@@ -514,39 +650,16 @@ describe("CronService", () => {
   });
 
   it("posts last output to main even when isolated job errors", async () => {
-    const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       summary: "last output",
       error: "boom",
     }));
-    const events = createCronEventHarness();
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { job, runAt } = await addDefaultIsolatedAnnounceJob(cron, "isolated error test");
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob,
-      onEvent: events.onEvent,
-    });
-
-    await cron.start();
-    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    const job = await cron.add({
-      name: "isolated error test",
-      enabled: true,
-      schedule: { kind: "at", at: new Date(atMs).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "do it" },
-      delivery: { mode: "announce" },
-    });
-
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    vi.setSystemTime(runAt);
     await vi.runOnlyPendingTimersAsync();
     await events.waitFor(
       (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "error",
@@ -562,6 +675,7 @@ describe("CronService", () => {
   });
 
   it("rejects unsupported session/payload combinations", async () => {
+    ensureDir(fixturesRoot);
     const store = await makeStorePath();
 
     const cron = new CronService({
@@ -602,32 +716,29 @@ describe("CronService", () => {
   });
 
   it("skips invalid main jobs with agentTurn payloads from disk", async () => {
+    ensureDir(fixturesRoot);
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const events = createCronEventHarness();
 
     const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [
-          {
-            id: "job-1",
-            enabled: true,
-            createdAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
-            updatedAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
-            schedule: { kind: "at", at: new Date(atMs).toISOString() },
-            sessionTarget: "main",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "bad" },
-            state: {},
-          },
-        ],
-      }),
-    );
+    writeStoreFile(store.storePath, {
+      version: 1,
+      jobs: [
+        {
+          id: "job-1",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
+          schedule: { kind: "at", at: new Date(atMs).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "bad" },
+          state: {},
+        },
+      ],
+    });
 
     const cron = new CronService({
       storePath: store.storePath,

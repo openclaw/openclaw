@@ -95,7 +95,7 @@ export function resolveTranscriptPolicy(params: {
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic || isOpenAi;
+  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
     : sanitizeToolCallIds
@@ -109,7 +109,7 @@ export function resolveTranscriptPolicy(params: {
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
-    sanitizeToolCallIds,
+    sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
     toolCallIdMode,
     repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
     preserveSignatures: isAntigravityClaudeModel,

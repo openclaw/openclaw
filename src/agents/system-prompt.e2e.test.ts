@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
@@ -48,6 +49,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
     expect(prompt).toContain("if instructions conflict");
@@ -120,6 +124,9 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
@@ -361,7 +368,21 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
-    expect(prompt).toContain("respond with ONLY: NO_REPLY");
+    expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("includes inline button style guidance when runtime supports inline buttons", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
+    expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
   it("includes runtime provider capabilities when present", () => {
@@ -448,10 +469,12 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Your working directory is: /workspace");
     expect(prompt).toContain(
-      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw.",
+      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw. For bash/exec commands, use sandbox container paths under /workspace (or relative paths from that workdir), not host paths.",
     );
     expect(prompt).toContain("Sandbox container workdir: /workspace");
-    expect(prompt).toContain("Sandbox host workspace: /tmp/sandbox");
+    expect(prompt).toContain(
+      "Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): /tmp/sandbox",
+    );
     expect(prompt).toContain("You are running in a sandboxed runtime");
     expect(prompt).toContain("Sub-agents stay sandboxed");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
