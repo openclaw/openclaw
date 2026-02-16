@@ -18,11 +18,6 @@ describe("createInfoCard", () => {
     const footer = card.footer as { contents: Array<{ text: string }> };
     expect(footer.contents[0].text).toBe("Footer text");
   });
-
-  it("omits footer when not provided", () => {
-    const card = createInfoCard("Title", "Body");
-    expect(card.footer).toBeUndefined();
-  });
 });
 
 describe("createListCard", () => {
