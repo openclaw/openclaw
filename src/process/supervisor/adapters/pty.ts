@@ -1,5 +1,6 @@
 import type { ManagedRunStdin } from "../types.js";
 import { killProcessTree } from "../../kill-tree.js";
+import { toStringEnv } from "./env.js";
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyDisposable = { dispose: () => void };
@@ -28,20 +29,6 @@ type PtyModule = {
     spawn?: PtySpawn;
   };
 };
-
-function toStringEnv(env?: NodeJS.ProcessEnv): Record<string, string> {
-  if (!env) {
-    return {};
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) {
-      continue;
-    }
-    out[key] = String(value);
-  }
-  return out;
-}
 
 export type PtyAdapter = {
   pid?: number;

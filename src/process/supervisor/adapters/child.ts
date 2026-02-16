@@ -2,6 +2,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_pr
 import type { ManagedRunStdin } from "../types.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
+import { toStringEnv } from "./env.js";
 
 function resolveCommand(command: string): string {
   if (process.platform !== "win32") {
@@ -16,20 +17,6 @@ function resolveCommand(command: string): string {
     return `${command}.cmd`;
   }
   return command;
-}
-
-function toStringEnv(env?: NodeJS.ProcessEnv): Record<string, string> {
-  if (!env) {
-    return {};
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) {
-      continue;
-    }
-    out[key] = String(value);
-  }
-  return out;
 }
 
 export type ChildAdapter = {
