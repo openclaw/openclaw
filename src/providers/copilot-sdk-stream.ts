@@ -43,13 +43,15 @@ const { AssistantMessageEventStream: EventStreamClass } =
 let sharedClient: CopilotClient | null = null;
 let clientRefCount = 0;
 let clientInitToken: string | undefined;
+let clientStartPromise: Promise<void> | null = null;
 
-function getOrCreateClient(githubToken?: string): CopilotClient {
+async function getOrCreateClient(githubToken?: string): Promise<CopilotClient> {
   // If token changed, tear down old client.
   if (sharedClient && clientInitToken !== githubToken) {
     const oldClient = sharedClient;
     sharedClient = null;
     clientRefCount = 0;
+    clientStartPromise = null;
     oldClient.stop().catch(() => {});
   }
 
@@ -58,13 +60,25 @@ function getOrCreateClient(githubToken?: string): CopilotClient {
       process.env.OPENCLAW_LOG_LEVEL === "debug" || process.env.DEBUG?.includes("copilot");
     sharedClient = new CopilotClient({
       useStdio: true,
-      autoStart: true,
+      autoStart: false, // We manage startup explicitly for error recovery.
       autoRestart: true,
       logLevel: isDebug ? "debug" : "warning",
       ...(githubToken ? { githubToken, useLoggedInUser: false } : { useLoggedInUser: true }),
     });
     clientInitToken = githubToken;
+    clientStartPromise = null;
   }
+
+  // Ensure the client is started. If a previous start() failed, retry.
+  if (!clientStartPromise) {
+    clientStartPromise = sharedClient.start().catch((err) => {
+      // Clear the cached promise so the next call retries.
+      clientStartPromise = null;
+      throw err;
+    });
+  }
+  await clientStartPromise;
+
   clientRefCount++;
   return sharedClient;
 }
@@ -169,8 +183,7 @@ function buildErrorMessage(message: string, statusCode?: number): string {
  *   `gh` CLI auth or env vars automatically.
  */
 export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
-  const client = getOrCreateClient(githubToken);
-
+  // Client is started lazily inside the async IIFE (now async).
   return (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
     const stream = new EventStreamClass();
     const output = createEmptyOutput(model);
@@ -180,13 +193,26 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
     let thinkingContentIndex = -1;
     let currentTextContent: TextContent | null = null;
     let currentThinkingContent: ThinkingContent | null = null;
+    let streamEnded = false;
 
-    // Keep track of tool call mapping (SDK toolCallId → content index)
-    const toolCallIndices = new Map<string, number>();
+    /** Guard: only push to the stream if it hasn't been ended yet. */
+    function safePush(event: Parameters<typeof stream.push>[0]): void {
+      if (!streamEnded) {
+        stream.push(event);
+      }
+    }
+    function safeEnd(): void {
+      if (!streamEnded) {
+        streamEnded = true;
+        stream.end();
+      }
+    }
 
     void (async () => {
       let session: CopilotSession | null = null;
       try {
+        const client = await getOrCreateClient(githubToken);
+
         // Determine model ID — strip the `github-copilot/` prefix if present.
         const modelId = model.id.includes("/") ? model.id.split("/").pop()! : model.id;
 
@@ -231,13 +257,24 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
         const prompt = contextToPrompt(context);
         if (!prompt) {
           output.stopReason = "stop";
-          stream.push({ type: "done", reason: "stop", message: output });
-          stream.end();
+          safePush({ type: "done", reason: "stop", message: output });
+          safeEnd();
           return;
         }
 
+        // Wire abort signal — if the caller cancels, abort the SDK session.
+        if (options?.signal) {
+          options.signal.addEventListener(
+            "abort",
+            () => {
+              session?.abort().catch(() => {});
+            },
+            { once: true },
+          );
+        }
+
         // Emit start
-        stream.push({ type: "start", partial: output });
+        safePush({ type: "start", partial: output });
 
         // Subscribe to session events and translate to pi-ai events
         session.on((event: SessionEvent) => {
@@ -248,14 +285,14 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
                 currentTextContent = { type: "text", text: "" };
                 output.content.push(currentTextContent);
                 textContentIndex = output.content.length - 1;
-                stream.push({
+                safePush({
                   type: "text_start",
                   contentIndex: textContentIndex,
                   partial: output,
                 });
               }
               currentTextContent.text += event.data.deltaContent;
-              stream.push({
+              safePush({
                 type: "text_delta",
                 contentIndex: textContentIndex,
                 delta: event.data.deltaContent,
@@ -270,14 +307,14 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
                 currentThinkingContent = { type: "thinking", thinking: "" };
                 output.content.push(currentThinkingContent);
                 thinkingContentIndex = output.content.length - 1;
-                stream.push({
+                safePush({
                   type: "thinking_start",
                   contentIndex: thinkingContentIndex,
                   partial: output,
                 });
               }
               currentThinkingContent.thinking += event.data.deltaContent;
-              stream.push({
+              safePush({
                 type: "thinking_delta",
                 contentIndex: thinkingContentIndex,
                 delta: event.data.deltaContent,
@@ -290,7 +327,7 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
               // Complete thinking block (non-streamed or final)
               if (currentThinkingContent) {
                 currentThinkingContent.thinking = event.data.content;
-                stream.push({
+                safePush({
                   type: "thinking_end",
                   contentIndex: thinkingContentIndex,
                   content: event.data.content,
@@ -309,7 +346,7 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
                 if (finalContent && finalContent !== currentTextContent.text) {
                   currentTextContent.text = finalContent;
                 }
-                stream.push({
+                safePush({
                   type: "text_end",
                   contentIndex: textContentIndex,
                   content: currentTextContent.text,
@@ -321,12 +358,12 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
                 const tc: TextContent = { type: "text", text: event.data.content };
                 output.content.push(tc);
                 textContentIndex = output.content.length - 1;
-                stream.push({
+                safePush({
                   type: "text_start",
                   contentIndex: textContentIndex,
                   partial: output,
                 });
-                stream.push({
+                safePush({
                   type: "text_end",
                   contentIndex: textContentIndex,
                   content: tc.text,
@@ -348,9 +385,8 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
                   };
                   output.content.push(toolCall);
                   const idx = output.content.length - 1;
-                  toolCallIndices.set(req.toolCallId, idx);
-                  stream.push({ type: "toolcall_start", contentIndex: idx, partial: output });
-                  stream.push({
+                  safePush({ type: "toolcall_start", contentIndex: idx, partial: output });
+                  safePush({
                     type: "toolcall_end",
                     contentIndex: idx,
                     toolCall,
@@ -394,8 +430,8 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
               // (e.g. "429 rate limit exceeded" → rate_limit).
               output.stopReason = "error";
               output.errorMessage = buildErrorMessage(event.data.message, event.data.statusCode);
-              stream.push({ type: "error", reason: "error", error: output });
-              stream.end();
+              safePush({ type: "error", reason: "error", error: output });
+              safeEnd();
               break;
             }
 
@@ -415,14 +451,14 @@ export function createCopilotSdkStreamFn(githubToken?: string): StreamFunction {
         if (output.stopReason !== "error") {
           const reason = output.stopReason === "toolUse" ? "toolUse" : "stop";
           output.stopReason = reason;
-          stream.push({ type: "done", reason, message: output });
+          safePush({ type: "done", reason, message: output });
         }
-        stream.end();
+        safeEnd();
       } catch (err) {
         output.stopReason = "error";
         output.errorMessage = err instanceof Error ? err.message : String(err);
-        stream.push({ type: "error", reason: "error", error: output });
-        stream.end();
+        safePush({ type: "error", reason: "error", error: output });
+        safeEnd();
       } finally {
         // Destroy the session to free resources — OpenClaw manages its own sessions.
         if (session) {
