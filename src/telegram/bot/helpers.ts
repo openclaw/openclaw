@@ -18,6 +18,7 @@ export type TelegramThreadSpec = {
 
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
+  accountId?: string;
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
@@ -38,7 +39,11 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     isForum: params.isForum,
     messageThreadId: params.messageThreadId,
   });
-  const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+  const storeAllowFrom = await readChannelAllowFromStore(
+    "telegram",
+    process.env,
+    params.accountId,
+  ).catch(() => []);
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     resolvedThreadId,
