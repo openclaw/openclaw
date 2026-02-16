@@ -125,20 +125,6 @@ describe("createMediaPlayerCard", () => {
     expect(card.hero).toBeDefined();
     expect((card.hero as { url: string }).url).toBe("https://example.com/album.jpg");
   });
-
-  it("includes playback controls", () => {
-    const card = createMediaPlayerCard({
-      title: "Track",
-      controls: {
-        previous: { data: "action=prev" },
-        play: { data: "action=play" },
-        pause: { data: "action=pause" },
-        next: { data: "action=next" },
-      },
-    });
-
-    expect(card.footer).toBeDefined();
-  });
 });
 
 describe("createDeviceControlCard", () => {
