@@ -519,6 +519,51 @@ describe("registerSlackInteractionEvents", () => {
                   selected_date_time: 1_771_632_300,
                 },
               },
+              radio_block: {
+                radio_select: {
+                  type: "radio_buttons",
+                  selected_option: {
+                    text: { type: "plain_text", text: "Blue" },
+                    value: "blue",
+                  },
+                },
+              },
+              checks_block: {
+                checks_select: {
+                  type: "checkboxes",
+                  selected_options: [
+                    { text: { type: "plain_text", text: "A" }, value: "a" },
+                    { text: { type: "plain_text", text: "B" }, value: "b" },
+                  ],
+                },
+              },
+              number_block: {
+                number_input: {
+                  type: "number_input",
+                  value: "42.5",
+                },
+              },
+              email_block: {
+                email_input: {
+                  type: "email_text_input",
+                  value: "team@openclaw.ai",
+                },
+              },
+              url_block: {
+                url_input: {
+                  type: "url_text_input",
+                  value: "https://docs.openclaw.ai",
+                },
+              },
+              richtext_block: {
+                richtext_input: {
+                  type: "rich_text_input",
+                  rich_text_value: {
+                    type: "rich_text",
+                    elements: [{ type: "rich_text_section", elements: [] }],
+                  },
+                },
+              },
             },
           },
         },
@@ -531,11 +576,16 @@ describe("registerSlackInteractionEvents", () => {
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       inputs: Array<{
         actionId: string;
+        inputKind?: string;
         selectedValues?: string[];
         selectedLabels?: string[];
         selectedDate?: string;
         selectedTime?: string;
         selectedDateTime?: number;
+        inputNumber?: number;
+        inputEmail?: string;
+        inputUrl?: string;
+        richTextValue?: unknown;
       }>;
     };
     expect(payload.inputs).toEqual(
@@ -551,6 +601,39 @@ describe("registerSlackInteractionEvents", () => {
         expect.objectContaining({ actionId: "date_select", selectedDate: "2026-02-16" }),
         expect.objectContaining({ actionId: "time_select", selectedTime: "12:45" }),
         expect.objectContaining({ actionId: "datetime_select", selectedDateTime: 1_771_632_300 }),
+        expect.objectContaining({
+          actionId: "radio_select",
+          selectedValues: ["blue"],
+          selectedLabels: ["Blue"],
+        }),
+        expect.objectContaining({
+          actionId: "checks_select",
+          selectedValues: ["a", "b"],
+          selectedLabels: ["A", "B"],
+        }),
+        expect.objectContaining({
+          actionId: "number_input",
+          inputKind: "number",
+          inputNumber: 42.5,
+        }),
+        expect.objectContaining({
+          actionId: "email_input",
+          inputKind: "email",
+          inputEmail: "team@openclaw.ai",
+        }),
+        expect.objectContaining({
+          actionId: "url_input",
+          inputKind: "url",
+          inputUrl: "https://docs.openclaw.ai/",
+        }),
+        expect.objectContaining({
+          actionId: "richtext_input",
+          inputKind: "rich_text",
+          richTextValue: {
+            type: "rich_text",
+            elements: [{ type: "rich_text_section", elements: [] }],
+          },
+        }),
       ]),
     );
   });
