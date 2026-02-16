@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/x",
-  "version": "2026.2.17",
+  "version": "2026.2.18",
   "description": "OpenClaw X (Twitter) channel plugin",
   "type": "module",
   "openclaw": {

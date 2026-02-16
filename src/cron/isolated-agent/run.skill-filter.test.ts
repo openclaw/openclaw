@@ -195,6 +195,7 @@ function makeParams(overrides?: Record<string, unknown>) {
 describe("runCronIsolatedAgentTurn — skill filter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "<available_skills></available_skills>",
       resolvedSkills: [],
