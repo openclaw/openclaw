@@ -67,6 +67,53 @@ describe("base64 validation", () => {
     }
   });
 
+  it("rejects base64 with padding in wrong position", async () => {
+    const blocks = [
+      {
+        type: "image" as const,
+        data: "SGVs=bG8=", // = in middle is invalid
+        mimeType: "image/png",
+      },
+    ];
+
+    const out = await sanitizeContentBlocksImages(blocks, "test");
+    expect(out.length).toBe(1);
+    expect(out[0].type).toBe("text");
+    if (out[0].type === "text") {
+      expect(out[0].text).toContain("omitted image payload");
+    }
+  });
+
+  it("normalizes URL-safe base64 to standard base64", async () => {
+    // Create a small valid image
+    const jpeg = await sharp({
+      create: {
+        width: 10,
+        height: 10,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .jpeg()
+      .toBuffer();
+
+    // Convert to URL-safe base64 (replace + with -, / with _)
+    const standardBase64 = jpeg.toString("base64");
+    const urlSafeBase64 = standardBase64.replace(/\+/g, "-").replace(/\//g, "_");
+
+    const blocks = [
+      {
+        type: "image" as const,
+        data: urlSafeBase64,
+        mimeType: "image/jpeg",
+      },
+    ];
+
+    const out = await sanitizeContentBlocksImages(blocks, "test");
+    expect(out.length).toBe(1);
+    expect(out[0].type).toBe("image");
+  });
+
   it("rejects base64 with invalid length", async () => {
     const blocks = [
       {
