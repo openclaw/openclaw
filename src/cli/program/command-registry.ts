@@ -43,14 +43,26 @@ const coreEntries: CoreCliEntry[] = [
     },
   },
   {
-    commands: [{ name: "configure", description: "Configure wizard" }],
+    commands: [
+      {
+        name: "configure",
+        description:
+          "Interactive setup wizard for credentials, channels, gateway, and agent defaults",
+      },
+    ],
     register: async ({ program }) => {
       const mod = await import("./register.configure.js");
       mod.registerConfigureCommand(program);
     },
   },
   {
-    commands: [{ name: "config", description: "Config helpers" }],
+    commands: [
+      {
+        name: "config",
+        description:
+          "Non-interactive config helpers (get/set/unset). Default: starts setup wizard.",
+      },
+    ],
     register: async ({ program }) => {
       const mod = await import("../config-cli.js");
       mod.registerConfigCli(program);
@@ -58,9 +70,18 @@ const coreEntries: CoreCliEntry[] = [
   },
   {
     commands: [
-      { name: "doctor", description: "Health checks + quick fixes for the gateway and channels" },
-      { name: "dashboard", description: "Open the Control UI with your current token" },
-      { name: "reset", description: "Reset local config/state (keeps the CLI installed)" },
+      {
+        name: "doctor",
+        description: "Health checks + quick fixes for the gateway and channels",
+      },
+      {
+        name: "dashboard",
+        description: "Open the Control UI with your current token",
+      },
+      {
+        name: "reset",
+        description: "Reset local config/state (keeps the CLI installed)",
+      },
       {
         name: "uninstall",
         description: "Uninstall the gateway service + local data (CLI remains)",
@@ -92,7 +113,9 @@ const coreEntries: CoreCliEntry[] = [
     ],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.agent.js");
-      mod.registerAgentCommands(program, { agentChannelOptions: ctx.agentChannelOptions });
+      mod.registerAgentCommands(program, {
+        agentChannelOptions: ctx.agentChannelOptions,
+      });
     },
   },
   {
