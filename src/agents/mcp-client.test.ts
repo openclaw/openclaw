@@ -79,3 +79,51 @@ describe("mcp client runtime", () => {
     }
   });
 });
+
+const MOCK_ARRAY_SCHEMA_SCRIPT = [
+  'process.stdin.setEncoding("utf8");',
+  'let buffer = "";',
+  'const send = (payload) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...payload }) + "\\n");',
+  'process.stdin.on("data", (chunk) => {',
+  '  buffer += String(chunk);',
+  '  let newline = buffer.indexOf("\\n");',
+  '  while (newline >= 0) {',
+  '    const raw = buffer.slice(0, newline).trim();',
+  '    buffer = buffer.slice(newline + 1);',
+  '    newline = buffer.indexOf("\\n");',
+  '    if (!raw) continue;',
+  '    const msg = JSON.parse(raw);',
+  '    if (msg.method === "initialize") {',
+  '      send({ id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "mock", version: "1.0.0" } } });',
+  '      continue;',
+  '    }',
+  '    if (msg.method === "tools/list") {',
+  '      send({ id: msg.id, result: { tools: [{ name: "bad_schema", description: "Tool with array inputSchema", inputSchema: ["not", "a", "record"] }] } });',
+  '      continue;',
+  '    }',
+  '    if (msg.method === "notifications/initialized") continue;',
+  '    send({ id: msg.id, error: { code: -32601, message: "method not found" } });',
+  '  }',
+  '});',
+].join("\n");
+
+describe("mcp client array rejection", () => {
+  it("drops inputSchema when it is an array instead of a record", async () => {
+    const runtime = await initMcpRuntime({
+      mcpServers: [{
+        name: "array-schema",
+        type: "stdio",
+        command: process.execPath,
+        args: ["-e", MOCK_ARRAY_SCHEMA_SCRIPT],
+      } as const],
+    });
+
+    try {
+      expect(runtime.tools).toHaveLength(1);
+      expect(runtime.tools[0].name).toBe("bad_schema");
+      expect(runtime.tools[0].inputSchema).toBeUndefined();
+    } finally {
+      await runtime.cleanup();
+    }
+  });
+});
