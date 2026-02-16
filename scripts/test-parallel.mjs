@@ -33,6 +33,8 @@ const unitIsolatedFilesRaw = [
   "src/auto-reply/reply.block-streaming.test.ts",
   // Integration test is process-heavy and can bottleneck unit-fast.
   "test/git-hooks-pre-commit.integration.test.ts",
+  // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
+  "src/hooks/install.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
 ];
