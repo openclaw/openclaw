@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripMarkdown } from "../line/markdown-to-line.js";
+import { stripMarkdown } from "./tts.js";
 
 /**
  * Tests that stripMarkdown (used in the TTS pipeline via maybeApplyTtsToPayload)

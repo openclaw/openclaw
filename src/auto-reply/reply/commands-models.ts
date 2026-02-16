@@ -10,13 +10,20 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import {
-  buildModelsKeyboard,
-  buildProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ProviderInfo,
-} from "../../telegram/model-buttons.js";
+// Stubs for deleted telegram model-buttons module
+type ProviderInfo = { id: string; count: number };
+const buildProviderKeyboard = (_providers: ProviderInfo[]): any => ({ inline_keyboard: [] });
+const buildModelsKeyboard = (_params: {
+  provider: string;
+  models: string[];
+  currentModel?: string;
+  currentPage: number;
+  totalPages: number;
+  pageSize: number;
+}): any => ({ inline_keyboard: [] });
+const calculateTotalPages = (total: number, pageSize: number): number =>
+  Math.max(1, Math.ceil(total / pageSize));
+const getModelsPageSize = (): number => 10;
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;

@@ -1,4 +1,3 @@
-import { RateLimitError } from "@buape/carbon";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
@@ -55,8 +54,11 @@ export function createDiscordRetryRunner(params: {
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: (err) => err instanceof RateLimitError,
-      retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
+      shouldRetry: (err) => (err as any)?.retryAfter != null,
+      retryAfterMs: (err) => {
+        const retryAfter = (err as any)?.retryAfter;
+        return typeof retryAfter === "number" ? retryAfter * 1000 : undefined;
+      },
       onRetry: params.verbose
         ? (info) => {
             const labelText = info.label ?? "request";

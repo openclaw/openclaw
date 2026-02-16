@@ -22,7 +22,6 @@ import type {
 } from "../config/types.tts.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
@@ -63,15 +62,6 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   speed: 1.0,
 };
 
-const TELEGRAM_OUTPUT = {
-  openai: "opus" as const,
-  // ElevenLabs output formats use codec_sample_rate_bitrate naming.
-  // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
-  elevenlabs: "opus_48000_64",
-  extension: ".opus",
-  voiceCompatible: true,
-};
-
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
@@ -85,6 +75,17 @@ const TELEPHONY_OUTPUT = {
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
+
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*{1,3}(.+?)\*{1,3}/g, "$1")
+    .replace(/_{1,3}(.+?)_{1,3}/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^>\s+/gm, "")
+    .replace(/^---+$/gm, "");
+}
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -478,10 +479,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-function resolveOutputFormat(channelId?: string | null) {
-  if (channelId === "telegram") {
-    return TELEGRAM_OUTPUT;
-  }
+function resolveOutputFormat(_channelId?: string | null) {
   return DEFAULT_OUTPUT;
 }
 

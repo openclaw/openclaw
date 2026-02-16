@@ -9,7 +9,8 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { buildBrowseProvidersButton } from "../../telegram/model-buttons.js";
+// Stub for deleted telegram model-buttons module
+const buildBrowseProvidersButton = (): any => ({ inline_keyboard: [] });
 import { shortenHomePath } from "../../utils.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
 import {

@@ -1,7 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
-import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
+// Stub: bluebubbles-actions module was removed with channel cleanup.
+const BLUEBUBBLES_GROUP_ACTIONS = new Set<string>();
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,

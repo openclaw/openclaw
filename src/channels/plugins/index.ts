@@ -64,6 +64,7 @@ export {
   listTelegramDirectoryPeersFromConfig,
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
+  type DirectoryConfigParams,
 } from "./directory-config.js";
 export {
   applyChannelMatchMeta,

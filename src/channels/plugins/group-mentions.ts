@@ -9,7 +9,13 @@ import {
   resolveChannelGroupToolsPolicy,
   resolveToolsBySender,
 } from "../../config/group-policy.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
+// Stub: resolveSlackAccount was removed with the Slack channel module.
+function resolveSlackAccount(_params: { cfg: any; accountId?: string | null }): {
+  channels?: Record<string, any>;
+  config?: any;
+} {
+  return { channels: {}, config: {} };
+}
 
 type GroupMentionParams = {
   cfg: OpenClawConfig;

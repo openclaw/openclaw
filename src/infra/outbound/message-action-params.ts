@@ -9,9 +9,38 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
 import { extensionForMime } from "../../media/mime.js";
-import { parseSlackTarget } from "../../slack/targets.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
 import { loadWebMedia } from "../../web/media.js";
+
+function parseTelegramTarget(raw: string): { chatId: string } {
+  const trimmed = raw.trim().replace(/^telegram:/i, "");
+  const parts = trimmed.split(":").filter(Boolean);
+  // Handle formats like "telegram:group:123:topic:456" or "telegram:123"
+  for (const part of parts) {
+    if (/^-?\d+$/.test(part)) {
+      return { chatId: part };
+    }
+  }
+  return { chatId: trimmed };
+}
+
+function parseSlackTarget(
+  raw: string,
+  _opts?: { defaultKind?: string },
+): { kind: string; id: string } | null {
+  const trimmed = raw.trim().replace(/^slack:/i, "");
+  if (!trimmed) {
+    return null;
+  }
+  const channelMatch = trimmed.match(/^channel:(.+)$/i);
+  if (channelMatch) {
+    return { kind: "channel", id: channelMatch[1] };
+  }
+  const userMatch = trimmed.match(/^user:(.+)$/i);
+  if (userMatch) {
+    return { kind: "user", id: userMatch[1] };
+  }
+  return { kind: _opts?.defaultKind ?? "channel", id: trimmed };
+}
 
 export function readBooleanParam(
   params: Record<string, unknown>,

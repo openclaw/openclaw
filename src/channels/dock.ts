@@ -14,17 +14,50 @@ import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
-import { resolveDiscordAccount } from "../discord/accounts.js";
-import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { resolveSignalAccount } from "../signal/accounts.js";
-import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
-import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
-import { resolveTelegramAccount } from "../telegram/accounts.js";
 import { escapeRegExp, normalizeE164 } from "../utils.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
-import { normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+
+// Stubs for deleted channel account resolvers
+const resolveDiscordAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: { dm: {}, guilds: {}, groupPolicy: undefined },
+  token: undefined,
+});
+const resolveIMessageAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: { allowFrom: [], groupAllowFrom: [], dmPolicy: undefined, groupPolicy: undefined },
+});
+const resolveSignalAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: { allowFrom: [], groupAllowFrom: [], dmPolicy: undefined, groupPolicy: undefined },
+});
+const resolveSlackAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  dm: {},
+  config: { userToken: undefined },
+  botToken: undefined,
+  groupPolicy: undefined,
+  channels: {},
+});
+const resolveSlackReplyToMode = (_account: any, _chatType?: string): string => "off";
+const buildSlackThreadingToolContext = (_params: any): any => ({
+  currentChannelId: undefined,
+  currentThreadTs: undefined,
+  hasRepliedRef: undefined,
+});
+const resolveTelegramAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: {
+    allowFrom: [],
+    groupAllowFrom: [],
+    dmPolicy: undefined,
+    groupPolicy: undefined,
+    groups: {},
+  },
+});
+const resolveWhatsAppAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  allowFrom: [],
+  groupAllowFrom: [],
+  dmPolicy: undefined,
+  groupPolicy: undefined,
+});
+const normalizeWhatsAppTarget = (target: string): string => target;
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,

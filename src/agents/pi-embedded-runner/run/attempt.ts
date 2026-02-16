@@ -11,10 +11,15 @@ import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey, normalizeAgentId } from "../../../routing/session-key.js";
-import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
+
+const resolveTelegramInlineButtonsScope = (_opts: unknown) => "off" as const;
+const resolveTelegramReactionLevel = (_opts: unknown) => ({
+  agentReactionGuidance: undefined as string | undefined,
+});
+const resolveSignalReactionLevel = (_opts: unknown) => ({
+  agentReactionGuidance: undefined as string | undefined,
+});
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";

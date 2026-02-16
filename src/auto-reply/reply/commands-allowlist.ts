@@ -10,21 +10,54 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
-import { resolveDiscordAccount } from "../../discord/accounts.js";
-import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
 import { logVerbose } from "../../globals.js";
-import { resolveIMessageAccount } from "../../imessage/accounts.js";
 import {
   addChannelAllowFromStoreEntry,
   readChannelAllowFromStore,
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { resolveSignalAccount } from "../../signal/accounts.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
-import { resolveTelegramAccount } from "../../telegram/accounts.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
+// Stubs for deleted channel account resolvers
+const resolveDiscordAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: { dm: {}, guilds: {}, groupPolicy: undefined },
+  token: undefined,
+});
+const resolveDiscordUserAllowlist = async (_params: {
+  token: string;
+  entries: string[];
+}): Promise<Array<{ input: string; resolved: boolean; name?: string }>> => [];
+const resolveIMessageAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: { allowFrom: [], groupAllowFrom: [], dmPolicy: undefined, groupPolicy: undefined },
+});
+const resolveSignalAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: { allowFrom: [], groupAllowFrom: [], dmPolicy: undefined, groupPolicy: undefined },
+});
+const resolveSlackAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  dm: {},
+  config: { userToken: undefined },
+  botToken: undefined,
+  groupPolicy: undefined,
+  channels: {},
+});
+const resolveSlackUserAllowlist = async (_params: {
+  token: string;
+  entries: string[];
+}): Promise<Array<{ input: string; resolved: boolean; name?: string }>> => [];
+const resolveTelegramAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  config: {
+    allowFrom: [],
+    groupAllowFrom: [],
+    dmPolicy: undefined,
+    groupPolicy: undefined,
+    groups: {},
+  },
+});
+const resolveWhatsAppAccount = (_params: { cfg: any; accountId?: string | null }): any => ({
+  allowFrom: [],
+  groupAllowFrom: [],
+  dmPolicy: undefined,
+  groupPolicy: undefined,
+});
 
 type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
