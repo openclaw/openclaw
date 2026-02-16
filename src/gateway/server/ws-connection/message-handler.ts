@@ -427,7 +427,9 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
-          if (scopes.length > 0) {
+          // Preserve scopes for Control UI when allowInsecureAuth is enabled
+          const preserveScopes = isControlUi && allowInsecureControlUi;
+          if (scopes.length > 0 && !preserveScopes) {
             scopes = [];
             connectParams.scopes = scopes;
           }
