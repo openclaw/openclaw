@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
+import {
+  createThrowingRuntime,
+  readJsonFile,
+  runNonInteractiveOnboarding,
+} from "./onboard-non-interactive.test-helpers.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -53,15 +58,7 @@ async function getFreeGatewayPort(): Promise<number> {
   });
 }
 
-const runtime = {
-  log: () => {},
-  error: (msg: string) => {
-    throw new Error(msg);
-  },
-  exit: (code: number) => {
-    throw new Error(`exit:${code}`);
-  },
-};
+const runtime = createThrowingRuntime();
 
 async function expectGatewayTokenAuth(params: {
   authConfig: unknown;
@@ -111,11 +108,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   };
-  const runOnboarding = async (options: Record<string, unknown>) => {
-    const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
-    await runNonInteractiveOnboarding(options, runtime);
-  };
-
   beforeAll(async () => {
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -125,7 +117,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
-    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
+    tempHome = await makeTempWorkspace("openclaw-onboard-");
     process.env.HOME = tempHome;
   });
 
@@ -150,25 +142,28 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const token = "tok_test_123";
       const workspace = path.join(stateDir, "openclaw");
 
-      await runOnboarding({
-        nonInteractive: true,
-        mode: "local",
-        workspace,
-        authChoice: "skip",
-        skipSkills: true,
-        skipHealth: true,
-        installDaemon: false,
-        gatewayBind: "loopback",
-        gatewayAuth: "token",
-        gatewayToken: token,
-      });
+      await runNonInteractiveOnboarding(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: token,
+        },
+        runtime,
+      );
 
       const { resolveConfigPath } = await import("../config/paths.js");
       const configPath = resolveConfigPath(process.env, stateDir);
-      const cfg = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      const cfg = await readJsonFile<{
         gateway?: { auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
-      };
+      }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.auth?.mode).toBe("token");
@@ -186,19 +181,22 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     await withStateDir("state-remote-", async () => {
       const port = await getFreePort();
       const token = "tok_remote_123";
-      await runOnboarding({
-        nonInteractive: true,
-        mode: "remote",
-        remoteUrl: `ws://127.0.0.1:${port}`,
-        remoteToken: token,
-        authChoice: "skip",
-        json: true,
-      });
+      await runNonInteractiveOnboarding(
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: `ws://127.0.0.1:${port}`,
+          remoteToken: token,
+          authChoice: "skip",
+          json: true,
+        },
+        runtime,
+      );
 
       const { resolveConfigPath } = await import("../config/config.js");
-      const cfg = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8")) as {
+      const cfg = await readJsonFile<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
-      };
+      }>(resolveConfigPath());
 
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
@@ -226,27 +224,30 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const port = await getFreeGatewayPort();
       const workspace = path.join(stateDir, "openclaw");
 
-      await runOnboarding({
-        nonInteractive: true,
-        mode: "local",
-        workspace,
-        authChoice: "skip",
-        skipSkills: true,
-        skipHealth: true,
-        installDaemon: false,
-        gatewayPort: port,
-        gatewayBind: "lan",
-      });
+      await runNonInteractiveOnboarding(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayPort: port,
+          gatewayBind: "lan",
+        },
+        runtime,
+      );
 
       const { resolveConfigPath } = await import("../config/paths.js");
       const configPath = resolveConfigPath(process.env, stateDir);
-      const cfg = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      const cfg = await readJsonFile<{
         gateway?: {
           bind?: string;
           port?: number;
           auth?: { mode?: string; token?: string };
         };
-      };
+      }>(configPath);
 
       expect(cfg.gateway?.bind).toBe("lan");
       expect(cfg.gateway?.port).toBe(port);
