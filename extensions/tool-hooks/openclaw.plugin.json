@@ -1,0 +1,50 @@
+{
+  "id": "tool-hooks",
+  "kind": "extension",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "hooks": {
+        "type": "array",
+        "description": "List of tool hook definitions. Each hook runs a shell command after a matching tool call completes.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tool", "command"],
+          "properties": {
+            "tool": {
+              "type": "string",
+              "description": "Tool name to match (e.g. 'memory_search', 'web_search'). Supports glob patterns with '*'."
+            },
+            "event": {
+              "type": "string",
+              "enum": ["after_tool_call", "before_tool_call"],
+              "default": "after_tool_call",
+              "description": "When to run the hook. Default: after_tool_call."
+            },
+            "command": {
+              "type": "string",
+              "description": "Shell command to execute. Receives tool params and result as env vars: TOOL_NAME, TOOL_PARAMS (JSON), TOOL_RESULT (JSON for after hooks), TOOL_DURATION_MS, AGENT_ID, SESSION_KEY."
+            },
+            "background": {
+              "type": "boolean",
+              "default": true,
+              "description": "Run command in background (fire-and-forget). Default: true."
+            },
+            "timeoutMs": {
+              "type": "number",
+              "default": 10000,
+              "description": "Maximum execution time in milliseconds. Default: 10000."
+            },
+            "onlyOnSuccess": {
+              "type": "boolean",
+              "default": false,
+              "description": "Only run hook when the tool call succeeds (no error). Default: false."
+            }
+          }
+        }
+      }
+    }
+  }
+}
