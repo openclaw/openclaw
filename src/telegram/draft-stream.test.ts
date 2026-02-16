@@ -169,9 +169,7 @@ describe("createTelegramDraftStream", () => {
     });
 
     stream.update("Hello");
-    await vi.waitFor(() =>
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined),
-    );
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
   });
 
   it("includes reply_to_message_id even when thread resolves to general topic", async () => {

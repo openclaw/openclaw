@@ -123,7 +123,11 @@ export const dispatchTelegramMessage = async ({
       // Some providers briefly emit a shorter prefix snapshot (for example
       // "Sure." -> "Sure" -> "Sure."). Keep the longer preview to avoid
       // visible punctuation flicker.
-      if (lastPartialText && lastPartialText.startsWith(text) && text.length < lastPartialText.length) {
+      if (
+        lastPartialText &&
+        lastPartialText.startsWith(text) &&
+        text.length < lastPartialText.length
+      ) {
         return;
       }
       lastPartialText = text;
