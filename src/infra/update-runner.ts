@@ -302,7 +302,9 @@ function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args
 
 function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
   if (manager === "pnpm") {
-    return ["pnpm", "install"];
+    // Keep update installs non-interactive so launchd/systemd runs do not fail
+    // with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY.
+    return ["pnpm", "install", "--config.confirmModulesPurge=false"];
   }
   if (manager === "bun") {
     return ["bun", "install"];

@@ -79,7 +79,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} checkout --detach ${params.stableTag}`) {
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (key === "pnpm install") {
+      if (key === "pnpm install --config.confirmModulesPurge=false") {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === "pnpm build") {
@@ -187,7 +187,7 @@ describe("runGatewayUpdate", () => {
         stdout: `${stableTag}\n${betaTag}\n`,
       },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
-      "pnpm install": { stdout: "" },
+      "pnpm install --config.confirmModulesPurge=false": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
       [`${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`]: {
@@ -451,7 +451,7 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
       [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${stableTag}\n` },
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
-      "pnpm install": { stdout: "" },
+      "pnpm install --config.confirmModulesPurge=false": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
     });
