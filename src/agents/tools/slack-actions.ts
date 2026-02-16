@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { Block, KnownBlock } from "@slack/web-api";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
@@ -82,6 +83,27 @@ function resolveThreadTsFromContext(
     return context.currentThreadTs;
   }
   return undefined;
+}
+
+function readSlackBlocksParam(params: Record<string, unknown>) {
+  const raw = params.blocks;
+  if (raw == null) {
+    return undefined;
+  }
+  const parsed =
+    typeof raw === "string"
+      ? (() => {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            throw new Error("blocks must be valid JSON");
+          }
+        })()
+      : raw;
+  if (!Array.isArray(parsed)) {
+    throw new Error("blocks must be an array");
+  }
+  return parsed as (Block | KnownBlock)[];
 }
 
 export async function handleSlackAction(
@@ -174,17 +196,22 @@ export async function handleSlackAction(
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
-        const content = readStringParam(params, "content", { required: true });
+        const content = readStringParam(params, "content", { allowEmpty: true });
         const mediaUrl = readStringParam(params, "mediaUrl");
+        const blocks = readSlackBlocksParam(params);
+        if (!content && !mediaUrl && !blocks) {
+          throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
+        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
         );
-        const result = await sendSlackMessage(to, content, {
+        const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
+          blocks,
         });
 
         // Keep "first" mode consistent even when the agent explicitly provided
