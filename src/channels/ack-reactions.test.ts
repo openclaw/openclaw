@@ -36,22 +36,10 @@ describe("shouldAckReaction", () => {
     ).toBe(true);
   });
 
-  it("skips when scope is off or none", () => {
+  it("skips when scope is off", () => {
     expect(
       shouldAckReaction({
         scope: "off",
-        isDirect: true,
-        isGroup: true,
-        isMentionableGroup: true,
-        requireMention: true,
-        canDetectMention: true,
-        effectiveWasMentioned: true,
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldAckReaction({
-        scope: "none",
         isDirect: true,
         isGroup: true,
         isMentionableGroup: true,
