@@ -1,4 +1,5 @@
 import type { GroupPolicy } from "./types.base.js";
+import type { DingTalkConfig } from "./types.dingtalk.js";
 import type { DiscordConfig } from "./types.discord.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
@@ -43,6 +44,7 @@ export type ChannelsConfig = {
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
   irc?: IrcConfig;
+  dingtalk?: DingTalkConfig;
   googlechat?: GoogleChatConfig;
   slack?: SlackConfig;
   signal?: SignalConfig;

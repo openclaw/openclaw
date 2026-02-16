@@ -813,6 +813,45 @@ function resolveTlonSession(
   };
 }
 
+function resolveDingTalkSession(
+  params: ResolveOutboundSessionRouteParams,
+): OutboundSessionRoute | null {
+  let trimmed = stripProviderPrefix(params.target, "dingtalk").trim();
+  trimmed = stripProviderPrefix(trimmed, "dingtalk-connector").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const lower = trimmed.toLowerCase();
+  let isGroup = false;
+  if (lower.startsWith("group:")) {
+    trimmed = trimmed.replace(/^group:/i, "").trim();
+    isGroup = true;
+  } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
+    trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
+    isGroup = false;
+  } else if (trimmed.includes("=") || trimmed.length > 30) {
+    isGroup = true;
+  }
+
+  const peer: RoutePeer = { kind: isGroup ? "group" : "dm", id: trimmed };
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "dingtalk",
+    accountId: params.accountId,
+    peer,
+  });
+  return {
+    sessionKey: baseSessionKey,
+    baseSessionKey,
+    peer,
+    chatType: isGroup ? "group" : "direct",
+    from: isGroup ? `dingtalk:group:${trimmed}` : `dingtalk:${trimmed}`,
+    to: isGroup ? `group:${trimmed}` : `user:${trimmed}`,
+  };
+}
+
 /**
  * Feishu ID formats:
  * - oc_xxx: chat_id (group chat)
@@ -944,6 +983,8 @@ export async function resolveOutboundSessionRoute(
       return resolveNostrSession({ ...params, target });
     case "tlon":
       return resolveTlonSession({ ...params, target });
+    case "dingtalk":
+      return resolveDingTalkSession({ ...params, target });
     case "feishu":
       return resolveFeishuSession({ ...params, target });
     default:

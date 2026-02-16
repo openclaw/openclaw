@@ -118,6 +118,27 @@ export type {
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
 } from "../config/types.js";
+// DingTalk exports (added in later tasks)
+export type {
+  DingTalkConfig,
+  DingTalkAccountConfig,
+  DingTalkGroupConfig,
+} from "../config/types.dingtalk.js";
+export {
+  listDingTalkAccountIds,
+  resolveDefaultDingTalkAccountId,
+  resolveDingTalkAccount,
+  type ResolvedDingTalkAccount,
+  resolveDingTalkConfig,
+  resolveDingTalkGroupRequireMention,
+  resolveDingTalkGroupEnabled,
+  readDingTalkAllowFromStore,
+  readDingTalkKnownUsers,
+  normalizeDingTalkTarget,
+  dingtalkOutbound,
+  monitorDingTalkProvider,
+  probeDingTalk,
+} from "../dingtalk/index.js";
 export {
   DiscordConfigSchema,
   GoogleChatConfigSchema,
