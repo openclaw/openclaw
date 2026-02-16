@@ -202,6 +202,10 @@ class MemoryManagerEmbeddingOps {
   }
 
   private computeProviderKey(): string {
+    // FTS-only mode: no provider, use a constant key
+    if (!this.provider) {
+      return hashText(JSON.stringify({ provider: "none", model: "fts-only" }));
+    }
     if (this.provider.id === "openai" && this.openAi) {
       const entries = Object.entries(this.openAi.headers)
         .filter(([key]) => key.toLowerCase() !== "authorization")
