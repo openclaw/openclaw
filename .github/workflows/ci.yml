@@ -3,10 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -27,8 +26,7 @@ jobs:
         id: check
         uses: ./.github/actions/detect-docs-only
 
-  # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
-  # Push to main keeps broad coverage.
+  # Detect which heavy areas are touched so pushes to main can skip unrelated expensive jobs.
   changed-scope:
     needs: [docs-scope]
     if: needs.docs-scope.outputs.docs_only != 'true'
@@ -50,12 +48,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
-
+          BASE="${{ github.event.before }}"
           CHANGED="$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")"
           if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
             # Fail-safe: run broad checks if detection fails.
@@ -121,7 +114,7 @@ jobs:
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -185,7 +178,7 @@ jobs:
 
   install-check:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -239,7 +232,7 @@ jobs:
 
   checks:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -533,11 +526,10 @@ jobs:
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
-  # running 4 separate jobs per PR (as before) starved the queue. One job
-  # per PR allows 5 PRs to run macOS checks simultaneously.
+  # consolidate to one macOS job to avoid runner saturation and queue pressure.
   macos:
     needs: [docs-scope, changed-scope]
-    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -815,7 +807,7 @@ jobs:
 
   android:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_android == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false

@@ -3,11 +3,10 @@ name: Install Smoke
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: install-smoke-${{ github.event.pull_request.number || github.sha }}
+  group: install-smoke-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -56,6 +55,6 @@ jobs:
           CLAWDBOT_INSTALL_CLI_URL: https://openclaw.ai/install-cli.sh
           CLAWDBOT_NO_ONBOARD: "1"
           CLAWDBOT_INSTALL_SMOKE_SKIP_CLI: "1"
-          CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          CLAWDBOT_INSTALL_SMOKE_SKIP_NONROOT: "0"
           CLAWDBOT_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
         run: pnpm test:install:smoke

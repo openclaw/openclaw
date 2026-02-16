@@ -42,22 +42,35 @@ pnpm test
 
 Runtime baseline: Node **22+**.
 
-## Pull request expectations
+## Integration model
 
-- Use `E#-F#-S#` at the start of the PR title.
-  - Example: `E1-F1-S1: add contracts package`
+- This repo uses **file-based handoffs only**. PRs and GitHub PR-based gates are no longer part of this workflow.
+- Keep local commits for traceability and context, then hand off via artifacts in `handoff/`.
+- Export either a bundle (`*.bundle`) or patch series (`*.patches/`) from a clean working tree and run gates before export:
+  - `./scripts/handoff-export-bundle.sh E6-F1-S1 your_name 2026-02-16__1430 shadow-proposal handoff/inbox`
+  - `./scripts/handoff-export-patch.sh E6-F1-S1 your_name 2026-02-16__1430 shadow-proposal handoff/inbox HEAD~1`
+- Naming format must include the workstream id:
+  - `E6-F1-S1__author__2026-02-16__shadow-proposal.bundle`
+  - `E6-F1-S1__author__2026-02-16__shadow-proposal.patches/`
 
-- Keep scope focused and explain behavioral impact.
-- Include tests for logic changes.
-- Call out security implications when touching tools, routing, or permissions.
-- Mention any closeout/billing behavior changes explicitly.
-
-## Suggested PR checklist
+## Handoff checklist
 
 - [ ] Dispatch lifecycle behavior is covered (intake/schedule/onsite/closeout as applicable).
 - [ ] Audit events are emitted for state-changing actions.
 - [ ] Role permissions remain least-privilege.
-- [ ] `pnpm build && pnpm check && pnpm test` passes locally.
+- [ ] `./scripts/handoff-verify.sh` passes in the artifact source repo.
+- [ ] `handoff/inbox` artifact landed with a short handoff note.
+- [ ] On successful verification, append ledger entry:
+  - `echo "{\"ts\":\"$(date -Iseconds)\",\"artifact\":\"<name>\",\"result\":\"applied+green\"}" >> handoff/ledger.ndjson`
+
+### Push protection
+
+- The repo ships with `.githooks/pre-push` that blocks pushes.
+- Configure it locally with:
+  - `git config core.hooksPath .githooks`
+- If your local remote exists for fetch-only workflows, disable push destinations with:
+  - `git remote set-url --push origin DISABLED`
+- Run `pnpm no-pr-language` before opening repository-wide updates to enforce file-handoff terminology.
 
 ## Commit guidance
 

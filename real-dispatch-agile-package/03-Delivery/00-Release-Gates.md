@@ -1,5 +1,11 @@
 # Release gates (v0 → v1 → v2)
 
+Release gates are executed in file-handoff verification (`./scripts/handoff-verify.sh`), not via PR checks.
+
+The hard required gate for integration is:
+
+- `./scripts/handoff-verify.sh` (includes `pnpm dispatch:test:ci` and required temporal shadow checks).
+
 ## v0 “Shadow Autonomy”
 
 Allowed:

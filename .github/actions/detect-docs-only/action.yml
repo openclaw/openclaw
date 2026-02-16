@@ -18,10 +18,10 @@ runs:
       run: |
         if [ "${{ github.event_name }}" = "push" ]; then
           BASE="${{ github.event.before }}"
+        elif [ -n "${{ github.sha || github.event.head_sha }}" ]; then
+          BASE="${{ github.sha }}~1"
         else
-          # Use the exact base SHA from the event payload — stable regardless
-          # of base branch movement (avoids origin/<ref> drift).
-          BASE="${{ github.event.pull_request.base.sha }}"
+          BASE="$(git rev-parse HEAD~1)"
         fi
 
         # Fail-safe: if we can't diff, assume non-docs (run everything)

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'EOF'
+ERROR: Pushes/PRs are disabled for this project.
+Use file handoff artifacts (bundle or patch) only.
+EOF
+
+exit 1
