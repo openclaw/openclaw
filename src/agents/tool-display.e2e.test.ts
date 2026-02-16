@@ -123,8 +123,18 @@ describe("tool display details", () => {
         },
       }),
     );
+    const nodeShortCheckDetail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: "node -c /tmp/test.js",
+          workdir: "/Users/adityasingh/.openclaw/workspace",
+        },
+      }),
+    );
 
     expect(pyDetail).toContain("run python3 inline script (heredoc)");
     expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
+    expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
   });
 });
