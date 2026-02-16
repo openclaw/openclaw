@@ -10,7 +10,9 @@ import {
   createAgentToAgentPolicy,
   classifySessionKind,
   deriveChannel,
+  listSpawnedSessionKeys,
   resolveDisplaySessionKey,
+  resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
   type SessionListRow,
@@ -42,6 +44,11 @@ export function createSessionsListTool(opts?: {
           agentSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed,
         });
+      const effectiveRequesterKey = requesterInternalKey ?? alias;
+      const visibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
         value.trim().toLowerCase(),
@@ -72,15 +79,19 @@ export function createSessionsListTool(opts?: {
           activeMinutes,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
-          spawnedBy: restrictToSpawned ? requesterInternalKey : undefined,
+          spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
         },
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
       const rows: SessionListRow[] = [];
+      const spawnedKeys =
+        visibility === "tree"
+          ? await listSpawnedSessionKeys({ requesterSessionKey: effectiveRequesterKey })
+          : null;
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -93,8 +104,20 @@ export function createSessionsListTool(opts?: {
 
         const entryAgentId = resolveAgentIdFromSessionKey(key);
         const crossAgent = entryAgentId !== requesterAgentId;
-        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
-          continue;
+        if (crossAgent) {
+          if (visibility !== "all") {
+            continue;
+          }
+          if (!a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
+            continue;
+          }
+        } else {
+          if (visibility === "self" && key !== effectiveRequesterKey) {
+            continue;
+          }
+          if (visibility === "tree" && key !== effectiveRequesterKey && !spawnedKeys?.has(key)) {
+            continue;
+          }
         }
 
         if (key === "unknown") {

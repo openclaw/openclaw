@@ -8,6 +8,8 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
+  listSpawnedSessionKeys,
+  resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   SessionListRow,
   resolveSandboxedSessionToolContext,
@@ -167,7 +169,6 @@ async function isSpawnedSessionAllowed(params: {
     return false;
   }
 }
-
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -189,11 +190,12 @@ export function createSessionsHistoryTool(opts?: {
           agentSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed,
         });
+      const effectiveRequesterKey = requesterInternalKey ?? alias;
       const resolvedSession = await resolveSessionReference({
         sessionKey: sessionKeyParam,
         alias,
         mainKey,
-        requesterInternalKey,
+        requesterInternalKey: effectiveRequesterKey,
         restrictToSpawned,
       });
       if (!resolvedSession.ok) {
@@ -203,9 +205,9 @@ export function createSessionsHistoryTool(opts?: {
       const resolvedKey = resolvedSession.key;
       const displayKey = resolvedSession.displayKey;
       const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
-      if (restrictToSpawned && requesterInternalKey && !resolvedViaSessionId) {
+      if (restrictToSpawned && !resolvedViaSessionId && resolvedKey !== effectiveRequesterKey) {
         const ok = await isSpawnedSessionAllowed({
-          requesterSessionKey: requesterInternalKey,
+          requesterSessionKey: effectiveRequesterKey,
           targetSessionKey: resolvedKey,
         });
         if (!ok) {
@@ -215,11 +217,22 @@ export function createSessionsHistoryTool(opts?: {
           });
         }
       }
+      const visibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
       const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
       const isCrossAgent = requesterAgentId !== targetAgentId;
+      if (isCrossAgent && visibility !== "all") {
+        return jsonResult({
+          status: "forbidden",
+          error:
+            "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+        });
+      }
       if (isCrossAgent) {
         if (!a2aPolicy.enabled) {
           return jsonResult({
@@ -233,6 +246,28 @@ export function createSessionsHistoryTool(opts?: {
             status: "forbidden",
             error: "Agent-to-agent history denied by tools.agentToAgent.allow.",
           });
+        }
+      }
+
+      if (!isCrossAgent) {
+        if (visibility === "self" && resolvedKey !== effectiveRequesterKey) {
+          return jsonResult({
+            status: "forbidden",
+            error:
+              "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
+          });
+        }
+        if (visibility === "tree" && resolvedKey !== effectiveRequesterKey) {
+          const spawned = await listSpawnedSessionKeys({
+            requesterSessionKey: effectiveRequesterKey,
+          });
+          if (!spawned.has(resolvedKey)) {
+            return jsonResult({
+              status: "forbidden",
+              error:
+                "Session history visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+            });
+          }
         }
       }
 

@@ -18,6 +18,8 @@ import { jsonResult, readStringParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
   extractAssistantText,
+  listSpawnedSessionKeys,
+  resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSessionReference,
@@ -51,21 +53,25 @@ export function createSessionsSendTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const visibility = cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
-      const requesterInternalKey =
+      const requesterKeyInput =
         typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
-          ? resolveInternalSessionKey({
-              key: opts.agentSessionKey,
-              alias,
-              mainKey,
-            })
-          : undefined;
+          ? opts.agentSessionKey
+          : "main";
+      const requesterInternalKey = resolveInternalSessionKey({
+        key: requesterKeyInput,
+        alias,
+        mainKey,
+      });
       const restrictToSpawned =
         opts?.sandboxed === true &&
         visibility === "spawned" &&
-        !!requesterInternalKey &&
         !isSubagentSessionKey(requesterInternalKey);
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const sessionVisibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = readStringParam(params, "label")?.trim() || undefined;
@@ -199,7 +205,7 @@ export function createSessionsSendTool(opts?: {
       const displayKey = resolvedSession.displayKey;
       const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
 
-      if (restrictToSpawned && !resolvedViaSessionId) {
+      if (restrictToSpawned && !resolvedViaSessionId && resolvedKey !== requesterInternalKey) {
         const sessions = await listSessions({
           includeGlobal: false,
           includeUnknown: false,
@@ -227,6 +233,15 @@ export function createSessionsSendTool(opts?: {
       const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
       const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
       const isCrossAgent = requesterAgentId !== targetAgentId;
+      if (isCrossAgent && sessionVisibility !== "all") {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error:
+            "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+          sessionKey: displayKey,
+        });
+      }
       if (isCrossAgent) {
         if (!a2aPolicy.enabled) {
           return jsonResult({
@@ -244,6 +259,30 @@ export function createSessionsSendTool(opts?: {
             error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
             sessionKey: displayKey,
           });
+        }
+      } else {
+        if (sessionVisibility === "self" && resolvedKey !== requesterInternalKey) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error:
+              "Session send visibility is restricted to the current session (tools.sessions.visibility=self).",
+            sessionKey: displayKey,
+          });
+        }
+        if (sessionVisibility === "tree" && resolvedKey !== requesterInternalKey) {
+          const spawned = await listSpawnedSessionKeys({
+            requesterSessionKey: requesterInternalKey,
+          });
+          if (!spawned.has(resolvedKey)) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error:
+                "Session send visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+              sessionKey: displayKey,
+            });
+          }
         }
       }
 
