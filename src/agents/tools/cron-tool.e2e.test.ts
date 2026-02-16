@@ -443,4 +443,61 @@ describe("cron tool", () => {
     };
     expect(call?.params?.delivery).toEqual({ mode: "none" });
   });
+
+  it("does not infer announce delivery when mode is webhook", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    await tool.execute("call-webhook-explicit", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    expect(call?.params?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+  });
+
+  it("fails fast when webhook mode is missing delivery.to", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+
+    await expect(
+      tool.execute("call-webhook-missing", {
+        action: "add",
+        job: {
+          name: "reminder",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery: { mode: "webhook" },
+        },
+      }),
+    ).rejects.toThrow('delivery.mode="webhook" requires delivery.to to be a valid http(s) URL');
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("fails fast when webhook mode uses a non-http URL", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+
+    await expect(
+      tool.execute("call-webhook-invalid", {
+        action: "add",
+        job: {
+          name: "reminder",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery: { mode: "webhook", to: "ftp://example.invalid/cron-finished" },
+        },
+      }),
+    ).rejects.toThrow('delivery.mode="webhook" requires delivery.to to be a valid http(s) URL');
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
 });
