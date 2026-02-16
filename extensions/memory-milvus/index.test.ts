@@ -161,7 +161,170 @@ describe("memory-milvus plugin e2e", () => {
       expect(detectCategory(text)).toBe(expected);
     }
   });
+
+  test("config schema defaults autoCapture and autoRecall to true", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: { apiKey: OPENAI_API_KEY },
+      milvus: { address: "localhost:19530" },
+    });
+
+    expect(config?.autoCapture).toBe(true);
+    expect(config?.autoRecall).toBe(true);
+  });
+
+  test("config schema rejects unknown keys", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: "sk-test" },
+        milvus: { address: "localhost:19530" },
+        unknownKey: true,
+      });
+    }).toThrow("unknown keys");
+  });
+
+  test("config schema rejects unsupported embedding model", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: "sk-test", model: "text-embedding-ada-002" },
+        milvus: { address: "localhost:19530" },
+      });
+    }).toThrow("Unsupported embedding model");
+  });
+
+  test("config schema rejects unresolvable env var", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: "${NONEXISTENT_KEY_12345}" },
+        milvus: { address: "localhost:19530" },
+      });
+    }).toThrow("not set");
+  });
+
+  test("vectorDimsForModel returns correct dimensions", async () => {
+    const { vectorDimsForModel } = await import("./config.js");
+
+    expect(vectorDimsForModel("text-embedding-3-small")).toBe(1536);
+    expect(vectorDimsForModel("text-embedding-3-large")).toBe(3072);
+    expect(() => vectorDimsForModel("unknown-model")).toThrow("Unsupported");
+  });
+
+  test("shouldCapture boundary: exactly 10 chars with trigger", async () => {
+    const { shouldCapture } = await import("./index.js");
+
+    expect(shouldCapture("I prefer x")).toBe(true); // exactly 10 chars
+    expect(shouldCapture("I prefer ")).toBe(false); // 9 chars
+  });
+
+  test("shouldCapture rejects emoji-heavy text", async () => {
+    const { shouldCapture } = await import("./index.js");
+
+    // 4+ emojis should be rejected (likely agent output)
+    expect(shouldCapture("I prefer this approach a lot")).toBe(true);
+    expect(shouldCapture("I prefer \u{1F389}\u{1F389}\u{1F389}\u{1F389} dark mode")).toBe(false);
+  });
 });
+
+// Retry helper for eventual consistency — retries search until results appear
+// oxlint-disable-next-line typescript/no-explicit-any
+async function recallWithRetry(tool: any, params: any, maxRetries = 3): Promise<any> {
+  for (let i = 0; i < maxRetries; i++) {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const result: any = await tool.execute(`retry-${i}`, params);
+    if (result.details?.count > 0) {
+      return result;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return tool.execute("retry-final", params);
+}
+
+// Helper: register plugin and extract tools
+function setupLivePlugin(
+  collectionName: string,
+  opts?: { autoCapture?: boolean; autoRecall?: boolean },
+) {
+  const liveApiKey = process.env.OPENAI_API_KEY ?? "";
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const registeredTools: any[] = [];
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const registeredClis: any[] = [];
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const registeredServices: any[] = [];
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const registeredHooks: Record<string, any[]> = {};
+  const logs: string[] = [];
+
+  const mockApi = {
+    id: "memory-milvus",
+    name: "Memory (Milvus)",
+    source: "test",
+    config: {},
+    pluginConfig: {
+      embedding: {
+        apiKey: liveApiKey,
+        model: "text-embedding-3-small",
+      },
+      milvus: {
+        address: MILVUS_ADDRESS,
+        token: MILVUS_TOKEN || undefined,
+        collectionName,
+      },
+      autoCapture: opts?.autoCapture ?? false,
+      autoRecall: opts?.autoRecall ?? false,
+    },
+    runtime: {},
+    logger: {
+      info: (msg: string) => logs.push(`[info] ${msg}`),
+      warn: (msg: string) => logs.push(`[warn] ${msg}`),
+      error: (msg: string) => logs.push(`[error] ${msg}`),
+      debug: (msg: string) => logs.push(`[debug] ${msg}`),
+    },
+    // oxlint-disable-next-line typescript/no-explicit-any
+    registerTool: (tool: any, toolOpts: any) => {
+      registeredTools.push({ tool, opts: toolOpts });
+    },
+    // oxlint-disable-next-line typescript/no-explicit-any
+    registerCli: (registrar: any, cliOpts: any) => {
+      registeredClis.push({ registrar, opts: cliOpts });
+    },
+    // oxlint-disable-next-line typescript/no-explicit-any
+    registerService: (service: any) => {
+      registeredServices.push(service);
+    },
+    // oxlint-disable-next-line typescript/no-explicit-any
+    on: (hookName: string, handler: any) => {
+      if (!registeredHooks[hookName]) {
+        registeredHooks[hookName] = [];
+      }
+      registeredHooks[hookName].push(handler);
+    },
+    resolvePath: (p: string) => p,
+  };
+
+  return { mockApi, registeredTools, registeredClis, registeredServices, registeredHooks, logs };
+}
+
+async function dropTestCollection(collectionName: string): Promise<void> {
+  try {
+    const { MilvusClient } = await import("@zilliz/milvus2-sdk-node");
+    const client = new MilvusClient({
+      address: MILVUS_ADDRESS,
+      token: MILVUS_TOKEN || undefined,
+      ssl: MILVUS_ADDRESS.startsWith("https://"),
+    });
+    await client.dropCollection({ collection_name: collectionName });
+  } catch {
+    // best-effort cleanup
+  }
+}
 
 // Live tests that require OpenAI API key and Milvus/Zilliz credentials
 describeLive("memory-milvus plugin live tests", () => {
@@ -170,65 +333,8 @@ describeLive("memory-milvus plugin live tests", () => {
 
   test("memory tools work end-to-end", async () => {
     const { default: memoryPlugin } = await import("./index.js");
-    const liveApiKey = process.env.OPENAI_API_KEY ?? "";
-
-    // Mock plugin API
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const registeredTools: any[] = [];
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const registeredClis: any[] = [];
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const registeredServices: any[] = [];
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const registeredHooks: Record<string, any[]> = {};
-    const logs: string[] = [];
-
-    const mockApi = {
-      id: "memory-milvus",
-      name: "Memory (Milvus)",
-      source: "test",
-      config: {},
-      pluginConfig: {
-        embedding: {
-          apiKey: liveApiKey,
-          model: "text-embedding-3-small",
-        },
-        milvus: {
-          address: MILVUS_ADDRESS,
-          token: MILVUS_TOKEN || undefined,
-          collectionName: testCollectionName,
-        },
-        autoCapture: false,
-        autoRecall: false,
-      },
-      runtime: {},
-      logger: {
-        info: (msg: string) => logs.push(`[info] ${msg}`),
-        warn: (msg: string) => logs.push(`[warn] ${msg}`),
-        error: (msg: string) => logs.push(`[error] ${msg}`),
-        debug: (msg: string) => logs.push(`[debug] ${msg}`),
-      },
-      // oxlint-disable-next-line typescript/no-explicit-any
-      registerTool: (tool: any, opts: any) => {
-        registeredTools.push({ tool, opts });
-      },
-      // oxlint-disable-next-line typescript/no-explicit-any
-      registerCli: (registrar: any, opts: any) => {
-        registeredClis.push({ registrar, opts });
-      },
-      // oxlint-disable-next-line typescript/no-explicit-any
-      registerService: (service: any) => {
-        registeredServices.push(service);
-      },
-      // oxlint-disable-next-line typescript/no-explicit-any
-      on: (hookName: string, handler: any) => {
-        if (!registeredHooks[hookName]) {
-          registeredHooks[hookName] = [];
-        }
-        registeredHooks[hookName].push(handler);
-      },
-      resolvePath: (p: string) => p,
-    };
+    const { mockApi, registeredTools, registeredClis, registeredServices } =
+      setupLivePlugin(testCollectionName);
 
     // Register plugin
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -259,11 +365,8 @@ describeLive("memory-milvus plugin live tests", () => {
       expect(storeResult.details?.id).toBeDefined();
       const storedId = storeResult.details?.id;
 
-      // Wait briefly for Milvus indexing (eventual consistency)
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Test recall
-      const recallResult = await recallTool.execute("test-call-2", {
+      // Test recall (with retry for eventual consistency)
+      const recallResult = await recallWithRetry(recallTool, {
         query: "dark mode preference",
         limit: 5,
       });
@@ -278,17 +381,16 @@ describeLive("memory-milvus plugin live tests", () => {
 
       expect(duplicateResult.details?.action).toBe("duplicate");
 
-      // Test forget
+      // Test forget by ID
       const forgetResult = await forgetTool.execute("test-call-4", {
         memoryId: storedId,
       });
 
       expect(forgetResult.details?.action).toBe("deleted");
 
-      // Wait for deletion to propagate
+      // Wait for deletion to propagate, then verify
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Verify it's gone
       const recallAfterForget = await recallTool.execute("test-call-5", {
         query: "dark mode preference",
         limit: 5,
@@ -296,18 +398,94 @@ describeLive("memory-milvus plugin live tests", () => {
 
       expect(recallAfterForget.details?.count).toBe(0);
     } finally {
-      // Clean up: drop the test collection
-      try {
-        const { MilvusClient } = await import("@zilliz/milvus2-sdk-node");
-        const client = new MilvusClient({
-          address: MILVUS_ADDRESS,
-          token: MILVUS_TOKEN || undefined,
-          ssl: MILVUS_ADDRESS.startsWith("https://"),
-        });
-        await client.dropCollection({ collection_name: testCollectionName });
-      } catch {
-        // best-effort cleanup
-      }
+      await dropTestCollection(testCollectionName);
     }
-  }, 120000); // 120s timeout for live API calls + Milvus operations
+  }, 120000);
+
+  test("multi-category storage and recall", async () => {
+    const collectionName = `test_multi_${randomUUID().slice(0, 8)}`;
+    const { default: memoryPlugin } = await import("./index.js");
+    const { mockApi, registeredTools } = setupLivePlugin(collectionName);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
+
+    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
+    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+
+    try {
+      // Store memories of different categories
+      const pref = await storeTool.execute("mc-1", {
+        text: "I prefer TypeScript over JavaScript for backend work",
+        category: "preference",
+      });
+      expect(pref.details?.action).toBe("created");
+
+      const fact = await storeTool.execute("mc-2", {
+        text: "The production API server runs on port 8080",
+        category: "fact",
+      });
+      expect(fact.details?.action).toBe("created");
+
+      const entity = await storeTool.execute("mc-3", {
+        text: "My work email is developer@example.com",
+        category: "entity",
+      });
+      expect(entity.details?.action).toBe("created");
+
+      // Recall each category (with retry for consistency)
+      const recallPref = await recallWithRetry(recallTool, {
+        query: "programming language preference",
+        limit: 5,
+      });
+      expect(recallPref.details?.count).toBeGreaterThan(0);
+      expect(recallPref.details?.memories?.[0]?.text).toContain("TypeScript");
+
+      const recallEntity = await recallWithRetry(recallTool, {
+        query: "email address contact info",
+        limit: 5,
+      });
+      expect(recallEntity.details?.count).toBeGreaterThan(0);
+      expect(recallEntity.details?.memories?.[0]?.text).toContain("email");
+    } finally {
+      await dropTestCollection(collectionName);
+    }
+  }, 120000);
+
+  test("forget with query and empty params", async () => {
+    const collectionName = `test_forget_${randomUUID().slice(0, 8)}`;
+    const { default: memoryPlugin } = await import("./index.js");
+    const { mockApi, registeredTools } = setupLivePlugin(collectionName);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
+
+    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
+    const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
+
+    try {
+      // Test forget with empty params — should return error
+      const emptyForget = await forgetTool.execute("ef-1", {});
+      expect(emptyForget.details?.error).toBe("missing_param");
+
+      // Store a memory, then try query-based forget
+      await storeTool.execute("qf-1", {
+        text: "The database password is rotated every 90 days",
+        category: "fact",
+      });
+
+      // Wait for indexing
+      await new Promise((r) => setTimeout(r, 2000));
+
+      // Query-based forget — should find candidates or auto-delete
+      const queryForget = await forgetTool.execute("qf-2", {
+        query: "database password rotation policy",
+      });
+
+      // Should have either deleted (high confidence) or returned candidates
+      expect(["deleted", "candidates"]).toContain(queryForget.details?.action);
+    } finally {
+      await dropTestCollection(collectionName);
+    }
+  }, 120000);
 });
