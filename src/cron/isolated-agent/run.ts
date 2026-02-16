@@ -42,7 +42,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
@@ -321,16 +321,17 @@ export async function runCronIsolatedAgentTurn(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
+  const cronRunId = cronSession.sessionEntry.sessionId;
+  const resolvedVerboseLevel =
+    normalizeVerboseLevel(cronSession.sessionEntry.verboseLevel) ??
+    normalizeVerboseLevel(agentCfg?.verboseDefault) ??
+    "off";
+  registerAgentRunContext(cronRunId, {
+    sessionKey: agentSessionKey,
+    verboseLevel: resolvedVerboseLevel,
+  });
   try {
     const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
-    const resolvedVerboseLevel =
-      normalizeVerboseLevel(cronSession.sessionEntry.verboseLevel) ??
-      normalizeVerboseLevel(agentCfg?.verboseDefault) ??
-      "off";
-    registerAgentRunContext(cronSession.sessionEntry.sessionId, {
-      sessionKey: agentSessionKey,
-      verboseLevel: resolvedVerboseLevel,
-    });
     const messageChannel = resolvedDelivery.channel;
     const fallbackResult = await runWithModelFallback({
       cfg: cfgWithAgentDefaults,
@@ -381,6 +382,8 @@ export async function runCronIsolatedAgentTurn(params: {
     fallbackModel = fallbackResult.model;
   } catch (err) {
     return { status: "error", error: String(err) };
+  } finally {
+    clearAgentRunContext(cronRunId);
   }
 
   const payloads = runResult.payloads ?? [];
