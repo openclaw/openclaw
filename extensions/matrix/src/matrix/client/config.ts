@@ -3,24 +3,11 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import { resolveAccountConfig, mergeAccountConfig } from "../accounts.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 
 function clean(value?: string): string {
   return value?.trim() ?? "";
-}
-
-/** Shallow-merge known nested config sub-objects so partial overrides inherit base values. */
-function deepMergeConfig<T extends Record<string, unknown>>(base: T, override: Partial<T>): T {
-  const merged = { ...base, ...override } as Record<string, unknown>;
-  // Merge known nested objects (dm, actions) so partial overrides keep base fields
-  for (const key of ["dm", "actions"] as const) {
-    const b = base[key];
-    const o = override[key];
-    if (typeof b === "object" && b !== null && typeof o === "object" && o !== null) {
-      merged[key] = { ...(b as Record<string, unknown>), ...(o as Record<string, unknown>) };
-    }
-  }
-  return merged as T;
 }
 
 /**
@@ -35,22 +22,13 @@ export function resolveMatrixConfigForAccount(
 ): MatrixResolvedConfig {
   const normalizedAccountId = normalizeAccountId(accountId);
   const matrixBase = cfg.channels?.matrix ?? {};
-  const accounts = cfg.channels?.matrix?.accounts;
 
-  // Try to get account-specific config first (direct lookup, then case-insensitive fallback)
-  let accountConfig = accounts?.[normalizedAccountId];
-  if (!accountConfig && accounts) {
-    for (const key of Object.keys(accounts)) {
-      if (normalizeAccountId(key) === normalizedAccountId) {
-        accountConfig = accounts[key];
-        break;
-      }
-    }
-  }
+  // Use shared account resolution (single source of truth)
+  const accountConfig = resolveAccountConfig(cfg, normalizedAccountId);
 
-  // Deep merge: account-specific values override top-level values, preserving
-  // nested object inheritance (dm, actions, groups) so partial overrides work.
-  const matrix = accountConfig ? deepMergeConfig(matrixBase, accountConfig) : matrixBase;
+  // Merge: account-specific values override top-level values, preserving
+  // nested object inheritance (dm, actions) so partial overrides work.
+  const matrix = accountConfig ? mergeAccountConfig(matrixBase, accountConfig) : matrixBase;
 
   const homeserver = clean(matrix.homeserver) || clean(env.MATRIX_HOMESERVER);
   const userId = clean(matrix.userId) || clean(env.MATRIX_USER_ID);

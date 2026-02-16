@@ -447,7 +447,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       matrixStartupLock = new Promise<void>((resolve) => {
         releaseLock = resolve;
       });
-      await previousLock;
+      // Safety timeout: if a previous startup hangs, don't block all accounts forever.
+      const STARTUP_LOCK_TIMEOUT_MS = 30_000;
+      await Promise.race([
+        previousLock,
+        new Promise<void>((resolve) => setTimeout(resolve, STARTUP_LOCK_TIMEOUT_MS)),
+      ]);
 
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
       // Wrap in try/finally to ensure lock is released even if import fails.

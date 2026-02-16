@@ -4,7 +4,7 @@ import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";
 
 /** Merge account config with top-level defaults, preserving nested objects. */
-function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixConfig {
+export function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixConfig {
   const merged = { ...base, ...account };
   // Deep-merge known nested objects so partial overrides inherit base fields
   for (const key of ["dm", "actions"] as const) {
@@ -61,7 +61,8 @@ export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
-function resolveAccountConfig(cfg: CoreConfig, accountId: string): MatrixConfig | undefined {
+/** Look up account-specific config with case-insensitive key fallback. */
+export function resolveAccountConfig(cfg: CoreConfig, accountId: string): MatrixConfig | undefined {
   const accounts = cfg.channels?.matrix?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return undefined;
