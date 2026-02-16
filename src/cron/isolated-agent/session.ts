@@ -60,24 +60,12 @@ export function resolveCronSession(params: {
 
   const sessionEntry: SessionEntry = {
     // Spread existing entry to preserve conversation context when reusing
+    // (the spread already copies all fields when !isNewSession, no need to re-assign)
     ...(isNewSession ? undefined : entry),
+    // Always update these core fields
     sessionId,
     updatedAt: params.nowMs,
     systemSent,
-    // Preserve user preferences from existing entry
-    thinkingLevel: entry?.thinkingLevel,
-    verboseLevel: entry?.verboseLevel,
-    model: entry?.model,
-    modelOverride: entry?.modelOverride,
-    providerOverride: entry?.providerOverride,
-    contextTokens: entry?.contextTokens,
-    sendPolicy: entry?.sendPolicy,
-    lastChannel: entry?.lastChannel,
-    lastTo: entry?.lastTo,
-    lastAccountId: entry?.lastAccountId,
-    label: entry?.label,
-    displayName: entry?.displayName,
-    skillsSnapshot: entry?.skillsSnapshot,
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
 }
