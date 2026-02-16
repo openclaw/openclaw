@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
@@ -320,7 +321,8 @@ describe("server-web-app", () => {
       });
 
       const log = makeLog();
-      const resultPromise = startWebAppIfEnabled({ enabled: true }, log);
+      // Use an explicit high port to avoid the real web app on default port.
+      const resultPromise = startWebAppIfEnabled({ enabled: true, port: 49100 }, log);
       await vi.advanceTimersByTimeAsync(3_500);
       const result = await resultPromise;
 
@@ -345,7 +347,8 @@ describe("server-web-app", () => {
       });
 
       const log = makeLog();
-      const result = await startWebAppIfEnabled({ enabled: true }, log);
+      // Use an explicit high port to avoid the real web app on default port.
+      const result = await startWebAppIfEnabled({ enabled: true, port: 49101 }, log);
 
       expect(result).toBeNull();
       expect(log.error).toHaveBeenCalledWith(expect.stringContaining("standalone build not found"));
@@ -391,7 +394,8 @@ describe("server-web-app", () => {
         return false;
       });
 
-      const resultPromise = startWebAppIfEnabled({ enabled: true }, makeLog());
+      // Use an explicit high port to avoid the real web app on default port.
+      const resultPromise = startWebAppIfEnabled({ enabled: true, port: 49102 }, makeLog());
       await vi.advanceTimersByTimeAsync(3_500);
       const result = await resultPromise;
       expect(result).not.toBeNull();
@@ -423,7 +427,8 @@ describe("server-web-app", () => {
       });
 
       const log = makeLog();
-      const resultPromise = startWebAppIfEnabled({ enabled: true }, log);
+      // Use an explicit high port to avoid the real web app on default port.
+      const resultPromise = startWebAppIfEnabled({ enabled: true, port: 49103 }, log);
 
       // Simulate the child crashing immediately (e.g. Cannot find module 'next').
       child.exitCode = 1;
@@ -435,5 +440,87 @@ describe("server-web-app", () => {
       expect(log.error).toHaveBeenCalledWith(expect.stringContaining("web app failed to start"));
       vi.useRealTimers();
     });
+
+    it("reuses existing web app when preferred port already has Next.js running", async () => {
+      const { startWebAppIfEnabled } = await import("./server-web-app.js");
+
+      // Clear accumulated spawn call history from previous tests (the
+      // module-level vi.mock isn't reset by vi.restoreAllMocks).
+      vi.mocked(spawn).mockClear();
+
+      // resolveWebAppDir() needs to find a valid directory before reaching
+      // the port check, so mock existsSync for the package.json check.
+      existsSyncSpy.mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith(path.join("apps", "web", "package.json"))) {
+          return true;
+        }
+        return false;
+      });
+
+      // Start a real HTTP server that mimics a Next.js app on a high port.
+      const testPort = 13_199;
+      const httpServer = http.createServer((_, res) => {
+        res.setHeader("x-powered-by", "Next.js");
+        res.writeHead(200);
+        res.end("ok");
+      });
+      await new Promise<void>((resolve) => httpServer.listen(testPort, resolve));
+
+      try {
+        const log = makeLog();
+        const result = await startWebAppIfEnabled({ enabled: true, port: testPort }, log);
+
+        expect(result).not.toBeNull();
+        expect(result!.port).toBe(testPort);
+        expect(log.info).toHaveBeenCalledWith(expect.stringContaining("already running"));
+        // No child process should be spawned for the reuse path.
+        expect(spawn).not.toHaveBeenCalled();
+
+        // stop() should be a no-op (we didn't spawn this process).
+        await expect(result!.stop()).resolves.toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      }
+    });
+
+    it("finds alternative port when preferred port is occupied by non-Next.js app", async () => {
+      // Real timers: multiple async I/O steps (isPortFree + probeForWebApp)
+      // run before the timer-based waitForStartupOrCrash, so fake timers
+      // can't advance the clock early enough.
+      const { startWebAppIfEnabled } = await import("./server-web-app.js");
+      mockChildProcess();
+
+      existsSyncSpy.mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith(path.join("apps", "web", "package.json"))) {
+          return true;
+        }
+        if (s.includes(path.join(".next", "standalone", "apps", "web", "server.js"))) {
+          return true;
+        }
+        return false;
+      });
+
+      // Start a plain HTTP server (no x-powered-by: Next.js) to simulate
+      // another app occupying the port.
+      const testPort = 13_200;
+      const httpServer = http.createServer((_, res) => {
+        res.writeHead(200);
+        res.end("not next");
+      });
+      await new Promise<void>((resolve) => httpServer.listen(testPort, resolve));
+
+      try {
+        const log = makeLog();
+        const result = await startWebAppIfEnabled({ enabled: true, port: testPort }, log);
+
+        expect(result).not.toBeNull();
+        expect(result!.port).not.toBe(testPort);
+        expect(log.info).toHaveBeenCalledWith(expect.stringContaining("is busy"));
+      } finally {
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      }
+    }, 15_000);
   });
 });

@@ -24,7 +24,11 @@ import {
 } from "../commands/onboard-helpers.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
-import { DEFAULT_WEB_APP_PORT, ensureWebAppBuilt } from "../gateway/server-web-app.js";
+import {
+  DEFAULT_WEB_APP_PORT,
+  ensureWebAppBuilt,
+  probeForWebApp,
+} from "../gateway/server-web-app.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
 
@@ -270,9 +274,9 @@ export async function finalizeOnboardingWizard(
     : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
   await prompter.note(
     [
-      `Web UI: ${links.httpUrl}`,
+      `Control UI: ${links.httpUrl}`,
       settings.authMode === "token" && settings.gatewayToken
-        ? `Web UI (with token): ${authedUrl}`
+        ? `Control UI (with token): ${authedUrl}`
         : undefined,
       `Gateway WS: ${links.wsUrl}`,
       gatewayStatusLine,
@@ -303,7 +307,10 @@ export async function finalizeOnboardingWizard(
 
     // Always open the Next.js web app in the browser (TUI available via `openclaw tui`).
     if (webAppReady) {
-      const webAppPort = nextConfig.gateway?.webApp?.port ?? DEFAULT_WEB_APP_PORT;
+      // Probe for the actual port the web app is serving on — the daemon
+      // may have picked a different port if the configured one was busy.
+      const preferredWebAppPort = nextConfig.gateway?.webApp?.port ?? DEFAULT_WEB_APP_PORT;
+      const webAppPort = await detectRunningWebAppPort(preferredWebAppPort);
       const webAppUrl = `http://localhost:${webAppPort}`;
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
@@ -432,4 +439,23 @@ export async function finalizeOnboardingWizard(
   );
 
   return { launchedTui: false };
+}
+
+/**
+ * Probe for the actual port the Next.js web app is serving on.
+ * The gateway may have picked a different port if the preferred one was busy
+ * (mirrors the fallback logic in `startWebAppIfEnabled`).
+ */
+async function detectRunningWebAppPort(preferred: number): Promise<number> {
+  if (await probeForWebApp(preferred)) {
+    return preferred;
+  }
+  for (let offset = 1; offset <= 10; offset++) {
+    const candidate = preferred + offset;
+    if (candidate <= 65535 && (await probeForWebApp(candidate))) {
+      return candidate;
+    }
+  }
+  // Not detected — fall back to the preferred port for display.
+  return preferred;
 }

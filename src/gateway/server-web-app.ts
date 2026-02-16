@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +96,27 @@ function isPortFree(port: number): Promise<boolean> {
       server.close(() => resolve(true));
     });
     server.listen(port);
+  });
+}
+
+/**
+ * Probe whether our Next.js web app is already serving on the given port.
+ * Returns true when the server responds with the `x-powered-by: Next.js` header.
+ * Used during gateway restarts to detect a still-running prior instance and
+ * reuse it instead of spawning a broken duplicate on another port.
+ */
+export function probeForWebApp(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get({ hostname: "127.0.0.1", port, path: "/", timeout: 1_000 }, (res) => {
+      const powered = res.headers["x-powered-by"];
+      res.resume();
+      resolve(powered === "Next.js");
+    });
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
   });
 }
 
@@ -220,6 +242,38 @@ export async function ensureWebAppBuilt(
 }
 
 /**
+ * Ensure the standalone output has access to static assets and public files.
+ *
+ * Next.js standalone builds intentionally exclude `.next/static` and `public`
+ * (they're meant for CDN serving). When self-hosting, we symlink them into the
+ * standalone directory so the built-in server can serve CSS, JS, fonts, etc.
+ */
+function ensureStandaloneAssets(webAppDir: string): void {
+  const standaloneAppDir = path.join(webAppDir, ".next", "standalone", "apps", "web");
+
+  // Symlink .next/static → standalone's .next/static
+  const staticSrc = path.join(webAppDir, ".next", "static");
+  const staticDest = path.join(standaloneAppDir, ".next", "static");
+  symlinkIfMissing(staticSrc, staticDest);
+
+  // Symlink public → standalone's public
+  const publicSrc = path.join(webAppDir, "public");
+  const publicDest = path.join(standaloneAppDir, "public");
+  symlinkIfMissing(publicSrc, publicDest);
+}
+
+function symlinkIfMissing(src: string, dest: string): void {
+  if (!fs.existsSync(src)) {
+    return;
+  }
+  if (fs.existsSync(dest)) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.symlinkSync(src, dest, "junction");
+}
+
+/**
  * Start the Ironclaw Next.js web app as a child process.
  *
  * Production mode (default):
@@ -246,18 +300,35 @@ export async function startWebAppIfEnabled(
     return null;
   }
 
-  const preferredPort = cfg.port ?? DEFAULT_WEB_APP_PORT;
-  const port = await findAvailablePort(preferredPort);
-  if (port !== preferredPort) {
-    log.info(`port ${preferredPort} is busy; using port ${port} instead`);
-  }
-  const devMode = cfg.dev === true;
-
+  // Check for the web app directory early (fails fast when apps/web is absent,
+  // before doing any network probes or port detection).
   const webAppDir = resolveWebAppDir();
   if (!webAppDir) {
     log.warn("apps/web directory not found — skipping web app");
     return null;
   }
+
+  const preferredPort = cfg.port ?? DEFAULT_WEB_APP_PORT;
+  let port: number;
+
+  if (await isPortFree(preferredPort)) {
+    // Fast path: preferred port is available.
+    port = preferredPort;
+  } else if (await probeForWebApp(preferredPort)) {
+    // Our web app is already serving on the preferred port (e.g. orphaned
+    // child from a prior gateway run or a restart race). Reuse it instead
+    // of spawning a broken duplicate on another port.
+    log.info(`web app already running on port ${preferredPort} — reusing`);
+    return { port: preferredPort, stop: async () => {} };
+  } else {
+    // Something else occupies the preferred port — find an alternative.
+    port = await findAvailablePort(preferredPort);
+    if (port !== preferredPort) {
+      log.info(`port ${preferredPort} is busy; using port ${port} instead`);
+    }
+  }
+
+  const devMode = cfg.dev === true;
 
   let child: ChildProcess;
 
@@ -282,6 +353,7 @@ export async function startWebAppIfEnabled(
 
     if (fs.existsSync(serverJs)) {
       // Standalone build found — just run it (npm global install or post-build).
+      ensureStandaloneAssets(webAppDir);
       log.info(`starting web app (standalone) on port ${port}…`);
       child = spawn("node", [serverJs], {
         cwd: path.dirname(serverJs),
@@ -310,6 +382,7 @@ export async function startWebAppIfEnabled(
 
       // After building, prefer standalone if the config produced it.
       if (fs.existsSync(serverJs)) {
+        ensureStandaloneAssets(webAppDir);
         log.info(`starting web app (standalone) on port ${port}…`);
         child = spawn("node", [serverJs], {
           cwd: path.dirname(serverJs),
