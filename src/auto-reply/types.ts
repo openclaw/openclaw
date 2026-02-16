@@ -31,6 +31,10 @@ export type GetReplyOptions = {
   heartbeatModelOverride?: string;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
+  /** Called when a thinking/reasoning block ends. */
+  onReasoningEnd?: () => Promise<void> | void;
+  /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
+  onAssistantMessageStart?: () => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when the actual model is selected (including after fallback).

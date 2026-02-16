@@ -112,7 +112,7 @@ function buildMessagingSection(params: {
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
-    "- If a `[System Message]` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to NO_REPLY).",
+    `- If a \`[System Message]\` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
@@ -366,7 +366,7 @@ export function buildAgentSystemPrompt(params: {
       : sanitizedWorkspaceDir;
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. Prefer relative paths so both sandboxed exec and file tools work consistently.`
+      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
@@ -413,7 +413,6 @@ export function buildAgentSystemPrompt(params: {
           "- apply_patch: apply multi-file patches",
           `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background exec sessions`,
-          `- For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
           "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
@@ -425,6 +424,7 @@ export function buildAgentSystemPrompt(params: {
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
+    `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
@@ -488,7 +488,7 @@ export function buildAgentSystemPrompt(params: {
             ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
             : "",
           params.sandboxInfo.workspaceDir
-            ? `Sandbox host workspace: ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
+            ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
             : "",
           params.sandboxInfo.workspaceAccess
             ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${

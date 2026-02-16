@@ -258,7 +258,7 @@ export type AgentDefaultsConfig = {
     workspaceAccess?: "none" | "ro" | "rw";
     /**
      * Session tools visibility for sandboxed sessions.
-     * - "spawned": only allow session tools to target sessions spawned from this session (default)
+     * - "spawned": only allow session tools to target the current session and sessions spawned from it (default)
      * - "all": allow session tools to target any session
      */
     sessionToolsVisibility?: "spawned" | "all";

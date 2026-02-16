@@ -11,6 +11,7 @@ import type {
 import type { CronServiceState } from "./state.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
+import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
   normalizeOptionalText,
@@ -41,8 +42,19 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  if (job.delivery && job.sessionTarget !== "isolated") {
-    throw new Error('cron delivery config is only supported for sessionTarget="isolated"');
+  if (!job.delivery) {
+    return;
+  }
+  if (job.delivery.mode === "webhook") {
+    const target = normalizeHttpWebhookUrl(job.delivery.to);
+    if (!target) {
+      throw new Error("cron webhook delivery requires delivery.to to be a valid http(s) URL");
+    }
+    job.delivery.to = target;
+    return;
+  }
+  if (job.sessionTarget !== "isolated") {
+    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }
 }
 
@@ -89,6 +101,35 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
 const MAX_SCHEDULE_ERRORS = 3;
+
+function recordScheduleComputeError(params: {
+  state: CronServiceState;
+  job: CronJob;
+  err: unknown;
+}): boolean {
+  const { state, job, err } = params;
+  const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
+  const errText = String(err);
+
+  job.state.scheduleErrorCount = errorCount;
+  job.state.nextRunAtMs = undefined;
+  job.state.lastError = `schedule error: ${errText}`;
+
+  if (errorCount >= MAX_SCHEDULE_ERRORS) {
+    job.enabled = false;
+    state.deps.log.error(
+      { jobId: job.id, name: job.name, errorCount, err: errText },
+      "cron: auto-disabled job after repeated schedule errors",
+    );
+  } else {
+    state.deps.log.warn(
+      { jobId: job.id, name: job.name, errorCount, err: errText },
+      "cron: failed to compute next run for job (skipping)",
+    );
+  }
+
+  return true;
+}
 
 function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; nowMs: number }): {
   changed: boolean;
@@ -172,23 +213,8 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
           changed = true;
         }
       } catch (err) {
-        const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
-        job.state.scheduleErrorCount = errorCount;
-        job.state.nextRunAtMs = undefined;
-        job.state.lastError = `schedule error: ${String(err)}`;
-        changed = true;
-
-        if (errorCount >= MAX_SCHEDULE_ERRORS) {
-          job.enabled = false;
-          state.deps.log.error(
-            { jobId: job.id, name: job.name, errorCount, err: String(err) },
-            "cron: auto-disabled job after repeated schedule errors",
-          );
-        } else {
-          state.deps.log.warn(
-            { jobId: job.id, name: job.name, errorCount, err: String(err) },
-            "cron: failed to compute next run for job (skipping)",
-          );
+        if (recordScheduleComputeError({ state, job, err })) {
+          changed = true;
         }
       }
     }
@@ -210,10 +236,21 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
     // If a job was past-due but not found by findDueJobs, recomputing would
     // cause it to be silently skipped.
     if (job.state.nextRunAtMs === undefined) {
-      const newNext = computeJobNextRunAtMs(job, now);
-      if (newNext !== undefined) {
-        job.state.nextRunAtMs = newNext;
-        changed = true;
+      try {
+        const newNext = computeJobNextRunAtMs(job, now);
+        if (job.state.nextRunAtMs !== newNext) {
+          job.state.nextRunAtMs = newNext;
+          changed = true;
+        }
+        // Clear schedule error count on successful computation.
+        if (job.state.scheduleErrorCount) {
+          job.state.scheduleErrorCount = undefined;
+          changed = true;
+        }
+      } catch (err) {
+        if (recordScheduleComputeError({ state, job, err })) {
+          changed = true;
+        }
       }
     }
     return changed;
@@ -258,7 +295,6 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled,
-    notify: typeof input.notify === "boolean" ? input.notify : undefined,
     deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,
@@ -286,9 +322,6 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (typeof patch.enabled === "boolean") {
     job.enabled = patch.enabled;
-  }
-  if (typeof patch.notify === "boolean") {
-    job.notify = patch.notify;
   }
   if (typeof patch.deleteAfterRun === "boolean") {
     job.deleteAfterRun = patch.deleteAfterRun;
@@ -319,7 +352,7 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
-  if (job.sessionTarget === "main" && job.delivery) {
+  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     job.delivery = undefined;
   }
   if (patch.state) {

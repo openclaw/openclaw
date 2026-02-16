@@ -464,54 +464,69 @@ export async function dispatchReplyFromConfig(params: {
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
 
+    const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
+      if (shouldSendToolSummaries) {
+        return payload;
+      }
+      // Group/native flows intentionally suppress tool summary text, but media-only
+      // tool results (for example TTS audio) must still be delivered.
+      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+      if (!hasMedia) {
+        return null;
+      }
+      return { ...payload, text: undefined };
+    };
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
-        onToolResult: shouldSendToolSummaries
-          ? (payload: ReplyPayload) => {
-              const run = async () => {
-                const ttsPayload = await maybeApplyTtsToPayload({
-                  payload,
-                  cfg,
-                  channel: ttsChannel,
-                  kind: "tool",
-                  inboundAudio,
-                  ttsAuto: sessionTtsAuto,
-                });
-                if (shouldRouteToOriginating) {
-                  await sendPayloadAsync(ttsPayload, undefined, false);
-                } else {
-                  const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
-                  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-                  const sending = await runMessageSendingHook({
-                    to: ctx.To ?? "",
-                    content: ttsPayload.text ?? "",
-                    channelId,
-                    conversationId,
-                  });
-                  const nextPayload: ReplyPayload =
-                    typeof ttsPayload.text === "string"
-                      ? { ...ttsPayload, text: sending.content }
-                      : ttsPayload;
-                  const didQueue = sending.cancel ? false : dispatcher.sendToolResult(nextPayload);
-                  void emitMessageSentHook({
-                    to: sending.to,
-                    content: sending.content,
-                    success: didQueue,
-                    error: didQueue
-                      ? undefined
-                      : sending.cancel
-                        ? "message canceled by plugin hook"
-                        : "reply not queued",
-                    channelId,
-                    conversationId,
-                  });
-                }
-              };
-              return run();
+        onToolResult: (payload: ReplyPayload) => {
+          const run = async () => {
+            const ttsPayload = await maybeApplyTtsToPayload({
+              payload,
+              cfg,
+              channel: ttsChannel,
+              kind: "tool",
+              inboundAudio,
+              ttsAuto: sessionTtsAuto,
+            });
+            const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
+            if (!deliveryPayload) {
+              return;
             }
-          : undefined,
+            if (shouldRouteToOriginating) {
+              await sendPayloadAsync(deliveryPayload, undefined, false);
+            } else {
+              const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
+              const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+              const sending = await runMessageSendingHook({
+                to: ctx.To ?? "",
+                content: deliveryPayload.text ?? "",
+                channelId,
+                conversationId,
+              });
+              const nextPayload: ReplyPayload =
+                typeof deliveryPayload.text === "string"
+                  ? { ...deliveryPayload, text: sending.content }
+                  : deliveryPayload;
+              const didQueue = sending.cancel ? false : dispatcher.sendToolResult(nextPayload);
+              void emitMessageSentHook({
+                to: sending.to,
+                content: sending.content,
+                success: didQueue,
+                error: didQueue
+                  ? undefined
+                  : sending.cancel
+                    ? "message canceled by plugin hook"
+                    : "reply not queued",
+                channelId,
+                conversationId,
+              });
+            }
+          };
+          return run();
+        },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
             // Accumulate block text for TTS generation after streaming
