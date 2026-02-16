@@ -40,76 +40,75 @@ describe("onboard-hooks", () => {
     exit: vi.fn(),
   });
 
+  const createMockHook = (
+    params: {
+      name: string;
+      description: string;
+      filePath: string;
+      baseDir: string;
+      handlerPath: string;
+      hookKey: string;
+      emoji: string;
+      events: string[];
+    },
+    eligible: boolean,
+  ) => ({
+    ...params,
+    source: "openclaw-bundled" as const,
+    pluginId: undefined,
+    homepage: undefined,
+    always: false,
+    disabled: false,
+    eligible,
+    managedByPlugin: false,
+    requirements: {
+      bins: [],
+      anyBins: [],
+      env: [],
+      config: ["workspace.dir"],
+      os: [],
+    },
+    missing: {
+      bins: [],
+      anyBins: [],
+      env: [],
+      config: eligible ? [] : ["workspace.dir"],
+      os: [],
+    },
+    configChecks: [],
+    install: [],
+  });
+
   const createMockHookReport = (eligible = true): HookStatusReport => ({
     workspaceDir: "/mock/workspace",
     managedHooksDir: "/mock/.openclaw/hooks",
     hooks: [
-      {
-        name: "session-memory",
-        description: "Save session context to memory when /new command is issued",
-        source: "openclaw-bundled",
-        pluginId: undefined,
-        filePath: "/mock/workspace/hooks/session-memory/HOOK.md",
-        baseDir: "/mock/workspace/hooks/session-memory",
-        handlerPath: "/mock/workspace/hooks/session-memory/handler.js",
-        hookKey: "session-memory",
-        emoji: "💾",
-        events: ["command:new"],
-        homepage: undefined,
-        always: false,
-        disabled: false,
+      createMockHook(
+        {
+          name: "session-memory",
+          description: "Save session context to memory when /new command is issued",
+          filePath: "/mock/workspace/hooks/session-memory/HOOK.md",
+          baseDir: "/mock/workspace/hooks/session-memory",
+          handlerPath: "/mock/workspace/hooks/session-memory/handler.js",
+          hookKey: "session-memory",
+          emoji: "💾",
+          events: ["command:new"],
+        },
         eligible,
-        managedByPlugin: false,
-        requirements: {
-          bins: [],
-          anyBins: [],
-          env: [],
-          config: ["workspace.dir"],
-          os: [],
+      ),
+      createMockHook(
+        {
+          name: "command-logger",
+          description: "Log all command events to a centralized audit file",
+          filePath: "/mock/workspace/hooks/command-logger/HOOK.md",
+          baseDir: "/mock/workspace/hooks/command-logger",
+          handlerPath: "/mock/workspace/hooks/command-logger/handler.js",
+          hookKey: "command-logger",
+          emoji: "📝",
+          events: ["command"],
         },
-        missing: {
-          bins: [],
-          anyBins: [],
-          env: [],
-          config: eligible ? [] : ["workspace.dir"],
-          os: [],
-        },
-        configChecks: [],
-        install: [],
-      },
-      {
-        name: "command-logger",
-        description: "Log all command events to a centralized audit file",
-        source: "openclaw-bundled",
-        pluginId: undefined,
-        filePath: "/mock/workspace/hooks/command-logger/HOOK.md",
-        baseDir: "/mock/workspace/hooks/command-logger",
-        handlerPath: "/mock/workspace/hooks/command-logger/handler.js",
-        hookKey: "command-logger",
-        emoji: "📝",
-        events: ["command"],
-        homepage: undefined,
-        always: false,
-        disabled: false,
         eligible,
-        managedByPlugin: false,
-        requirements: {
-          bins: [],
-          anyBins: [],
-          env: [],
-          config: ["workspace.dir"],
-          os: [],
-        },
-        missing: {
-          bins: [],
-          anyBins: [],
-          env: [],
-          config: eligible ? [] : ["workspace.dir"],
-          os: [],
-        },
-        configChecks: [],
-        install: [],
-      },
+      ),
     ],
   });
 
