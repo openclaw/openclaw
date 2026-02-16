@@ -47,6 +47,23 @@ export function formatErrorMessage(err: unknown): string {
   return redactSensitiveText(formatted);
 }
 
+/**
+ * Detect transient Discord gateway errors thrown by `@buape/carbon` inside
+ * `setTimeout`/`setInterval` callbacks (e.g. heartbeat reconnect on zombie
+ * connections).  These surface as uncaught exceptions but are non-fatal –
+ * the gateway's own reconnection logic will recover.
+ */
+export function isTransientGatewayError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const msg = err.message ?? "";
+  return (
+    msg.includes("Attempted to reconnect zombie connection") ||
+    msg.includes("Attempted to reconnect gateway after disconnecting first")
+  );
+}
+
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
     return formatErrorMessage(err);

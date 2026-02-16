@@ -57,7 +57,7 @@ async function main() {
 
   const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
   assertSupportedRuntime();
-  const { formatUncaughtError } = await import("../infra/errors.js");
+  const { formatUncaughtError, isTransientGatewayError } = await import("../infra/errors.js");
   const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
 
   const { buildProgram } = await import("../cli/program.js");
@@ -66,6 +66,10 @@ async function main() {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    if (isTransientGatewayError(error)) {
+      console.warn("[openclaw] Transient gateway error (non-fatal):", formatUncaughtError(error));
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
