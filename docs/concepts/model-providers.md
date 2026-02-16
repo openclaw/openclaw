@@ -165,6 +165,36 @@ Kimi K2 model IDs:
 }
 ```
 
+### Orq AI Router
+
+Orq AI provides an OpenAI-compatible router endpoint:
+
+- Provider: `orq`
+- Auth: `ORQ_API_KEY`
+- Example model: `orq/openai/gpt-5.2`
+  - Gemini IDs: `google-ai/*` (Gemini API) and `google/*` (Vertex AI / GCP)
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "orq/openai/gpt-5.2" } },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      orq: {
+        baseUrl: "https://api.orq.ai/v2/router",
+        apiKey: "${ORQ_API_KEY}",
+        api: "openai-completions",
+        models: [{ id: "openai/gpt-5.2", name: "GPT-5.2" }],
+      },
+    },
+  },
+}
+```
+
+See [/providers/orq](/providers/orq) for a curated model list.
+
 ### Kimi Coding
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:

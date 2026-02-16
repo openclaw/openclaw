@@ -59,6 +59,58 @@ describe("models-config", () => {
       }
     });
   });
+
+  it("stores ORQ_API_KEY env var name when models exist and apiKey is missing", async () => {
+    await withTempHome(async () => {
+      vi.resetModules();
+      const prevKey = process.env.ORQ_API_KEY;
+      process.env.ORQ_API_KEY = "orq-test-key";
+      try {
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
+        const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
+
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              orq: {
+                baseUrl: "https://api.orq.ai/v2/router",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "router-default",
+                    name: "Orq Router",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        };
+
+        await ensureOpenClawModelsJson(cfg);
+
+        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+        const raw = await fs.readFile(modelPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
+        };
+        // We store the env var name to avoid persisting secrets in models.json.
+        expect(parsed.providers.orq?.apiKey).toBe("ORQ_API_KEY");
+        const ids = parsed.providers.orq?.models?.map((model) => model.id);
+        expect(ids).toContain("router-default");
+      } finally {
+        if (prevKey === undefined) {
+          delete process.env.ORQ_API_KEY;
+        } else {
+          process.env.ORQ_API_KEY = prevKey;
+        }
+      }
+    });
+  });
   it("merges providers by default", async () => {
     await withTempHome(async () => {
       const agentDir = resolveOpenClawAgentDir();

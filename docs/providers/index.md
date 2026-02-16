@@ -40,6 +40,7 @@ See [Venice AI](/providers/venice).
 - [Qwen (OAuth)](/providers/qwen)
 - [OpenRouter](/providers/openrouter)
 - [LiteLLM (unified gateway)](/providers/litellm)
+- [Orq AI Router](/providers/orq)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Together AI](/providers/together)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)

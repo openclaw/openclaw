@@ -167,6 +167,18 @@ export async function setOpenrouterApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setOrqApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "orq:default",
+    credential: {
+      type: "api_key",
+      provider: "orq",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setCloudflareAiGatewayConfig(
   accountId: string,
   gatewayId: string,

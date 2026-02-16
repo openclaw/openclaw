@@ -65,6 +65,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["gemini-api-key", "google-antigravity", "google-gemini-cli"],
   },
   {
+    value: "orq",
+    label: "Orq AI Router",
+    hint: "OpenAI-compatible router",
+    choices: ["orq-api-key"],
+  },
+  {
     value: "xai",
     label: "xAI (Grok)",
     hint: "API key",

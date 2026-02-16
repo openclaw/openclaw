@@ -1054,6 +1054,7 @@
                   "providers/openai",
                   "providers/openrouter",
                   "providers/litellm",
+                  "providers/orq",
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",

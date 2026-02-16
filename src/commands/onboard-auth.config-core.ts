@@ -12,6 +12,11 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
+  buildOrqModelDefinitions,
+  ORQ_BASE_URL,
+  ORQ_DEFAULT_MODEL_REF,
+} from "../agents/orq-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -160,6 +165,85 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+}
+
+export function applyOrqProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[ORQ_DEFAULT_MODEL_REF] = {
+    ...models[ORQ_DEFAULT_MODEL_REF],
+    alias: models[ORQ_DEFAULT_MODEL_REF]?.alias ?? "Orq",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.orq;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModels = buildOrqModelDefinitions();
+  const modelById = new Map(defaultModels.map((model) => [model.id, model]));
+  for (const model of existingModels) {
+    if (model?.id && !modelById.has(model.id)) {
+      modelById.set(model.id, model);
+    }
+  }
+  const mergedModels = Array.from(modelById.values());
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  const resolvedBaseUrl =
+    typeof existingProvider?.baseUrl === "string" && existingProvider.baseUrl.trim()
+      ? existingProvider.baseUrl
+      : ORQ_BASE_URL;
+  const resolvedApi =
+    typeof existingProvider?.api === "string" && existingProvider.api.trim()
+      ? existingProvider.api
+      : "openai-completions";
+  providers.orq = {
+    ...existingProviderRest,
+    baseUrl: resolvedBaseUrl,
+    api: resolvedApi,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyOrqConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyOrqProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: ORQ_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

@@ -12,6 +12,7 @@ export type AuthChoice =
   | "vllm"
   | "openai-codex"
   | "openai-api-key"
+  | "orq-api-key"
   | "openrouter-api-key"
   | "litellm-api-key"
   | "ai-gateway-api-key"
@@ -101,6 +102,7 @@ export type OnboardOptions = {
   tokenExpiresIn?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  orqApiKey?: string;
   openrouterApiKey?: string;
   litellmApiKey?: string;
   aiGatewayApiKey?: string;
