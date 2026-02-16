@@ -166,6 +166,36 @@ if [ ! -f "$CONFIG_FILE" ]; then
   fi
 fi
 
+# --- Pre-seed device pairing for local CLI ---
+# When MASTER_KEY is set the CLI's device identity is deterministic (HKDF-derived).
+# Pre-approve it so local commands (healthcheck, channels status) don't block on
+# manual pairing approval in the headless CVM.
+PAIRED_JSON="/root/.openclaw/devices/paired.json"
+if [ -n "$MASTER_KEY" ]; then
+  mkdir -p "$(dirname "$PAIRED_JSON")"
+  node -e '
+    const c = require("crypto"), fs = require("fs");
+    const mk = process.env.MASTER_KEY;
+    const seed = Buffer.from(c.hkdfSync("sha256", mk, "", "openclaw-device-identity-v1", 32));
+    const pkcs8Prefix = Buffer.from("302e020100300506032b657004220420", "hex");
+    const privKey = c.createPrivateKey({ key: Buffer.concat([pkcs8Prefix, seed]), format: "der", type: "pkcs8" });
+    const pubKey = c.createPublicKey(privKey);
+    const spki = pubKey.export({ type: "spki", format: "der" });
+    const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+    const raw = spki.subarray(spkiPrefix.length);
+    const deviceId = c.createHash("sha256").update(raw).digest("hex");
+    const f = process.argv[1];
+    let paired = {};
+    try { paired = JSON.parse(fs.readFileSync(f, "utf8")); } catch {}
+    if (paired[deviceId]) { console.log("Device pairing already present (" + deviceId.slice(0, 12) + "...)"); process.exit(0); }
+    const publicKey = raw.toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+    const now = Date.now();
+    paired[deviceId] = { deviceId, publicKey, displayName: "local-cvm", roles: ["operator"], scopes: ["operator.admin", "operator.approvals", "operator.pairing"], createdAtMs: now, approvedAtMs: now };
+    fs.writeFileSync(f, JSON.stringify(paired, null, 2), { mode: 0o600 });
+    console.log("Pre-seeded device pairing (" + deviceId.slice(0, 12) + "...)");
+  ' "$PAIRED_JSON"
+fi
+
 # --- SQLite symlink helper ---
 # Called after gateway creates agent dirs to redirect memory.db to local storage
 setup_sqlite_symlinks() {
@@ -241,31 +271,20 @@ GATEWAY_RESTART_DELAY="${OPENCLAW_GATEWAY_RESTART_DELAY:-5}"
 GATEWAY_RESTART_MAX_DELAY="${OPENCLAW_GATEWAY_RESTART_MAX_DELAY:-60}"
 GATEWAY_RESET_AFTER="${OPENCLAW_GATEWAY_RESET_AFTER:-600}"
 
-shutdown() {
-  echo "Shutting down..."
-  if [ -n "${GATEWAY_PID:-}" ] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
-    kill "$GATEWAY_PID" 2>/dev/null || true
-  fi
-  if [ -n "${DOCKERD_PID:-}" ] && kill -0 "$DOCKERD_PID" 2>/dev/null; then
-    kill "$DOCKERD_PID" 2>/dev/null || true
-  fi
-  exit 0
-}
-
-trap shutdown INT TERM
-
 backoff="$GATEWAY_RESTART_DELAY"
 set +e
 while true; do
   echo "Starting OpenClaw gateway..."
   start_time=$(date +%s)
-  openclaw gateway run --bind lan --port 18789 --force &
-  GATEWAY_PID=$!
-  wait "$GATEWAY_PID"
+  openclaw gateway run --bind lan --port 18789 --force
   exit_code=$?
   end_time=$(date +%s)
   runtime=$((end_time - start_time))
   echo "Gateway exited with code ${exit_code}."
+
+  # Kill orphaned openclaw children from the previous run so they don't
+  # accumulate across restarts (especially under OOM pressure).
+  pkill -9 -x openclaw 2>/dev/null || true
 
   if [ "$runtime" -ge "$GATEWAY_RESET_AFTER" ]; then
     backoff="$GATEWAY_RESTART_DELAY"

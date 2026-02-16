@@ -1,6 +1,6 @@
 services:
   openclaw:
-    image: h4x3rotab/openclaw-cvm@sha256:b8cc9cbd1363f03175480e6476ecf99fc9c7c67fbcdc977ce1c9924831ca198b
+    image: h4x3rotab/openclaw-cvm@sha256:9e28f688333b192ae14e7f6f147b624f7ab1c5a645dbe48db9e11fe0c56316ed
     # For local builds, uncomment below and comment out image:
     # build:
     #   context: ..
@@ -14,6 +14,7 @@ services:
       - /home/root/.ssh:/root/.ssh:ro
       - openclaw_data:/data
       - docker_data:/var/lib/docker
+
     environment:
       NODE_ENV: production
       # Master key — derives rclone crypt passwords + gateway auth token via HKDF
@@ -31,6 +32,11 @@ services:
       # Override derived crypt passwords (optional — only if not using MASTER_KEY)
       RCLONE_CRYPT_PASSWORD: ${RCLONE_CRYPT_PASSWORD:-}
       RCLONE_CRYPT_PASSWORD2: ${RCLONE_CRYPT_PASSWORD2:-}
+      # Bootstrap config (base64-encoded openclaw.json, used on first boot only)
+      OPENCLAW_CONFIG_B64: ${OPENCLAW_CONFIG_B64:-}
+      # Dstack runtime vars (used by config env-substitution for mux inboundUrl)
+      DSTACK_APP_ID: ${DSTACK_APP_ID:-}
+      DSTACK_GATEWAY_DOMAIN: ${DSTACK_GATEWAY_DOMAIN:-}
       # Debug logging (set to 1 to enable)
       OPENCLAW_RAW_STREAM: ${OPENCLAW_RAW_STREAM:-}
       OPENCLAW_ANTHROPIC_PAYLOAD_LOG: ${OPENCLAW_ANTHROPIC_PAYLOAD_LOG:-}

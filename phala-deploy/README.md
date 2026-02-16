@@ -2,16 +2,6 @@
 
 Run an OpenClaw gateway inside a Phala Confidential VM (CVM) with optional encrypted S3-backed storage.
 
-## Local Mux E2E (Control-Plane Dry Run)
-
-For local end-to-end testing of `mux-server + openclaw` with real channel credentials but isolated test state, use:
-
-- `phala-deploy/local-mux-e2e/README.md`
-
-Important guardrail:
-
-- Never reuse production WhatsApp auth/session files in the local mux e2e stack.
-
 ## Storage modes
 
 | Mode                 | State location                            | Persistence              | Best for              |
@@ -48,28 +38,71 @@ The master key derives all encryption passwords and the gateway auth token. Keep
 head -c 32 /dev/urandom | base64
 ```
 
-### 3. Prepare deploy env vars (recommended: Redpill Vault)
+### 3. Generate `OPENCLAW_CONFIG_B64`
 
-Generate a temporary deploy env file with `rv-exec`:
+Every CVM deployment needs a bootstrap config. Use `gen-cvm-config.sh` to generate it — it derives the gateway auth token from `MASTER_KEY`, sets up mux registration, channels, and agent defaults:
 
 ```sh
-cd phala-deploy
-rv-exec --dotenv /tmp/deploy.env \
-  MASTER_KEY REDPILL_API_KEY \
-  S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION \
-  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
-  -- bash -lc 'test -s /tmp/deploy.env && echo "deploy env ready: /tmp/deploy.env"'
+OPENCLAW_CONFIG_B64=$(MASTER_KEY="<your-master-key>" \
+  MUX_BASE_URL="https://<mux_app_id>-18891.<gateway>.phala.network" \
+  MUX_REGISTER_KEY="<your-register-key>" \
+  ./phala-deploy/gen-cvm-config.sh)
 ```
 
-Notes:
+You need the **mux base URL** and **register key** from the mux-server deployment. The **inbound URL** (where mux delivers messages back to your OpenClaw) is derived automatically at runtime from `DSTACK_APP_ID` and `DSTACK_GATEWAY_DOMAIN` env vars injected by the Phala platform — you don't need to know your app ID upfront.
 
-- S3 mode needs all S3 variables above.
-- Local-only mode only needs `MASTER_KEY` and `REDPILL_API_KEY`.
-- Prefer this flow over plaintext `.env` files for production deploys.
+Optional env vars for `gen-cvm-config.sh`:
+
+| Variable         | Default     | Description          |
+| ---------------- | ----------- | -------------------- |
+| `MODEL_BASE_URL` | _(omitted)_ | AI provider base URL |
+| `MODEL_API_KEY`  | _(omitted)_ | AI provider API key  |
+
+> **Tip:** With [Redpill Vault](https://github.com/aspect-build/redpill-vault), pull secrets from the vault instead of passing them inline:
+>
+> ```sh
+> OPENCLAW_CONFIG_B64=$(rv-exec --project openclaw \
+>   MASTER_KEY MUX_REGISTER_KEY \
+>   -- bash -c 'MUX_BASE_URL="https://<mux_app_id>-18891.<gateway>.phala.network" \
+>     ./phala-deploy/gen-cvm-config.sh')
+> ```
+
+### 4. Prepare deploy env file
+
+Create a deploy env file with your secrets:
+
+```sh
+cat > /tmp/deploy.env <<EOF
+MASTER_KEY=<your-master-key>
+REDPILL_API_KEY=<your-redpill-api-key>
+S3_BUCKET=<your-bucket-name>
+S3_ENDPOINT=<your-s3-endpoint>
+S3_PROVIDER=Other
+S3_REGION=us-east-1
+AWS_ACCESS_KEY_ID=<your-access-key>
+AWS_SECRET_ACCESS_KEY=<your-secret-key>
+OPENCLAW_CONFIG_B64=${OPENCLAW_CONFIG_B64}
+EOF
+chmod 600 /tmp/deploy.env
+```
+
+Local-only mode only needs `MASTER_KEY`, `REDPILL_API_KEY`, and `OPENCLAW_CONFIG_B64` — omit the S3 variables.
 
 Get a Redpill API key at [redpill.ai](https://redpill.ai). This gives access to GPU TEE models (DeepSeek, Qwen, Llama, etc.) with end-to-end encrypted inference.
 
-### 4. Docker image
+> **Tip:** With Redpill Vault, generate the env file from vault secrets:
+>
+> ```sh
+> rv-exec --dotenv /tmp/deploy.env \
+>   MASTER_KEY REDPILL_API_KEY \
+>   S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION \
+>   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+>   -- bash -lc 'test -s /tmp/deploy.env && echo "deploy env ready"'
+> # Then append OPENCLAW_CONFIG_B64 (generated in step 3)
+> echo "OPENCLAW_CONFIG_B64=${OPENCLAW_CONFIG_B64}" >> /tmp/deploy.env
+> ```
+
+### 5. Docker image
 
 A pre-built image is available on Docker Hub. The `docker-compose.yml` already pins the image by digest. No build step needed unless you want a custom image.
 
@@ -86,14 +119,12 @@ docker push your-dockerhub-user/openclaw-cvm:latest
 # Then update the image: line in docker-compose.yml
 ```
 
-### 5. Deploy to Phala Cloud
+### 6. Deploy to Phala Cloud
 
 ```sh
-cd phala-deploy
-
 phala deploy \
   -n my-openclaw \
-  -c docker-compose.yml \
+  -c phala-deploy/docker-compose.yml \
   -e /tmp/deploy.env \
   -t tdx.medium \
   --dev-os \
@@ -104,7 +135,7 @@ The `-e /tmp/deploy.env` flag passes your secrets as encrypted environment varia
 
 The CLI will output your CVM ID and dashboard URL. Save these.
 
-### 6. Verify
+### 7. Verify
 
 Check the container logs:
 
@@ -135,7 +166,7 @@ SSH daemon started.
 Docker daemon ready.
 ```
 
-### 7. What's next
+### 8. What's next
 
 1. **Open the dashboard** — go to `https://<app_id>-18789.<gateway>.phala.network?token=<your-gateway-token>` (see [Connecting to your gateway](#connecting-to-your-gateway) for how to construct this URL)
 
@@ -145,29 +176,55 @@ Docker daemon ready.
 
 After that, your agent is live on Telegram and you can chat with it there.
 
-## Mux + OpenClaw Rollout Checklist
+## Mux registration
 
-Use this when rolling out shared mux bots plus tenant OpenClaw instances.
+Every OpenClaw CVM registers with a mux-server on boot. The bootstrap config (`OPENCLAW_CONFIG_B64`, generated in [step 3](#3-generate-openclaw_config_b64)) contains the mux endpoint, register key, and channel routing.
 
-1. Deploy mux-server as its own CVM with persistent storage for:
-   - mux SQLite/log path (`/data`)
-   - WhatsApp auth snapshot path (`/wa-auth/default`)
-2. Inject mux runtime secrets from `rv`:
-   - `MUX_REGISTER_KEY` (must match tenant OpenClaw `gateway.http.endpoints.mux.registerKey`)
-   - `MUX_ADMIN_TOKEN` (required for control-plane pairing token issuance)
-   - optional: `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `MUX_JWT_PRIVATE_KEY`
-3. For each tenant OpenClaw instance:
-   - set `gateway.http.endpoints.mux.baseUrl`
-   - set `gateway.http.endpoints.mux.registerKey`
-   - set `gateway.http.endpoints.mux.inboundUrl` (public URL reachable by mux)
-   - enable channel account `mux` for `telegram`, `discord`, `whatsapp`
-4. OpenClaw auto-registers itself with mux on boot (register key -> runtime JWT).
-5. Validate with live checks:
-   - pair chat using token (`/v1/admin/pairings/token`)
-   - send `/help` via mux channel
-   - verify OpenClaw version and health via `./phala-deploy/cvm-exec`
+### How it works
 
-Runtime JWT contract details live in `mux-server/JWT_INSTANCE_RUNTIME_DESIGN.md`.
+1. OpenClaw boots and reads `openclaw.json` with the mux config.
+2. It derives a stable device identity from `MASTER_KEY` (via HKDF).
+3. It calls `POST /v1/instances/register` on the mux-server with the `registerKey`.
+4. Mux-server issues a runtime JWT (24h TTL). OpenClaw caches and auto-refreshes it.
+5. Inbound messages (mux -> OpenClaw) are delivered to `inboundUrl`, authenticated via JWKS.
+
+The `inboundUrl` uses `${DSTACK_APP_ID}` and `${DSTACK_GATEWAY_DOMAIN}` placeholders, resolved by the config loader's env-substitution at boot time.
+
+Runtime JWT contract details: `mux-server/JWT_INSTANCE_RUNTIME_DESIGN.md`.
+
+### Pair channels
+
+Once the CVM is running, generate a pairing token to link a chat to your instance:
+
+```sh
+./phala-deploy/mux-pair-token.sh telegram
+```
+
+This calls `POST /v1/admin/pairings/token` on the mux-server. Send the returned token as a message in the Telegram bot to complete pairing.
+
+### Modifying config on an existing CVM
+
+`OPENCLAW_CONFIG_B64` is only used on first boot (when no `openclaw.json` exists yet). To update config on a running CVM, SSH in and edit the JSON directly:
+
+```sh
+export CVM_SSH_HOST=<app_id>-1022.<gateway>.phala.network
+
+# Open an interactive shell
+./phala-deploy/cvm-ssh
+
+# Edit the config inside the CVM
+vi /root/.openclaw/openclaw.json
+
+# Restart the gateway to pick up changes (the supervisor loop restarts it automatically)
+pkill -f "openclaw gateway"
+```
+
+Key config fields:
+
+1. `gateway.http.endpoints.mux` — `enabled`, `baseUrl`, `registerKey`, `inboundUrl`
+   - For `inboundUrl`, use `https://${DSTACK_APP_ID}-18789.${DSTACK_GATEWAY_DOMAIN}/v1/mux/inbound` — the placeholders are resolved at boot time
+2. `channels.<channel>.accounts.mux` — `enabled: true` and `mux: { enabled: true, timeoutMs: 30000 }`
+3. `plugins.entries.<channel>.enabled` — `true` for each channel
 
 ## How S3 storage works
 
@@ -280,28 +337,28 @@ The entrypoint keeps SSH available even if the gateway crashes and restarts it w
 
 ## Updating
 
-Use the dedicated runbook:
+Two commands: build, then deploy.
 
-- `phala-deploy/UPDATE_RUNBOOK.md`
+```sh
+# Build and push both images (openclaw + mux-server)
+./phala-deploy/build.sh
 
-Minimal sequence:
+# Deploy to both CVMs, wait for health, run smoke tests
+./phala-deploy/deploy.sh
+```
 
-1. Build/pin images:
-   - `./phala-deploy/build-pin-image.sh`
-   - `./phala-deploy/build-pin-mux-image.sh` (if mux changed)
-2. Load rollout targets and deploy:
-   - `set -a; source phala-deploy/.env.rollout-targets; set +a`
-   - `./phala-deploy/cvm-rollout-targets.sh all --wait`
-3. Generate pairing token and run a quick smoke check:
-   - `./phala-deploy/mux-pair-token.sh telegram agent:main:main`
+`build.sh` accepts `--openclaw-only` or `--mux-only` to build one image. `deploy.sh` accepts `--dry-run`, `--test-only` (smoke tests without deploying), and `--skip-test`.
 
-The new image pulls in the background. The old container keeps running until the new one is ready.
+Both scripts read CVM IDs from `phala-deploy/.env.rollout-targets` (see `cvm-rollout-targets.env.example`).
 
-**Verification notes:**
+**Verification:** `deploy.sh` runs 5 smoke tests automatically (mux health, openclaw version, gateway reachability, mux config, mux registration). For manual checks:
 
-- `phala deploy` is the reliable rollout path. `phala cvms logs` can lag, so confirm with a live version check via `cvm-exec` (for example: `./phala-deploy/cvm-exec 'openclaw --version'`).
-- `rv-exec` with `CVM_SSH_HOST` is sufficient to verify the live container without exposing secrets.
-- Full runbook: `phala-deploy/UPDATE_RUNBOOK.md`.
+```sh
+./phala-deploy/cvm-exec 'openclaw --version'
+./phala-deploy/cvm-exec 'openclaw channels status --probe'
+```
+
+Full runbook with fallback procedures: `phala-deploy/UPDATE_RUNBOOK.md`.
 
 ## Disaster recovery
 
@@ -315,32 +372,38 @@ If your CVM is destroyed (S3 mode only):
 
 ## File reference
 
-| File                     | Purpose                                                               |
-| ------------------------ | --------------------------------------------------------------------- |
-| `Dockerfile`             | CVM image (Ubuntu 24.04 + Node 22 + rclone + Docker-in-Docker)        |
-| `entrypoint.sh`          | Boot sequence: key derivation, S3 mount, SSH, Docker, gateway         |
-| `docker-compose.yml`     | Compose file for `phala deploy`                                       |
-| `mux-server-compose.yml` | Compose file for mux-server CVM deployment                            |
-| `build-pin-image.sh`     | Rebuild tarball + image, push, and pin compose image digest           |
-| `build-pin-mux-image.sh` | Rebuild mux image, push, and pin mux compose digest                   |
-| `cvm-rollout.sh`         | Standardized multi-CVM deploy flow with `rv-exec` env materialization |
-| `cvm-rollout-targets.sh` | Role-aware deploy wrapper with CVM role safety checks                 |
-| `mux-pair-token.sh`      | Mint mux pairing token for a tenant OpenClaw instance (admin API)     |
-| `UPDATE_RUNBOOK.md`      | Dedicated repeatable update runbook                                   |
-| `secrets/.env`           | Legacy local env-file workflow (prefer `rv-exec --dotenv`)            |
-| `cvm-ssh`                | Interactive SSH into the container                                    |
-| `cvm-exec`               | Run a command in the container                                        |
-| `cvm-scp`                | Copy files to/from the container                                      |
-| `S3_STORAGE.md`          | Detailed S3 encryption documentation                                  |
+| File                     | Purpose                                                           |
+| ------------------------ | ----------------------------------------------------------------- |
+| `Dockerfile`             | CVM image (Ubuntu 24.04 + Node 24 + rclone + Docker-in-Docker)    |
+| `entrypoint.sh`          | Boot sequence: key derivation, S3 mount, SSH, Docker, gateway     |
+| `docker-compose.yml`     | Compose file for `phala deploy`                                   |
+| `mux-server-compose.yml` | Compose file for mux-server CVM deployment                        |
+| `build.sh`               | Build and push both images (wraps the two scripts below)          |
+| `build-pin-image.sh`     | Rebuild tarball + image, push, and pin compose image digest       |
+| `build-pin-mux-image.sh` | Rebuild mux image, push, and pin mux compose digest               |
+| `deploy.sh`              | Deploy both CVMs, wait for health, run smoke tests                |
+| `gen-cvm-config.sh`      | Generate `OPENCLAW_CONFIG_B64` from env vars (MASTER_KEY, etc.)   |
+| `mux-pair-token.sh`      | Mint mux pairing token for a tenant OpenClaw instance (admin API) |
+| `UPDATE_RUNBOOK.md`      | Detailed update runbook with fallback procedures                  |
+| `cvm-ssh`                | Interactive SSH into the container                                |
+| `cvm-exec`               | Run a command in the container                                    |
+| `cvm-scp`                | Copy files to/from the container                                  |
+| `S3_STORAGE.md`          | Detailed S3 encryption documentation                              |
 
 ## CVM environment notes
 
-- The Ubuntu base image is minimal: install `unzip` (for bun), `tmux`, and use nodesource repo for Node 22 (default apt gives Node 12).
+- The Ubuntu base image is minimal: install `unzip` (for bun), `tmux`, and use nodesource repo for Node 24 (default apt gives Node 12).
 - Entrypoint starts SSH before dockerd — SSH is always available for debugging, even if dockerd fails.
 - Backgrounding over non-interactive SSH is unreliable; use tmux inside the CVM.
 - Docker uses static binaries from `download.docker.com/linux/static/stable/` (not `apt docker-ce`). Do **not** bind-mount Docker binaries from the CVM host (ELF interpreter mismatch: host `/lib/ld-linux-x86-64.so.2` vs container `/lib64/`).
 - Dockerfile: `build-essential` is installed, used for `npm install`, then purged in the same `RUN` layer. Never split install and purge across layers.
 - Auto-update is disabled in bootstrap config (`update.checkOnStart=false`); updates happen via Docker image rebuilds.
+
+## Local Mux E2E
+
+For local end-to-end testing of `mux-server + openclaw` with real channel credentials but isolated test state, see `phala-deploy/local-mux-e2e/README.md`.
+
+Important guardrail: never reuse production WhatsApp auth/session files in the local mux e2e stack.
 
 ## Troubleshooting
 

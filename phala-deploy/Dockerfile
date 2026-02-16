@@ -35,8 +35,8 @@ RUN mkdir -p /usr/local/lib/docker/cli-plugins && \
       -o /usr/local/lib/docker/cli-plugins/docker-compose && \
     chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Layer 2: Node.js 22 via nodesource
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+# Layer 2: Node.js 24 via nodesource
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     corepack enable && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -77,8 +77,8 @@ RUN chmod +x /entrypoint.sh
 
 ENV NODE_ENV=production
 
-HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
-  CMD openclaw channels status --probe >/dev/null 2>&1 || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl -sf http://localhost:18789/ >/dev/null || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 

@@ -25,18 +25,7 @@ Do not run both services in one CVM.
 cp phala-deploy/cvm-rollout-targets.env.example phala-deploy/.env.rollout-targets
 ```
 
-Edit `phala-deploy/.env.rollout-targets`:
-
-- `PHALA_OPENCLAW_CVM_IDS`
-- `PHALA_MUX_CVM_IDS`
-
-Load before update commands:
-
-```bash
-set -a
-source phala-deploy/.env.rollout-targets
-set +a
-```
+Edit `phala-deploy/.env.rollout-targets` with your CVM IDs (`PHALA_OPENCLAW_CVM_IDS`, `PHALA_MUX_CVM_IDS`).
 
 ## No-rv fallback (manual .env files)
 
@@ -75,18 +64,16 @@ Deploy without `rv-exec`:
 
 ```bash
 # OpenClaw
-./phala-deploy/cvm-rollout.sh deploy \
-  --cvm-ids "$PHALA_OPENCLAW_CVM_IDS" \
-  --compose phala-deploy/docker-compose.yml \
-  --env-file /tmp/openclaw-phala-deploy.env \
-  --wait
+phala deploy \
+  --cvm-id "$PHALA_OPENCLAW_CVM_IDS" \
+  -c phala-deploy/docker-compose.yml \
+  -e /tmp/openclaw-phala-deploy.env
 
 # mux-server
-./phala-deploy/cvm-rollout.sh deploy \
-  --cvm-ids "$PHALA_MUX_CVM_IDS" \
-  --compose phala-deploy/mux-server-compose.yml \
-  --env-file /tmp/mux-phala-deploy.env \
-  --wait
+phala deploy \
+  --cvm-id "$PHALA_MUX_CVM_IDS" \
+  -c phala-deploy/mux-server-compose.yml \
+  -e /tmp/mux-phala-deploy.env
 ```
 
 Generate pairing token without `rv-exec`:
@@ -105,11 +92,10 @@ export CVM_SSH_HOST=<openclaw-app-id>-1022.<gateway-domain>
 ### 1. Preflight
 
 ```bash
-./phala-deploy/cvm-rollout-targets.sh all --dry-run
+./phala-deploy/deploy.sh --dry-run
 ```
 
-This validates role-to-CVM mapping by name (`mux` role requires CVM name containing `mux`).
-It reads CVM metadata via `phala cvms get`.
+This validates vault secrets and prints the deploy commands without executing them.
 
 ### 2. Build and pin images
 
@@ -125,25 +111,13 @@ mux-server (only when mux changed):
 ./phala-deploy/build-pin-mux-image.sh
 ```
 
-### 3. Roll out by role
-
-OpenClaw first:
+### 3. Deploy
 
 ```bash
-./phala-deploy/cvm-rollout-targets.sh openclaw --wait
+./phala-deploy/deploy.sh
 ```
 
-Then mux:
-
-```bash
-./phala-deploy/cvm-rollout-targets.sh mux --wait
-```
-
-Or both in sequence:
-
-```bash
-./phala-deploy/cvm-rollout-targets.sh all --wait
-```
+This deploys both CVMs, waits for health, and runs smoke tests.
 
 ### 4. Verify runtime
 
@@ -197,9 +171,8 @@ Cause: missing `TELEGRAM_BOT_TOKEN` / `DISCORD_BOT_TOKEN` in mux deploy env.
 
 Fix:
 
-1. Ensure `PHALA_MUX_DEPLOY_SECRETS` includes required keys.
-2. Re-run:
-   - `./phala-deploy/cvm-rollout-targets.sh mux --wait`
+1. Ensure `MUX_DEPLOY_SECRETS` in `deploy.sh` includes the required keys.
+2. Re-run: `./phala-deploy/deploy.sh`
 
 ### mux healthy but no messages forwarded to OpenClaw
 
@@ -224,13 +197,11 @@ Fix:
 1. SSH to the mux CVM host and clear mux state volume:
    - `docker rm -f mux-server || true`
    - `docker volume rm -f mux_data || true`
-2. Re-run mux rollout:
-   - `./phala-deploy/cvm-rollout-targets.sh mux --wait`
+2. Re-run: `./phala-deploy/deploy.sh`
 
 ## Related files
 
-- `phala-deploy/cvm-rollout-targets.sh`
-- `phala-deploy/cvm-rollout.sh`
+- `phala-deploy/deploy.sh`
 - `phala-deploy/cvm-rollout-targets.env.example`
 - `phala-deploy/mux-pair-token.sh`
 - `phala-deploy/mux-server-compose.yml`
