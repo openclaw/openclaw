@@ -1470,6 +1470,7 @@ Validation:
   - `E1-F2-S1` — trace propagation standardization across command chain.
     - Required evidence: end-to-end path demonstrates `traceparent`/legacy compatibility in contracts + read/write API headers.
     - Required evidence: `node --test packages/dispatch-contracts/tests/contracts.test.mjs` plus existing trace audit coverage in `dispatch/tests/story_09_observability.node.test.mjs`.
+    - Backward compatibility note: `buildTraceContextHeaders()` returns `source: null` for pure legacy `x-trace-id` propagation; this preserves legacy clients while traceparent remains preferred when available.
   - `E6-F1-S1` — Temporal dev + worker scaffold/hello workflow.
     - Required evidence: control-plane worker starts in skeleton mode and emits startup logs.
     - Required evidence: `node --input-type=module -e "import('./packages/control-plane-temporal/src/worker.mjs'); setTimeout(() => process.exit(0), 1800);"`

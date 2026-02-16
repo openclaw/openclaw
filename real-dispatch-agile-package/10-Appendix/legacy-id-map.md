@@ -38,5 +38,7 @@ This appendix is for transition context only. New work should use `E#-F#-S#` IDs
 
 ## Update rule
 
+- `legacy-id-map.md` remains transition-only context and is included in Sprint 1 governance PRs only for traceability alignment, not for runtime behavior.
+
 - Add a row only when a recurring legacy ID causes operational ambiguity.
 - If a legacy row gains a true one-to-one `E/F/S` mapping, update the row to `Exact` and keep prior notes as audit context.

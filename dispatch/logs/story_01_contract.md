@@ -5,6 +5,8 @@ Story: `STORY-01: Implement command endpoints with idempotency`
 
 ## Acceptance Criteria Source Summary
 
+Note: this contract file is retained as a legacy-story contract artifact and is included in Sprint 1 governance alignment to preserve decision context while moving to `E#-F#-S#` source-of-truth IDs.
+
 From `dispatch/logs/current_work_item.md`, `dispatch/logs/next_story_recommendation.md` (current planning file of record), and v0 acceptance checklist:
 
 - Every command endpoint must require `Idempotency-Key`.
