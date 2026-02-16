@@ -15,6 +15,7 @@ struct SettingsTab: View {
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
+    @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @AppStorage("talk.voiceDirectiveHint.enabled") private var talkVoiceDirectiveHintEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
@@ -254,6 +255,10 @@ struct SettingsTab: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Text("Use this local override when gateway config redacts talk.apiKey for mobile clients.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Toggle("Background Listening", isOn: self.$talkBackgroundEnabled)
+                        Text("Keep listening when the app is in the background. Uses more battery.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Toggle("Voice Directive Hint", isOn: self.$talkVoiceDirectiveHintEnabled)
