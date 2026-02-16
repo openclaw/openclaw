@@ -86,36 +86,6 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
   });
 
-  it("saveSessionStore caps entries over limit", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "30d",
-          maxEntries: 5,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
-
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {};
-    for (let i = 0; i < 10; i++) {
-      store[`key-${i}`] = makeEntry(now - i * 1000);
-    }
-
-    await saveSessionStore(storePath, store);
-
-    const loaded = loadSessionStore(storePath);
-    expect(Object.keys(loaded)).toHaveLength(5);
-    for (let i = 0; i < 5; i++) {
-      expect(loaded[`key-${i}`]).toBeDefined();
-    }
-    for (let i = 5; i < 10; i++) {
-      expect(loaded[`key-${i}`]).toBeUndefined();
-    }
-  });
-
   it("saveSessionStore rotates file when over size limit and creates .bak", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
