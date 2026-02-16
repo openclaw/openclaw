@@ -17,6 +17,7 @@ export function createTelegramDraftStream(params: {
   chatId: number;
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
+  replyToMessageId?: number;
   throttleMs?: number;
   log?: (message: string) => void;
   warn?: (message: string) => void;
@@ -28,6 +29,13 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
+  const replyParams: Record<string, unknown> | undefined = (() => {
+    const base: Record<string, unknown> = threadParams ? { ...threadParams } : {};
+    if (params.replyToMessageId != null) {
+      base.reply_to_message_id = params.replyToMessageId;
+    }
+    return Object.keys(base).length > 0 ? base : undefined;
+  })();
 
   let streamMessageId: number | undefined;
   let lastSentText = "";
@@ -64,7 +72,7 @@ export function createTelegramDraftStream(params: {
         await params.api.editMessageText(chatId, streamMessageId, trimmed);
         return;
       }
-      const sent = await params.api.sendMessage(chatId, trimmed, threadParams);
+      const sent = await params.api.sendMessage(chatId, trimmed, replyParams);
       const sentMessageId = sent?.message_id;
       if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
         stopped = true;

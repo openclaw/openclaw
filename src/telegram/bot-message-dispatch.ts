@@ -91,12 +91,15 @@ export const dispatchTelegramMessage = async ({
       ? telegramCfg.blockStreaming
       : cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamDraft = streamMode !== "off" && !accountBlockStreamingEnabled;
+  const draftReplyToMessageId =
+    replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftStream = canStreamDraft
     ? createTelegramDraftStream({
         api: bot.api,
         chatId,
         maxChars: draftMaxChars,
         thread: threadSpec,
+        replyToMessageId: draftReplyToMessageId,
         log: logVerbose,
         warn: logVerbose,
       })
