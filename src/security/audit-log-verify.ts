@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import { canonicalize, computeHash } from "./audit-log.js";
 import type { AuditLogEntry } from "./audit-log.js";
+import { canonicalize, computeHash } from "./audit-log.js";
 
 export type VerifyResult =
   | { valid: true; entryCount: number }

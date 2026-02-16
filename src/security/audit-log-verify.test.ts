@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SecurityEvent } from "./events.js";
+import { verifyAuditLogChain } from "./audit-log-verify.js";
 import {
   appendAuditEntry,
   flushAuditWriter,
   resetAuditWriter,
   setAuditLogPath,
 } from "./audit-log.js";
-import { verifyAuditLogChain } from "./audit-log-verify.js";
 
 function makeEvent(action: string): SecurityEvent {
   return {

@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import type { SecurityEvent } from "./events.js";
+import { resolveStateDir } from "../config/paths.js";
 
 export type AuditLogEntry = {
   seq: number;
@@ -116,43 +116,45 @@ async function recoverState(): Promise<void> {
  * Fire-and-forget: returns void synchronously, writes are serialized internally.
  */
 export function appendAuditEntry(event: SecurityEvent): void {
-  writeChain = writeChain.catch(() => undefined).then(async () => {
-    if (!initialized) {
-      await recoverState();
-      initialized = true;
-    }
+  writeChain = writeChain
+    .catch(() => undefined)
+    .then(async () => {
+      if (!initialized) {
+        await recoverState();
+        initialized = true;
+      }
 
-    const logPath = auditLogPathOverride ?? resolveAuditLogPath();
-    const dir = path.dirname(logPath);
+      const logPath = auditLogPathOverride ?? resolveAuditLogPath();
+      const dir = path.dirname(logPath);
 
-    const entryWithoutHash: Omit<AuditLogEntry, "hash"> = {
-      seq: lastSeq + 1,
-      timestamp: event.timestamp,
-      prevHash: lastHash,
-      event,
-    };
+      const entryWithoutHash: Omit<AuditLogEntry, "hash"> = {
+        seq: lastSeq + 1,
+        timestamp: event.timestamp,
+        prevHash: lastHash,
+        event,
+      };
 
-    const canonicalized = canonicalize(entryWithoutHash);
-    const hash = computeHash(canonicalized);
+      const canonicalized = canonicalize(entryWithoutHash);
+      const hash = computeHash(canonicalized);
 
-    const fullEntry: AuditLogEntry = {
-      ...entryWithoutHash,
-      hash,
-    };
+      const fullEntry: AuditLogEntry = {
+        ...entryWithoutHash,
+        hash,
+      };
 
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    await fs.appendFile(logPath, `${JSON.stringify(fullEntry)}\n`, "utf-8");
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.appendFile(logPath, `${JSON.stringify(fullEntry)}\n`, "utf-8");
 
-    // Best-effort file permissions
-    try {
-      await fs.chmod(logPath, 0o600);
-    } catch {
-      // May fail on some platforms
-    }
+      // Best-effort file permissions
+      try {
+        await fs.chmod(logPath, 0o600);
+      } catch {
+        // May fail on some platforms
+      }
 
-    lastHash = hash;
-    lastSeq = fullEntry.seq;
-  });
+      lastHash = hash;
+      lastSeq = fullEntry.seq;
+    });
 }
 
 /**

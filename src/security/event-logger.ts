@@ -1,5 +1,6 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SecurityEvent } from "./events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { appendAuditEntry } from "./audit-log.js";
 
 const securityLogger = createSubsystemLogger("security");
 
@@ -15,4 +16,6 @@ export function emitSecurityEvent(event: SecurityEvent): void {
   } else {
     securityLogger.info(message, meta);
   }
+
+  appendAuditEntry(event);
 }

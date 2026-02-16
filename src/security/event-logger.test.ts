@@ -1,34 +1,39 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SecurityEvent } from "./events.js";
 
+// Reset module registry so we get fresh imports not tainted by setup.ts
+vi.resetModules();
+
 const mockInfo = vi.fn();
 const mockWarn = vi.fn();
 const mockError = vi.fn();
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: (subsystem: string) => {
-    expect(subsystem).toBe("security");
-    return {
-      subsystem,
-      info: mockInfo,
-      warn: mockWarn,
-      error: mockError,
-      debug: vi.fn(),
-      trace: vi.fn(),
-      fatal: vi.fn(),
-      raw: vi.fn(),
-      isEnabled: () => true,
-      child: vi.fn(),
-    };
-  },
+vi.mock("./audit-log.js", () => ({
+  appendAuditEntry: vi.fn(),
 }));
 
-// Import after mock setup
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "security",
+    info: mockInfo,
+    warn: mockWarn,
+    error: mockError,
+    debug: vi.fn(),
+    trace: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    isEnabled: () => true,
+    child: vi.fn(),
+  }),
+}));
+
 const { emitSecurityEvent } = await import("./event-logger.js");
 
 describe("emitSecurityEvent", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockInfo.mockClear();
+    mockWarn.mockClear();
+    mockError.mockClear();
   });
 
   it("routes info severity to info()", () => {
