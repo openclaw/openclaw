@@ -92,37 +92,46 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   warnings: [],
 }) as unknown as MockFn;
 
-export const detectLegacyStateMigrations = vi.fn().mockResolvedValue({
-  targetAgentId: "main",
-  targetMainKey: "main",
-  targetScope: undefined,
-  stateDir: "/tmp/state",
-  oauthDir: "/tmp/oauth",
-  sessions: {
-    legacyDir: "/tmp/state/sessions",
-    legacyStorePath: "/tmp/state/sessions/sessions.json",
-    targetDir: "/tmp/state/agents/main/sessions",
-    targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
-    hasLegacy: false,
-    legacyKeys: [],
-  },
-  agentDir: {
-    legacyDir: "/tmp/state/agent",
-    targetDir: "/tmp/state/agents/main/agent",
-    hasLegacy: false,
-  },
-  whatsappAuth: {
-    legacyDir: "/tmp/oauth",
-    targetDir: "/tmp/oauth/whatsapp/default",
-    hasLegacy: false,
-  },
-  pairingAllowFrom: {
-    legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
-    targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
-    hasLegacyTelegram: false,
-  },
-  preview: [],
-}) as unknown as MockFn;
+function createLegacyStateMigrationDetectionResult(params?: {
+  hasLegacySessions?: boolean;
+  preview?: string[];
+}) {
+  return {
+    targetAgentId: "main",
+    targetMainKey: "main",
+    targetScope: undefined,
+    stateDir: "/tmp/state",
+    oauthDir: "/tmp/oauth",
+    sessions: {
+      legacyDir: "/tmp/state/sessions",
+      legacyStorePath: "/tmp/state/sessions/sessions.json",
+      targetDir: "/tmp/state/agents/main/sessions",
+      targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
+      hasLegacy: params?.hasLegacySessions ?? false,
+      legacyKeys: [],
+    },
+    agentDir: {
+      legacyDir: "/tmp/state/agent",
+      targetDir: "/tmp/state/agents/main/agent",
+      hasLegacy: false,
+    },
+    whatsappAuth: {
+      legacyDir: "/tmp/oauth",
+      targetDir: "/tmp/oauth/whatsapp/default",
+      hasLegacy: false,
+    },
+    pairingAllowFrom: {
+      legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
+      targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
+      hasLegacyTelegram: false,
+    },
+    preview: params?.preview ?? [],
+  };
+}
+
+export const detectLegacyStateMigrations = vi
+  .fn()
+  .mockResolvedValue(createLegacyStateMigrationDetectionResult()) as unknown as MockFn;
 
 export const runLegacyStateMigrations = vi.fn().mockResolvedValue({
   changes: [],
@@ -312,37 +321,12 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
 
   detectLegacyStateMigrations.mockClear();
   runLegacyStateMigrations.mockClear();
-  detectLegacyStateMigrations.mockResolvedValueOnce({
-    targetAgentId: "main",
-    targetMainKey: "main",
-    targetScope: undefined,
-    stateDir: "/tmp/state",
-    oauthDir: "/tmp/oauth",
-    sessions: {
-      legacyDir: "/tmp/state/sessions",
-      legacyStorePath: "/tmp/state/sessions/sessions.json",
-      targetDir: "/tmp/state/agents/main/sessions",
-      targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
-      hasLegacy: true,
-      legacyKeys: [],
-    },
-    agentDir: {
-      legacyDir: "/tmp/state/agent",
-      targetDir: "/tmp/state/agents/main/agent",
-      hasLegacy: false,
-    },
-    whatsappAuth: {
-      legacyDir: "/tmp/oauth",
-      targetDir: "/tmp/oauth/whatsapp/default",
-      hasLegacy: false,
-    },
-    pairingAllowFrom: {
-      legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
-      targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
-      hasLegacyTelegram: false,
-    },
-    preview: ["- Legacy sessions detected"],
-  });
+  detectLegacyStateMigrations.mockResolvedValueOnce(
+    createLegacyStateMigrationDetectionResult({
+      hasLegacySessions: true,
+      preview: ["- Legacy sessions detected"],
+    }),
+  );
   runLegacyStateMigrations.mockResolvedValueOnce({
     changes: ["migrated"],
     warnings: [],
