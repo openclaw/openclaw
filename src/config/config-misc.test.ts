@@ -88,6 +88,62 @@ describe("talk.voiceAliases", () => {
   });
 });
 
+describe("gateway.remote.transport", () => {
+  it("accepts direct transport", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          transport: "direct",
+          url: "wss://gateway.example.ts.net",
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown transport", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          transport: "udp",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.remote.transport");
+    }
+  });
+});
+
+describe("gateway.tools config", () => {
+  it("accepts gateway.tools allow and deny lists", () => {
+    const res = validateConfigObject({
+      gateway: {
+        tools: {
+          allow: ["gateway"],
+          deny: ["sessions_spawn", "sessions_send"],
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid gateway.tools values", () => {
+    const res = validateConfigObject({
+      gateway: {
+        tools: {
+          allow: "gateway",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.tools.allow");
+    }
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhook and cron.webhookToken", () => {
     const res = OpenClawSchema.safeParse({
