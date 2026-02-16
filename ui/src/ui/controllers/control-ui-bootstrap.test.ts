@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/control-ui-contract.js";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../control-ui-profile.ts";
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
 describe("loadControlUiBootstrapConfig", () => {
@@ -10,6 +10,7 @@ describe("loadControlUiBootstrapConfig", () => {
       ok: true,
       json: async () => ({
         basePath: "/openclaw",
+        profile: "americanclaw",
         assistantName: "Ops",
         assistantAvatar: "O",
         assistantAgentId: "main",
@@ -19,6 +20,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "/openclaw",
+      controlUiProfile: "openclaw" as const,
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
@@ -33,6 +35,7 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
     expect(state.assistantAgentId).toBe("main");
+    expect(state.controlUiProfile).toBe("americanclaw");
 
     vi.unstubAllGlobals();
   });
@@ -43,6 +46,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "",
+      controlUiProfile: "openclaw" as const,
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
@@ -55,6 +59,7 @@ describe("loadControlUiBootstrapConfig", () => {
       expect.objectContaining({ method: "GET" }),
     );
     expect(state.assistantName).toBe("Assistant");
+    expect(state.controlUiProfile).toBe("openclaw");
 
     vi.unstubAllGlobals();
   });
@@ -65,6 +70,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     const state = {
       basePath: "/openclaw/",
+      controlUiProfile: "openclaw" as const,
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,

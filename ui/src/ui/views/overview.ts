@@ -1,6 +1,8 @@
 import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
 import { t, i18n, type Locale } from "../../i18n/index.ts";
+import { resolveUiBrand } from "../brand.ts";
+import type { ControlUiProfile } from "../control-ui-profile.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
@@ -20,6 +22,7 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  controlUiProfile?: ControlUiProfile;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
@@ -28,6 +31,7 @@ export type OverviewProps = {
 };
 
 export function renderOverview(props: OverviewProps) {
+  const brand = resolveUiBrand(props.controlUiProfile);
   const snapshot = props.hello?.snapshot as
     | {
         uptimeMs?: number;
@@ -116,11 +120,11 @@ export function renderOverview(props: OverviewProps) {
           <div style="margin-top: 6px">
             <a
               class="session-link"
-              href="https://docs.openclaw.ai/web/dashboard"
+              href=${brand.docs.dashboardAuth}
               target=${EXTERNAL_LINK_TARGET}
               rel=${buildExternalLinkRel()}
-              title="Control UI auth docs (opens in new tab)"
-              >Docs: Control UI auth</a
+              title="${brand.productName} dashboard auth docs (opens in new tab)"
+              >Docs: Dashboard auth</a
             >
           </div>
         </div>
@@ -132,11 +136,11 @@ export function renderOverview(props: OverviewProps) {
         <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/web/dashboard"
+            href=${brand.docs.dashboardAuth}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Control UI auth docs (opens in new tab)"
-            >Docs: Control UI auth</a
+            title="${brand.productName} dashboard auth docs (opens in new tab)"
+            >Docs: Dashboard auth</a
           >
         </div>
       </div>
@@ -171,7 +175,7 @@ export function renderOverview(props: OverviewProps) {
         <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/gateway/tailscale"
+            href=${brand.docs.tailscale}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
             title="Tailscale Serve docs (opens in new tab)"
@@ -180,7 +184,7 @@ export function renderOverview(props: OverviewProps) {
           <span class="muted"> · </span>
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/web/control-ui#insecure-http"
+            href=${brand.docs.insecureHttp}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
             title="Insecure HTTP docs (opens in new tab)"
@@ -222,7 +226,7 @@ export function renderOverview(props: OverviewProps) {
                       const v = (e.target as HTMLInputElement).value;
                       props.onSettingsChange({ ...props.settings, token: v });
                     }}
-                    placeholder="OPENCLAW_GATEWAY_TOKEN"
+                    placeholder="gateway token"
                   />
                 </label>
                 <label class="field">

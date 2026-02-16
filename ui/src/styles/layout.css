@@ -119,13 +119,19 @@
 .brand-logo {
   width: 28px;
   height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
-.brand-logo img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.brand-logo-mark {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  transform: translateY(-0.5px);
 }
 
 .brand-text {

@@ -147,7 +147,7 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatNewMessagesBelow = false;
 }
 
-export function exportLogs(lines: string[], label: string) {
+export function exportLogs(lines: string[], label: string, exportPrefix = "openclaw") {
   if (lines.length === 0) {
     return;
   }
@@ -156,7 +156,7 @@ export function exportLogs(lines: string[], label: string) {
   const anchor = document.createElement("a");
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   anchor.href = url;
-  anchor.download = `openclaw-logs-${label}-${stamp}.log`;
+  anchor.download = `${exportPrefix}-logs-${label}-${stamp}.log`;
   anchor.click();
   URL.revokeObjectURL(url);
 }

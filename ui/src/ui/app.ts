@@ -52,6 +52,8 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import { resolveUiBrand } from "./brand.ts";
+import { DEFAULT_CONTROL_UI_PROFILE, type ControlUiProfile } from "./control-ui-profile.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -135,6 +137,7 @@ export class OpenClawApp extends LitElement {
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
+  @state() controlUiProfile: ControlUiProfile = DEFAULT_CONTROL_UI_PROFILE;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -430,7 +433,7 @@ export class OpenClawApp extends LitElement {
   }
 
   exportLogs(lines: string[], label: string) {
-    exportLogsInternal(lines, label);
+    exportLogsInternal(lines, label, resolveUiBrand(this.controlUiProfile).exportPrefix);
   }
 
   resetToolStream() {

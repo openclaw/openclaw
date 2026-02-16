@@ -1,5 +1,6 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { ControlUiProfile } from "./control-ui-profile.ts";
 import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -60,6 +61,7 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  controlUiProfile: ControlUiProfile;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;

@@ -1,3 +1,4 @@
+import type { ControlUiProfile } from "../control-ui-profile.ts";
 import type {
   CostUsageDailyEntry,
   SessionsUsageEntry,
@@ -36,6 +37,7 @@ export type UsageProps = {
   selectedSessions: string[]; // Support multiple session selection
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection
+  controlUiProfile?: ControlUiProfile;
   chartMode: "tokens" | "cost";
   dailyChartMode: "total" | "by-type";
   timeSeriesMode: "cumulative" | "per-turn";

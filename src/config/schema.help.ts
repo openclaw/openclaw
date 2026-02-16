@@ -307,6 +307,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
+  "gateway.controlUi.profile":
+    'Brand profile for the Control UI ("americanclaw" default, "openclaw", or "elsehelp").',
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":

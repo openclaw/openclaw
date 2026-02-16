@@ -164,6 +164,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("");
+        expect(parsed.profile).toBe("americanclaw");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
@@ -182,6 +183,7 @@ describe("handleControlUiHttpRequest", () => {
             basePath: "/openclaw",
             root: { kind: "resolved", path: tmp },
             config: {
+              gateway: { controlUi: { profile: "openclaw" } },
               agents: { defaults: { workspace: tmp } },
               ui: { assistant: { name: "Ops", avatar: "ops.png" } },
             },
@@ -190,6 +192,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.basePath).toBe("/openclaw");
+        expect(parsed.profile).toBe("openclaw");
         expect(parsed.assistantName).toBe("Ops");
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");

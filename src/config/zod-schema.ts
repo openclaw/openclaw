@@ -480,6 +480,9 @@ export const OpenClawSchema = z
         controlUi: z
           .object({
             enabled: z.boolean().optional(),
+            profile: z
+              .union([z.literal("openclaw"), z.literal("americanclaw"), z.literal("elsehelp")])
+              .optional(),
             basePath: z.string().optional(),
             root: z.string().optional(),
             allowedOrigins: z.array(z.string()).optional(),

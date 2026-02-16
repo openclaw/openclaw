@@ -31,6 +31,7 @@ export function renderUsageTab(state: AppViewState) {
     selectedSessions: state.usageSelectedSessions,
     selectedDays: state.usageSelectedDays,
     selectedHours: state.usageSelectedHours,
+    controlUiProfile: state.controlUiProfile,
     chartMode: state.usageChartMode,
     dailyChartMode: state.usageDailyChartMode,
     timeSeriesMode: state.usageTimeSeriesMode,

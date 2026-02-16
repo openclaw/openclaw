@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { resolveUiBrand } from "../brand.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -43,6 +44,7 @@ import {
 export type { UsageColumnId, SessionLogEntry, SessionLogRole };
 
 export function renderUsage(props: UsageProps) {
+  const brand = resolveUiBrand(props.controlUiProfile);
   // Show loading skeleton if loading and no data yet
   if (props.loading && !props.totals) {
     // Use inline styles since main stylesheet hasn't loaded yet on initial render
@@ -519,7 +521,7 @@ export function renderUsage(props: UsageProps) {
                   class="usage-export-item"
                   @click=${() =>
                     downloadTextFile(
-                      `openclaw-usage-sessions-${exportStamp}.csv`,
+                      `${brand.exportPrefix}-usage-sessions-${exportStamp}.csv`,
                       buildSessionsCsv(filteredSessions),
                       "text/csv",
                     )}
@@ -531,7 +533,7 @@ export function renderUsage(props: UsageProps) {
                   class="usage-export-item"
                   @click=${() =>
                     downloadTextFile(
-                      `openclaw-usage-daily-${exportStamp}.csv`,
+                      `${brand.exportPrefix}-usage-daily-${exportStamp}.csv`,
                       buildDailyCsv(filteredDaily),
                       "text/csv",
                     )}
@@ -543,7 +545,7 @@ export function renderUsage(props: UsageProps) {
                   class="usage-export-item"
                   @click=${() =>
                     downloadTextFile(
-                      `openclaw-usage-${exportStamp}.json`,
+                      `${brand.exportPrefix}-usage-${exportStamp}.json`,
                       JSON.stringify(
                         {
                           totals: displayTotals,
