@@ -1,57 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_COPILOT_API_BASE_URL } from "../providers/github-copilot-token.js";
+import { captureEnv } from "../test-utils/env.js";
+import {
+  installModelsConfigTestHooks,
+  withModelsTempHome as withTempHome,
+} from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
-}
-
-const _MODELS_CONFIG: OpenClawConfig = {
-  models: {
-    providers: {
-      "custom-proxy": {
-        baseUrl: "http://localhost:4000/v1",
-        apiKey: "TEST_KEY",
-        api: "openai-completions",
-        models: [
-          {
-            id: "llama-3.1-8b",
-            name: "Llama 3.1 8B (Proxy)",
-            api: "openai-completions",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128000,
-            maxTokens: 32000,
-          },
-        ],
-      },
-    },
-  },
-};
+installModelsConfigTestHooks({ restoreFetch: true });
 
 describe("models-config", () => {
-  let previousHome: string | undefined;
-  const originalFetch = globalThis.fetch;
-
-  beforeEach(() => {
-    previousHome = process.env.HOME;
-  });
-
-  afterEach(() => {
-    process.env.HOME = previousHome;
-    if (originalFetch) {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
   it("falls back to default baseUrl when token exchange fails", async () => {
     await withTempHome(async () => {
-      const previous = process.env.COPILOT_GITHUB_TOKEN;
+      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN"]);
       process.env.COPILOT_GITHUB_TOKEN = "gh-token";
       const fetchMock = vi.fn().mockResolvedValue({
         ok: false,
@@ -71,16 +34,14 @@ describe("models-config", () => {
 
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe(DEFAULT_COPILOT_API_BASE_URL);
       } finally {
-        process.env.COPILOT_GITHUB_TOKEN = previous;
+        envSnapshot.restore();
       }
     });
   });
 
   it("uses agentDir override auth profiles for copilot injection", async () => {
     await withTempHome(async (home) => {
-      const previous = process.env.COPILOT_GITHUB_TOKEN;
-      const previousGh = process.env.GH_TOKEN;
-      const previousGithub = process.env.GITHUB_TOKEN;
+      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]);
       delete process.env.COPILOT_GITHUB_TOKEN;
       delete process.env.GH_TOKEN;
       delete process.env.GITHUB_TOKEN;
@@ -125,21 +86,7 @@ describe("models-config", () => {
 
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
       } finally {
-        if (previous === undefined) {
-          delete process.env.COPILOT_GITHUB_TOKEN;
-        } else {
-          process.env.COPILOT_GITHUB_TOKEN = previous;
-        }
-        if (previousGh === undefined) {
-          delete process.env.GH_TOKEN;
-        } else {
-          process.env.GH_TOKEN = previousGh;
-        }
-        if (previousGithub === undefined) {
-          delete process.env.GITHUB_TOKEN;
-        } else {
-          process.env.GITHUB_TOKEN = previousGithub;
-        }
+        envSnapshot.restore();
       }
     });
   });

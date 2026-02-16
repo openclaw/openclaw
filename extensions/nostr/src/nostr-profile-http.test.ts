@@ -29,12 +29,21 @@ import { importProfileFromRelays } from "./nostr-profile-import.js";
 // Test Helpers
 // ============================================================================
 
-function createMockRequest(method: string, url: string, body?: unknown): IncomingMessage {
+function createMockRequest(
+  method: string,
+  url: string,
+  body?: unknown,
+  opts?: { headers?: Record<string, string>; remoteAddress?: string },
+): IncomingMessage {
   const socket = new Socket();
+  Object.defineProperty(socket, "remoteAddress", {
+    value: opts?.remoteAddress ?? "127.0.0.1",
+    configurable: true,
+  });
   const req = new IncomingMessage(socket);
   req.method = method;
   req.url = url;
-  req.headers = { host: "localhost:3000" };
+  req.headers = { host: "localhost:3000", ...(opts?.headers ?? {}) };
 
   if (body) {
     const bodyStr = JSON.stringify(body);
@@ -206,6 +215,36 @@ describe("nostr-profile-http", () => {
       expect(ctx.updateConfigProfile).toHaveBeenCalled();
     });
 
+    it("rejects profile mutation from non-loopback remote address", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { remoteAddress: "198.51.100.10" },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects cross-origin profile mutation attempts", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { headers: { origin: "https://evil.example" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
     it("rejects private IP in picture URL (SSRF protection)", async () => {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
@@ -325,6 +364,36 @@ describe("nostr-profile-http", () => {
       expect(data.ok).toBe(true);
       expect(data.imported.name).toBe("imported");
       expect(data.saved).toBe(false); // autoMerge not requested
+    });
+
+    it("rejects import mutation from non-loopback remote address", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {},
+        { remoteAddress: "203.0.113.10" },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects cross-origin import mutation attempts", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {},
+        { headers: { origin: "https://evil.example" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
     });
 
     it("auto-merges when requested", async () => {

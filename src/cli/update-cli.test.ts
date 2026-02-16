@@ -3,11 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../infra/update-runner.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
 const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn() }));
 const isCancel = (value: unknown) => value === "cancel";
+
+const readPackageName = vi.fn();
+const readPackageVersion = vi.fn();
+const resolveGlobalManager = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -30,12 +35,46 @@ vi.mock("../config/config.js", () => ({
   writeConfigFile: vi.fn(),
 }));
 
-vi.mock("../infra/update-check.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/update-check.js")>(
-    "../infra/update-check.js",
-  );
+vi.mock("../infra/update-check.js", () => {
+  const parseSemver = (
+    value: string | null,
+  ): { major: number; minor: number; patch: number } | null => {
+    if (!value) {
+      return null;
+    }
+    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(value);
+    if (!m) {
+      return null;
+    }
+    const major = Number(m[1]);
+    const minor = Number(m[2]);
+    const patch = Number(m[3]);
+    if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) {
+      return null;
+    }
+    return { major, minor, patch };
+  };
+
+  const compareSemverStrings = (a: string | null, b: string | null): number | null => {
+    const pa = parseSemver(a);
+    const pb = parseSemver(b);
+    if (!pa || !pb) {
+      return null;
+    }
+    if (pa.major !== pb.major) {
+      return pa.major < pb.major ? -1 : 1;
+    }
+    if (pa.minor !== pb.minor) {
+      return pa.minor < pb.minor ? -1 : 1;
+    }
+    if (pa.patch !== pb.patch) {
+      return pa.patch < pb.patch ? -1 : 1;
+    }
+    return 0;
+  };
+
   return {
-    ...actual,
+    compareSemverStrings,
     checkUpdateStatus: vi.fn(),
     fetchNpmTagVersion: vi.fn(),
     resolveNpmChannelTag: vi.fn(),
@@ -60,6 +99,16 @@ vi.mock("node:child_process", async () => {
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
+
+vi.mock("./update-cli/shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-cli/shared.js")>();
+  return {
+    ...actual,
+    readPackageName,
+    readPackageVersion,
+    resolveGlobalManager,
+  };
+});
 
 // Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
@@ -96,7 +145,7 @@ describe("update-cli", () => {
 
   const createCaseDir = async (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-    await fs.mkdir(dir, { recursive: true });
+    // Tests only need a stable path; the directory does not have to exist because all I/O is mocked.
     return dir;
   };
 
@@ -128,8 +177,57 @@ describe("update-cli", () => {
     });
   };
 
+  const setupNonInteractiveDowngrade = async () => {
+    const tempDir = await createCaseDir("openclaw-update");
+    setTty(false);
+    readPackageVersion.mockResolvedValue("2.0.0");
+
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: tempDir,
+      installKind: "package",
+      packageManager: "npm",
+      deps: {
+        manager: "npm",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "0.0.1",
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "npm",
+      steps: [],
+      durationMs: 100,
+    });
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+
+    return tempDir;
+  };
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    confirm.mockReset();
+    select.mockReset();
+    vi.mocked(runGatewayUpdate).mockReset();
+    vi.mocked(resolveOpenClawPackageRoot).mockReset();
+    vi.mocked(readConfigFileSnapshot).mockReset();
+    vi.mocked(writeConfigFile).mockReset();
+    vi.mocked(checkUpdateStatus).mockReset();
+    vi.mocked(fetchNpmTagVersion).mockReset();
+    vi.mocked(resolveNpmChannelTag).mockReset();
+    vi.mocked(runCommandWithTimeout).mockReset();
+    vi.mocked(runDaemonRestart).mockReset();
+    vi.mocked(defaultRuntime.log).mockReset();
+    vi.mocked(defaultRuntime.error).mockReset();
+    vi.mocked(defaultRuntime.exit).mockReset();
+    readPackageName.mockReset();
+    readPackageVersion.mockReset();
+    resolveGlobalManager.mockReset();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -172,6 +270,9 @@ describe("update-cli", () => {
       signal: null,
       killed: false,
     });
+    readPackageName.mockResolvedValue("openclaw");
+    readPackageVersion.mockResolvedValue("1.0.0");
+    resolveGlobalManager.mockResolvedValue("npm");
     setTty(false);
     setStdoutTty(false);
   });
@@ -241,11 +342,6 @@ describe("update-cli", () => {
 
   it("defaults to stable channel for package installs when unset", async () => {
     const tempDir = await createCaseDir("openclaw-update");
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
 
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(checkUpdateStatus).mockResolvedValue({
@@ -293,11 +389,6 @@ describe("update-cli", () => {
 
   it("falls back to latest when beta tag is older than release", async () => {
     const tempDir = await createCaseDir("openclaw-update");
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
 
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
@@ -335,11 +426,6 @@ describe("update-cli", () => {
 
   it("honors --tag override", async () => {
     const tempDir = await createCaseDir("openclaw-update");
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
 
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(runGatewayUpdate).mockResolvedValue({
@@ -476,38 +562,7 @@ describe("update-cli", () => {
   });
 
   it("requires confirmation on downgrade when non-interactive", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-    setTty(false);
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-      "utf-8",
-    );
-
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: tempDir,
-      installKind: "package",
-      packageManager: "npm",
-      deps: {
-        manager: "npm",
-        status: "ok",
-        lockfilePath: null,
-        markerPath: null,
-      },
-    });
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "0.0.1",
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
+    await setupNonInteractiveDowngrade();
 
     await updateCommand({});
 
@@ -518,38 +573,7 @@ describe("update-cli", () => {
   });
 
   it("allows downgrade with --yes in non-interactive mode", async () => {
-    const tempDir = await createCaseDir("openclaw-update");
-    setTty(false);
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-      "utf-8",
-    );
-
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: tempDir,
-      installKind: "package",
-      packageManager: "npm",
-      deps: {
-        manager: "npm",
-        status: "ok",
-        lockfilePath: null,
-        markerPath: null,
-      },
-    });
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "0.0.1",
-    });
-    vi.mocked(runGatewayUpdate).mockResolvedValue({
-      status: "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 100,
-    });
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
+    await setupNonInteractiveDowngrade();
 
     await updateCommand({ yes: true });
 
@@ -574,7 +598,7 @@ describe("update-cli", () => {
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
     const tempDir = await createCaseDir("openclaw-update-wizard");
-    const previousGitDir = process.env.OPENCLAW_GIT_DIR;
+    const envSnapshot = captureEnv(["OPENCLAW_GIT_DIR"]);
     try {
       setTty(true);
       process.env.OPENCLAW_GIT_DIR = tempDir;
@@ -604,7 +628,7 @@ describe("update-cli", () => {
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     } finally {
-      process.env.OPENCLAW_GIT_DIR = previousGitDir;
+      envSnapshot.restore();
     }
   });
 });

@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { AuthChoice } from "./onboard-types.js";
+import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
-import { ZAI_CODING_CN_BASE_URL, ZAI_CODING_GLOBAL_BASE_URL } from "./onboard-auth.js";
+import {
+  MINIMAX_CN_API_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+} from "./onboard-auth.js";
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
@@ -34,18 +39,20 @@ const requireAgentDir = () => {
 };
 
 describe("applyAuthChoice", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
-  const previousOpenrouterKey = process.env.OPENROUTER_API_KEY;
-  const previousHfToken = process.env.HF_TOKEN;
-  const previousHfHubToken = process.env.HUGGINGFACE_HUB_TOKEN;
-  const previousLitellmKey = process.env.LITELLM_API_KEY;
-  const previousAiGatewayKey = process.env.AI_GATEWAY_API_KEY;
-  const previousCloudflareGatewayKey = process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-  const previousSshTty = process.env.SSH_TTY;
-  const previousChutesClientId = process.env.CHUTES_CLIENT_ID;
+  const envSnapshot = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_TOKEN",
+    "LITELLM_API_KEY",
+    "AI_GATEWAY_API_KEY",
+    "CLOUDFLARE_AI_GATEWAY_API_KEY",
+    "SSH_TTY",
+    "CHUTES_CLIENT_ID",
+  ]);
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -57,66 +64,7 @@ describe("applyAuthChoice", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    if (previousAnthropicKey === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = previousAnthropicKey;
-    }
-    if (previousOpenrouterKey === undefined) {
-      delete process.env.OPENROUTER_API_KEY;
-    } else {
-      process.env.OPENROUTER_API_KEY = previousOpenrouterKey;
-    }
-    if (previousHfToken === undefined) {
-      delete process.env.HF_TOKEN;
-    } else {
-      process.env.HF_TOKEN = previousHfToken;
-    }
-    if (previousHfHubToken === undefined) {
-      delete process.env.HUGGINGFACE_HUB_TOKEN;
-    } else {
-      process.env.HUGGINGFACE_HUB_TOKEN = previousHfHubToken;
-    }
-    if (previousLitellmKey === undefined) {
-      delete process.env.LITELLM_API_KEY;
-    } else {
-      process.env.LITELLM_API_KEY = previousLitellmKey;
-    }
-    if (previousAiGatewayKey === undefined) {
-      delete process.env.AI_GATEWAY_API_KEY;
-    } else {
-      process.env.AI_GATEWAY_API_KEY = previousAiGatewayKey;
-    }
-    if (previousCloudflareGatewayKey === undefined) {
-      delete process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
-    } else {
-      process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = previousCloudflareGatewayKey;
-    }
-    if (previousSshTty === undefined) {
-      delete process.env.SSH_TTY;
-    } else {
-      process.env.SSH_TTY = previousSshTty;
-    }
-    if (previousChutesClientId === undefined) {
-      delete process.env.CHUTES_CLIENT_ID;
-    } else {
-      process.env.CHUTES_CLIENT_ID = previousChutesClientId;
-    }
+    envSnapshot.restore();
   });
 
   it("does not throw when openai-codex oauth fails", async () => {
@@ -207,6 +155,60 @@ describe("applyAuthChoice", () => {
       profiles?: Record<string, { key?: string }>;
     };
     expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
+  });
+
+  it("prompts and writes MiniMax API key when selecting minimax-api-key-cn", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+    const text = vi.fn().mockResolvedValue("sk-minimax-test");
+    const select: WizardPrompter["select"] = vi.fn(
+      async (params) => params.options[0]?.value as never,
+    );
+    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select,
+      multiselect,
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "minimax-api-key-cn",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enter MiniMax China API key" }),
+    );
+    expect(result.config.auth?.profiles?.["minimax-cn:default"]).toMatchObject({
+      provider: "minimax-cn",
+      mode: "api_key",
+    });
+    expect(result.config.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
+    expect(parsed.profiles?.["minimax-cn:default"]?.key).toBe("sk-minimax-test");
   });
 
   it("prompts and writes Synthetic API key when selecting synthetic-api-key", async () => {
@@ -1036,7 +1038,26 @@ describe("applyAuthChoice", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
 
-    const text = vi.fn().mockResolvedValue("code_manual");
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+    const text: WizardPrompter["text"] = vi.fn(async (params) => {
+      if (params.message === "Paste the redirect URL") {
+        const lastLog = runtime.log.mock.calls.at(-1)?.[0];
+        const urlLine = typeof lastLog === "string" ? lastLog : String(lastLog ?? "");
+        const urlMatch = urlLine.match(/https?:\/\/\S+/)?.[0] ?? "";
+        const state = urlMatch ? new URL(urlMatch).searchParams.get("state") : null;
+        if (!state) {
+          throw new Error("missing state in oauth URL");
+        }
+        return `?code=code_manual&state=${state}`;
+      }
+      return "code_manual";
+    });
     const select: WizardPrompter["select"] = vi.fn(
       async (params) => params.options[0]?.value as never,
     );
@@ -1051,13 +1072,6 @@ describe("applyAuthChoice", () => {
       confirm: vi.fn(async () => false),
       progress: vi.fn(() => ({ update: noop, stop: noop })),
     };
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
 
     const result = await applyAuthChoice({
       authChoice: "chutes",
@@ -1069,7 +1083,7 @@ describe("applyAuthChoice", () => {
 
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Paste the redirect URL (or authorization code)",
+        message: "Paste the redirect URL",
       }),
     );
     expect(result.config.auth?.profiles?.["chutes:remote-user"]).toMatchObject({

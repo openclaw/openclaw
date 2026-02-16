@@ -13,11 +13,66 @@ import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
+async function fetchBrowserStatus(
+  parent: BrowserParentOpts,
+  profile?: string,
+): Promise<BrowserStatus> {
+  return await callBrowserRequest<BrowserStatus>(
+    parent,
+    {
+      method: "GET",
+      path: "/",
+      query: profile ? { profile } : undefined,
+    },
+    {
+      timeoutMs: 1500,
+    },
+  );
+}
+
+async function runBrowserToggle(
+  parent: BrowserParentOpts,
+  params: { profile?: string; path: string },
+) {
+  await callBrowserRequest(
+    parent,
+    {
+      method: "POST",
+      path: params.path,
+      query: params.profile ? { profile: params.profile } : undefined,
+    },
+    { timeoutMs: 15000 },
+  );
+  const status = await fetchBrowserStatus(parent, params.profile);
+  if (parent?.json) {
+    defaultRuntime.log(JSON.stringify(status, null, 2));
+    return;
+  }
+  const name = status.profile ?? "openclaw";
+  defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}`));
+}
+
 function runBrowserCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
   });
+}
+
+function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
+  if (json) {
+    defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
+    return;
+  }
+  if (tabs.length === 0) {
+    defaultRuntime.log("No tabs (browser closed or no targets).");
+    return;
+  }
+  defaultRuntime.log(
+    tabs
+      .map((t, i) => `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`)
+      .join("\n"),
+  );
 }
 
 export function registerBrowserManageCommands(
@@ -30,17 +85,7 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
-        const status = await callBrowserRequest<BrowserStatus>(
-          parent,
-          {
-            method: "GET",
-            path: "/",
-            query: parent?.browserProfile ? { profile: parent.browserProfile } : undefined,
-          },
-          {
-            timeoutMs: 1500,
-          },
-        );
+        const status = await fetchBrowserStatus(parent, parent?.browserProfile);
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(status, null, 2));
           return;
@@ -71,30 +116,7 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/start",
-            query: profile ? { profile } : undefined,
-          },
-          { timeoutMs: 15000 },
-        );
-        const status = await callBrowserRequest<BrowserStatus>(
-          parent,
-          {
-            method: "GET",
-            path: "/",
-            query: profile ? { profile } : undefined,
-          },
-          { timeoutMs: 1500 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(status, null, 2));
-          return;
-        }
-        const name = status.profile ?? "openclaw";
-        defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}`));
+        await runBrowserToggle(parent, { profile, path: "/start" });
       });
     });
 
@@ -105,30 +127,7 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/stop",
-            query: profile ? { profile } : undefined,
-          },
-          { timeoutMs: 15000 },
-        );
-        const status = await callBrowserRequest<BrowserStatus>(
-          parent,
-          {
-            method: "GET",
-            path: "/",
-            query: profile ? { profile } : undefined,
-          },
-          { timeoutMs: 1500 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(status, null, 2));
-          return;
-        }
-        const name = status.profile ?? "openclaw";
-        defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}`));
+        await runBrowserToggle(parent, { profile, path: "/stop" });
       });
     });
 
@@ -178,21 +177,7 @@ export function registerBrowserManageCommands(
           { timeoutMs: 3000 },
         );
         const tabs = result.tabs ?? [];
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
-          return;
-        }
-        if (tabs.length === 0) {
-          defaultRuntime.log("No tabs (browser closed or no targets).");
-          return;
-        }
-        defaultRuntime.log(
-          tabs
-            .map(
-              (t, i) => `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`,
-            )
-            .join("\n"),
-        );
+        logBrowserTabs(tabs, parent?.json);
       });
     });
 
@@ -216,21 +201,7 @@ export function registerBrowserManageCommands(
           { timeoutMs: 10_000 },
         );
         const tabs = result.tabs ?? [];
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
-          return;
-        }
-        if (tabs.length === 0) {
-          defaultRuntime.log("No tabs (browser closed or no targets).");
-          return;
-        }
-        defaultRuntime.log(
-          tabs
-            .map(
-              (t, i) => `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`,
-            )
-            .join("\n"),
-        );
+        logBrowserTabs(tabs, parent?.json);
       });
     });
 

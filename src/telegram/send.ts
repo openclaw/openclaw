@@ -17,6 +17,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
+import { normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -35,6 +36,7 @@ type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   api?: Bot["api"];
   retry?: RetryConfig;
@@ -72,6 +74,8 @@ type TelegramReactionOpts = {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
+const MESSAGE_NOT_MODIFIED_RE =
+  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
@@ -178,6 +182,10 @@ function normalizeMessageId(raw: string | number): number {
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
   return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramMessageNotModifiedError(err: unknown): boolean {
+  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
 }
 
 function hasMessageThreadIdParam(params?: Record<string, unknown>): boolean {
@@ -383,7 +391,10 @@ export async function sendMessageTelegram(
   };
 
   if (mediaUrl) {
-    const media = await loadWebMedia(mediaUrl, opts.maxBytes);
+    const media = await loadWebMedia(mediaUrl, {
+      maxBytes: opts.maxBytes,
+      localRoots: opts.mediaLocalRoots,
+    });
     const kind = mediaKindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
@@ -695,6 +706,8 @@ type TelegramEditOpts = {
   api?: Bot["api"];
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Controls whether link previews are shown in the edited message. */
+  linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
   /** Optional config injection to avoid global loadConfig() (improves testability). */
@@ -723,10 +736,15 @@ export async function editMessageTelegram(
     verbose: opts.verbose,
   });
   const logHttpError = createTelegramHttpLogger(cfg);
-  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+  const requestWithDiag = <T>(
+    fn: () => Promise<T>,
+    label?: string,
+    shouldLog?: (err: unknown) => boolean,
+  ) =>
     withTelegramApiErrorLogging({
       operation: label ?? "request",
       fn: () => request(fn, label),
+      shouldLog,
     }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
@@ -751,6 +769,9 @@ export async function editMessageTelegram(
   const editParams: Record<string, unknown> = {
     parse_mode: "HTML",
   };
+  if (opts.linkPreview === false) {
+    editParams.link_preview_options = { is_disabled: true };
+  }
   if (replyMarkup !== undefined) {
     editParams.reply_markup = replyMarkup;
   }
@@ -758,7 +779,12 @@ export async function editMessageTelegram(
   await requestWithDiag(
     () => api.editMessageText(chatId, messageId, htmlText, editParams),
     "editMessage",
+    (err) => !isTelegramMessageNotModifiedError(err),
   ).catch(async (err) => {
+    if (isTelegramMessageNotModifiedError(err)) {
+      return;
+    }
+
     // Telegram rejects malformed HTML. Fall back to plain text.
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
@@ -766,6 +792,9 @@ export async function editMessageTelegram(
         console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
       }
       const plainParams: Record<string, unknown> = {};
+      if (opts.linkPreview === false) {
+        plainParams.link_preview_options = { is_disabled: true };
+      }
       if (replyMarkup !== undefined) {
         plainParams.reply_markup = replyMarkup;
       }
@@ -775,7 +804,13 @@ export async function editMessageTelegram(
             ? api.editMessageText(chatId, messageId, text, plainParams)
             : api.editMessageText(chatId, messageId, text),
         "editMessage-plain",
-      );
+        (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+      ).catch((plainErr) => {
+        if (isTelegramMessageNotModifiedError(plainErr)) {
+          return;
+        }
+        throw plainErr;
+      });
     }
     throw err;
   });
@@ -922,4 +957,155 @@ export async function sendStickerTelegram(
   });
 
   return { messageId, chatId: resolvedChatId };
+}
+
+type TelegramPollOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  /** Message ID to reply to (for threading) */
+  replyToMessageId?: number;
+  /** Forum topic thread ID (for forum supergroups) */
+  messageThreadId?: number;
+  /** Send message silently (no notification). Defaults to false. */
+  silent?: boolean;
+  /** Whether votes are anonymous. Defaults to true (Telegram default). */
+  isAnonymous?: boolean;
+};
+
+/**
+ * Send a poll to a Telegram chat.
+ * @param to - Chat ID or username (e.g., "123456789" or "@username")
+ * @param poll - Poll input with question, options, maxSelections, and optional durationHours
+ * @param opts - Optional configuration
+ */
+export async function sendPollTelegram(
+  to: string,
+  poll: PollInput,
+  opts: TelegramPollOpts = {},
+): Promise<{ messageId: string; chatId: string; pollId?: string }> {
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const target = parseTelegramTarget(to);
+  const chatId = normalizeChatId(target.chatId);
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+
+  // Normalize the poll input (validates question, options, maxSelections)
+  const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
+
+  const messageThreadId =
+    opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
+  const threadSpec =
+    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+  const threadIdParams = buildTelegramThreadParams(threadSpec);
+
+  // Build poll options as simple strings (Grammy accepts string[] or InputPollOption[])
+  const pollOptions = normalizedPoll.options;
+
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const wrapChatNotFound = (err: unknown) => {
+    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) {
+      return err;
+    }
+    return new Error(
+      [
+        `Telegram send failed: chat not found (chat_id=${chatId}).`,
+        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+        `Input was: ${JSON.stringify(to)}.`,
+      ].join(" "),
+    );
+  };
+
+  const sendWithThreadFallback = async <T>(
+    params: Record<string, unknown> | undefined,
+    label: string,
+    attempt: (
+      effectiveParams: Record<string, unknown> | undefined,
+      effectiveLabel: string,
+    ) => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await attempt(params, label);
+    } catch (err) {
+      if (!hasMessageThreadIdParam(params) || !isTelegramThreadNotFoundError(err)) {
+        throw err;
+      }
+      if (opts.verbose) {
+        console.warn(
+          `telegram ${label} failed with message_thread_id, retrying without thread: ${formatErrorMessage(err)}`,
+        );
+      }
+      const retriedParams = removeMessageThreadIdParam(params);
+      return await attempt(retriedParams, `${label}-threadless`);
+    }
+  };
+
+  const durationSeconds = normalizedPoll.durationSeconds;
+  if (durationSeconds === undefined && normalizedPoll.durationHours !== undefined) {
+    throw new Error(
+      "Telegram poll durationHours is not supported. Use durationSeconds (5-600) instead.",
+    );
+  }
+  if (durationSeconds !== undefined && (durationSeconds < 5 || durationSeconds > 600)) {
+    throw new Error("Telegram poll durationSeconds must be between 5 and 600");
+  }
+
+  // Build poll parameters following Grammy's api.sendPoll signature
+  // sendPoll(chat_id, question, options, other?, signal?)
+  const pollParams = {
+    allows_multiple_answers: normalizedPoll.maxSelections > 1,
+    is_anonymous: opts.isAnonymous ?? true,
+    ...(durationSeconds !== undefined ? { open_period: durationSeconds } : {}),
+    ...(threadIdParams ? threadIdParams : {}),
+    ...(opts.replyToMessageId != null
+      ? { reply_to_message_id: Math.trunc(opts.replyToMessageId) }
+      : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+
+  const result = await sendWithThreadFallback(pollParams, "poll", async (effectiveParams, label) =>
+    requestWithDiag(
+      () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams),
+      label,
+    ).catch((err) => {
+      throw wrapChatNotFound(err);
+    }),
+  );
+
+  const messageId = String(result?.message_id ?? "unknown");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  const pollId = result?.poll?.id;
+  if (result?.message_id) {
+    recordSentMessage(chatId, result.message_id);
+  }
+
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return { messageId, chatId: resolvedChatId, pollId };
 }

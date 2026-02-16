@@ -1,13 +1,17 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import {
-  buildWorkspaceSkillStatus,
-  type SkillStatusEntry,
-  type SkillStatusReport,
-} from "../agents/skills-status.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillEntry } from "../agents/skills.js";
+import { captureEnv } from "../test-utils/env.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+
+// Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  loadSkillsFromDir: () => ({ skills: [] }),
+  formatSkillsForPrompt: () => "",
+}));
 
 function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
   return {
@@ -214,25 +218,51 @@ describe("skills-cli", () => {
   });
 
   describe("integration: loads real skills from bundled directory", () => {
-    function resolveBundledSkillsDir(): string | undefined {
-      const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-      const root = path.resolve(moduleDir, "..", "..");
-      const candidate = path.join(root, "skills");
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-      return undefined;
-    }
+    let tempWorkspaceDir = "";
+    let tempBundledDir = "";
+    let envSnapshot: ReturnType<typeof captureEnv>;
+    let buildWorkspaceSkillStatus: typeof import("../agents/skills-status.js").buildWorkspaceSkillStatus;
 
-    it("loads bundled skills and formats them", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        // Skip if skills dir not found (e.g., in CI without skills)
-        return;
-      }
+    beforeAll(async () => {
+      envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
+      tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-test-"));
+      tempBundledDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-skills-test-"));
+      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = tempBundledDir;
+      ({ buildWorkspaceSkillStatus } = await import("../agents/skills-status.js"));
+    });
 
-      const report = buildWorkspaceSkillStatus("/tmp", {
+    afterAll(() => {
+      if (tempWorkspaceDir) {
+        fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
+      }
+      if (tempBundledDir) {
+        fs.rmSync(tempBundledDir, { recursive: true, force: true });
+      }
+      envSnapshot.restore();
+    });
+
+    const createEntries = (): SkillEntry[] => {
+      const baseDir = path.join(tempWorkspaceDir, "peekaboo");
+      return [
+        {
+          skill: {
+            name: "peekaboo",
+            description: "Capture UI screenshots",
+            source: "openclaw-bundled",
+            filePath: path.join(baseDir, "SKILL.md"),
+            baseDir,
+          } as SkillEntry["skill"],
+          frontmatter: {},
+          metadata: { emoji: "📸" },
+        },
+      ];
+    };
+
+    it("loads bundled skills and formats them", async () => {
+      const entries = createEntries();
+      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",
+        entries,
       });
 
       // Should have loaded some skills
@@ -251,21 +281,17 @@ describe("skills-cli", () => {
       expect(parsed.skills).toBeInstanceOf(Array);
     });
 
-    it("formats info for a real bundled skill (peekaboo)", () => {
-      const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) {
-        return;
-      }
-
-      const report = buildWorkspaceSkillStatus("/tmp", {
+    it("formats info for a real bundled skill (peekaboo)", async () => {
+      const entries = createEntries();
+      const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",
+        entries,
       });
 
       // peekaboo is a bundled skill that should always exist
       const peekaboo = report.skills.find((s) => s.name === "peekaboo");
       if (!peekaboo) {
-        // Skip if peekaboo not found
-        return;
+        throw new Error("peekaboo fixture skill missing");
       }
 
       const output = formatSkillInfo(report, "peekaboo", {});
