@@ -37,6 +37,7 @@ actor VoiceWakeRuntime {
     private var listeningState: ListeningState = .idle
     private var overlayToken: UUID?
     private var activeTriggerEndTime: TimeInterval?
+    private var activeTriggerWord: String?
     private var scheduledRestartTask: Task<Void, Never>?
     private var lastLoggedText: String?
     private var lastLoggedAt: Date?
@@ -246,6 +247,7 @@ actor VoiceWakeRuntime {
         self.currentConfig = nil
         self.listeningState = .idle
         self.activeTriggerEndTime = nil
+        self.activeTriggerWord = nil
         self.logger.debug("voicewake runtime stopped")
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "stopped")
 
@@ -353,7 +355,11 @@ actor VoiceWakeRuntime {
             } else {
                 self.logger.info("voicewake runtime detected len=\(match.command.count)")
             }
-            await self.beginCapture(command: match.command, triggerEndTime: match.triggerEndTime, config: config)
+            await self.beginCapture(
+                command: match.command,
+                triggerEndTime: match.triggerEndTime,
+                triggerWord: match.trigger,
+                config: config)
         } else if !transcript.isEmpty, update.error == nil {
             if self.isTriggerOnly(transcript: transcript, triggers: config.triggers) {
                 self.preDetectTask?.cancel()
@@ -484,7 +490,7 @@ actor VoiceWakeRuntime {
             return
         }
         self.logger.info("voicewake runtime detected (trigger-only pause)")
-        await self.beginCapture(command: "", triggerEndTime: nil, config: config)
+        await self.beginCapture(command: "", triggerEndTime: nil, triggerWord: nil, config: config)
     }
 
     private func textOnlyFallbackMatch(
@@ -530,10 +536,16 @@ actor VoiceWakeRuntime {
         await self.beginCapture(
             command: match.command,
             triggerEndTime: match.triggerEndTime,
+            triggerWord: match.trigger,
             config: config)
     }
 
-    private func beginCapture(command: String, triggerEndTime: TimeInterval?, config: RuntimeConfig) async {
+    private func beginCapture(
+        command: String,
+        triggerEndTime: TimeInterval?,
+        triggerWord: String?,
+        config: RuntimeConfig) async
+    {
         self.listeningState = .voiceWake
         self.isCapturing = true
         DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
@@ -545,6 +557,7 @@ actor VoiceWakeRuntime {
         self.heardBeyondTrigger = !command.isEmpty
         self.triggerChimePlayed = false
         self.activeTriggerEndTime = triggerEndTime
+        self.activeTriggerWord = triggerWord
         self.preDetectTask?.cancel()
         self.preDetectTask = nil
         self.triggerOnlyTask?.cancel()
@@ -620,7 +633,9 @@ actor VoiceWakeRuntime {
         self.lastHeard = nil
         self.heardBeyondTrigger = false
         self.triggerChimePlayed = false
+        let triggerWord = self.activeTriggerWord
         self.activeTriggerEndTime = nil
+        self.activeTriggerWord = nil
         self.lastTranscript = nil
         self.lastTranscriptAt = nil
         self.preDetectTask?.cancel()
@@ -648,7 +663,9 @@ actor VoiceWakeRuntime {
                 await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "voicewake.send") }
             }
             Task.detached {
-                await VoiceWakeForwarder.forward(transcript: finalTranscript)
+                await VoiceWakeForwarder.forward(
+                    transcript: finalTranscript,
+                    options: .init(voiceWakeTrigger: triggerWord))
             }
         }
         self.overlayToken = nil
