@@ -19,18 +19,41 @@ export function isCjsInEsmError(err: unknown): boolean {
   );
 }
 
+/** True if the error indicates require() of an ESM module (so we should try import). */
+function isRequireOfEsmError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /require\(\) of ES Module is not supported|Cannot use import statement/.test(msg);
+}
+
 /**
- * Load a hook handler module from a file path. Tries ESM import first;
- * if that fails with "module is not defined" (CJS in ESM context), falls back to require().
+ * Load a hook handler module from a file path.
+ * For .js and .cjs we try require() first so CJS hooks never hit "require is not defined" when
+ * Node parses them as ESM. For .mjs we use import() only. On ESM-style errors we fall back to the other loader.
  */
 export async function loadHookModule(filePath: string): Promise<Record<string, unknown>> {
-  const url = pathToFileURL(path.resolve(filePath)).href;
+  const resolved = path.resolve(filePath);
+  const ext = path.extname(resolved).toLowerCase();
+  const tryRequireFirst = ext === ".cjs" || ext === ".js";
+
+  if (tryRequireFirst) {
+    try {
+      return require(resolved) as Record<string, unknown>;
+    } catch (err) {
+      if (isRequireOfEsmError(err)) {
+        const url = pathToFileURL(resolved).href;
+        return (await import(`${url}?t=${Date.now()}`)) as Record<string, unknown>;
+      }
+      throw err;
+    }
+  }
+
+  const url = pathToFileURL(resolved).href;
   const cacheBustedUrl = `${url}?t=${Date.now()}`;
   try {
     return (await import(cacheBustedUrl)) as Record<string, unknown>;
   } catch (err) {
     if (isCjsInEsmError(err)) {
-      return require(filePath) as Record<string, unknown>;
+      return require(resolved) as Record<string, unknown>;
     }
     throw err;
   }
