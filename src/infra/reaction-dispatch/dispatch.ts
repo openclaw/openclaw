@@ -24,55 +24,63 @@ function resolveReactionReplyPayload(
 }
 
 export async function dispatchReactionEvent(bundle: ReactionBundleContext): Promise<void> {
-  const cfg = loadConfig();
-  const prompt = buildReactionPrompt(bundle);
+  try {
+    const cfg = loadConfig();
+    const prompt = buildReactionPrompt(bundle);
 
-  // Import getReplyFromConfig and deliverOutboundPayloads dynamically to avoid circular deps
-  const { getReplyFromConfig } = await import("../../auto-reply/reply.js");
-  const { deliverOutboundPayloads } = await import("../outbound/deliver.js");
-  const { resolveHeartbeatDeliveryTarget } = await import("../outbound/targets.js");
-  const { loadSessionStore } = await import("../../config/sessions/store.js");
+    // Import getReplyFromConfig and deliverOutboundPayloads dynamically to avoid circular deps
+    const { getReplyFromConfig } = await import("../../auto-reply/reply.js");
+    const { deliverOutboundPayloads } = await import("../outbound/deliver.js");
+    const { resolveHeartbeatDeliveryTarget } = await import("../outbound/targets.js");
+    const { loadSessionStore } = await import("../../config/sessions/store.js");
 
-  // Resolve the session entry to get delivery context.
-  // Note: loadSessionStore reads from disk on each call. This is acceptable
-  // because reactions are debounced, keeping call frequency low.
-  const sessionCfg = cfg.session;
-  const storePath = resolveStorePath(sessionCfg?.store);
-  const sessionStore = loadSessionStore(storePath);
-  const entry = sessionStore[bundle.sessionKey];
+    // Resolve the session entry to get delivery context.
+    // Note: loadSessionStore reads from disk on each call. This is acceptable
+    // because reactions are debounced, keeping call frequency low.
+    const sessionCfg = cfg.session;
+    const storePath = resolveStorePath(sessionCfg?.store);
+    const sessionStore = loadSessionStore(storePath);
+    const entry = sessionStore[bundle.sessionKey];
 
-  const delivery = resolveHeartbeatDeliveryTarget({
-    cfg,
-    entry,
-  });
+    const delivery = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry,
+    });
 
-  if (delivery.channel === "none" || !delivery.to) {
-    return;
+    if (delivery.channel === "none" || !delivery.to) {
+      return;
+    }
+
+    const ctx = {
+      Body: prompt,
+      From: delivery.to,
+      To: delivery.to,
+      Provider: "reaction-event",
+      SessionKey: bundle.sessionKey,
+    };
+
+    const result = await getReplyFromConfig(ctx, undefined, cfg);
+    const replyPayload = resolveReactionReplyPayload(result);
+
+    if (
+      !replyPayload ||
+      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
+    ) {
+      return;
+    }
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: delivery.channel,
+      to: delivery.to,
+      accountId: delivery.accountId ?? bundle.accountId,
+      payloads: [replyPayload],
+    });
+  } catch (err) {
+    console.error(
+      `[reaction-dispatch] dispatchReactionEvent failed for session=${bundle.sessionKey} account=${bundle.accountId}:`,
+      err,
+    );
+    throw err;
   }
-
-  const ctx = {
-    Body: prompt,
-    From: delivery.to,
-    To: delivery.to,
-    Provider: "reaction-event",
-    SessionKey: bundle.sessionKey,
-  };
-
-  const result = await getReplyFromConfig(ctx, undefined, cfg);
-  const replyPayload = resolveReactionReplyPayload(result);
-
-  if (
-    !replyPayload ||
-    (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
-  ) {
-    return;
-  }
-
-  await deliverOutboundPayloads({
-    cfg,
-    channel: delivery.channel,
-    to: delivery.to,
-    accountId: delivery.accountId ?? bundle.accountId,
-    payloads: [replyPayload],
-  });
 }
