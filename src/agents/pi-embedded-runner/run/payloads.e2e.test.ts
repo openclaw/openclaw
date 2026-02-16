@@ -161,7 +161,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe("All good");
   });
 
-  it("adds tool error fallback when the assistant only invoked tools", () => {
+  it("does not surface benign exec exit code 1 (e.g. grep no match)", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "toolUse",
@@ -171,17 +171,36 @@ describe("buildEmbeddedRunPayloads", () => {
             type: "toolCall",
             id: "toolu_01",
             name: "exec",
-            arguments: { command: "echo hi" },
+            arguments: { command: "grep -r foo /some/path" },
           },
         ],
       }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
     });
 
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("surfaces exec exit code >= 2 as a real error", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_01",
+            name: "exec",
+            arguments: { command: "some-command" },
+          },
+        ],
+      }),
+      lastToolError: { toolName: "exec", error: "Command exited with code 2" },
+    });
+
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Exec");
-    expect(payloads[0]?.text).toContain("code 1");
+    expect(payloads[0]?.text).toContain("code 2");
   });
 
   it("does not add tool error fallback when assistant text exists after tool calls", () => {

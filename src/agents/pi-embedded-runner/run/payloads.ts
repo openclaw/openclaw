@@ -44,11 +44,30 @@ function isRecoverableToolError(error: string | undefined): boolean {
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
+/**
+ * Many CLI tools use exit code 1 for "no results" (grep, diff, test, etc.) rather than
+ * actual failures.  Exit code >= 2 typically indicates a real error.  We treat exec/bash
+ * exit-code-1 errors as benign so they are not surfaced as warnings to the user.
+ */
+const EXEC_TOOL_NAMES = new Set(["exec", "bash"]);
+const BENIGN_EXIT_CODE_RE = /exited with code 1$/i;
+
+function isBenignExecExit(toolName: string, error: string | undefined): boolean {
+  return (
+    EXEC_TOOL_NAMES.has(toolName.trim().toLowerCase()) && BENIGN_EXIT_CODE_RE.test(error ?? "")
+  );
+}
+
 function shouldShowToolErrorWarning(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
 }): boolean {
+  // CLI tools like grep/diff/test return exit code 1 for normal "no match" results.
+  // These should never be surfaced as warnings regardless of mutation status.
+  if (isBenignExecExit(params.lastToolError.toolName, params.lastToolError.error)) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
