@@ -47,12 +47,23 @@ function truncatePlainText(value: string, max: number): string {
   return `${trimmed.slice(0, max - 1)}…`;
 }
 
+function escapeSlackMrkdwn(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/([*_`~])/g, "\\$1");
+}
+
 function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
+  const command = escapeSlackMrkdwn(params.command);
+  const arg = escapeSlackMrkdwn(params.arg);
   return {
     title: { type: "plain_text", text: "Confirm selection" },
     text: {
       type: "mrkdwn",
-      text: `Run */${params.command}* with *${params.arg}* set to this value?`,
+      text: `Run */${command}* with *${arg}* set to this value?`,
     },
     confirm: { type: "plain_text", text: "Run command" },
     deny: { type: "plain_text", text: "Cancel" },
