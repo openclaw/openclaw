@@ -40,6 +40,7 @@ Réponses (shape)
 - Ce doc est l'endroit unique pour tracker refactors protocole pour onboarding/config.
 
 Voir aussi :
+
 - [Onboarding](/fr-FR/cli/onboard)
 - [Configuration](/fr-FR/cli/config)
 - [Passerelle](/fr-FR/cli/gateway)

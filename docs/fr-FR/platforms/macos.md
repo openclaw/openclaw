@@ -54,6 +54,7 @@ Le nœud rapporte map `permissions` donc agents peuvent décider ce qui est auto
 `system.run` est contrôlé par **Exec approvals** dans l'app macOS (Réglages → Exec approvals). Sécurité + ask + allowlist sont stockés localement sur Mac.
 
 Voir aussi :
+
 - [Passerelle Bundled](/fr-FR/platforms/mac/bundled-gateway)
 - [Permissions macOS](/fr-FR/platforms/mac/permissions)
 - [Canvas](/fr-FR/platforms/mac/canvas)

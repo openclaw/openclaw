@@ -76,11 +76,11 @@ Voir [Configuration : Substitution de variable d'environnement](/fr-FR/gateway/c
 
 ## Variables d'environnement liées aux chemins
 
-| Variable               | Objectif                                                                                                                                                                                  |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Variable               | Objectif                                                                                                                                                                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_HOME`        | Remplace le répertoire d'accueil utilisé pour toute résolution de chemin interne (`~/.openclaw/`, répertoires d'agent, sessions, identifiants). Utile lors de l'exécution d'OpenClaw en tant qu'utilisateur de service dédié. |
-| `OPENCLAW_STATE_DIR`   | Remplace le répertoire d'état (par défaut `~/.openclaw`).                                                                                                                                 |
-| `OPENCLAW_CONFIG_PATH` | Remplace le chemin du fichier de config (par défaut `~/.openclaw/openclaw.json`).                                                                                                         |
+| `OPENCLAW_STATE_DIR`   | Remplace le répertoire d'état (par défaut `~/.openclaw`).                                                                                                                                                                     |
+| `OPENCLAW_CONFIG_PATH` | Remplace le chemin du fichier de config (par défaut `~/.openclaw/openclaw.json`).                                                                                                                                             |
 
 ### `OPENCLAW_HOME`
 

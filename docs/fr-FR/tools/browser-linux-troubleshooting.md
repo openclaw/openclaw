@@ -147,10 +147,7 @@ Config :
 {
   "browser": {
     "noSandbox": true,
-    "args": [
-      "--disable-dev-shm-usage",
-      "--disable-setuid-sandbox"
-    ]
+    "args": ["--disable-dev-shm-usage", "--disable-setuid-sandbox"]
   }
 }
 ```
@@ -176,7 +173,7 @@ Certains distros ont problèmes avec headless mode :
 {
   "browser": {
     "headless": false,
-    "display": ":99"  // Utiliser Xvfb
+    "display": ":99" // Utiliser Xvfb
   }
 }
 ```
@@ -275,6 +272,7 @@ ls -la /usr/bin/google-chrome-stable
 ```
 
 Voir aussi :
+
 - [Browser](/fr-FR/tools/browser)
 - [Extension Chrome](/fr-FR/tools/chrome-extension)
 - [Nodes](/fr-FR/nodes/index)

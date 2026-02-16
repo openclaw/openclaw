@@ -70,6 +70,7 @@ Média entrant peut être résumé/transcrit avant exécution réponse. Utilise 
 - Usage : génération embeddings pour recherche mémoire sémantique.
 
 Voir aussi :
+
 - [Modèles](/fr-FR/providers/models)
 - [Utilisation Token](/fr-FR/reference/token-use)
 - [Configuration](/fr-FR/cli/config)

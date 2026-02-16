@@ -29,6 +29,7 @@ title: "Icône Menu Bar"
 - Gardez TTLs courts (<10s) donc icône retourne vers baseline rapidement si job hang.
 
 Voir aussi :
+
 - [Menu Bar](/fr-FR/platforms/mac/menu-bar)
 - [App macOS](/fr-FR/platforms/macos)
 - [Voice Wake](/fr-FR/platforms/mac/voicewake)

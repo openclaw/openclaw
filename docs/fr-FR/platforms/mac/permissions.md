@@ -45,6 +45,7 @@ Contournement : déplacez les fichiers dans le workspace OpenClaw (`~/.openclaw/
 Si vous testez les permissions, signez toujours avec un vrai certificat. Les builds ad-hoc sont uniquement acceptables pour exécutions locales rapides où les permissions n'importent pas.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Passerelle Bundled](/fr-FR/platforms/mac/bundled-gateway)
 - [Configuration](/fr-FR/gateway/configuration)

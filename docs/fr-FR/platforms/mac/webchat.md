@@ -38,6 +38,7 @@ L'app menu bar macOS embarque UI WebChat comme vue SwiftUI native. Se connecte √
 - UI optimis√©e pour sessions chat (pas sandbox browser complet).
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Passerelle](/fr-FR/cli/gateway)
 - [Configuration](/fr-FR/gateway/configuration)

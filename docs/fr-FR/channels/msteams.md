@@ -79,9 +79,9 @@ Désactivez avec :
 {
   channels: {
     msteams: {
-      allowConfigWrite: false
-    }
-  }
+      allowConfigWrite: false,
+    },
+  },
 }
 ```
 
@@ -99,8 +99,8 @@ Envoi fichiers groupe Teams requiert :
     msteams: {
       sharePointSiteId: "<SITE_ID>",
       // driveId: "<DRIVE_ID>"  // Optionnel
-    }
-  }
+    },
+  },
 }
 ```
 
@@ -114,9 +114,9 @@ Polls envoyés via Adaptive Cards :
 {
   channels: {
     msteams: {
-      adaptiveCards: true  // Défaut : true
-    }
-  }
+      adaptiveCards: true, // Défaut : true
+    },
+  },
 }
 ```
 
@@ -128,10 +128,10 @@ Contrôlez qui peut déclencher agent dans groupes :
 {
   channels: {
     msteams: {
-      groupPolicy: "allowlist",  // "open" | "allowlist" | "closed"
-      groupAllowFrom: ["user@example.com"]
-    }
-  }
+      groupPolicy: "allowlist", // "open" | "allowlist" | "closed"
+      groupAllowFrom: ["user@example.com"],
+    },
+  },
 }
 ```
 
@@ -140,6 +140,7 @@ Contrôlez qui peut déclencher agent dans groupes :
 - `closed` : aucune réponse groupe
 
 Voir aussi :
+
 - [Plugins](/fr-FR/tools/plugin)
 - [Canaux](/fr-FR/channels/index)
 - [Configuration](/fr-FR/gateway/configuration)

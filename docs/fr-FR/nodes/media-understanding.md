@@ -48,9 +48,7 @@ Si compréhension échoue ou désactivée, **flux réponse continue** avec body 
 {
   tools: {
     media: {
-      models: [
-        { provider: "openai", model: "gpt-4o-mini", capabilities: ["image", "audio"] },
-      ],
+      models: [{ provider: "openai", model: "gpt-4o-mini", capabilities: ["image", "audio"] }],
       image: {
         enabled: true,
         maxBytes: 5242880,
@@ -65,6 +63,7 @@ Si compréhension échoue ou désactivée, **flux réponse continue** avec body 
 ```
 
 Voir aussi :
+
 - [Audio](/fr-FR/nodes/audio)
 - [Images](/fr-FR/nodes/images)
 - [Configuration](/fr-FR/gateway/configuration)

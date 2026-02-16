@@ -95,6 +95,7 @@ Quand opérateur dit "release", faites immédiatement ce preflight (pas question
 Nous publions seulement **plugins npm existants** sous scope `@openclaw/*`. Plugins bundled pas sur npm restent **disk-tree seulement** (toujours shipped dans `extensions/**`).
 
 Voir aussi :
+
 - [Release macOS](/fr-FR/platforms/mac/release)
 - [Testing](/fr-FR/help/testing)
 - [Build](/fr-FR/help/building)

@@ -64,12 +64,12 @@ Utilisez le mode d'authentification `trusted-proxy` quand :
 
 ### Référence de configuration
 
-| Champ                                       | Requis | Description                                                                     |
-| ------------------------------------------- | ------ | ------------------------------------------------------------------------------- |
-| `gateway.trustedProxies`                    | Oui    | Tableau d'adresses IP de proxy à faire confiance. Les requêtes d'autres IP sont rejetées. |
-| `gateway.auth.mode`                         | Oui    | Doit être `"trusted-proxy"`                                                     |
-| `gateway.auth.trustedProxy.userHeader`      | Oui    | Nom de l'en-tête contenant l'identité utilisateur authentifié                  |
-| `gateway.auth.trustedProxy.requiredHeaders` | Non    | En-têtes supplémentaires qui doivent être présents pour que la requête soit de confiance |
+| Champ                                       | Requis | Description                                                                                          |
+| ------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
+| `gateway.trustedProxies`                    | Oui    | Tableau d'adresses IP de proxy à faire confiance. Les requêtes d'autres IP sont rejetées.            |
+| `gateway.auth.mode`                         | Oui    | Doit être `"trusted-proxy"`                                                                          |
+| `gateway.auth.trustedProxy.userHeader`      | Oui    | Nom de l'en-tête contenant l'identité utilisateur authentifié                                        |
+| `gateway.auth.trustedProxy.requiredHeaders` | Non    | En-têtes supplémentaires qui doivent être présents pour que la requête soit de confiance             |
 | `gateway.auth.trustedProxy.allowUsers`      | Non    | Liste blanche des identités utilisateur. Vide signifie autoriser tous les utilisateurs authentifiés. |
 
 ## Exemples de configuration de proxy
@@ -229,7 +229,7 @@ L'en-tête utilisateur était vide ou manquant. Vérifiez :
 - Le nom de l'en-tête est-il correct ? (insensible à la casse, mais l'orthographe compte)
 - L'utilisateur est-il réellement authentifié au niveau du proxy ?
 
-### "trusted_proxy_missing_header_*"
+### "trusted*proxy_missing_header*\*"
 
 Un en-tête requis n'était pas présent. Vérifiez :
 

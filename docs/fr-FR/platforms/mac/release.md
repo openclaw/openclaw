@@ -72,6 +72,7 @@ Génère notes release HTML depuis `CHANGELOG.md` et les embarque dans l'entrée
 - Assurez-vous que l'URL appcast raw correspond au flux baked : `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`.
 
 Voir aussi :
+
 - [Passerelle Bundled](/fr-FR/platforms/mac/bundled-gateway)
 - [Permissions macOS](/fr-FR/platforms/mac/permissions)
 - [Installation](/fr-FR/install/index)

@@ -83,6 +83,7 @@ openclaw nodes notify --node <id> --title "Ping" --body "Passerelle distante pr�
 Plus de toggle global "default sound" dans app ; callers choisissent son (ou aucun) per requête.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Configuration](/fr-FR/gateway/configuration)
 - [Sécurité](/fr-FR/gateway/security)

@@ -114,9 +114,9 @@ gcloud services enable compute.googleapis.com
 
 **Types de machines :**
 
-| Type     | Specs                      | Coût                | Notes               |
-| -------- | -------------------------- | ------------------- | ------------------- |
-| e2-small | 2 vCPU, 2 Go RAM           | ~12 $/mois          | Recommandé          |
+| Type     | Specs                      | Coût                    | Notes                               |
+| -------- | -------------------------- | ----------------------- | ----------------------------------- |
+| e2-small | 2 vCPU, 2 Go RAM           | ~12 $/mois              | Recommandé                          |
 | e2-micro | 2 vCPU (partagé), 1 Go RAM | Éligible niveau gratuit | Peut manquer de mémoire sous charge |
 
 **CLI :**
@@ -403,18 +403,18 @@ Collez votre token de passerelle.
 OpenClaw s'exécute dans Docker, mais Docker n'est pas la source de vérité.
 Tout l'état à long terme doit survivre aux redémarrages, reconstructions et réinitialisations.
 
-| Composant              | Emplacement                       | Mécanisme de persistance | Notes                                |
-| ---------------------- | --------------------------------- | ------------------------ | ------------------------------------ |
-| Configuration passerelle | `/home/node/.openclaw/`           | Montage de volume hôte   | Inclut `openclaw.json`, tokens       |
-| Profils auth modèle    | `/home/node/.openclaw/`           | Montage de volume hôte   | Tokens OAuth, clés API               |
-| Configurations compétences | `/home/node/.openclaw/skills/`    | Montage de volume hôte   | État niveau compétence               |
-| Espace de travail agent | `/home/node/.openclaw/workspace/` | Montage de volume hôte   | Code et artefacts agent              |
-| Session WhatsApp       | `/home/node/.openclaw/`           | Montage de volume hôte   | Préserve la connexion QR             |
-| Trousseau Gmail        | `/home/node/.openclaw/`           | Montage de volume hôte + mot de passe | Nécessite `GOG_KEYRING_PASSWORD`     |
-| Binaires externes      | `/usr/local/bin/`                 | Image Docker             | Doit être intégré au moment de la construction |
-| Environnement d'exécution Node | Système de fichiers conteneur    | Image Docker             | Reconstruit à chaque construction d'image |
-| Paquets OS             | Système de fichiers conteneur    | Image Docker             | Ne pas installer au moment de l'exécution |
-| Conteneur Docker       | Éphémère                          | Redémarrable             | Sûr de détruire                      |
+| Composant                      | Emplacement                       | Mécanisme de persistance              | Notes                                          |
+| ------------------------------ | --------------------------------- | ------------------------------------- | ---------------------------------------------- |
+| Configuration passerelle       | `/home/node/.openclaw/`           | Montage de volume hôte                | Inclut `openclaw.json`, tokens                 |
+| Profils auth modèle            | `/home/node/.openclaw/`           | Montage de volume hôte                | Tokens OAuth, clés API                         |
+| Configurations compétences     | `/home/node/.openclaw/skills/`    | Montage de volume hôte                | État niveau compétence                         |
+| Espace de travail agent        | `/home/node/.openclaw/workspace/` | Montage de volume hôte                | Code et artefacts agent                        |
+| Session WhatsApp               | `/home/node/.openclaw/`           | Montage de volume hôte                | Préserve la connexion QR                       |
+| Trousseau Gmail                | `/home/node/.openclaw/`           | Montage de volume hôte + mot de passe | Nécessite `GOG_KEYRING_PASSWORD`               |
+| Binaires externes              | `/usr/local/bin/`                 | Image Docker                          | Doit être intégré au moment de la construction |
+| Environnement d'exécution Node | Système de fichiers conteneur     | Image Docker                          | Reconstruit à chaque construction d'image      |
+| Paquets OS                     | Système de fichiers conteneur     | Image Docker                          | Ne pas installer au moment de l'exécution      |
+| Conteneur Docker               | Éphémère                          | Redémarrable                          | Sûr de détruire                                |
 
 ---
 

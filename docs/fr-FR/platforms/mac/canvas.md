@@ -57,6 +57,7 @@ openclaw nodes canvas snapshot --node <id>
 ```
 
 Voir aussi :
+
 - [Nœuds](/fr-FR/nodes/index)
 - [Passerelle Bundled](/fr-FR/platforms/mac/bundled-gateway)
 - [App macOS](/fr-FR/platforms/macos)

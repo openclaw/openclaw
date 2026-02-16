@@ -50,6 +50,7 @@ sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Lo
 Pas de reboot requis ; logd remarque fichier rapidement, mais seules nouvelles lignes log incluront payloads privés.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Dépannage](/fr-FR/gateway/troubleshooting)
 - [Configuration](/fr-FR/gateway/configuration)

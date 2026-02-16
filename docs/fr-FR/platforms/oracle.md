@@ -20,13 +20,13 @@ Le tier gratuit Oracle peut être excellent fit pour OpenClaw (surtout si vous a
 
 ## Comparaison Coût (2026)
 
-| Provider     | Plan            | Specs                  | Prix/mois | Notes                 |
-| ------------ | --------------- | ---------------------- | --------- | --------------------- |
-| Oracle Cloud | Always Free ARM | jusqu'à 4 OCPU, 24GB RAM | $0       | ARM, capacité limitée |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4      | Option payée la moins chère |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6        | UI facile, bonnes docs |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6        | Nombreux emplacements |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5        | Maintenant partie Akamai |
+| Provider     | Plan            | Specs                    | Prix/mois | Notes                       |
+| ------------ | --------------- | ------------------------ | --------- | --------------------------- |
+| Oracle Cloud | Always Free ARM | jusqu'à 4 OCPU, 24GB RAM | $0        | ARM, capacité limitée       |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM          | ~ $4      | Option payée la moins chère |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM          | $6        | UI facile, bonnes docs      |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM          | $6        | Nombreux emplacements       |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM          | $5        | Maintenant partie Akamai    |
 
 ## Prérequis
 
@@ -77,6 +77,7 @@ sudo tailscale up
 ```
 
 Voir aussi :
+
 - [VPS](/fr-FR/platforms/vps)
 - [DigitalOcean](/fr-FR/platforms/digitalocean)
 - [Installation](/fr-FR/install/index)

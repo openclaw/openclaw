@@ -56,6 +56,7 @@ Mode distant ne démarre jamais Passerelle locale. App utilise tunnel SSH vers h
 Si vrai mode child-process jamais nécessaire à nouveau, devrait être documenté comme mode séparé, explicite dev-only.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Contrôle Distant](/fr-FR/platforms/mac/remote)
 - [Configuration](/fr-FR/gateway/configuration)

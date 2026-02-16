@@ -350,6 +350,7 @@ Même `deviceId` à travers rôles → ligne "Instance" unique :
 - Claims capability vérifiées contre allowlists serveur par plateforme/type.
 
 Voir aussi :
+
 - [Protocole Passerelle](/fr-FR/gateway/protocol)
 - [Protocole Bridge](/fr-FR/gateway/bridge-protocol)
 - [Pairing](/fr-FR/gateway/pairing)

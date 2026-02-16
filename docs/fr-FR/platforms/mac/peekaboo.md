@@ -52,6 +52,7 @@ peekaboo bridge status --verbose
 ```
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Permissions](/fr-FR/platforms/mac/permissions)
 - [Compétences](/fr-FR/tools/skills)

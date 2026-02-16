@@ -71,15 +71,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Référence de configuration
 
-| Clé          | Type     | Défaut                                      | Description                               |
-| ------------ | -------- | ------------------------------------------- | ----------------------------------------- |
-| `privateKey` | string   | requis                                      | Clé privée au format `nsec` ou hex        |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URLs relais (WebSocket)                   |
-| `dmPolicy`   | string   | `pairing`                                   | Politique d'accès DM                      |
-| `allowFrom`  | string[] | `[]`                                        | Pubkeys expéditeurs autorisés             |
-| `enabled`    | boolean  | `true`                                      | Activer/désactiver canal                  |
-| `name`       | string   | -                                           | Nom d'affichage                           |
-| `profile`    | object   | -                                           | Métadonnées profil NIP-01                 |
+| Clé          | Type     | Défaut                                      | Description                        |
+| ------------ | -------- | ------------------------------------------- | ---------------------------------- |
+| `privateKey` | string   | requis                                      | Clé privée au format `nsec` ou hex |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URLs relais (WebSocket)            |
+| `dmPolicy`   | string   | `pairing`                                   | Politique d'accès DM               |
+| `allowFrom`  | string[] | `[]`                                        | Pubkeys expéditeurs autorisés      |
+| `enabled`    | boolean  | `true`                                      | Activer/désactiver canal           |
+| `name`       | string   | -                                           | Nom d'affichage                    |
+| `profile`    | object   | -                                           | Métadonnées profil NIP-01          |
 
 ## Métadonnées de profil
 
@@ -166,12 +166,12 @@ Conseils :
 
 ## Support de protocole
 
-| NIP    | Statut    | Description                                 |
-| ------ | --------- | ------------------------------------------- |
-| NIP-01 | Supporté  | Format événement de base + métadonnées profil |
-| NIP-04 | Supporté  | DM chiffrés (`kind:4`)                      |
-| NIP-17 | Prévu     | DM emballés-cadeaux                         |
-| NIP-44 | Prévu     | Chiffrement versionné                       |
+| NIP    | Statut   | Description                                   |
+| ------ | -------- | --------------------------------------------- |
+| NIP-01 | Supporté | Format événement de base + métadonnées profil |
+| NIP-04 | Supporté | DM chiffrés (`kind:4`)                        |
+| NIP-17 | Prévu    | DM emballés-cadeaux                           |
+| NIP-44 | Prévu    | Chiffrement versionné                         |
 
 ## Tests
 

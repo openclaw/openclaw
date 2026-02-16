@@ -27,10 +27,10 @@ Ce ne sont **pas** automation browser. Pour sites JS-heavy ou logins, utilisez [
 
 ## Choisir provider recherche
 
-| Provider            | Pros                                            | Cons                             | Clé API                                      |
-| ------------------- | ----------------------------------------------- | -------------------------------- | -------------------------------------------- |
-| **Brave** (défaut)  | Rapide, résultats structurés, tier gratuit      | Résultats recherche traditionnels | `BRAVE_API_KEY`                              |
-| **Perplexity**      | Réponses AI-synthétisées, citations, real-time  | Nécessite accès Perplexity ou OpenRouter | `OPENROUTER_API_KEY` ou `PERPLEXITY_API_KEY` |
+| Provider           | Pros                                           | Cons                                     | Clé API                                      |
+| ------------------ | ---------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
+| **Brave** (défaut) | Rapide, résultats structurés, tier gratuit     | Résultats recherche traditionnels        | `BRAVE_API_KEY`                              |
+| **Perplexity**     | Réponses AI-synthétisées, citations, real-time | Nécessite accès Perplexity ou OpenRouter | `OPENROUTER_API_KEY` ou `PERPLEXITY_API_KEY` |
 
 Voir [Setup Brave Search](/fr-FR/providers/brave-search) et [Perplexity Sonar](/fr-FR/providers/perplexity) pour détails spécifiques provider.
 
@@ -88,17 +88,17 @@ Brave fournit tier gratuit plus plans payants ; vérifier portail API Brave pour
         brave: {
           apiKey: "${BRAVE_API_KEY}",
           maxResults: 10,
-          cacheMinutes: 15
-        }
+          cacheMinutes: 15,
+        },
       },
       fetch: {
         enabled: true,
         maxLength: 20000,
         timeout: 30000,
-        userAgent: "Mozilla/5.0 (compatible; OpenClaw/1.0)"
-      }
-    }
-  }
+        userAgent: "Mozilla/5.0 (compatible; OpenClaw/1.0)",
+      },
+    },
+  },
 }
 ```
 
@@ -178,11 +178,11 @@ Perplexity fournit réponses AI-synthétisées avec citations web real-time.
         perplexity: {
           apiKey: "${PERPLEXITY_API_KEY}",
           baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro"
-        }
-      }
-    }
-  }
+          model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -197,11 +197,11 @@ Perplexity fournit réponses AI-synthétisées avec citations web real-time.
         perplexity: {
           apiKey: "${OPENROUTER_API_KEY}",
           baseUrl: "https://openrouter.ai/api/v1",
-          model: "perplexity/sonar-pro"
-        }
-      }
-    }
-  }
+          model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -214,10 +214,10 @@ Résultats recherche cachés pour réduire appels API :
   tools: {
     web: {
       search: {
-        cacheMinutes: 15  // Défaut
-      }
-    }
-  }
+        cacheMinutes: 15, // Défaut
+      },
+    },
+  },
 }
 ```
 
@@ -282,6 +282,7 @@ Pour sites nécessitant JavaScript ou interaction complexe :
 - [Puppeteer skill](/fr-FR/tools/skills) : scripting browser custom
 
 Voir aussi :
+
 - [Browser](/fr-FR/tools/browser)
 - [Brave Search](/fr-FR/providers/brave-search)
 - [Perplexity](/fr-FR/providers/perplexity)

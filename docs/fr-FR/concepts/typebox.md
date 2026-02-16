@@ -42,14 +42,14 @@ Client                    Passerelle
 
 Méthodes + événements courants :
 
-| Catégorie | Exemples                                                  | Notes                              |
-| --------- | --------------------------------------------------------- | ---------------------------------- |
-| Noyau     | `connect`, `health`, `status`                             | `connect` doit être le premier     |
-| Messagerie| `send`, `poll`, `agent`, `agent.wait`                     | side-effects nécessitent `idempotencyKey` |
-| Chat      | `chat.history`, `chat.send`, `chat.abort`, `chat.inject`  | WebChat utilise ceux-ci            |
-| Sessions  | `sessions.list`, `sessions.patch`, `sessions.delete`      | admin de session                   |
-| Nœuds     | `node.list`, `node.invoke`, `node.pair.*`                 | WS de passerelle + actions de nœud |
-| Événements| `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | push serveur                       |
+| Catégorie  | Exemples                                                  | Notes                                     |
+| ---------- | --------------------------------------------------------- | ----------------------------------------- |
+| Noyau      | `connect`, `health`, `status`                             | `connect` doit être le premier            |
+| Messagerie | `send`, `poll`, `agent`, `agent.wait`                     | side-effects nécessitent `idempotencyKey` |
+| Chat       | `chat.history`, `chat.send`, `chat.abort`, `chat.inject`  | WebChat utilise ceux-ci                   |
+| Sessions   | `sessions.list`, `sessions.patch`, `sessions.delete`      | admin de session                          |
+| Nœuds      | `node.list`, `node.invoke`, `node.pair.*`                 | WS de passerelle + actions de nœud        |
+| Événements | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | push serveur                              |
 
 La liste autoritaire vit dans `src/gateway/server.ts` (`METHODS`, `EVENTS`).
 

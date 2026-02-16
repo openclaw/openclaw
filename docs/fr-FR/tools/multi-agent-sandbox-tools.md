@@ -170,9 +170,7 @@ Conteneur sandbox nouveau per session :
               "TZ": "America/New_York",
               "CUSTOM_VAR": "value"
             },
-            "volumes": [
-              "~/.config/agent-data:/data:ro"
-            ]
+            "volumes": ["~/.config/agent-data:/data:ro"]
           }
         }
       }
@@ -257,6 +255,7 @@ docker run -it openclaw/sandbox:latest bash
 ```
 
 Voir aussi :
+
 - [Sandboxing](/fr-FR/gateway/sandboxing)
 - [Configuration](/fr-FR/gateway/configuration)
 - [Mode Elevated](/fr-FR/tools/elevated)

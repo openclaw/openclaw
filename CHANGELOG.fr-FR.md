@@ -25,6 +25,7 @@ Pour voir l'historique détaillé des versions, y compris toutes les corrections
 ## Versions récentes
 
 Vous pouvez également consulter :
+
 - [Releases GitHub](https://github.com/openclaw/openclaw/releases) - pour les notes de version formatées
 - [Commits récents](https://github.com/openclaw/openclaw/commits/main) - pour les changements en temps réel
 

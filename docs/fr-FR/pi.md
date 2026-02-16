@@ -28,12 +28,12 @@ OpenClaw utilise SDK pi pour embarquer agent coding AI dans architecture passere
 }
 ```
 
-| Package           | Purpose                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| Package           | Purpose                                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Abstractions LLM core : `Model`, `streamSimple`, types message, APIs provider                           |
-| `pi-agent-core`   | Boucle agent, exécution tool, types `AgentMessage`                                                       |
+| `pi-agent-core`   | Boucle agent, exécution tool, types `AgentMessage`                                                      |
 | `pi-coding-agent` | SDK haut niveau : `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, tools builtin |
-| `pi-tui`          | Composants UI terminal (utilisé dans mode TUI local OpenClaw)                                             |
+| `pi-tui`          | Composants UI terminal (utilisé dans mode TUI local OpenClaw)                                           |
 
 ## Structure Fichier
 
@@ -129,6 +129,7 @@ Supporte :
 - **Pruning** : suppression cache-expired turns
 
 Voir aussi :
+
 - [Sessions](/fr-FR/concepts/session)
 - [Boucle Agent](/fr-FR/concepts/agent-loop)
 - [Tools](/fr-FR/tools/index)

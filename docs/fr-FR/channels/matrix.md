@@ -211,17 +211,17 @@ Notes :
 
 ## Capacités
 
-| Fonctionnalité      | Statut                                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------------------- |
-| Messages directs    | ✅ Supporté                                                                                       |
-| Salles              | ✅ Supporté                                                                                       |
-| Fils                | ✅ Supporté                                                                                       |
-| Médias              | ✅ Supporté                                                                                       |
-| E2EE                | ✅ Supporté (module crypto requis)                                                                |
-| Réactions           | ✅ Supporté (envoi/lecture via outils)                                                            |
-| Sondages            | ✅ Envoi supporté ; démarrages de sondages entrants convertis en texte (réponses/fins ignorées)   |
-| Emplacement         | ✅ Supporté (geo URI ; altitude ignorée)                                                          |
-| Commandes natives   | ✅ Supporté                                                                                       |
+| Fonctionnalité    | Statut                                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| Messages directs  | ✅ Supporté                                                                                     |
+| Salles            | ✅ Supporté                                                                                     |
+| Fils              | ✅ Supporté                                                                                     |
+| Médias            | ✅ Supporté                                                                                     |
+| E2EE              | ✅ Supporté (module crypto requis)                                                              |
+| Réactions         | ✅ Supporté (envoi/lecture via outils)                                                          |
+| Sondages          | ✅ Envoi supporté ; démarrages de sondages entrants convertis en texte (réponses/fins ignorées) |
+| Emplacement       | ✅ Supporté (geo URI ; altitude ignorée)                                                        |
+| Commandes natives | ✅ Supporté                                                                                     |
 
 ## Dépannage
 

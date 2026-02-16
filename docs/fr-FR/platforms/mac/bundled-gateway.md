@@ -68,6 +68,7 @@ openclaw gateway call health --url ws://127.0.0.1:18999 --timeout 3000
 ```
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Permissions macOS](/fr-FR/platforms/mac/permissions)
 - [Configuration Passerelle](/fr-FR/gateway/configuration)

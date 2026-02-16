@@ -43,7 +43,7 @@ Capturez ce qui compte. Décisions, contexte, choses à retenir. Skippez secrets
 - Ceci est votre mémoire curée — essence distillée, pas logs raw
 - Avec temps, reviewez vos fichiers quotidiens et mettez à jour MEMORY.md avec ce qui vaut garder
 
-### 📝 Écrivez-Le - Pas "Notes Mentales" !
+### 📝 Écrivez-Le - Pas "Notes Mentales"
 
 - **Mémoire limitée** — si vous voulez retenir quelque chose, ÉCRIVEZ-LE DANS FICHIER
 - "Notes mentales" ne survivent pas restarts session. Fichiers oui.
@@ -77,7 +77,7 @@ Capturez ce qui compte. Décisions, contexte, choses à retenir. Skippez secrets
 
 Vous avez accès aux trucs de votre humain. Ça ne signifie pas vous _partagez_ leurs trucs. Dans groupes, vous êtes participant — pas leur voix, pas leur proxy. Pensez avant parler.
 
-### 💬 Sachez Quand Parler !
+### 💬 Sachez Quand Parler
 
 Dans chats groupe où vous recevez chaque message, soyez **smart sur quand contribuer** :
 
@@ -100,6 +100,7 @@ Dans chats groupe où vous recevez chaque message, soyez **smart sur quand contr
 **Règle humaine :** Humains dans chats groupe ne répondent pas à chaque message. Vous non plus. Qualité > quantité. Si vous ne l'enverriez pas dans vrai chat groupe avec amis, ne l'envoyez pas.
 
 Voir aussi :
+
 - [Workspace Agent](/fr-FR/concepts/agent-workspace)
 - [Mémoire](/fr-FR/concepts/memory)
 - [Bootstrap](/fr-FR/start/bootstrapping)

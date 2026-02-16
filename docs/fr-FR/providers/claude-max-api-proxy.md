@@ -13,10 +13,10 @@ title: "Proxy API Claude Max"
 
 ## Pourquoi Utiliser Ceci ?
 
-| Approche                | Coût                                                     | Meilleur Pour                          |
-| ----------------------- | -------------------------------------------------------- | -------------------------------------- |
-| API Anthropic           | Payé per token (~$15/M input, $75/M output pour Opus)   | Apps production, volume élevé          |
-| Souscription Claude Max | $200/mois forfait                                        | Usage personnel, dev, usage illimité   |
+| Approche                | Coût                                                  | Meilleur Pour                        |
+| ----------------------- | ----------------------------------------------------- | ------------------------------------ |
+| API Anthropic           | Payé per token (~$15/M input, $75/M output pour Opus) | Apps production, volume élevé        |
+| Souscription Claude Max | $200/mois forfait                                     | Usage personnel, dev, usage illimité |
 
 Si vous avez souscription Claude Max et voulez l'utiliser avec tools compatibles OpenAI, ce proxy peut vous faire économiser argent significatif.
 
@@ -171,6 +171,7 @@ PORT=3457 claude-max-api
 Puis mettez à jour `OPENAI_BASE_URL` dans config OpenClaw.
 
 Voir aussi :
+
 - [Provider Anthropic](/fr-FR/providers/anthropic) - Intégration native OpenClaw avec setup-token Claude ou clés API
 - [Provider OpenAI](/fr-FR/providers/openai) - Pour souscriptions OpenAI/Codex
 - [Modèles](/fr-FR/concepts/models)

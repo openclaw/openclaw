@@ -45,11 +45,11 @@ Config minimale :
 
 Référence des champs :
 
-| Champ       | Description                                           |
-| ----------- | ----------------------------------------------------- |
+| Champ       | Description                                                 |
+| ----------- | ----------------------------------------------------------- |
 | `account`   | Numéro de téléphone du bot au format E.164 (`+15551234567`) |
-| `cliPath`   | Chemin vers `signal-cli` (`signal-cli` si dans `PATH`) |
-| `dmPolicy`  | Politique d'accès DM (`pairing` recommandé)          |
+| `cliPath`   | Chemin vers `signal-cli` (`signal-cli` si dans `PATH`)      |
+| `dmPolicy`  | Politique d'accès DM (`pairing` recommandé)                 |
 | `allowFrom` | Numéros de téléphone ou valeurs `uuid:<id>` autorisés en DM |
 
 ## Ce que c'est

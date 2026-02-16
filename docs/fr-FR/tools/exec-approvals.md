@@ -156,18 +156,18 @@ Approbations exec empêchent agent sandboxed accéder host sans permission. Impl
         security: "allowlist",
         ask: "on-miss",
         askFallback: "deny",
-        autoAllowSkills: true
-      }
+        autoAllowSkills: true,
+      },
     },
     list: [
       {
         id: "research",
         exec: {
-          security: "deny"  // Override : aucun exec pour agent research
-        }
-      }
-    ]
-  }
+          security: "deny", // Override : aucun exec pour agent research
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -193,6 +193,7 @@ openclaw approvals allowlist add --node <nodeId> "<commande>"
 - Vérifier `exec.askFallback` pour comportement quand UI unavailable
 
 Voir aussi :
+
 - [Mode Elevated](/fr-FR/tools/elevated)
 - [Sandboxing](/fr-FR/gateway/sandboxing)
 - [Nodes](/fr-FR/nodes/index)

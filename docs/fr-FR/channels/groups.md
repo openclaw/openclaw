@@ -40,12 +40,12 @@ sinon -> répondre
 
 Si vous voulez...
 
-| Objectif                                       | Quoi définir                                               |
-| ---------------------------------------------- | ---------------------------------------------------------- |
-| Autoriser tous les groupes mais répondre seulement sur @mentions | `groups: { "*": { requireMention: true } }`    |
-| Désactiver toutes les réponses de groupe      | `groupPolicy: "disabled"`                                  |
-| Seulement des groupes spécifiques             | `groups: { "<group-id>": { ... } }` (pas de clé `"*"`)     |
-| Seulement vous pouvez déclencher dans les groupes | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Objectif                                                         | Quoi définir                                               |
+| ---------------------------------------------------------------- | ---------------------------------------------------------- |
+| Autoriser tous les groupes mais répondre seulement sur @mentions | `groups: { "*": { requireMention: true } }`                |
+| Désactiver toutes les réponses de groupe                         | `groupPolicy: "disabled"`                                  |
+| Seulement des groupes spécifiques                                | `groups: { "<group-id>": { ... } }` (pas de clé `"*"`)     |
+| Seulement vous pouvez déclencher dans les groupes                | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
 
 ## Clés de session
 
@@ -174,10 +174,10 @@ Contrôlez comment les messages de groupe/salon sont gérés par canal :
 }
 ```
 
-| Politique     | Comportement                                                  |
-| ------------- | ------------------------------------------------------------- |
-| `"open"`      | Les groupes contournent les allowlists ; contrôle de mention s'applique toujours. |
-| `"disabled"`  | Bloquer tous les messages de groupe entièrement.              |
+| Politique     | Comportement                                                                       |
+| ------------- | ---------------------------------------------------------------------------------- |
+| `"open"`      | Les groupes contournent les allowlists ; contrôle de mention s'applique toujours.  |
+| `"disabled"`  | Bloquer tous les messages de groupe entièrement.                                   |
 | `"allowlist"` | Autoriser seulement les groupes/salons qui correspondent à l'allowlist configurée. |
 
 Notes :

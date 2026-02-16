@@ -19,18 +19,18 @@ Chaque canal démarre automatiquement quand sa section config existe (sauf `enab
 
 Tous canaux supportent politiques DM et politiques groupe :
 
-| Politique DM        | Comportement                                                     |
-| ------------------- | ---------------------------------------------------------------- |
-| `pairing` (défaut)  | Expéditeurs inconnus obtiennent code pairing one-time ; proprio doit approuver |
-| `allowlist`         | Uniquement expéditeurs dans `allowFrom` (ou paired allow store)  |
-| `open`              | Autoriser tous DMs entrants (nécessite `allowFrom: ["*"]`)       |
-| `disabled`          | Ignorer tous DMs entrants                                        |
+| Politique DM       | Comportement                                                                   |
+| ------------------ | ------------------------------------------------------------------------------ |
+| `pairing` (défaut) | Expéditeurs inconnus obtiennent code pairing one-time ; proprio doit approuver |
+| `allowlist`        | Uniquement expéditeurs dans `allowFrom` (ou paired allow store)                |
+| `open`             | Autoriser tous DMs entrants (nécessite `allowFrom: ["*"]`)                     |
+| `disabled`         | Ignorer tous DMs entrants                                                      |
 
-| Politique Groupe      | Comportement                                            |
-| --------------------- | ------------------------------------------------------- |
-| `allowlist` (défaut)  | Uniquement groupes correspondant allowlist configurée   |
-| `open`                | Bypass allowlists groupe (mention-gating toujours appliqué) |
-| `disabled`            | Bloquer tous messages groupe/room                       |
+| Politique Groupe     | Comportement                                                |
+| -------------------- | ----------------------------------------------------------- |
+| `allowlist` (défaut) | Uniquement groupes correspondant allowlist configurée       |
+| `open`               | Bypass allowlists groupe (mention-gating toujours appliqué) |
+| `disabled`           | Bloquer tous messages groupe/room                           |
 
 <Note>
 `channels.defaults.groupPolicy` définit défaut quand `groupPolicy` provider non défini.
@@ -81,6 +81,7 @@ WhatsApp fonctionne via canal web passerelle (Baileys Web). Démarre automatique
 Voir [Configuration Complète](/fr-FR/gateway/configuration) pour champs détaillés.
 
 Voir aussi :
+
 - [Configuration](/fr-FR/gateway/configuration)
 - [Canaux](/fr-FR/channels/index)
 - [Agents](/fr-FR/cli/agents)

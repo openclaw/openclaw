@@ -47,10 +47,12 @@ Optionnel. Nœud macOS rapporte `location` via map permissions ; iOS/Android peu
 Appelée via `node.invoke`.
 
 Params :
+
 - `accuracy` : `best | nearestTenMeters | hundredMeters | kilometer | threeKilometers` (optionnel)
 - `timeout` : millisecondes (optionnel)
 
 Voir aussi :
+
 - [Nœuds](/fr-FR/nodes/index)
 - [Permissions](/fr-FR/platforms/mac/permissions)
 - [App iOS](/fr-FR/platforms/ios)

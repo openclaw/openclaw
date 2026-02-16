@@ -9,20 +9,20 @@ La CI s'exécute à chaque push vers `main` et chaque pull request. Elle utilise
 
 ## Aperçu des Tâches
 
-| Tâche             | But                                             | Quand elle s'exécute      |
-| ----------------- | ----------------------------------------------- | ------------------------- |
-| `docs-scope`      | Détecter changements docs-seulement            | Toujours                  |
-| `changed-scope`   | Détecter quelles zones ont changé (node/macos/android) | PRs non-docs       |
-| `check`           | Types TypeScript, lint, format                  | Changements non-docs      |
-| `check-docs`      | Lint Markdown + vérification lien cassé         | Docs changés              |
-| `code-analysis`   | Vérification seuil LOC (1000 lignes)            | PRs uniquement            |
-| `secrets`         | Détecter fuites de secrets                      | Toujours                  |
-| `build-artifacts` | Build dist une fois, partager avec autres tâches| Non-docs, changements node|
-| `release-check`   | Valider contenu npm pack                        | Après build               |
-| `checks`          | Tests Node/Bun + vérification protocole         | Non-docs, changements node|
-| `checks-windows`  | Tests spécifiques Windows                       | Non-docs, changements node|
-| `macos`           | Lint/build/test Swift + tests TS                | PRs avec changements macos|
-| `android`         | Build Gradle + tests                            | Non-docs, changements android|
+| Tâche             | But                                                    | Quand elle s'exécute          |
+| ----------------- | ------------------------------------------------------ | ----------------------------- |
+| `docs-scope`      | Détecter changements docs-seulement                    | Toujours                      |
+| `changed-scope`   | Détecter quelles zones ont changé (node/macos/android) | PRs non-docs                  |
+| `check`           | Types TypeScript, lint, format                         | Changements non-docs          |
+| `check-docs`      | Lint Markdown + vérification lien cassé                | Docs changés                  |
+| `code-analysis`   | Vérification seuil LOC (1000 lignes)                   | PRs uniquement                |
+| `secrets`         | Détecter fuites de secrets                             | Toujours                      |
+| `build-artifacts` | Build dist une fois, partager avec autres tâches       | Non-docs, changements node    |
+| `release-check`   | Valider contenu npm pack                               | Après build                   |
+| `checks`          | Tests Node/Bun + vérification protocole                | Non-docs, changements node    |
+| `checks-windows`  | Tests spécifiques Windows                              | Non-docs, changements node    |
+| `macos`           | Lint/build/test Swift + tests TS                       | PRs avec changements macos    |
+| `android`         | Build Gradle + tests                                   | Non-docs, changements android |
 
 ## Ordre Fail-Fast
 
@@ -34,12 +34,12 @@ Les tâches sont ordonnées pour que les vérifications peu coûteuses échouent
 
 ## Exécuteurs
 
-| Exécuteur                       | Tâches                        |
-| ------------------------------- | ----------------------------- |
-| `blacksmith-4vcpu-ubuntu-2404`  | La plupart des tâches Linux   |
-| `blacksmith-4vcpu-windows-2025` | `checks-windows`              |
-| `macos-latest`                  | `macos`, `ios`                |
-| `ubuntu-latest`                 | Détection portée (léger)      |
+| Exécuteur                       | Tâches                      |
+| ------------------------------- | --------------------------- |
+| `blacksmith-4vcpu-ubuntu-2404`  | La plupart des tâches Linux |
+| `blacksmith-4vcpu-windows-2025` | `checks-windows`            |
+| `macos-latest`                  | `macos`, `ios`              |
+| `ubuntu-latest`                 | Détection portée (léger)    |
 
 ## Équivalents Locaux
 

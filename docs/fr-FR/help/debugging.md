@@ -53,7 +53,7 @@ le débogage. Il y a **deux** flags `--dev` :
 
 - **`--dev` global (profil) :** isole l'état sous `~/.openclaw-dev` et
   définit le port de passerelle par défaut à `19001` (les ports dérivés changent avec lui).
-- **`gateway --dev` : indique à la Passerelle de créer automatiquement une config + 
+- **`gateway --dev` : indique à la Passerelle de créer automatiquement une config +
   workspace par défaut** quand ils manquent (et saute BOOTSTRAP.md).
 
 Flux recommandé (profil dev + bootstrap dev) :

@@ -73,6 +73,7 @@ Envois outbound mirrorés dans session agent _actuelle_ (clé session tool) plut
 - Confirmer si plugin externe utilise formats `From/To` non-standards au-delà ensemble bundled.
 
 Voir aussi :
+
 - [Routing Channel](/fr-FR/channels/channel-routing)
 - [Configuration](/fr-FR/gateway/configuration)
 - [Sessions](/fr-FR/reference/session-management-compaction)

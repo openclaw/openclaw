@@ -58,6 +58,7 @@ Pour désactiver auto-détection, définissez `tools.media.audio.enabled: false`
 ```
 
 Voir aussi :
+
 - [Compréhension Média](/fr-FR/nodes/media-understanding)
 - [Nœuds](/fr-FR/nodes/index)
 - [Configuration](/fr-FR/gateway/configuration)

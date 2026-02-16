@@ -108,6 +108,7 @@ rm ~/.openclaw/settings/voicewake.json
 Redémarrez passerelle après reset manuel.
 
 Voir aussi :
+
 - [Voice Wake macOS](/fr-FR/platforms/mac/voicewake)
 - [Nodes](/fr-FR/nodes/index)
 - [Configuration](/fr-FR/gateway/configuration)

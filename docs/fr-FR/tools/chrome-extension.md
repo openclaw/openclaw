@@ -101,19 +101,19 @@ Config :
     profiles: {
       chrome: {
         driver: "extension",
-        cdpUrl: "http://127.0.0.1:18792"
-      }
-    }
+        cdpUrl: "http://127.0.0.1:18792",
+      },
+    },
   },
   nodes: {
     list: [
       {
         id: "mac",
         tailscaleHostname: "macbook-pro",
-        services: ["browser"]
-      }
-    ]
-  }
+        services: ["browser"],
+      },
+    ],
+  },
 }
 ```
 
@@ -183,6 +183,7 @@ curl http://127.0.0.1:18792/json
 ```
 
 Voir aussi :
+
 - [Browser](/fr-FR/tools/browser)
 - [Nodes](/fr-FR/nodes/index)
 - [Tailscale](/fr-FR/gateway/tailscale)

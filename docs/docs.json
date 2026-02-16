@@ -1342,11 +1342,7 @@
               },
               {
                 "group": "Guides",
-                "pages": [
-                  "fr-FR/start/openclaw",
-                  "fr-FR/start/bootstrapping",
-                  "fr-FR/start/setup"
-                ]
+                "pages": ["fr-FR/start/openclaw", "fr-FR/start/bootstrapping", "fr-FR/start/setup"]
               },
               {
                 "group": "Communauté",
@@ -1638,11 +1634,7 @@
               },
               {
                 "group": "Outils avancés",
-                "pages": [
-                  "fr-FR/cli/logs",
-                  "fr-FR/cli/tui",
-                  "fr-FR/cli/docs"
-                ]
+                "pages": ["fr-FR/cli/logs", "fr-FR/cli/tui", "fr-FR/cli/docs"]
               }
             ]
           },
@@ -1651,11 +1643,7 @@
             "groups": [
               {
                 "group": "Aide",
-                "pages": [
-                  "fr-FR/help/index",
-                  "fr-FR/help/troubleshooting",
-                  "fr-FR/help/faq"
-                ]
+                "pages": ["fr-FR/help/index", "fr-FR/help/troubleshooting", "fr-FR/help/faq"]
               },
               {
                 "group": "Développement",

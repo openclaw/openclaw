@@ -114,6 +114,7 @@ export type PluginRuntime = {
 - `docs/tools/plugin.md` : docs SDK
 
 Voir aussi :
+
 - [Plugins](/fr-FR/tools/plugin)
 - [Création Compétences](/fr-FR/tools/creating-skills)
 - [Configuration](/fr-FR/gateway/configuration)

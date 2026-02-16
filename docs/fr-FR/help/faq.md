@@ -154,6 +154,7 @@ Cela installe OpenClaw **depuis un checkout git**, donc l'agent peut lire le cod
 Conseil : demandez à l'agent de **planifier et superviser** la correction (étape par étape), puis exécutez seulement les commandes nécessaires. Cela garde les changements petits et plus faciles à auditer.
 
 Si vous découvrez un vrai bug ou correction, veuillez déposer un problème GitHub ou envoyer une PR :
+
 - [https://github.com/openclaw/openclaw/issues](https://github.com/openclaw/openclaw/issues)
 - [https://github.com/openclaw/openclaw/pulls](https://github.com/openclaw/openclaw/pulls)
 
@@ -1050,16 +1051,16 @@ Connexe : [Workspace agent](/fr-FR/concepts/agent-workspace), [Mémoire](/fr-FR/
 
 Tout vit sous `$OPENCLAW_STATE_DIR` (par défaut : `~/.openclaw`) :
 
-| Chemin                                                          | Objectif                                                           |
-| --------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `$OPENCLAW_STATE_DIR/openclaw.json`                             | Config principale (JSON5)                                          |
-| `$OPENCLAW_STATE_DIR/credentials/oauth.json`                    | Import OAuth legacy (copié dans profils auth au premier usage)     |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json` | Profils d'auth (OAuth + clés API)                                 |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Cache d'auth runtime (géré automatiquement)                       |
-| `$OPENCLAW_STATE_DIR/credentials/`                              | État fournisseur (ex. `whatsapp/<accountId>/creds.json`)          |
-| `$OPENCLAW_STATE_DIR/agents/`                                   | État par agent (agentDir + sessions)                              |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Historique & état conversation (par agent)                        |
-| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`   | Métadonnées session (par agent)                                   |
+| Chemin                                                          | Objectif                                                       |
+| --------------------------------------------------------------- | -------------------------------------------------------------- |
+| `$OPENCLAW_STATE_DIR/openclaw.json`                             | Config principale (JSON5)                                      |
+| `$OPENCLAW_STATE_DIR/credentials/oauth.json`                    | Import OAuth legacy (copié dans profils auth au premier usage) |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json` | Profils d'auth (OAuth + clés API)                              |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Cache d'auth runtime (géré automatiquement)                    |
+| `$OPENCLAW_STATE_DIR/credentials/`                              | État fournisseur (ex. `whatsapp/<accountId>/creds.json`)       |
+| `$OPENCLAW_STATE_DIR/agents/`                                   | État par agent (agentDir + sessions)                           |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Historique & état conversation (par agent)                     |
+| `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`   | Métadonnées session (par agent)                                |
 
 Chemin agent unique legacy : `~/.openclaw/agent/*` (migré par `openclaw doctor`).
 

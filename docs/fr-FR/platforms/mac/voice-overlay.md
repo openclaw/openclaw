@@ -43,6 +43,7 @@ Audience : contributeurs app macOS. Objectif : garder overlay voix prévisible q
   ```
 
 Voir aussi :
+
 - [Voice Wake](/fr-FR/platforms/mac/voicewake)
 - [App macOS](/fr-FR/platforms/macos)
 - [Logging](/fr-FR/platforms/mac/logging)

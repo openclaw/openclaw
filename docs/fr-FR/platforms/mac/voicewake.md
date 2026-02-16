@@ -52,6 +52,7 @@ title: "Voice Wake"
 - Réponses livrées vers **provider main last-used** (WhatsApp/Telegram/Discord/WebChat).
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Permissions macOS](/fr-FR/platforms/mac/permissions)
 - [Nœuds](/fr-FR/nodes/index)

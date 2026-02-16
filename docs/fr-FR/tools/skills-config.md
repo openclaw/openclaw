@@ -78,10 +78,10 @@ Utilisez un de :
 ```json5
 {
   skills: {
-    allowBundled: ["peekaboo", "gemini"]
+    allowBundled: ["peekaboo", "gemini"],
     // Seulement peekaboo et gemini peuvent charger depuis bundled
     // Skills managed/workspace pas affectés
-  }
+  },
 }
 ```
 
@@ -91,12 +91,9 @@ Utilisez un de :
 {
   skills: {
     load: {
-      extraDirs: [
-        "~/Projects/custom-skills",
-        "/opt/company-skills"
-      ]
-    }
-  }
+      extraDirs: ["~/Projects/custom-skills", "/opt/company-skills"],
+    },
+  },
 }
 ```
 
@@ -106,18 +103,18 @@ Utilisez un de :
 {
   skills: {
     entries: {
-      "gemini": {
+      gemini: {
         enabled: true,
         apiKey: "GEMINI_API_KEY_VALUE",
         env: {
-          GEMINI_MODEL: "gemini-pro"
-        }
+          GEMINI_MODEL: "gemini-pro",
+        },
       },
-      "peekaboo": {
-        enabled: false  // Désactivé temporairement
-      }
-    }
-  }
+      peekaboo: {
+        enabled: false, // Désactivé temporairement
+      },
+    },
+  },
 }
 ```
 
@@ -127,10 +124,10 @@ Utilisez un de :
 {
   skills: {
     install: {
-      preferBrew: true,      // Préférer brew pour binaires
-      nodeManager: "pnpm"    // Utiliser pnpm pour deps Node
-    }
-  }
+      preferBrew: true, // Préférer brew pour binaires
+      nodeManager: "pnpm", // Utiliser pnpm pour deps Node
+    },
+  },
 }
 ```
 
@@ -144,21 +141,21 @@ Utilisez un de :
         mode: "all",
         docker: {
           env: {
-            GEMINI_API_KEY: "${GEMINI_API_KEY}",  // Depuis host env
-            CUSTOM_VAR: "value"
-          }
-        }
-      }
-    }
+            GEMINI_API_KEY: "${GEMINI_API_KEY}", // Depuis host env
+            CUSTOM_VAR: "value",
+          },
+        },
+      },
+    },
   },
   skills: {
     entries: {
-      "gemini": {
-        enabled: true
+      gemini: {
+        enabled: true,
         // apiKey/env définis ici s'appliquent seulement runs NON-sandboxed
-      }
-    }
-  }
+      },
+    },
+  },
 }
 ```
 
@@ -238,6 +235,7 @@ openclaw gateway restart
 ```
 
 Voir aussi :
+
 - [Créer Skills](/fr-FR/tools/creating-skills)
 - [Skills](/fr-FR/tools/skills)
 - [Plugins](/fr-FR/concepts/plugins)

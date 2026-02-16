@@ -304,12 +304,15 @@ openclaw reset
 
 ```markdown
 # SKILL.md
+
 Ce skill automatise tâches répétitives.
 
 ## Usage
+
 Demandez "automatise cette tâche" et je vais...
 
 ## Capacités
+
 - Détection pattern automatique
 - Génération script
 - Execution sûre
@@ -319,17 +322,21 @@ Demandez "automatise cette tâche" et je vais...
 
 ```markdown
 # SKILL.md
+
 Skill intégration API ServiceX.
 
 ## Setup
+
 1. Obtenez API key depuis servicex.com
 2. Configurez : `export SERVICEX_API_KEY=...`
 
 ## Usage
+
 "Requête ServiceX pour..."
 ```
 
 Voir aussi :
+
 - [Skills](/fr-FR/tools/skills)
 - [Créer Skills](/fr-FR/tools/creating-skills)
 - [Config Skills](/fr-FR/tools/skills-config)

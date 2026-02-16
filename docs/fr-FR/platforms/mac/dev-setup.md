@@ -104,6 +104,7 @@ lsof -nP -iTCP:18789 -sTCP:LISTEN
 Si run manuel tient port, stoppez ce processus (Ctrl+C). En dernier recours, tuez PID trouvé ci-dessus.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Lifecycle Passerelle](/fr-FR/platforms/mac/child-process)
 - [Permissions](/fr-FR/platforms/mac/permissions)

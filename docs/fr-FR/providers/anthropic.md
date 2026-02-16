@@ -43,11 +43,11 @@ OpenClaw supporte la fonctionnalité de mise en cache de prompt d'Anthropic. Cel
 
 Utilisez le paramètre `cacheRetention` dans votre config de modèle :
 
-| Valeur  | Durée de Cache | Description                           |
-| ------- | -------------- | ------------------------------------- |
-| `none`  | Pas de cache   | Désactiver mise en cache de prompt    |
-| `short` | 5 minutes      | Par défaut pour auth Clé API          |
-| `long`  | 1 heure        | Cache étendu (nécessite flag beta)    |
+| Valeur  | Durée de Cache | Description                        |
+| ------- | -------------- | ---------------------------------- |
+| `none`  | Pas de cache   | Désactiver mise en cache de prompt |
+| `short` | 5 minutes      | Par défaut pour auth Clé API       |
+| `long`  | 1 heure        | Cache étendu (nécessite flag beta) |
 
 ```json5
 {

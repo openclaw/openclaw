@@ -78,13 +78,13 @@ primary_region = "iad"
 
 **Paramètres clés :**
 
-| Paramètre                      | Raison                                                                               |
-| ------------------------------ | ------------------------------------------------------------------------------------ |
-| `--bind lan`                   | Lie à `0.0.0.0` pour que le proxy Fly puisse atteindre la passerelle                |
-| `--allow-unconfigured`         | Démarre sans fichier de configuration (vous en créerez un après)                    |
+| Paramètre                      | Raison                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Lie à `0.0.0.0` pour que le proxy Fly puisse atteindre la passerelle                  |
+| `--allow-unconfigured`         | Démarre sans fichier de configuration (vous en créerez un après)                      |
 | `internal_port = 3000`         | Doit correspondre à `--port 3000` (ou `OPENCLAW_GATEWAY_PORT`) pour les vérifications |
-| `memory = "2048mb"`            | 512 Mo est trop petit ; 2 Go recommandé                                             |
-| `OPENCLAW_STATE_DIR = "/data"` | Persiste l'état sur le volume                                                        |
+| `memory = "2048mb"`            | 512 Mo est trop petit ; 2 Go recommandé                                               |
+| `OPENCLAW_STATE_DIR = "/data"` | Persiste l'état sur le volume                                                         |
 
 ## 3) Définir les secrets
 
@@ -461,12 +461,12 @@ Le tunnel ngrok s'exécute dans le conteneur et fournit une URL webhook publique
 
 ### Avantages de sécurité
 
-| Aspect                | Public       | Privé      |
-| --------------------- | ------------ | ---------- |
-| Scanners Internet     | Découvrable  | Masqué     |
-| Attaques directes     | Possibles    | Bloquées   |
-| Accès interface       | Navigateur   | Proxy/VPN  |
-| Livraison webhook     | Direct       | Via tunnel |
+| Aspect            | Public      | Privé      |
+| ----------------- | ----------- | ---------- |
+| Scanners Internet | Découvrable | Masqué     |
+| Attaques directes | Possibles   | Bloquées   |
+| Accès interface   | Navigateur  | Proxy/VPN  |
+| Livraison webhook | Direct      | Via tunnel |
 
 ## Notes
 

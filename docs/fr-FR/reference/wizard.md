@@ -195,6 +195,7 @@ Passerelle expose flux wizard via RPC (`wizard.start`, `wizard.next`, `wizard.ca
 ```
 
 Voir aussi :
+
 - [Wizard Onboarding](/fr-FR/start/wizard)
 - [Configuration](/fr-FR/gateway/configuration)
 - [OAuth](/fr-FR/concepts/oauth)

@@ -148,8 +148,8 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Comment ça fonctionne
 
-| Composant                            | Ce qu'il fait                                               |
-| ------------------------------------ | ----------------------------------------------------------- |
+| Composant                            | Ce qu'il fait                                              |
+| ------------------------------------ | ---------------------------------------------------------- |
 | `LocalForward 18789 127.0.0.1:18789` | Transfère le port local 18789 vers le port distant 18789   |
 | `ssh -N`                             | SSH sans exécuter de commandes distantes (juste transfert) |
 | `KeepAlive`                          | Redémarre automatiquement le tunnel s'il crash             |

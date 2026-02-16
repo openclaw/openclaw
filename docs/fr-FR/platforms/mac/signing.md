@@ -41,6 +41,7 @@ Quand signature avec `SIGN_IDENTITY="-"` (ad-hoc), script désactive automatique
 Onglet About lit ces clés pour montrer version, date build, commit git et si c'est build debug (via `#if DEBUG`). Exécutez packager pour rafraîchir ces valeurs après changements code.
 
 Voir aussi :
+
 - [Release macOS](/fr-FR/platforms/mac/release)
 - [Permissions](/fr-FR/platforms/mac/permissions)
 - [App macOS](/fr-FR/platforms/macos)

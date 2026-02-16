@@ -119,11 +119,11 @@ Les URL directes sont récupérées telles quelles. Cela utilise l'outil `web_fe
 
 Les programmes OpenProse mappent vers les primitives OpenClaw :
 
-| Concept OpenProse         | Outil OpenClaw   |
-| ------------------------- | ---------------- |
+| Concept OpenProse            | Outil OpenClaw   |
+| ---------------------------- | ---------------- |
 | Générer session / Outil Task | `sessions_spawn` |
-| Lecture/écriture fichier  | `read` / `write` |
-| Récupération web          | `web_fetch`      |
+| Lecture/écriture fichier     | `read` / `write` |
+| Récupération web             | `web_fetch`      |
 
 Si votre allowlist d'outil bloque ces outils, les programmes OpenProse échoueront. Voir [Config Compétences](/fr-FR/tools/skills-config).
 

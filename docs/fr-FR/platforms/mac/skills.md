@@ -40,6 +40,7 @@ Onglet Compétences dans app macOS montre :
 - Champs input pour clés API
 
 Voir aussi :
+
 - [Compétences](/fr-FR/tools/skills)
 - [Création Compétences](/fr-FR/tools/creating-skills)
 - [App macOS](/fr-FR/platforms/macos)

@@ -100,6 +100,7 @@ title: "Niveaux Thinking"
 ```
 
 Voir aussi :
+
 - [Boucle Agent](/fr-FR/concepts/agent-loop)
 - [Modèles](/fr-FR/concepts/models)
 - [Configuration](/fr-FR/gateway/configuration)

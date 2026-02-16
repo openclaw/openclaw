@@ -96,14 +96,14 @@ Configuration minimale :
 
 ## Capacités
 
-| Fonctionnalité      | Statut        |
-| ------------------- | ------------- |
-| Messages directs    | Supporté      |
-| Salles              | Supporté      |
-| Fils                | Non supporté  |
-| Médias              | URL seulement |
-| Réactions           | Supporté      |
-| Commandes natives   | Non supporté  |
+| Fonctionnalité    | Statut        |
+| ----------------- | ------------- |
+| Messages directs  | Supporté      |
+| Salles            | Supporté      |
+| Fils              | Non supporté  |
+| Médias            | URL seulement |
+| Réactions         | Supporté      |
+| Commandes natives | Non supporté  |
 
 ## Référence de configuration (Nextcloud Talk)
 

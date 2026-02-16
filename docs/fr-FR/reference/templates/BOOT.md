@@ -32,9 +32,9 @@ Pour activer exécution BOOT.md :
 {
   hooks: {
     internal: {
-      enabled: true
-    }
-  }
+      enabled: true,
+    },
+  },
 }
 ```
 
@@ -46,6 +46,7 @@ Pour activer exécution BOOT.md :
 - Gardez instructions courtes - temps démarrage affecte latence
 
 Voir aussi :
+
 - [Hooks](/fr-FR/automation/hooks)
 - [Workspace](/fr-FR/concepts/agent-workspace)
 - [Bootstrap](/fr-FR/start/bootstrapping)

@@ -52,21 +52,21 @@ services:
 
 Fonctionnalités clés du Blueprint utilisées :
 
-| Fonctionnalité        | Objectif                                                   |
-| --------------------- | ---------------------------------------------------------- |
-| `runtime: docker`     | Construit depuis le Dockerfile du dépôt                    |
+| Fonctionnalité        | Objectif                                                           |
+| --------------------- | ------------------------------------------------------------------ |
+| `runtime: docker`     | Construit depuis le Dockerfile du dépôt                            |
 | `healthCheckPath`     | Render surveille `/health` et redémarre les instances défaillantes |
-| `sync: false`         | Invite pour la valeur pendant le déploiement (secrets)     |
-| `generateValue: true` | Génère automatiquement une valeur cryptographiquement sécurisée |
-| `disk`                | Stockage persistant qui survit aux redéploiements          |
+| `sync: false`         | Invite pour la valeur pendant le déploiement (secrets)             |
+| `generateValue: true` | Génère automatiquement une valeur cryptographiquement sécurisée    |
+| `disk`                | Stockage persistant qui survit aux redéploiements                  |
 
 ## Choisir un plan
 
-| Plan      | Arrêt             | Disque        | Meilleur pour                 |
-| --------- | ----------------- | ------------- | ----------------------------- |
-| Free      | Après 15 min inactivité | Non disponible | Tests, démos                  |
-| Starter   | Jamais            | 1GB+          | Usage personnel, petites équipes |
-| Standard+ | Jamais            | 1GB+          | Production, plusieurs canaux  |
+| Plan      | Arrêt                   | Disque         | Meilleur pour                    |
+| --------- | ----------------------- | -------------- | -------------------------------- |
+| Free      | Après 15 min inactivité | Non disponible | Tests, démos                     |
+| Starter   | Jamais                  | 1GB+           | Usage personnel, petites équipes |
+| Standard+ | Jamais                  | 1GB+           | Production, plusieurs canaux     |
 
 Le Blueprint utilise `starter` par défaut. Pour utiliser le niveau gratuit, changez `plan: free` dans le fork de votre
 `render.yaml` (mais notez : pas de disque persistant signifie que la configuration se réinitialise à chaque déploiement).

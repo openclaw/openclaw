@@ -61,6 +61,7 @@ Agent -> Passerelle -> Service Node (WS)
 - Durcissement IPC : mode socket `0600`, token, checks peer-UID, défi/réponse HMAC, TTL court.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [PeekabooBridge](/fr-FR/platforms/mac/peekaboo)
 - [Configuration](/fr-FR/gateway/configuration)

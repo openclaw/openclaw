@@ -80,6 +80,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 Si vous traitez ce workspace comme "mémoire" Clawd, faites-en repo git (idéalement privé) donc `AGENTS.md` et vos fichiers mémoire sont backed up.
 
 Voir aussi :
+
 - [Configuration Agent](/fr-FR/cli/agents)
 - [Workspace](/fr-FR/cli/directory)
 - [Mémoire](/fr-FR/cli/memory)

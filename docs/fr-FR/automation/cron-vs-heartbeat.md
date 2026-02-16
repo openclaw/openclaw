@@ -13,15 +13,15 @@ et **cron** (planificateur de tâches). Choisissez en fonction de vos besoins :
 
 ## Aperçu rapide
 
-| Fonctionnalité                | Heartbeat              | Cron                              |
-| ----------------------------- | ---------------------- | --------------------------------- |
-| **Quand utiliser**            | Vérifications régulières de la session principale | Tâches ponctuelles ou isolées récurrentes |
-| **Context**                   | Session principale partagée | Principal (événements système) ou isolé (dédié) |
-| **Planification**             | Intervalle fixe        | Unique, intervalle, ou expression cron |
-| **Charge utile**              | Invite système         | Événement système ou tour d'agent dédié |
-| **Persistance**               | Non (re-planifie après chaque exécution) | Oui (tâches stockées dans `~/.openclaw/cron/`) |
-| **Multi-agent**               | Session principale uniquement | Peut épingler à un agent spécifique via `agentId` |
-| **Livraison**                 | Session principale uniquement | Aucune, annonce vers n'importe quel canal, ou session principale |
+| Fonctionnalité     | Heartbeat                                         | Cron                                                             |
+| ------------------ | ------------------------------------------------- | ---------------------------------------------------------------- |
+| **Quand utiliser** | Vérifications régulières de la session principale | Tâches ponctuelles ou isolées récurrentes                        |
+| **Context**        | Session principale partagée                       | Principal (événements système) ou isolé (dédié)                  |
+| **Planification**  | Intervalle fixe                                   | Unique, intervalle, ou expression cron                           |
+| **Charge utile**   | Invite système                                    | Événement système ou tour d'agent dédié                          |
+| **Persistance**    | Non (re-planifie après chaque exécution)          | Oui (tâches stockées dans `~/.openclaw/cron/`)                   |
+| **Multi-agent**    | Session principale uniquement                     | Peut épingler à un agent spécifique via `agentId`                |
+| **Livraison**      | Session principale uniquement                     | Aucune, annonce vers n'importe quel canal, ou session principale |
 
 ## Heartbeat : vérifications de routine continues
 

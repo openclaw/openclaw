@@ -2,7 +2,7 @@
 summary: "Référence CLI pour `openclaw dns` (aides de découverte étendue)"
 read_when:
   - Vous voulez la découverte étendue (DNS-SD) via Tailscale + CoreDNS
-  - Vous configurez le DNS divisé pour un domaine de découverte personnalisé (exemple : openclaw.internal)
+  - Vous configurez le DNS divisé pour un domaine de découverte personnalisé (exemple: openclaw.internal)
 title: "dns"
 ---
 

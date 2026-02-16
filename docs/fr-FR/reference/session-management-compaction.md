@@ -157,10 +157,10 @@ Configuration :
       compaction: {
         mode: "auto",
         targetTokens: 4000,
-        reserveTokens: 2000
-      }
-    }
-  }
+        reserveTokens: 2000,
+      },
+    },
+  },
 }
 ```
 
@@ -185,6 +185,7 @@ module.exports = async (ctx) => {
 ```
 
 Voir aussi :
+
 - [Compaction](/fr-FR/concepts/compaction)
 - [Sessions](/fr-FR/concepts/sessions)
 - [Mémoire](/fr-FR/concepts/memory)

@@ -92,7 +92,7 @@ Quand un message Pub/Sub arrive :
 1. OpenClaw examine l'`historyId` et appelle `gmail.users.history.list` pour obtenir les nouveaux
    événements de boîte de réception.
 2. Si un nouveau e-mail est détecté, l'outil Gmail traite comme d'habitude (respectant les préférences de notification
-   + conditions du hook `gmail`).
+   - conditions du hook `gmail`).
 3. Le message Pub/Sub est confirmé.
 
 ## Expiration et renouvellement de montre

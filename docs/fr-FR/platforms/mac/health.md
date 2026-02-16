@@ -34,6 +34,7 @@ Comment voir si canal lié est sain depuis app menu bar.
 - Vous pouvez toujours utiliser flux CLI dans [Santé Gateway](/fr-FR/gateway/health) (`openclaw status`, `openclaw status --deep`, `openclaw health --json`) et tail `/tmp/openclaw/openclaw-*.log` pour `web-heartbeat` / `web-reconnect`.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Status](/fr-FR/cli/status)
 - [Dépannage](/fr-FR/gateway/troubleshooting)

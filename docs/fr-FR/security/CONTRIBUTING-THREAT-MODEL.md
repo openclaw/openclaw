@@ -41,27 +41,27 @@ Ce modèle de menaces est construit sur [MITRE ATLAS](https://atlas.mitre.org/) 
 
 Chaque menace obtient un ID comme `T-EXEC-003`. Les catégories sont :
 
-| Code    | Catégorie                                     |
-| ------- | --------------------------------------------- |
-| RECON   | Reconnaissance - collecte d'informations      |
-| ACCESS  | Accès initial - obtenir l'entrée              |
-| EXEC    | Exécution - exécuter des actions malveillantes|
-| PERSIST | Persistance - maintenir l'accès               |
-| EVADE   | Évasion de défense - éviter la détection      |
-| DISC    | Découverte - apprendre l'environnement        |
-| EXFIL   | Exfiltration - voler des données              |
-| IMPACT  | Impact - dommages ou perturbation             |
+| Code    | Catégorie                                      |
+| ------- | ---------------------------------------------- |
+| RECON   | Reconnaissance - collecte d'informations       |
+| ACCESS  | Accès initial - obtenir l'entrée               |
+| EXEC    | Exécution - exécuter des actions malveillantes |
+| PERSIST | Persistance - maintenir l'accès                |
+| EVADE   | Évasion de défense - éviter la détection       |
+| DISC    | Découverte - apprendre l'environnement         |
+| EXFIL   | Exfiltration - voler des données               |
+| IMPACT  | Impact - dommages ou perturbation              |
 
 Les IDs sont attribués par les mainteneurs pendant la revue. Vous n'avez pas besoin d'en choisir un.
 
 ### Niveaux de risque
 
-| Niveau       | Signification                                                        |
-| ------------ | -------------------------------------------------------------------- |
-| **Critique** | Compromis système complet, ou probabilité élevée + impact critique   |
+| Niveau       | Signification                                                              |
+| ------------ | -------------------------------------------------------------------------- |
+| **Critique** | Compromis système complet, ou probabilité élevée + impact critique         |
 | **Élevé**    | Dommages significatifs probables, ou probabilité moyenne + impact critique |
-| **Moyen**    | Risque modéré, ou faible probabilité + impact élevé                  |
-| **Faible**   | Improbable et impact limité                                          |
+| **Moyen**    | Risque modéré, ou faible probabilité + impact élevé                        |
+| **Faible**   | Improbable et impact limité                                                |
 
 Si vous n'êtes pas sûr du niveau de risque, décrivez simplement l'impact et nous l'évaluerons.
 

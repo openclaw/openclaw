@@ -71,19 +71,19 @@ Le mode par défaut est `gateway.reload.mode="hybrid"`.
 
 ### Précédence du port et de la liaison
 
-| Paramètre     | Ordre de résolution                                            |
-| ------------- | -------------------------------------------------------------- |
+| Paramètre       | Ordre de résolution                                           |
+| --------------- | ------------------------------------------------------------- |
 | Port passerelle | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789` |
 | Mode de liaison | CLI/override → `gateway.bind` → `loopback`                    |
 
 ### Modes de rechargement à chaud
 
-| `gateway.reload.mode` | Comportement                                          |
-| --------------------- | ----------------------------------------------------- |
-| `off`                 | Pas de rechargement de configuration                  |
-| `hot`                 | Applique uniquement les changements sûrs à chaud      |
+| `gateway.reload.mode` | Comportement                                             |
+| --------------------- | -------------------------------------------------------- |
+| `off`                 | Pas de rechargement de configuration                     |
+| `hot`                 | Applique uniquement les changements sûrs à chaud         |
 | `restart`             | Redémarre lors de changements nécessitant un redémarrage |
-| `hybrid` (par défaut) | Application à chaud si sûr, redémarrage si nécessaire |
+| `hybrid` (par défaut) | Application à chaud si sûr, redémarrage si nécessaire    |
 
 ## Ensemble de commandes opérateur
 
@@ -227,12 +227,12 @@ Les événements ne sont pas rejoués. En cas d'écarts de séquence, rafraîchi
 
 ## Signatures d'échec courantes
 
-| Signature                                                       | Problème probable                                 |
-| --------------------------------------------------------------- | ------------------------------------------------- |
-| `refusing to bind gateway ... without auth`                     | Liaison non-loopback sans token/password          |
+| Signature                                                      | Problème probable                                 |
+| -------------------------------------------------------------- | ------------------------------------------------- |
+| `refusing to bind gateway ... without auth`                    | Liaison non-loopback sans token/password          |
 | `another gateway instance is already listening` / `EADDRINUSE` | Conflit de port                                   |
-| `Gateway start blocked: set gateway.mode=local`                 | Configuration en mode distant                     |
-| `unauthorized` pendant connect                                  | Incompatibilité d'auth entre client et passerelle |
+| `Gateway start blocked: set gateway.mode=local`                | Configuration en mode distant                     |
+| `unauthorized` pendant connect                                 | Incompatibilité d'auth entre client et passerelle |
 
 Pour les échelles de diagnostic complètes, utilisez [Dépannage de la passerelle](/fr-FR/gateway/troubleshooting).
 

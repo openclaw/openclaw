@@ -126,16 +126,16 @@ Support multi-comptes : utilisez `channels.zalo.accounts` avec jetons par compte
 
 ## Capacités
 
-| Fonctionnalité      | Statut                                |
-| ------------------- | ------------------------------------- |
-| Messages directs    | ✅ Supporté                           |
-| Groupes             | ❌ À venir bientôt (selon docs Zalo)  |
-| Médias (images)     | ✅ Supporté                           |
-| Réactions           | ❌ Non supporté                       |
-| Fils                | ❌ Non supporté                       |
-| Sondages            | ❌ Non supporté                       |
-| Commandes natives   | ❌ Non supporté                       |
-| Streaming           | ⚠️ Bloqué (limite 2000 caractères)    |
+| Fonctionnalité    | Statut                               |
+| ----------------- | ------------------------------------ |
+| Messages directs  | ✅ Supporté                          |
+| Groupes           | ❌ À venir bientôt (selon docs Zalo) |
+| Médias (images)   | ✅ Supporté                          |
+| Réactions         | ❌ Non supporté                      |
+| Fils              | ❌ Non supporté                      |
+| Sondages          | ❌ Non supporté                      |
+| Commandes natives | ❌ Non supporté                      |
+| Streaming         | ⚠️ Bloqué (limite 2000 caractères)   |
 
 ## Cibles de livraison (CLI/cron)
 

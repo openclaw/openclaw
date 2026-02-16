@@ -90,10 +90,10 @@ Ask est **indépendant** de allowlist ; allowlist peut être utilisée avec `alw
         host: "gateway",
         security: "allowlist",
         ask: "on-miss",
-        nodeId: "mac-laptop"
-      }
-    }
-  }
+        nodeId: "mac-laptop",
+      },
+    },
+  },
 }
 ```
 
@@ -104,8 +104,8 @@ Ask est **indépendant** de allowlist ; allowlist peut être utilisée avec `alw
   exec: {
     host: "sandbox",
     security: "deny",
-    ask: "on-miss"
-  }
+    ask: "on-miss",
+  },
 }
 ```
 
@@ -127,6 +127,7 @@ Ask est **indépendant** de allowlist ; allowlist peut être utilisée avec `alw
 - TTL court requests.
 
 Voir aussi :
+
 - [IPC macOS](/fr-FR/platforms/mac/xpc)
 - [Sécurité](/fr-FR/gateway/security)
 - [Configuration](/fr-FR/gateway/configuration)

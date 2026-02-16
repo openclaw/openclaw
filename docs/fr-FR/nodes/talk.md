@@ -70,6 +70,7 @@ openclaw talk status
 ```
 
 Voir aussi :
+
 - [Voice Wake](/fr-FR/platforms/mac/voicewake)
 - [Nœuds](/fr-FR/nodes/index)
 - [App macOS](/fr-FR/platforms/macos)

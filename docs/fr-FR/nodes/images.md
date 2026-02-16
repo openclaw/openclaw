@@ -55,6 +55,7 @@ Le canal WhatsApp fonctionne via **Baileys Web**. Ce document capture règles ge
 - Média oversize ou illisible → erreur claire dans logs et reply sautée.
 
 Voir aussi :
+
 - [Compréhension Média](/fr-FR/nodes/media-understanding)
 - [Envoi Message](/fr-FR/cli/message)
 - [Canaux](/fr-FR/channels/index)

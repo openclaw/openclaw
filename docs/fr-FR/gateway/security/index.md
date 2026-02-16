@@ -60,6 +60,7 @@ Utilisez lors audit accès ou décision quoi backup :
 - **Tokens Slack** : config/env (`channels.slack.*`)
 
 Voir aussi :
+
 - [Configuration](/fr-FR/gateway/configuration)
 - [Audit](/fr-FR/cli/security)
 - [Permissions](/fr-FR/platforms/mac/permissions)

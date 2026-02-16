@@ -93,13 +93,13 @@ test/
 ### Test Unit Basique
 
 ```typescript
-import { describe, it, expect } from 'vitest';
-import { myFunction } from '../src/my-module';
+import { describe, it, expect } from "vitest";
+import { myFunction } from "../src/my-module";
 
-describe('myFunction', () => {
-  it('devrait retourner résultat attendu', () => {
-    const result = myFunction('input');
-    expect(result).toBe('expected');
+describe("myFunction", () => {
+  it("devrait retourner résultat attendu", () => {
+    const result = myFunction("input");
+    expect(result).toBe("expected");
   });
 });
 ```
@@ -107,7 +107,7 @@ describe('myFunction', () => {
 ### Test Async
 
 ```typescript
-it('devrait gérer opérations async', async () => {
+it("devrait gérer opérations async", async () => {
   const result = await asyncFunction();
   expect(result).toBeDefined();
 });
@@ -116,10 +116,10 @@ it('devrait gérer opérations async', async () => {
 ### Test Mocks
 
 ```typescript
-import { vi } from 'vitest';
+import { vi } from "vitest";
 
-it('devrait mocker dependencies', () => {
-  const mockFn = vi.fn().mockReturnValue('mocked');
+it("devrait mocker dependencies", () => {
+  const mockFn = vi.fn().mockReturnValue("mocked");
   const result = functionUsingDep(mockFn);
   expect(mockFn).toHaveBeenCalled();
 });
@@ -177,6 +177,7 @@ pnpm test --run --reporter=verbose <test-file>
 ```
 
 Voir aussi :
+
 - [Testing](/fr-FR/help/testing)
 - [Debugging](/fr-FR/help/debugging)
 - [CI/CD](/fr-FR/help/cicd)

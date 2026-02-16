@@ -333,12 +333,12 @@ La passerelle surveille `~/.openclaw/openclaw.json` et applique les changements 
 
 ### Modes de rechargement
 
-| Mode                   | Comportement                                                                                   |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| **`hybrid`** (défaut)  | Applique à chaud les changements sûrs instantanément. Redémarre automatiquement pour les critiques. |
-| **`hot`**              | Applique à chaud les changements sûrs uniquement. Enregistre un avertissement quand un redémarrage est nécessaire — vous gérez. |
-| **`restart`**          | Redémarre la passerelle à chaque changement de configuration, sûr ou non.                      |
-| **`off`**              | Désactive la surveillance de fichier. Les changements prennent effet au prochain redémarrage manuel. |
+| Mode                  | Comportement                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **`hybrid`** (défaut) | Applique à chaud les changements sûrs instantanément. Redémarre automatiquement pour les critiques.                             |
+| **`hot`**             | Applique à chaud les changements sûrs uniquement. Enregistre un avertissement quand un redémarrage est nécessaire — vous gérez. |
+| **`restart`**         | Redémarre la passerelle à chaque changement de configuration, sûr ou non.                                                       |
+| **`off`**             | Désactive la surveillance de fichier. Les changements prennent effet au prochain redémarrage manuel.                            |
 
 ```json5
 {
@@ -352,16 +352,16 @@ La passerelle surveille `~/.openclaw/openclaw.json` et applique les changements 
 
 La plupart des champs s'appliquent à chaud sans interruption. En mode `hybrid`, les changements nécessitant un redémarrage sont gérés automatiquement.
 
-| Catégorie             | Champs                                                           | Redémarrage nécessaire ? |
-| --------------------- | ---------------------------------------------------------------- | ------------------------ |
-| Canaux                | `channels.*`, `web` (WhatsApp) — tous les canaux intégrés et extensions | Non                      |
-| Agent & modèles       | `agent`, `agents`, `models`, `routing`                           | Non                      |
-| Automatisation        | `hooks`, `cron`, `agent.heartbeat`                               | Non                      |
-| Sessions & messages   | `session`, `messages`                                            | Non                      |
-| Outils & médias       | `tools`, `browser`, `skills`, `audio`, `talk`                    | Non                      |
-| UI & divers           | `ui`, `logging`, `identity`, `bindings`                          | Non                      |
-| Serveur passerelle    | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)             | **Oui**                  |
-| Infrastructure        | `discovery`, `canvasHost`, `plugins`                             | **Oui**                  |
+| Catégorie           | Champs                                                                  | Redémarrage nécessaire ? |
+| ------------------- | ----------------------------------------------------------------------- | ------------------------ |
+| Canaux              | `channels.*`, `web` (WhatsApp) — tous les canaux intégrés et extensions | Non                      |
+| Agent & modèles     | `agent`, `agents`, `models`, `routing`                                  | Non                      |
+| Automatisation      | `hooks`, `cron`, `agent.heartbeat`                                      | Non                      |
+| Sessions & messages | `session`, `messages`                                                   | Non                      |
+| Outils & médias     | `tools`, `browser`, `skills`, `audio`, `talk`                           | Non                      |
+| UI & divers         | `ui`, `logging`, `identity`, `bindings`                                 | Non                      |
+| Serveur passerelle  | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)                    | **Oui**                  |
+| Infrastructure      | `discovery`, `canvasHost`, `plugins`                                    | **Oui**                  |
 
 <Note>
 `gateway.reload` et `gateway.remote` sont des exceptions — les modifier ne déclenche **pas** de redémarrage.

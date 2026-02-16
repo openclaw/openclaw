@@ -62,6 +62,7 @@ Tout accès caméra est gardé derrière **paramètres contrôlés utilisateur**
 Les captures caméra nécessitent que l'app soit en foreground.
 
 Voir aussi :
+
 - [Nœuds](/fr-FR/nodes/index)
 - [App iOS](/fr-FR/platforms/ios)
 - [App macOS](/fr-FR/platforms/macos)

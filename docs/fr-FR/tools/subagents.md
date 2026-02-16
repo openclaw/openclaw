@@ -89,11 +89,11 @@ Par défaut, sub-agents ne peuvent spawner propres sub-agents (`maxSpawnDepth: 1
 
 ### Niveaux depth
 
-| Depth | Forme clé session                            | Rôle                                           | Peut spawner?                |
-| ----- | -------------------------------------------- | ---------------------------------------------- | ---------------------------- |
-| 0     | `agent:<id>:main`                            | Agent principal                                | Toujours                     |
+| Depth | Forme clé session                            | Rôle                                            | Peut spawner?                     |
+| ----- | -------------------------------------------- | ----------------------------------------------- | --------------------------------- |
+| 0     | `agent:<id>:main`                            | Agent principal                                 | Toujours                          |
 | 1     | `agent:<id>:subagent:<uuid>`                 | Sub-agent (orchestrator quand depth 2 autorisé) | Seulement si `maxSpawnDepth >= 2` |
-| 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (worker leaf)                    | Jamais                       |
+| 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (worker leaf)                     | Jamais                            |
 
 ### Chaîne announce
 
@@ -166,11 +166,12 @@ Sub-agents reportent back via étape announce :
   task: "Analyser et optimiser ce codebase",
   label: "Orchestrator",
   agentId: "orchestrator",
-  model: "claude-sonnet-4.5"
+  model: "claude-sonnet-4.5",
 }
 ```
 
 Voir aussi :
+
 - [Sessions](/fr-FR/concepts/session)
 - [Boucle Agent](/fr-FR/concepts/agent-loop)
 - [Sandboxing](/fr-FR/gateway/sandboxing)

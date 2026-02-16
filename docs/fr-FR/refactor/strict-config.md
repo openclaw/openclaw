@@ -83,6 +83,7 @@ Tout le reste doit hard-fail avec : "Config invalid. Run `openclaw doctor --fix`
 - `src/cli/commands/doctor.ts` : flux migration + fix.
 
 Voir aussi :
+
 - [Doctor](/fr-FR/cli/doctor)
 - [Configuration](/fr-FR/gateway/configuration)
 - [Plugins](/fr-FR/tools/plugin)

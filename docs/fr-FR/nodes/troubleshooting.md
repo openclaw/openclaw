@@ -50,12 +50,12 @@ Si vous voyez `NODE_BACKGROUND_UNAVAILABLE`, amenez app node au foreground et re
 
 ## Matrice permissions
 
-| Capability                   | iOS                                     | Android                                      | App node macOS                | Code échec typique             |
-| ---------------------------- | --------------------------------------- | -------------------------------------------- | ----------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | Camera (+ mic pour clip audio)          | Camera (+ mic pour clip audio)               | Camera (+ mic pour clip audio)| `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Screen Recording (+ mic optionnel)      | Screen capture prompt (+ mic optionnel)      | Screen Recording              | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | While Using ou Always (dépend mode)     | Foreground/Background location basé sur mode | Permission location           | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (chemin node host)                  | n/a (chemin node host)                       | Approbations exec requises    | `SYSTEM_RUN_DENIED`            |
+| Capability                   | iOS                                 | Android                                      | App node macOS                 | Code échec typique             |
+| ---------------------------- | ----------------------------------- | -------------------------------------------- | ------------------------------ | ------------------------------ |
+| `camera.snap`, `camera.clip` | Camera (+ mic pour clip audio)      | Camera (+ mic pour clip audio)               | Camera (+ mic pour clip audio) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Screen Recording (+ mic optionnel)  | Screen capture prompt (+ mic optionnel)      | Screen Recording               | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | While Using ou Always (dépend mode) | Foreground/Background location basé sur mode | Permission location            | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (chemin node host)              | n/a (chemin node host)                       | Approbations exec requises     | `SYSTEM_RUN_DENIED`            |
 
 ## Pairing versus approbations
 
@@ -89,9 +89,11 @@ Si pairing OK mais `system.run` échoue, fixez approbations/allowlist exec.
 Activez logs verbose dans app :
 
 **iOS :**
+
 - Paramètres → Debug → Enable Verbose Logs
 
 **Android :**
+
 - Paramètres → Developer Options → Enable Verbose Logging
 
 Puis surveillez logs passerelle :
@@ -115,6 +117,7 @@ Paramètres → Reset Node Pairing
 App node redemandera pairing au prochain connect.
 
 Voir aussi :
+
 - [Nodes](/fr-FR/nodes/index)
 - [Approbations](/fr-FR/cli/approvals)
 - [Devices](/fr-FR/cli/devices)

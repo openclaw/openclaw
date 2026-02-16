@@ -51,6 +51,7 @@ title: "Menu Bar"
 - Quand idle : statut santé affiché.
 
 Voir aussi :
+
 - [App macOS](/fr-FR/platforms/macos)
 - [Santé](/fr-FR/platforms/mac/health)
 - [Status](/fr-FR/cli/status)

@@ -59,6 +59,7 @@ Séparément hygiène transcript, fichiers session réparés (si nécessaire) av
 - **Turn ordering** : Corrige ordre turns si nécessaire
 
 Voir aussi :
+
 - [Session Management](/fr-FR/reference/session-management-compaction)
 - [Providers](/fr-FR/providers/index)
 - [Configuration](/fr-FR/gateway/configuration)
