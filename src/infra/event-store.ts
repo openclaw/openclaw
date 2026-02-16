@@ -53,7 +53,7 @@ export type ClawEvent = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// State (encapsulated)
+// State (encapsulated — use resetForTest() in tests)
 // ─────────────────────────────────────────────────────────────────────────────
 
 type State = {
@@ -65,6 +65,18 @@ type State = {
 
 let state: State | null = null;
 
+/** Counters tracked separately to avoid TS narrowing issues in async closures */
+const counters = { disconnects: 0, publishFailures: 0 };
+
+/** Maximum consecutive publish failures before logging a warning */
+const MAX_PUBLISH_FAILURES_BEFORE_WARN = 10;
+
+/** Maximum consecutive disconnects before logging a critical warning */
+const MAX_DISCONNECTS_BEFORE_WARN = 5;
+
+/** Drain timeout in milliseconds for graceful shutdown */
+const DRAIN_TIMEOUT_MS = 5_000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers (minimal)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -72,26 +84,31 @@ let state: State | null = null;
 const EVENT_TYPE_MAP: Record<string, EventType> = {
   user: "msg.in",
   assistant: "msg.out",
-  tool: "tool.call",
-  lifecycle: "run.start",
   error: "run.error",
 };
 
-function toEventType(stream: string, data: Record<string, unknown>): EventType {
-  if (stream === "tool" && ("result" in data || "output" in data)) {
-    return "tool.result";
+/** Map event stream + payload data to the concrete event type. */
+export function toEventType(stream: string, data: Record<string, unknown>): EventType {
+  if (stream === "tool") {
+    return "result" in data || "output" in data ? "tool.result" : "tool.call";
   }
   if (stream === "lifecycle") {
     const phase = data?.phase;
-    if (phase === "end") return "run.end";
-    if (phase === "error") return "run.error";
+    if (phase === "end") {
+      return "run.end";
+    }
+    if (phase === "error") {
+      return "run.error";
+    }
     return "run.start";
   }
   return EVENT_TYPE_MAP[stream] ?? "msg.out";
 }
 
-function getAgent(sessionKey?: string): string {
-  if (!sessionKey || sessionKey === "main") return "main";
+export function getAgent(sessionKey?: string): string {
+  if (!sessionKey || sessionKey === "main") {
+    return "main";
+  }
   return sessionKey.split(":")[0] ?? "unknown";
 }
 
@@ -109,7 +126,9 @@ function log(msg: string, err?: unknown): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function publish(evt: AgentEventPayload): Promise<void> {
-  if (!state) return;
+  if (!state) {
+    return;
+  }
 
   const event: ClawEvent = {
     id: randomUUID(),
@@ -121,7 +140,19 @@ async function publish(evt: AgentEventPayload): Promise<void> {
   };
 
   const subject = `${state.config.subjectPrefix}.${event.agent}.${event.type.replace(".", "_")}`;
-  await state.js.publish(subject, sc.encode(JSON.stringify(event)));
+  try {
+    await state.js.publish(subject, sc.encode(JSON.stringify(event)));
+    counters.publishFailures = 0;
+  } catch (err) {
+    counters.publishFailures++;
+    if (
+      counters.publishFailures === 1 ||
+      counters.publishFailures % MAX_PUBLISH_FAILURES_BEFORE_WARN === 0
+    ) {
+      log(`Publish failed (${counters.publishFailures} consecutive failures)`, err);
+    }
+    throw err;
+  }
 }
 
 async function ensureStream(nc: NatsConnection, cfg: EventStoreConfig): Promise<void> {
@@ -175,24 +206,41 @@ export async function initEventStore(config: EventStoreConfig): Promise<void> {
     const safeUrl = url ? `${url.protocol}//${url.hostname}:${url.port || 4222}` : config.natsUrl;
     log(`Connected to ${safeUrl}`);
 
-    // Reconnection handler
+    // Reconnection handler with disconnect tracking
     (async () => {
       for await (const s of nc.status()) {
+        if (!state) {
+          break;
+        }
         if (s.type === Events.Reconnect) {
+          counters.disconnects = 0;
           log("Reconnected");
         } else if (s.type === Events.Disconnect) {
-          log("Disconnected, reconnecting...");
+          counters.disconnects++;
+          if (counters.disconnects <= MAX_DISCONNECTS_BEFORE_WARN) {
+            log(`Disconnected (attempt ${counters.disconnects}), reconnecting...`);
+          } else if (counters.disconnects % MAX_DISCONNECTS_BEFORE_WARN === 0) {
+            log(
+              `Persistent disconnect — ${counters.disconnects} consecutive failures, still reconnecting...`,
+            );
+          }
         }
       }
-    })().catch(() => {});
+    })().catch((err) => {
+      log("Status monitor exited unexpectedly", err);
+    });
 
     const js = nc.jetstream();
     await ensureStream(nc, config);
 
     const unsub = onAgentEvent((evt) => {
-      publish(evt).catch((e) => log("Publish failed", e));
+      publish(evt).catch(() => {
+        // Error already logged inside publish() with failure count tracking
+      });
     });
 
+    counters.disconnects = 0;
+    counters.publishFailures = 0;
     state = { nc, js, config, unsub };
     log("Ready");
   } catch (err) {
@@ -201,9 +249,28 @@ export async function initEventStore(config: EventStoreConfig): Promise<void> {
 }
 
 export async function shutdownEventStore(): Promise<void> {
-  if (!state) return;
+  if (!state) {
+    return;
+  }
   state.unsub();
-  await state.nc.drain();
+
+  // Drain with timeout to avoid hanging on shutdown
+  try {
+    await Promise.race([
+      state.nc.drain(),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error("Drain timeout")), DRAIN_TIMEOUT_MS),
+      ),
+    ]);
+  } catch (err) {
+    log("Drain timed out, forcing close", err);
+    try {
+      await state.nc.close();
+    } catch {
+      // Best-effort close
+    }
+  }
+
   state = null;
   log("Shutdown");
 }
@@ -215,9 +282,26 @@ export function isEventStoreConnected(): boolean {
 export function getEventStoreStatus(): {
   connected: boolean;
   stream: string | null;
+  disconnectCount: number;
+  publishFailures: number;
 } {
   return {
     connected: isEventStoreConnected(),
     stream: state?.config.streamName ?? null,
+    disconnectCount: counters.disconnects,
+    publishFailures: counters.publishFailures,
   };
+}
+
+/**
+ * Reset internal state for testing. Do not use in production.
+ * This allows tests to start clean without module reload tricks.
+ */
+export function resetForTest(): void {
+  if (state) {
+    state.unsub();
+  }
+  state = null;
+  counters.disconnects = 0;
+  counters.publishFailures = 0;
 }
