@@ -122,6 +122,8 @@ export class OpenClawApp extends LitElement {
   @state() theme: ThemeMode = this.settings.theme ?? "dark";
   @state() themeResolved: ResolvedTheme = "dark";
   @state() themeOrder: ThemeMode[] = this.buildThemeOrder(this.theme);
+  @state() mode: "basic" | "advanced" | "configure" = this.settings.mode ?? "advanced";
+  @state() tabVisibility: Record<string, boolean> = this.settings.tabVisibility ?? {};
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];

@@ -262,6 +262,10 @@ export function syncThemeWithSettings(host: SettingsHost) {
   applyResolvedTheme(host, resolveTheme(host.theme));
 }
 
+export function syncModeWithSettings(host: SettingsHost) {
+  host.mode = host.settings.mode ?? "advanced";
+}
+
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
   host.themeResolved = resolved;
   if (typeof document === "undefined") {
