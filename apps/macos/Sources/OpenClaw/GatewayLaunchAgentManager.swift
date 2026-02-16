@@ -15,8 +15,38 @@ enum GatewayLaunchAgentManager {
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
-        if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
-        return false
+        guard FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) else { return false }
+
+        // If the app is properly signed (Developer ID), the marker was left by a previous
+        // unsigned dev build. Auto-clear it so the gateway can start normally.
+        if self.isAppProperlySigned() {
+            self.logger.info("clearing stale disable-launchagent marker (app is properly signed)")
+            _ = self.setLaunchAgentWriteDisabled(false)
+            return false
+        }
+        return true
+    }
+
+    /// Returns true when the running app bundle has a Developer ID (or Apple Distribution)
+    /// signature — i.e. it is NOT ad-hoc signed.
+    private static func isAppProperlySigned() -> Bool {
+        let bundleURL = Bundle.main.bundleURL
+        guard bundleURL.pathExtension == "app" else { return false }
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, SecCSFlags(), &staticCode) == errSecSuccess,
+              let code = staticCode
+        else { return false }
+        var infoCF: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code, SecCSFlags(rawValue: kSecCSSigningInformation), &infoCF) == errSecSuccess,
+              let info = infoCF as? [String: Any],
+              let certs = info[kSecCodeInfoCertificates as String] as? [SecCertificate],
+              let leaf = certs.first
+        else { return false }
+        guard let summary = SecCertificateCopySubjectSummary(leaf) as String? else { return false }
+        return summary.hasPrefix("Developer ID Application:")
+            || summary.hasPrefix("Apple Development:")
+            || summary.hasPrefix("Apple Distribution:")
     }
 
     static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {

@@ -105,6 +105,7 @@ extension OnboardingView {
                     .foregroundColor(.secondary)
                     .opacity(0.8)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    .disabled(self.isInstallBusy)
                 }
             }
             .frame(minWidth: 80, alignment: .leading)
@@ -123,8 +124,8 @@ extension OnboardingView {
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isLocked)
-                    .opacity(isLocked ? 0.3 : 1)
+                    .disabled(isLocked || self.isInstallBusy)
+                    .opacity(isLocked || self.isInstallBusy ? 0.3 : 1)
                 }
             }
 

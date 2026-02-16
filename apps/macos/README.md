@@ -10,6 +10,7 @@ scripts/restart-mac.sh
 Options:
 
 ```bash
+scripts/restart-mac.sh --reset-onboarding  # clear onboarding state and relaunch
 scripts/restart-mac.sh --no-sign   # fastest dev; ad-hoc signing (TCC permissions do not stick)
 scripts/restart-mac.sh --sign      # force code signing (requires cert)
 ```

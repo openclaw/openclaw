@@ -11,6 +11,8 @@ Docs: https://docs.openclaw.ai
 - iOS/Talk: add a `Background Listening` toggle that keeps Talk Mode active while the app is backgrounded (off by default for battery safety). Thanks @zeulewan.
 - iOS/Talk: harden barge-in behavior by disabling interrupt-on-speech when output route is built-in speaker/receiver, reducing false interruptions from local TTS bleed-through. Thanks @zeulewan.
 - Telegram/Agents: add inline button `style` support (`primary|success|danger`) across message tool schema, Telegram action parsing, send pipeline, and runtime prompt guidance. (#18241) Thanks @obviyus.
+- macOS: add in-app CLI + gateway install page to onboarding — installs the standalone CLI (`~/.openclaw`), starts the gateway via launchd, and auto-selects "This Mac" connection mode. Includes a "Reset Installation" button for troubleshooting broken installs.
+- macOS: add `--reset-onboarding` and `--full-reset` flags to `scripts/restart-mac.sh` for dev quick-iteration on onboarding flow.
 
 ### Fixes
 
@@ -36,11 +38,16 @@ Docs: https://docs.openclaw.ai
 - iOS/Gateway: stabilize connect/discovery state handling, add onboarding reset recovery in Settings, and fix iOS gateway-controller coverage for command-surface and last-connection persistence behavior. (#18164) Thanks @mbelinky.
 - iOS/Onboarding: add QR-first onboarding wizard with setup-code deep link support, pairing/auth issue guidance, and device-pair QR generation improvements for Telegram/Web/TUI fallback flows. (#18162) Thanks @mbelinky and @Marvae.
 - iOS/Location: restore the significant location monitor implementation (service hooks + protocol surface + ATS key alignment) after merge drift so iOS builds compile again. (#18260) Thanks @ngutman.
+- macOS: fix gateway startup getting stuck during onboarding by removing async subprocess calls (`lsof`) from the polling loop that competed with `@MainActor` process manager tasks, and handle "failed but listener present" state as success for post-reset auth-pending scenarios.
+- macOS: preserve `gateway.mode` in config when connection mode is unconfigured, preventing post-reset gateway startup failures.
+- macOS: use calendar versioning (same year = compatible) for gateway version compatibility checks.
+- macOS: auto-clear stale `disable-launchagent` marker when the app is properly code-signed, preventing gateway from failing to start after upgrading from unsigned dev builds.
+- macOS: prefer standalone `openclaw` binary over `pnpm` in command resolution to avoid triggering workspace rebuilds when CLI was installed via `install-cli.sh`.
+- macOS: filter shell profile noise from CLI install error messages to show actionable errors.
 
 ## 2026.2.15
 
 ### Changes
-
 - Discord: unlock rich interactive agent prompts with Components v2 (buttons, selects, modals, and attachment-backed file blocks) so for native interaction through Discord. Thanks @thewilloftheshadow.
 - Discord: components v2 UI + embeds passthrough + exec approval UX refinements (CV2 containers, button layout, Discord-forwarding skip). Thanks @thewilloftheshadow.
 - Plugins: expose `llm_input` and `llm_output` hook payloads so extensions can observe prompt/input context and model output usage details. (#16724) Thanks @SecondThread.

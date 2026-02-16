@@ -123,6 +123,16 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func statusIsReadyForRunningAndAttached() {
+        #expect(GatewayProcessManager.Status.running(details: nil).isReady)
+        #expect(GatewayProcessManager.Status.running(details: "pid 123").isReady)
+        #expect(GatewayProcessManager.Status.attachedExisting(details: nil).isReady)
+        #expect(GatewayProcessManager.Status.attachedExisting(details: "port 18789").isReady)
+        #expect(!GatewayProcessManager.Status.stopped.isReady)
+        #expect(!GatewayProcessManager.Status.starting.isReady)
+        #expect(!GatewayProcessManager.Status.failed("timeout").isReady)
+    }
+
     @Test func clearsLastFailureWhenHealthSucceeds() async {
         let session = FakeWebSocketSession()
         let url = URL(string: "ws://example.invalid")!

@@ -61,6 +61,12 @@ struct OnboardingView: View {
     @State var isRequesting = false
     @State var installingCLI = false
     @State var cliStatus: String?
+    @State var startGatewayAfterInstall = true
+    @State var gatewayInstallStatus: String?
+    @State var installingGateway = false
+    @State var gatewayStarted = false
+    @State var resettingInstallation = false
+    @State var showResetConfirmation = false
     @State var copied = false
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
@@ -118,6 +124,7 @@ struct OnboardingView: View {
     }()
 
     let permissionsPageIndex = 5
+    let installPageIndex = 10
     static func pageOrder(
         for mode: AppState.ConnectionMode,
         showOnboardingChat: Bool) -> [Int]
@@ -126,11 +133,11 @@ struct OnboardingView: View {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
+            showOnboardingChat ? [0, 10, 1, 5, 8, 9] : [0, 10, 1, 5, 9]
         case .unconfigured:
-            showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
+            showOnboardingChat ? [0, 10, 1, 8, 9] : [0, 10, 1, 9]
         case .local:
-            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            showOnboardingChat ? [0, 10, 1, 3, 5, 8, 9] : [0, 10, 1, 3, 5, 9]
         }
     }
 
@@ -162,8 +169,12 @@ struct OnboardingView: View {
         self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
     }
 
+    var isInstallBusy: Bool {
+        self.installingCLI || self.installingGateway || self.resettingInstallation
+    }
+
     var canAdvance: Bool {
-        !self.isWizardBlocking
+        !self.isWizardBlocking && !self.isInstallBusy
     }
 
     var devLinkCommand: String {

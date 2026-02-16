@@ -38,8 +38,8 @@ struct Semver: Comparable, CustomStringConvertible, Sendable {
     }
 
     func compatible(with required: Semver) -> Bool {
-        // Same major and not older than required.
-        self.major == required.major && self >= required
+        // Calendar versioning (YYYY.M.D): same year is compatible.
+        self.major == required.major
     }
 }
 

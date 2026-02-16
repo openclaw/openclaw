@@ -35,6 +35,9 @@ extension OnboardingView {
         view.cliInstalled = true
         view.cliInstallLocation = "/usr/local/bin/openclaw"
         view.cliStatus = "Installed"
+        view.startGatewayAfterInstall = true
+        view.gatewayStarted = true
+        view.gatewayInstallStatus = "Gateway running"
         view.workspacePath = "/tmp/openclaw"
         view.workspaceStatus = "Saved workspace"
         view.anthropicAuthPKCE = AnthropicOAuth.PKCE(verifier: "verifier", challenge: "challenge")
@@ -52,6 +55,7 @@ extension OnboardingView {
         _ = view.wizardPage()
         _ = view.permissionsPage()
         _ = view.cliPage()
+        _ = view.installPage()
         _ = view.workspacePage()
         _ = view.onboardingChatPage()
         _ = view.readyPage()

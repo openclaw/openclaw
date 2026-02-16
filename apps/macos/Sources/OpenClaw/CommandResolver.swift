@@ -262,12 +262,14 @@ enum CommandResolver {
                     subcommand: subcommand,
                     extraArgs: extraArgs)
             }
+            // Prefer the standalone openclaw binary over pnpm to avoid triggering
+            // workspace rebuilds when the CLI was installed via install-cli.sh.
+            if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
+                return [openclawPath, subcommand] + extraArgs
+            }
             if let pnpm = self.findExecutable(named: "pnpm", searchPaths: searchPaths) {
                 // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
                 return [pnpm, "--silent", "openclaw", subcommand] + extraArgs
-            }
-            if let openclawPath = self.openclawExecutable(searchPaths: searchPaths) {
-                return [openclawPath, subcommand] + extraArgs
             }
 
             let missingEntry = """

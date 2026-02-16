@@ -21,7 +21,7 @@ extension OnboardingView {
                         workspacePath: self.workspacePath)
                 }
             }
-            .task {
+            .task(id: self.state.connectionMode) {
                 await self.onboardingWizard.startIfNeeded(
                     mode: self.state.connectionMode,
                     workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)
@@ -51,6 +51,16 @@ private struct OnboardingWizardCardContent: View {
         return .waiting
     }
 
+    private var startingDetail: String {
+        let attempt = self.wizard.gatewayStartAttempts
+        let status = GatewayProcessManager.shared.status.label
+        let hostName = Host.current().localizedName ?? "This Mac"
+        if attempt > 1 {
+            return "\(hostName) — attempt \(attempt) of \(self.wizard.maxGatewayStartAttempts) — \(status)"
+        }
+        return "Connecting to \(hostName)…"
+    }
+
     var body: some View {
         switch self.state {
         case let .error(error):
@@ -70,10 +80,15 @@ private struct OnboardingWizardCardContent: View {
             }
             .buttonStyle(.borderedProminent)
         case .starting:
-            HStack(spacing: 8) {
+            VStack(spacing: 12) {
                 ProgressView()
-                Text("Starting wizard…")
+                    .controlSize(.regular)
+                Text("Starting gateway…")
+                    .font(.headline)
+                Text(self.startingDetail)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
         case let .step(step):
             OnboardingWizardStepView(

@@ -464,10 +464,10 @@ final class AppState {
                     gateway["mode"] = desiredMode
                     changed = true
                 }
-            } else if currentMode != nil {
-                gateway.removeValue(forKey: "mode")
-                changed = true
             }
+            // When connectionMode is .unconfigured, preserve whatever mode is already
+            // in the config (e.g. "local" set by ensureGatewayModeLocal during onboarding).
+            // Actively removing gateway.mode would break post-reset gateway startup.
 
             if connectionMode == .remote {
                 var remote = gateway["remote"] as? [String: Any] ?? [:]

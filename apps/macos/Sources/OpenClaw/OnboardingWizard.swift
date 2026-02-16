@@ -36,10 +36,12 @@ final class OnboardingWizardModel {
     private(set) var errorMessage: String?
     var isStarting = false
     var isSubmitting = false
-    private var lastStartMode: AppState.ConnectionMode?
-    private var lastStartWorkspace: String?
+    private(set) var lastStartMode: AppState.ConnectionMode?
+    private(set) var lastStartWorkspace: String?
     private var restartAttempts = 0
     private let maxRestartAttempts = 1
+    private(set) var gatewayStartAttempts = 0
+    let maxGatewayStartAttempts = 3
 
     var isComplete: Bool {
         self.status == "done"
@@ -57,13 +59,19 @@ final class OnboardingWizardModel {
         self.isStarting = false
         self.isSubmitting = false
         self.restartAttempts = 0
+        self.gatewayStartAttempts = 0
         self.lastStartMode = nil
         self.lastStartWorkspace = nil
     }
 
     func startIfNeeded(mode: AppState.ConnectionMode, workspace: String? = nil) async {
         guard self.sessionId == nil, !self.isStarting else { return }
-        guard mode == .local else { return }
+        // If mode isn't .local yet but the gateway is already running locally
+        // (e.g. started on the Install page), proceed as local.
+        if mode != .local {
+            let gwStatus = GatewayProcessManager.shared.status
+            guard gwStatus.isReady else { return }
+        }
         if self.shouldSkipWizard() {
             self.sessionId = nil
             self.currentStep = nil
@@ -75,15 +83,39 @@ final class OnboardingWizardModel {
         self.errorMessage = nil
         self.lastStartMode = mode
         self.lastStartWorkspace = workspace
+        self.gatewayStartAttempts = 0
         defer { self.isStarting = false }
 
         do {
-            GatewayProcessManager.shared.setActive(true)
-            if await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12) == false {
-                throw NSError(
-                    domain: "Gateway",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Gateway did not become ready. Check that it is running."])
+            // If the gateway is already running (e.g. started on the Install page), skip the
+            // startup wait entirely.
+            let currentStatus = GatewayProcessManager.shared.status
+            let alreadyReady = currentStatus.isReady
+            if !alreadyReady {
+                GatewayProcessManager.shared.setActive(true)
+                // Wait for the process manager to finish its startup task (command resolution,
+                // launchd plist install, health check) rather than doing a parallel health poll
+                // that races against it. Auto-retry on failure to handle cold starts.
+                var ready = false
+                while !ready, self.gatewayStartAttempts < self.maxGatewayStartAttempts {
+                    self.gatewayStartAttempts += 1
+                    ready = await self.waitForGatewayStatus(timeout: 30)
+                    if !ready, self.gatewayStartAttempts < self.maxGatewayStartAttempts {
+                        onboardingWizardLogger.info(
+                            "gateway not ready, retrying (\(self.gatewayStartAttempts)/\(self.maxGatewayStartAttempts))")
+                        // Kick the process manager to retry.
+                        GatewayProcessManager.shared.setActive(true)
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                }
+                if !ready {
+                    let reason = GatewayProcessManager.shared.lastFailureReason
+                    let message = reason ?? "Gateway did not become ready. Check that it is running."
+                    throw NSError(
+                        domain: "Gateway",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: message])
+                }
             }
             var params: [String: AnyCodable] = ["mode": AnyCodable("local")]
             if let workspace, !workspace.isEmpty {
@@ -189,6 +221,27 @@ final class OnboardingWizardModel {
         self.errorMessage = "Wizard session lost. Restarting…"
         Task { await self.startIfNeeded(mode: mode, workspace: self.lastStartWorkspace) }
         return true
+    }
+
+    /// Wait for GatewayProcessManager to leave the `.starting` state and report
+    /// `.running` / `.attachedExisting`, or time out. This avoids a redundant
+    /// health-poll loop that races against the actual startup task.
+    private func waitForGatewayStatus(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            switch GatewayProcessManager.shared.status {
+            case .running, .attachedExisting:
+                return true
+            case .failed:
+                return false
+            case .stopped:
+                // Gateway was stopped externally; no point waiting.
+                return false
+            case .starting:
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+        }
+        return false
     }
 
     private func shouldSkipWizard() -> Bool {

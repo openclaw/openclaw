@@ -35,10 +35,10 @@ enum CLIInstaller {
     }
 
     static func install(statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async {
-        let expected = GatewayEnvironment.expectedGatewayVersionString() ?? "latest"
         let prefix = Self.installPrefix()
         await statusHandler("Installing openclaw CLI…")
-        let cmd = self.installScriptCommand(version: expected, prefix: prefix)
+
+        let cmd = self.installScriptCommand(version: "latest", prefix: prefix)
         let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: nil, timeout: 900)
 
         if response.success {
@@ -49,15 +49,31 @@ enum CLIInstaller {
             return
         }
 
+        await statusHandler("Install failed: \(self.cleanErrorMessage(response))")
+    }
+
+    private static func cleanErrorMessage(_ response: ShellExecutor.ShellResult) -> String {
+        // Prefer structured JSON error events from the install script.
         let parsed = self.parseInstallEvents(response.stdout)
         if let error = parsed.last(where: { $0.event == "error" })?.message {
-            await statusHandler("Install failed: \(error)")
-            return
+            return error
         }
-
-        let detail = response.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallback = response.errorMessage ?? "install failed"
-        await statusHandler("Install failed: \(detail.isEmpty ? fallback : detail)")
+        // Filter out shell profile noise (lines from .bash_profile, .zshrc, etc.)
+        let lines = response.stderr.components(separatedBy: CharacterSet.newlines)
+        let relevantLines = lines
+            .filter { line in
+                let l = line.lowercased()
+                if l.contains("npm err") || l.contains("npm error") { return true }
+                if l.contains("openclaw") || l.contains("install") { return true }
+                if l.contains("error") && !l.contains("bash_profile") && !l.contains("zshrc")
+                    && !l.contains("profile:")
+                { return true }
+                return false
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        if !relevantLines.isEmpty { return relevantLines }
+        return response.errorMessage ?? "install failed"
     }
 
     private static func installPrefix() -> String {

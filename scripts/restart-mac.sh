@@ -21,6 +21,8 @@ AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
 ATTACH_ONLY=1
+RESET_ONBOARDING=0
+FULL_RESET=0
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -84,13 +86,17 @@ for arg in "$@"; do
     --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
     --attach-only) ATTACH_ONLY=1 ;;
     --no-attach-only) ATTACH_ONLY=0 ;;
+    --reset-onboarding) RESET_ONBOARDING=1 ;;
+    --full-reset) FULL_RESET=1; RESET_ONBOARDING=1 ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only] [--reset-onboarding] [--full-reset]"
       log "  --wait    Wait for other restart to complete instead of exiting"
       log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
       log "  --attach-only    Launch app with --attach-only (skip launchd install)"
       log "  --no-attach-only Launch app without attach-only override"
+      log "  --reset-onboarding Clear onboarding/UI state (UserDefaults) before rebuild"
+      log "  --full-reset Reset everything (onboarding, gateway, CLI, config) — fresh state"
       log ""
       log "Env:"
       log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
@@ -123,6 +129,11 @@ fi
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
   log "==> Using --attach-only (skip launchd install)"
 fi
+if [[ "$FULL_RESET" -eq 1 ]]; then
+  log "==> Using --full-reset (wiping all state)"
+elif [[ "$RESET_ONBOARDING" -eq 1 ]]; then
+  log "==> Using --reset-onboarding (clearing UserDefaults)"
+fi
 
 acquire_lock
 
@@ -153,8 +164,38 @@ log "==> Killing existing OpenClaw instances"
 kill_all_openclaw
 stop_launch_agent
 
-# Bundle Gateway-hosted Canvas A2UI assets.
-run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
+# Full reset: remove gateway service, CLI, and all config.
+if [[ "$FULL_RESET" -eq 1 ]]; then
+  log "==> bootout gateway service"
+  launchctl bootout gui/"$UID"/ai.openclaw.gateway 2>/dev/null || true
+  log "==> remove gateway plist"
+  rm -f "${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist"
+  log "==> remove ~/.openclaw"
+  rm -rf "${HOME}/.openclaw"
+  log "==> reset onboarding state"
+  defaults delete ai.openclaw 2>/dev/null || true
+elif [[ "$RESET_ONBOARDING" -eq 1 ]]; then
+  log "==> reset onboarding state"
+  defaults delete ai.openclaw 2>/dev/null || true
+fi
+
+# When only resetting state (no other build flags), skip the full rebuild.
+SKIP_BUILD=0
+if [[ "$RESET_ONBOARDING" -eq 1 || "$FULL_RESET" -eq 1 ]]; then
+  # If user also passed --no-sign or --sign, they want a rebuild too.
+  if [[ "$AUTO_DETECT_SIGNING" -eq 1 && "$NO_SIGN" -eq 0 && "$SIGN" -eq 0 ]]; then
+    SKIP_BUILD=1
+  fi
+fi
+
+if [[ "$SKIP_BUILD" -eq 1 ]]; then
+  log "==> State reset complete (no rebuild, no launch)"
+  exit 0
+fi
+
+{
+  # Bundle Gateway-hosted Canvas A2UI assets.
+  run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
@@ -185,6 +226,7 @@ fi
 
 # 3) Package app (no embedded gateway).
 run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
+}
 
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then

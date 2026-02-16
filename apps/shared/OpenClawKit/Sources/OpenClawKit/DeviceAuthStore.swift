@@ -64,6 +64,12 @@ public enum DeviceAuthStore {
         writeStore(store)
     }
 
+    /// Remove all cached device auth tokens (e.g. after a gateway reset).
+    public static func clearAllTokens() {
+        let url = fileURL()
+        try? FileManager.default.removeItem(at: url)
+    }
+
     private static func normalizeRole(_ role: String) -> String {
         role.trimmingCharacters(in: .whitespacesAndNewlines)
     }

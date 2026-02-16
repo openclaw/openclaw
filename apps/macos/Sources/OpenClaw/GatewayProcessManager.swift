@@ -13,6 +13,13 @@ final class GatewayProcessManager {
         case attachedExisting(details: String?)
         case failed(String)
 
+        var isReady: Bool {
+            switch self {
+            case .running, .attachedExisting: return true
+            default: return false
+            }
+        }
+
         var label: String {
             switch self {
             case .stopped: return "Stopped"
@@ -220,6 +227,20 @@ final class GatewayProcessManager {
                 }
 
                 if hasListener {
+                    // Gateway is listening but the authenticated health check failed.
+                    // If it's an auth error (device_token_mismatch after a reset), the
+                    // gateway IS running — pairing will resolve via the control channel.
+                    // Mark as running so callers don't treat it as a startup failure.
+                    if self.isGatewayAuthFailure(error) {
+                        let details = instanceText ?? "port \(port)"
+                        self.existingGatewayDetails = details
+                        self.clearLastFailure()
+                        self.status = .attachedExisting(details: details)
+                        self.appendLog("[gateway] existing gateway on port \(port) (auth pending)\n")
+                        self.logger.info("gateway attach auth pending, marking as existing")
+                        self.refreshControlChannelIfNeeded(reason: "attach existing (auth pending)")
+                        return true
+                    }
                     let reason = self.describeAttachFailure(error, port: port, instance: instance)
                     self.existingGatewayDetails = instanceText
                     self.status = .failed(reason)
@@ -333,11 +354,13 @@ final class GatewayProcessManager {
         }
 
         // Best-effort: wait for the gateway to accept connections.
-        let deadline = Date().addingTimeInterval(6)
+        // Use a port-level check (TCP connect) rather than an authenticated health
+        // request because after a full reset the device token may not be paired yet.
+        // Fresh installs (cold Node start after launchd plist install) can take 10-15s.
+        let deadline = Date().addingTimeInterval(15)
         while Date() < deadline {
             if !self.desiredActive { return }
-            do {
-                _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+            if await PortGuardian.shared.isListening(port: port) {
                 let instance = await PortGuardian.shared.describe(port: port)
                 let details = instance.map { "pid \($0.pid)" }
                 self.clearLastFailure()
@@ -346,9 +369,8 @@ final class GatewayProcessManager {
                 self.refreshControlChannelIfNeeded(reason: "gateway started")
                 self.refreshLog()
                 return
-            } catch {
-                try? await Task.sleep(nanoseconds: 400_000_000)
             }
+            try? await Task.sleep(nanoseconds: 400_000_000)
         }
 
         self.status = .failed("Gateway did not start in time")

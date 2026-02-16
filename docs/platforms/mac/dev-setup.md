@@ -41,19 +41,60 @@ For dev run modes, signing flags, and Team ID troubleshooting, see the macOS app
 
 ## 3. Install the CLI
 
-The macOS app expects a global `openclaw` CLI install to manage background tasks.
+The macOS app needs the `openclaw` CLI to manage the gateway.
 
-**To install it (recommended):**
+**Option A: Via onboarding (recommended)**
 
-1. Open the OpenClaw app.
-2. Go to the **General** settings tab.
-3. Click **"Install CLI"**.
+Launch the app — the onboarding "Install OpenClaw" page runs the standalone installer automatically.
 
-Alternatively, install it manually:
+**Option B: Standalone installer**
 
 ```bash
-npm install -g openclaw@<version>
+curl -fsSL https://openclaw.ai/install-cli.sh | bash
 ```
+
+Installs to `~/.openclaw/` (Node.js + CLI, no sudo). The binary is at `~/.openclaw/bin/openclaw`.
+
+**Option C: Global npm install (if you already have Node.js 22+)**
+
+```bash
+npm install -g openclaw@latest
+```
+
+> **Note:** The standalone installer does not add `~/.openclaw/bin` to your PATH. The macOS app finds the binary directly. To use it from Terminal:
+>
+> ```bash
+> echo 'export PATH="$HOME/.openclaw/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+> ```
+
+## 4. Run Tests
+
+```bash
+cd apps/macos && swift test
+```
+
+## 5. Reset App State
+
+### Reset Onboarding
+
+Re-run onboarding without removing the CLI or gateway config (useful after UI/onboarding changes):
+
+```bash
+scripts/restart-mac.sh --reset-onboarding
+```
+
+This kills the running app and clears onboarding/UI state (UserDefaults). Launch the app manually afterward to re-run onboarding.
+It does **not** remove `~/.openclaw/openclaw.json` (gateway config persists across resets).
+
+### Full Reset
+
+Wipe everything (onboarding, gateway config, CLI install) and start the app from scratch:
+
+```bash
+scripts/restart-mac.sh --full-reset
+```
+
+This kills the running app, removes the gateway service, `~/.openclaw`, and onboarding state. Launch the app manually afterward — it will behave as if on a brand new Mac.
 
 ## Troubleshooting
 
@@ -94,8 +135,8 @@ If the app crashes when you try to allow **Speech Recognition** or **Microphone*
 If the gateway status stays on "Starting...", check if a zombie process is holding the port:
 
 ```bash
-openclaw gateway status
-openclaw gateway stop
+~/.openclaw/bin/openclaw gateway status
+~/.openclaw/bin/openclaw gateway stop
 
 # If you’re not using a LaunchAgent (dev mode / manual runs), find the listener:
 lsof -nP -iTCP:18789 -sTCP:LISTEN

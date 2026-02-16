@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawIPC
+import OpenClawKit
 
 extension OnboardingView {
     @MainActor
@@ -32,6 +33,15 @@ extension OnboardingView {
         let shouldMonitor = isConnectionPage
         if shouldMonitor, !self.monitoringDiscovery {
             self.monitoringDiscovery = true
+            // If the CLI is installed and gateway was started (or user kept the toggle on),
+            // default to "This Mac".
+            if self.cliInstalled, self.startGatewayAfterInstall, self.state.connectionMode != .local {
+                self.selectLocalGateway()
+            }
+            // If config says local but CLI is gone, reset to unconfigured.
+            if !self.cliInstalled, self.state.connectionMode == .local {
+                self.state.connectionMode = .unconfigured
+            }
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 guard self.monitoringDiscovery else { return }
@@ -93,17 +103,174 @@ extension OnboardingView {
     func installCLI() async {
         guard !self.installingCLI else { return }
         self.installingCLI = true
-        defer { installingCLI = false }
+        self.gatewayStarted = false
+        self.gatewayInstallStatus = nil
         await CLIInstaller.install { message in
             self.cliStatus = message
         }
+        self.installingCLI = false
         self.refreshCLIStatus()
+        if self.cliInstalled, self.startGatewayAfterInstall {
+            await self.installAndStartGateway()
+        }
+    }
+
+    func installAndStartGateway() async {
+        guard !self.installingGateway else { return }
+        self.installingGateway = true
+        self.gatewayStarted = false
+        defer { self.installingGateway = false }
+
+        // Pre-select "This Mac" so the Gateway page shows it selected and
+        // AppState.syncGatewayConfigIfNeeded() writes gateway.mode=local
+        // to the config file (the gateway refuses to start without it).
+        if self.state.connectionMode != .local {
+            self.selectLocalGateway()
+        }
+
+        // syncGatewayConfigIfNeeded() defers its write inside a Task, so after a
+        // full reset the config file may not exist yet when the gateway starts.
+        // Write gateway.mode=local directly so the gateway finds it immediately.
+        OpenClawConfigFile.updateGatewayDict { gateway in
+            gateway["mode"] = "local"
+        }
+
+        let mgr = GatewayProcessManager.shared
+        let port = GatewayEnvironment.gatewayPort()
+
+        // If the gateway is already running (e.g. reinstall, or after a
+        // --reset-onboarding), stop it first so the restarted process picks up
+        // the freshly installed CLI binary.
+        var alreadyRunning = mgr.status.isReady
+        if !alreadyRunning {
+            alreadyRunning = await PortGuardian.shared.isListening(port: port)
+        }
+        if alreadyRunning {
+            self.gatewayInstallStatus = "Restarting gateway…"
+            mgr.stop()
+            // Give launchd a moment to tear down the old process.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+
+        // Trigger gateway start — this installs the launchd plist and attempts
+        // a 15s health check internally. The plist has KeepAlive=true so launchd
+        // will keep retrying even if the first cold start is slow.
+        self.gatewayInstallStatus = "Starting gateway…"
+        mgr.setActive(true)
+
+        // Wait for the process manager to resolve. It does its own port checks
+        // internally (attachExistingGatewayIfAvailable + enableLaunchdGateway).
+        // We only read mgr.status here (no async subprocess calls) so the
+        // counter ticks smoothly without main-actor contention.
+        let startTime = Date()
+        let deadline = startTime.addingTimeInterval(60)
+        while Date() < deadline {
+            // Update elapsed counter on every iteration so the UI feels alive.
+            let secs = Int(Date().timeIntervalSince(startTime))
+            self.gatewayInstallStatus = "Starting gateway… (\(secs)s)"
+
+            // Check if the process manager already marked it ready.
+            if mgr.status.isReady {
+                self.gatewayStarted = true
+                self.gatewayInstallStatus = "Gateway running"
+                return
+            }
+
+            // The process manager may report .failed even when a listener is
+            // present (e.g. health check fails due to pending device pairing).
+            // For onboarding, a listener on the port is good enough — auth
+            // will resolve via the control channel after pairing.
+            if case .failed = mgr.status,
+               mgr.existingGatewayDetails != nil
+            {
+                self.gatewayStarted = true
+                self.gatewayInstallStatus = "Gateway running"
+                mgr.clearLastFailure()
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+
+        // Final fallback: the process manager timed out but the port may have
+        // come up after its internal deadline. One last TCP check.
+        if await PortGuardian.shared.isListening(port: port) {
+            self.gatewayStarted = true
+            self.gatewayInstallStatus = "Gateway running"
+            mgr.clearLastFailure()
+            return
+        }
+
+        let reason = mgr.lastFailureReason
+        self.gatewayInstallStatus = "Gateway failed to start: \(reason ?? "timed out")"
     }
 
     func refreshCLIStatus() {
         let installLocation = CLIInstaller.installedLocation()
         self.cliInstallLocation = installLocation
         self.cliInstalled = installLocation != nil
+    }
+
+    func refreshGatewayStatus() {
+        switch GatewayProcessManager.shared.status {
+        case .running, .attachedExisting:
+            self.gatewayStarted = true
+            self.gatewayInstallStatus = "Gateway running"
+        default:
+            break
+        }
+    }
+
+    /// Performs a full reset of the OpenClaw installation:
+    /// stops the gateway, removes launchd service, wipes ~/.openclaw,
+    /// clears device auth tokens, and resets UI state.
+    func resetInstallation() async {
+        guard !self.resettingInstallation else { return }
+        self.resettingInstallation = true
+        defer { self.resettingInstallation = false }
+
+        // 1. Stop the gateway process manager.
+        let mgr = GatewayProcessManager.shared
+        mgr.stop()
+
+        // 2. Bootout the gateway launchd service and remove its plist.
+        let bundlePath = Bundle.main.bundleURL.path
+        let port = GatewayEnvironment.gatewayPort()
+        _ = await GatewayLaunchAgentManager.set(enabled: false, bundlePath: bundlePath, port: port)
+
+        // Also bootout directly in case the CLI uninstall didn't cover it.
+        await Task.detached(priority: .utility) {
+            let process = Process()
+            process.launchPath = "/bin/launchctl"
+            process.arguments = ["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+        }.value
+
+        // Remove the gateway plist file directly.
+        let plistPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+        try? FileManager.default.removeItem(at: plistPath)
+
+        // 3. Remove ~/.openclaw (CLI, config, sessions, credentials, etc.)
+        let openclawDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openclaw")
+        try? FileManager.default.removeItem(at: openclawDir)
+
+        // 4. Clear device auth tokens (persisted outside ~/.openclaw).
+        DeviceAuthStore.clearAllTokens()
+
+        // 5. Reset UI state so the Install page is ready for a fresh install.
+        self.cliInstalled = false
+        self.cliInstallLocation = nil
+        self.cliStatus = nil
+        self.gatewayStarted = false
+        self.gatewayInstallStatus = nil
+        self.installingGateway = false
+        self.installingCLI = false
+        mgr.clearLog()
     }
 
     func refreshLocalGatewayProbe() async {

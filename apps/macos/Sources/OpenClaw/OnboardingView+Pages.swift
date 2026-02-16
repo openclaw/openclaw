@@ -24,6 +24,8 @@ extension OnboardingView {
             self.onboardingChatPage()
         case 9:
             self.readyPage()
+        case 10:
+            self.installPage()
         default:
             EmptyView()
         }
@@ -588,6 +590,243 @@ extension OnboardingView {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    func installPage() -> some View {
+        self.onboardingPage {
+            Text("Install OpenClaw")
+                .font(.largeTitle.weight(.semibold))
+            Text(
+                "OpenClaw needs its CLI installed on this Mac to run the gateway.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+                .fixedSize(horizontal: false, vertical: true)
+
+            self.onboardingCard(spacing: 12, padding: 14) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Install OpenClaw on this Mac")
+                                .font(.callout.weight(.semibold))
+                            Text(
+                                self.cliInstalled
+                                    ? "Installed at \(self.cliInstallLocation ?? "~/.openclaw")"
+                                    : "Installs a user-space Node 22+ runtime and the CLI.")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
+                        if self.cliInstalled {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Image(systemName: "arrow.down.circle")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(self.cliInstalled ? Color.green.opacity(0.08) : Color.clear))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(
+                                self.cliInstalled ? Color.green.opacity(0.3) : Color.clear,
+                                lineWidth: 1))
+
+                    HStack(spacing: 12) {
+                        Button {
+                            Task { await self.installCLI() }
+                        } label: {
+                            let title = self.cliInstalled ? "Reinstall" : "Install"
+                            ZStack {
+                                Text(title)
+                                    .opacity(self.installingCLI ? 0 : 1)
+                                if self.installingCLI {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                }
+                            }
+                            .frame(minWidth: 100)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.installingCLI || self.installingGateway)
+
+                        if self.cliInstalled {
+                            Label("Installed", systemImage: "checkmark.circle.fill")
+                                .font(.callout)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    .padding(.leading, 10)
+
+                    if let cliStatus {
+                        Text(cliStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 10)
+                    }
+
+                    Divider().padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("What this does")
+                            .font(.callout.weight(.semibold))
+                        Text(AttributedString("curl -fsSL https://openclaw.ai/install-cli.sh | bash"))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.primary.opacity(0.05)))
+                        Text(
+                            "Downloads and installs a self-contained Node.js 22+ runtime " +
+                                "and the OpenClaw CLI into ~/.openclaw. " +
+                                "No Homebrew, system Node, or sudo required.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.leading, 10)
+
+                    Divider().padding(.vertical, 4)
+
+                    // Gateway toggle + status
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: self.$startGatewayAfterInstall) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Start gateway after install")
+                                    .font(.callout.weight(.semibold))
+                                Text("Installs and starts the gateway service via launchd.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .disabled(self.installingCLI || self.installingGateway)
+
+                        if self.installingGateway || self.gatewayStarted || self.gatewayInstallStatus != nil {
+                            HStack(alignment: .center, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Gateway")
+                                        .font(.callout.weight(.semibold))
+                                    Text(self.gatewayInstallStatus ?? "")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                                Spacer(minLength: 0)
+                                if self.installingGateway {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else if self.gatewayStarted {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(
+                                        self.gatewayStarted
+                                            ? Color.green.opacity(0.08)
+                                            : Color.clear))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(
+                                        self.gatewayStarted
+                                            ? Color.green.opacity(0.3)
+                                            : Color.clear,
+                                        lineWidth: 1))
+                        }
+                    }
+                    .padding(.leading, 10)
+                }
+            }
+
+            self.onboardingCard(spacing: 10, padding: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Troubleshooting")
+                        .font(.callout.weight(.semibold))
+                    Text(
+                        "If you have issues from a previous installation, " +
+                            "reset to remove the CLI, gateway, and all config, " +
+                            "then install fresh.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 12) {
+                        Button(role: .destructive) {
+                            self.showResetConfirmation = true
+                        } label: {
+                            ZStack {
+                                Text("Reset Installation")
+                                    .foregroundStyle(.red)
+                                    .opacity(self.resettingInstallation ? 0 : 1)
+                                if self.resettingInstallation {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                }
+                            }
+                            .frame(minWidth: 140)
+                        }
+                        .disabled(
+                            self.resettingInstallation || self.installingCLI || self.installingGateway)
+                        .alert(
+                            "Reset Installation?",
+                            isPresented: self.$showResetConfirmation
+                        ) {
+                            Button("Cancel", role: .cancel) {}
+                            Button("Reset", role: .destructive) {
+                                Task { await self.resetInstallation() }
+                            }
+                        } message: {
+                            Text(
+                                "This will remove ~/.openclaw (CLI, config, credentials), " +
+                                    "stop the gateway service, and clear saved tokens.\n\n" +
+                                    "This cannot be undone.")
+                        }
+
+                        if !self.resettingInstallation, !self.cliInstalled, self.cliStatus == nil,
+                           self.gatewayInstallStatus == nil
+                        {
+                            Label("Ready for fresh install", systemImage: "checkmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
+
+                    Text("Removes ~/.openclaw, stops the gateway service, and clears saved tokens.")
+                        .font(.caption)
+                        .foregroundStyle(.red.opacity(0.7))
+                }
+                .padding(.leading, 10)
+            }
+
+            if !self.cliInstalled {
+                Text("You can skip this step if OpenClaw is already installed.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+            }
+        }
+        .onAppear {
+            self.refreshCLIStatus()
+            self.refreshGatewayStatus()
         }
     }
 

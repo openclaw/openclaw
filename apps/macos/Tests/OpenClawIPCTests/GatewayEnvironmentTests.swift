@@ -21,14 +21,23 @@ import Testing
         #expect(Semver.parse("1.2.x") == nil)
     }
 
-    @Test func semverCompatibilityRequiresSameMajorAndNotOlder() {
+    @Test func semverCompatibilityRequiresSameMajor() {
         let required = Semver(major: 2, minor: 1, patch: 0)
         #expect(Semver(major: 2, minor: 1, patch: 0).compatible(with: required))
         #expect(Semver(major: 2, minor: 2, patch: 0).compatible(with: required))
         #expect(Semver(major: 2, minor: 1, patch: 1).compatible(with: required))
-        #expect(Semver(major: 2, minor: 0, patch: 9).compatible(with: required) == false)
+        #expect(Semver(major: 2, minor: 0, patch: 9).compatible(with: required))
         #expect(Semver(major: 3, minor: 0, patch: 0).compatible(with: required) == false)
         #expect(Semver(major: 1, minor: 9, patch: 9).compatible(with: required) == false)
+    }
+
+    @Test func calendarVersioningCompatibilitySameYear() {
+        let required = Semver(major: 2026, minor: 2, patch: 16)
+        #expect(Semver(major: 2026, minor: 1, patch: 11).compatible(with: required))
+        #expect(Semver(major: 2026, minor: 2, patch: 16).compatible(with: required))
+        #expect(Semver(major: 2026, minor: 12, patch: 31).compatible(with: required))
+        #expect(Semver(major: 2025, minor: 12, patch: 31).compatible(with: required) == false)
+        #expect(Semver(major: 2027, minor: 1, patch: 1).compatible(with: required) == false)
     }
 
     @Test func gatewayPortDefaultsAndRespectsOverride() async {
