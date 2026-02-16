@@ -78,11 +78,15 @@ describe("validateBindMounts", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
     const link = join(dir, "etc-link");
     symlinkSync("/etc", link);
-    // Windows source paths include drive letters (e.g. C:\...), which our POSIX-only
-    // bind parser rejects as non-absolute before symlink resolution.
-    const expectedError =
-      process.platform === "win32" ? /(blocked path|non-absolute)/ : /blocked path/;
-    expect(() => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`])).toThrow(expectedError);
+    const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
+
+    if (process.platform === "win32") {
+      // Windows source paths (e.g. C:\...) are intentionally rejected as non-POSIX.
+      expect(run).toThrow(/non-absolute source path/);
+      return;
+    }
+
+    expect(run).toThrow(/blocked path/);
   });
 
   it("rejects non-absolute source paths (relative or named volumes)", () => {
