@@ -166,6 +166,8 @@ vi.mock("../../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
+const { runCronIsolatedAgentTurn } = await import("./run.js");
+
 // ---------- helpers ----------
 
 function makeJob(overrides?: Record<string, unknown>) {
@@ -230,8 +232,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("passes agent-level skillFilter to buildWorkspaceSkillSnapshot", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue(["meme-factory", "weather"]);
 
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
-
     const result = await runCronIsolatedAgentTurn(
       makeParams({
         cfg: { agents: { list: [{ id: "scout", skills: ["meme-factory", "weather"] }] } },
@@ -250,8 +250,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("omits skillFilter when agent has no skills config", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue(undefined);
 
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
-
     const result = await runCronIsolatedAgentTurn(
       makeParams({
         cfg: { agents: { list: [{ id: "general" }] } },
@@ -267,8 +265,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
   it("passes empty skillFilter when agent explicitly disables all skills", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([]);
-
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
 
     const result = await runCronIsolatedAgentTurn(
       makeParams({
@@ -301,8 +297,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       systemSent: false,
       isNewSession: true,
     });
-
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
 
     const result = await runCronIsolatedAgentTurn(
       makeParams({
@@ -337,8 +331,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       systemSent: false,
       isNewSession: true,
     });
-
-    const { runCronIsolatedAgentTurn } = await import("./run.js");
 
     const result = await runCronIsolatedAgentTurn(
       makeParams({

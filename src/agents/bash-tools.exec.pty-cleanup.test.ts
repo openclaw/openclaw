@@ -1,9 +1,17 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry";
+import { createExecTool } from "./bash-tools.exec";
+
+const { ptySpawnMock } = vi.hoisted(() => ({
+  ptySpawnMock: vi.fn(),
+}));
+
+vi.mock("@lydell/node-pty", () => ({
+  spawn: (...args: unknown[]) => ptySpawnMock(...args),
+}));
 
 afterEach(() => {
   resetProcessRegistryForTests();
-  vi.resetModules();
   vi.clearAllMocks();
 });
 
@@ -11,25 +19,20 @@ test("exec disposes PTY listeners after normal exit", async () => {
   const disposeData = vi.fn();
   const disposeExit = vi.fn();
 
-  vi.doMock("@lydell/node-pty", () => ({
-    spawn: () => {
-      return {
-        pid: 0,
-        write: vi.fn(),
-        onData: (listener: (value: string) => void) => {
-          setTimeout(() => listener("ok"), 0);
-          return { dispose: disposeData };
-        },
-        onExit: (listener: (event: { exitCode: number; signal?: number }) => void) => {
-          setTimeout(() => listener({ exitCode: 0 }), 0);
-          return { dispose: disposeExit };
-        },
-        kill: vi.fn(),
-      };
+  ptySpawnMock.mockImplementation(() => ({
+    pid: 0,
+    write: vi.fn(),
+    onData: (listener: (value: string) => void) => {
+      listener("ok");
+      return { dispose: disposeData };
     },
+    onExit: (listener: (event: { exitCode: number; signal?: number }) => void) => {
+      listener({ exitCode: 0 });
+      return { dispose: disposeExit };
+    },
+    kill: vi.fn(),
   }));
 
-  const { createExecTool } = await import("./bash-tools.exec");
   const tool = createExecTool({ allowBackground: false });
   const result = await tool.execute("toolcall", {
     command: "echo ok",
@@ -46,19 +49,14 @@ test("exec tears down PTY resources on timeout", async () => {
   const disposeExit = vi.fn();
   const kill = vi.fn();
 
-  vi.doMock("@lydell/node-pty", () => ({
-    spawn: () => {
-      return {
-        pid: 0,
-        write: vi.fn(),
-        onData: () => ({ dispose: disposeData }),
-        onExit: () => ({ dispose: disposeExit }),
-        kill,
-      };
-    },
+  ptySpawnMock.mockImplementation(() => ({
+    pid: 0,
+    write: vi.fn(),
+    onData: () => ({ dispose: disposeData }),
+    onExit: () => ({ dispose: disposeExit }),
+    kill,
   }));
 
-  const { createExecTool } = await import("./bash-tools.exec");
   const tool = createExecTool({ allowBackground: false });
   await expect(
     tool.execute("toolcall", {
