@@ -116,7 +116,7 @@ export const execSchema = Type.Object({
   pty: Type.Optional(
     Type.Boolean({
       description:
-        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
+        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs e.g. gog, coding agents)",
     }),
   ),
   elevated: Type.Optional(

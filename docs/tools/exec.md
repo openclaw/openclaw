@@ -20,7 +20,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `yieldMs` (default 10000): auto-background after delay
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill on expiry
-- `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs)
+- `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs). Use for CLIs that only print when stdout is a TTY (e.g. gog / Google Workspace CLI).
 - `host` (`sandbox | gateway | node`): where to execute
 - `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
 - `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
@@ -41,6 +41,19 @@ Notes:
 - Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
   the gateway host (no container) and **does not require approvals**. To require approvals, run with
   `host=gateway` and configure exec approvals (or enable sandboxing).
+
+### TTY-only CLIs (e.g. gog)
+
+Some CLIs write to stdout only when it is a TTY. In non-interactive contexts (exec tool, scripts, CI)
+they exit with code 0 but produce no output. Examples: **gog** (Google Workspace CLI), and other
+tools that use `isatty(stdout)` to decide whether to print. For these, set **`pty: true`** so the
+command runs in a pseudo-terminal and output is captured.
+
+Example:
+
+```json
+{ "tool": "exec", "command": "gog --version", "pty": true }
+```
 
 ## Config
 
