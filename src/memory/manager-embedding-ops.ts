@@ -175,19 +175,7 @@ class MemoryManagerEmbeddingOps {
     if (chunks.length === 0) {
       return [];
     }
-    const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
-    const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
-    const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
-
-    for (let i = 0; i < chunks.length; i += 1) {
-      const chunk = chunks[i];
-      const hit = chunk?.hash ? cached.get(chunk.hash) : undefined;
-      if (hit && hit.length > 0) {
-        embeddings[i] = hit;
-      } else if (chunk) {
-        missing.push({ index: i, chunk });
-      }
-    }
+    const { embeddings, missing } = this.collectCachedEmbeddings(chunks);
 
     if (missing.length === 0) {
       return embeddings;
