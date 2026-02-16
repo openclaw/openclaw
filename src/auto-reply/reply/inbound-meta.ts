@@ -24,6 +24,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     schema: "openclaw.inbound_meta.v1",
     message_id: messageId,
     message_id_full: messageIdFull && messageIdFull !== messageId ? messageIdFull : undefined,
+    sender_id: safeTrim(ctx.SenderId),
     chat_id: chatId,
     reply_to_id: replyToId,
     channel: safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface) ?? safeTrim(ctx.Provider),
