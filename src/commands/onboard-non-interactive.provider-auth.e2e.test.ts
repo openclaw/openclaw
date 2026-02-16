@@ -239,14 +239,11 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-", async ({ configPath, runtime }) => {
-      await runNonInteractiveWithDefaults(runtime, {
+    await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
+      const cfg = await runApiKeyOnboardingAndReadConfig(env, {
         authChoice: "zai-api-key",
         zaiApiKey: "zai-test-key",
-        skipSkills: true,
       });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
       expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
       expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
@@ -257,14 +254,11 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("supports Z.AI CN coding endpoint auth choice", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-cn-", async ({ configPath, runtime }) => {
-      await runNonInteractiveWithDefaults(runtime, {
+    await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
+      const cfg = await runApiKeyOnboardingAndReadConfig(env, {
         authChoice: "zai-coding-cn",
         zaiApiKey: "zai-test-key",
-        skipSkills: true,
       });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
       expect(cfg.models?.providers?.zai?.baseUrl).toBe(
         "https://open.bigmodel.cn/api/coding/paas/v4",
@@ -273,15 +267,12 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores xAI API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-xai-", async ({ configPath, runtime }) => {
+    await withOnboardEnv("openclaw-onboard-xai-", async (env) => {
       const rawKey = "xai-test-\r\nkey";
-      await runNonInteractiveWithDefaults(runtime, {
+      const cfg = await runApiKeyOnboardingAndReadConfig(env, {
         authChoice: "xai-api-key",
         xaiApiKey: rawKey,
-        skipSkills: true,
       });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
       expect(cfg.auth?.profiles?.["xai:default"]?.provider).toBe("xai");
       expect(cfg.auth?.profiles?.["xai:default"]?.mode).toBe("api_key");
@@ -291,14 +282,11 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores Vercel AI Gateway API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-ai-gateway-", async ({ configPath, runtime }) => {
-      await runNonInteractiveWithDefaults(runtime, {
+    await withOnboardEnv("openclaw-onboard-ai-gateway-", async (env) => {
+      const cfg = await runApiKeyOnboardingAndReadConfig(env, {
         authChoice: "ai-gateway-api-key",
         aiGatewayApiKey: "gateway-test-key",
-        skipSkills: true,
       });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
       expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe("vercel-ai-gateway");
       expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.mode).toBe("api_key");
@@ -342,14 +330,11 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores OpenAI API key and sets OpenAI default model", async () => {
-    await withOnboardEnv("openclaw-onboard-openai-", async ({ configPath, runtime }) => {
-      await runNonInteractiveWithDefaults(runtime, {
+    await withOnboardEnv("openclaw-onboard-openai-", async (env) => {
+      const cfg = await runApiKeyOnboardingAndReadConfig(env, {
         authChoice: "openai-api-key",
         openaiApiKey: "sk-openai-test",
-        skipSkills: true,
       });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
       expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
     });
@@ -367,14 +352,11 @@ describe("onboard (non-interactive): provider auth", () => {
   }, 60_000);
 
   it("stores LiteLLM API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-litellm-", async ({ configPath, runtime }) => {
-      await runNonInteractiveWithDefaults(runtime, {
+    await withOnboardEnv("openclaw-onboard-litellm-", async (env) => {
+      const cfg = await runApiKeyOnboardingAndReadConfig(env, {
         authChoice: "litellm-api-key",
         litellmApiKey: "litellm-test-key",
-        skipSkills: true,
       });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
 
       expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
       expect(cfg.auth?.profiles?.["litellm:default"]?.mode).toBe("api_key");
