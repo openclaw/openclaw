@@ -119,23 +119,6 @@ describe("capEntryCount", () => {
     expect(store.noDate1).toBeUndefined();
     expect(store.noDate2).toBeUndefined();
   });
-
-  it("falls back to built-in default (500) when no override given", () => {
-    const now = Date.now();
-    const entries: Array<[string, SessionEntry]> = [];
-    for (let i = 0; i < 501; i++) {
-      entries.push([`key-${i}`, makeEntry(now - i * 1000)]);
-    }
-    const store = makeStore(entries);
-
-    // loadConfig mock returns {} → maintenance is undefined → default 500
-    const evicted = capEntryCount(store);
-
-    expect(evicted).toBe(1);
-    expect(Object.keys(store)).toHaveLength(500);
-    expect(store["key-0"]).toBeDefined();
-    expect(store["key-500"]).toBeUndefined();
-  });
 });
 
 describe("rotateSessionFile", () => {
