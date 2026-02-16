@@ -284,6 +284,14 @@ function formatInteractionSelectionLabel(params: {
   return params.actionId;
 }
 
+function formatInteractionConfirmationText(params: {
+  selectedLabel: string;
+  userId?: string;
+}): string {
+  const actor = params.userId?.trim() ? ` by <@${params.userId.trim()}>` : "";
+  return `:white_check_mark: *${params.selectedLabel}* selected${actor}`;
+}
+
 function summarizeViewState(values: unknown): ModalInputSummary[] {
   if (!values || typeof values !== "object") {
     return [];
@@ -425,7 +433,12 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         if (typedBlock.type === "actions" && typedBlock.block_id === blockId) {
           return {
             type: "context",
-            elements: [{ type: "mrkdwn", text: `:white_check_mark: *${selectedLabel}* selected` }],
+            elements: [
+              {
+                type: "mrkdwn",
+                text: formatInteractionConfirmationText({ selectedLabel, userId }),
+              },
+            ],
           };
         }
         return block;
