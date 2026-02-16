@@ -7,6 +7,7 @@ import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
+  resolveSessionFilePath,
   resolveFreshSessionTotalTokens,
   resolveStorePath,
   type SessionEntry,
@@ -141,11 +142,6 @@ type SessionPathDebugInfo = {
   transcriptExists: boolean | null;
 };
 
-function isWithinDir(candidatePath: string, dirPath: string): boolean {
-  const relative = path.relative(path.resolve(dirPath), path.resolve(candidatePath));
-  return !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
 function resolveSessionPathDebugInfo(
   entry: SessionEntry | undefined,
   sessionsDir: string,
@@ -168,16 +164,27 @@ function resolveSessionPathDebugInfo(
       transcriptExists: null,
     };
   }
-  const sessionFileResolved = path.isAbsolute(trimmed)
-    ? path.resolve(trimmed)
-    : path.resolve(sessionsDir, trimmed);
-  const withinSessionsDir = isWithinDir(sessionFileResolved, sessionsDir);
-  return {
-    sessionFileRaw,
-    sessionFileResolved,
-    sessionFileStatus: withinSessionsDir ? "ok" : "outside_sessions_dir",
-    transcriptExists: withinSessionsDir ? fs.existsSync(sessionFileResolved) : null,
-  };
+  try {
+    const sessionFileResolved = resolveSessionFilePath(entry?.sessionId ?? "session-debug", entry, {
+      sessionsDir,
+    });
+    return {
+      sessionFileRaw,
+      sessionFileResolved,
+      sessionFileStatus: "ok",
+      transcriptExists: fs.existsSync(sessionFileResolved),
+    };
+  } catch {
+    const sessionFileResolved = path.isAbsolute(trimmed)
+      ? path.resolve(trimmed)
+      : path.resolve(sessionsDir, trimmed);
+    return {
+      sessionFileRaw,
+      sessionFileResolved,
+      sessionFileStatus: "outside_sessions_dir",
+      transcriptExists: null,
+    };
+  }
 }
 
 function toRows(store: Record<string, SessionEntry>): SessionRow[] {
