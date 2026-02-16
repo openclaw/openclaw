@@ -653,7 +653,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming }: {
 		return (
 			<div className="flex justify-end py-2">
 				<div
-					className="font-bookerly max-w-[80%] rounded-2xl rounded-br-sm px-3 py-2 text-sm leading-6"
+					className="font-bookerly max-w-[80%] min-w-0 rounded-2xl rounded-br-sm px-3 py-2 text-sm leading-6 overflow-hidden break-all"
 					style={{
 						background: "var(--color-user-bubble)",
 						color: "var(--color-user-bubble-text)",
@@ -667,7 +667,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming }: {
 								}
 							/>
 							{attachmentInfo.message && (
-								<p className="whitespace-pre-wrap">
+								<p className="whitespace-pre-wrap break-all">
 									{
 										attachmentInfo.message
 									}
@@ -675,7 +675,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming }: {
 							)}
 						</>
 					) : (
-						<p className="whitespace-pre-wrap">
+						<p className="whitespace-pre-wrap break-all">
 							{textContent}
 						</p>
 					)}
@@ -691,7 +691,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming }: {
 
 	// Assistant: free-flowing text, left-aligned, NO bubble
 	return (
-		<div className="py-3 space-y-2">
+		<div className="py-3 space-y-2 min-w-0 overflow-hidden">
 			<AnimatePresence initial={false}>
 			{segments.map((segment, index) => {
 				if (segment.type === "text") {
@@ -703,7 +703,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming }: {
 						return (
 							<div
 								key={index}
-								className="font-bookerly flex items-start gap-2 rounded-xl px-3 py-2 text-[13px] leading-relaxed"
+								className="font-bookerly flex items-start gap-2 rounded-xl px-3 py-2 text-[13px] leading-relaxed overflow-hidden"
 								style={{
 									background: `color-mix(in srgb, var(--color-error) 6%, var(--color-surface))`,
 									color: "var(--color-error)",
@@ -743,7 +743,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming }: {
 										/>
 									</svg>
 								</span>
-								<span className="whitespace-pre-wrap">
+								<span className="whitespace-pre-wrap break-all min-w-0">
 									{errorMatch[1].trim()}
 								</span>
 							</div>
@@ -760,7 +760,7 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming }: {
 								initial={{ opacity: 0, y: 4 }}
 								animate={{ opacity: 1, y: 0 }}
 								transition={{ duration: 0.2, ease: "easeOut" }}
-								className="chat-prose font-bookerly text-sm whitespace-pre-wrap"
+								className="chat-prose font-bookerly text-sm whitespace-pre-wrap break-all"
 								style={{ color: "var(--color-text)" }}
 							>
 								{segment.text}

@@ -863,6 +863,8 @@ a,
 .chat-prose {
   color: var(--color-text);
   line-height: 1.8;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-prose > *:first-child {
@@ -978,6 +980,8 @@ a,
   border: 1px solid var(--color-border);
   border-radius: 0.375rem;
   padding: 0.15em 0.35em;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 
