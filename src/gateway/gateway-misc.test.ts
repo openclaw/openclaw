@@ -80,7 +80,68 @@ describe("handleControlUiHttpRequest", () => {
       );
       expect(handled).toBe(true);
       expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
-      expect(setHeader).toHaveBeenCalledWith("Content-Security-Policy", "frame-ancestors 'none'");
+      const csp = setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1];
+      expect(typeof csp).toBe("string");
+      expect(String(csp)).toContain("frame-ancestors 'none'");
+      expect(String(csp)).toContain("script-src 'self'");
+      expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inject inline scripts into index.html", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      const html = "<html><head></head><body>Hello</body></html>\n";
+      await fs.writeFile(path.join(tmp, "index.html"), html);
+      const { res, end } = makeControlUiResponse();
+      const handled = handleControlUiHttpRequest(
+        { url: "/", method: "GET" } as IncomingMessage,
+        res,
+        {
+          root: { kind: "resolved", path: tmp },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+            ui: { assistant: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
+          },
+        },
+      );
+      expect(handled).toBe(true);
+      expect(end).toHaveBeenCalledWith(html);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("serves bootstrap config JSON", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      await fs.writeFile(path.join(tmp, "index.html"), "<html></html>\n");
+      const { res, end } = makeControlUiResponse();
+      const handled = handleControlUiHttpRequest(
+        { url: "/__openclaw/control-ui-config.json", method: "GET" } as IncomingMessage,
+        res,
+        {
+          root: { kind: "resolved", path: tmp },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+            ui: { assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" } },
+          },
+        },
+      );
+      expect(handled).toBe(true);
+      const payload = String(end.mock.calls[0]?.[0] ?? "");
+      const parsed = JSON.parse(payload) as {
+        basePath: string;
+        assistantName: string;
+        assistantAvatar: string;
+        assistantAgentId: string;
+      };
+      expect(parsed.basePath).toBe("");
+      expect(parsed.assistantName).toBe("</script><script>alert(1)//");
+      expect(parsed.assistantAvatar).toBe("/avatar/main");
+      expect(parsed.assistantAgentId).toBe("main");
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
