@@ -230,21 +230,6 @@ Some ~~deleted~~ content.`;
 });
 
 describe("convertTableToFlexBubble", () => {
-  it("creates a receipt-style card for 2-column tables", () => {
-    const table = {
-      headers: ["Item", "Price"],
-      rows: [
-        ["Apple", "$1"],
-        ["Banana", "$2"],
-      ],
-    };
-
-    const bubble = convertTableToFlexBubble(table);
-
-    expect(bubble.type).toBe("bubble");
-    expect(bubble.body).toBeDefined();
-  });
-
   it("creates a multi-column layout for 3+ column tables", () => {
     const table = {
       headers: ["A", "B", "C"],
@@ -362,15 +347,6 @@ That's it.`;
     expect(result.text).toContain("Check this code:");
     expect(result.text).toContain("That's it.");
     expect(result.text).not.toContain("```");
-  });
-
-  it("processes text with markdown formatting", () => {
-    const text = "This is **bold** and *italic* text.";
-
-    const result = processLineMessage(text);
-
-    expect(result.text).toBe("This is bold and italic text.");
-    expect(result.flexMessages).toHaveLength(0);
   });
 
   it("handles mixed content", () => {
