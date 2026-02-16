@@ -49,7 +49,7 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
  * Skips content inside fenced code blocks.
  * Captures until the next heading of same or higher level, or end of string.
  */
-function extractSections(content: string, sectionNames: string[]): string[] {
+export function extractSections(content: string, sectionNames: string[]): string[] {
   const results: string[] = [];
   const lines = content.split("\n");
 
