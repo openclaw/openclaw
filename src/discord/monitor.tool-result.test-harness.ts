@@ -1,11 +1,12 @@
 import { vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-export const sendMock = vi.fn();
-export const reactMock = vi.fn();
-export const updateLastRouteMock = vi.fn();
-export const dispatchMock = vi.fn();
-export const readAllowFromStoreMock = vi.fn();
-export const upsertPairingRequestMock = vi.fn();
+export const sendMock: MockFn = vi.fn();
+export const reactMock: MockFn = vi.fn();
+export const updateLastRouteMock: MockFn = vi.fn();
+export const dispatchMock: MockFn = vi.fn();
+export const readAllowFromStoreMock: MockFn = vi.fn();
+export const upsertPairingRequestMock: MockFn = vi.fn();
 
 vi.mock("./send.js", () => ({
   sendMessageDiscord: (...args: unknown[]) => sendMock(...args),
