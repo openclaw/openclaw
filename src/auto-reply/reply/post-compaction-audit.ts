@@ -30,7 +30,9 @@ export function auditPostCompactionReads(
       // RegExp — match against relative paths from workspace
       const found = readFilePaths.some((p) => {
         const rel = path.relative(workspaceDir, path.resolve(workspaceDir, p));
-        return required.test(rel);
+        // Normalize to forward slashes for cross-platform RegExp matching
+        const normalizedRel = rel.split(path.sep).join("/");
+        return required.test(normalizedRel);
       });
       if (!found) {
         missingPatterns.push(required.source);
