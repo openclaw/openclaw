@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
 
 const runtime = {
@@ -30,6 +30,14 @@ const { registerQrCli } = await import("./qr-cli.js");
 describe("registerQrCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    vi.stubEnv("CLAWDBOT_GATEWAY_PASSWORD", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("prints setup code only when requested", async () => {
