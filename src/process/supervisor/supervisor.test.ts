@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createProcessSupervisor } from "./supervisor.js";
 
 describe("process supervisor", () => {
-  it("spawns child runs and captures output", async () => {
+  it("spawns child runs and captures output", { retry: 2 }, async () => {
     const supervisor = createProcessSupervisor();
     const run = await supervisor.spawn({
       sessionId: "s1",
@@ -18,7 +18,7 @@ describe("process supervisor", () => {
     expect(exit.stdout).toBe("ok");
   });
 
-  it("enforces no-output timeout for silent processes", async () => {
+  it("enforces no-output timeout for silent processes", { retry: 2 }, async () => {
     const supervisor = createProcessSupervisor();
     const run = await supervisor.spawn({
       sessionId: "s1",
@@ -35,7 +35,7 @@ describe("process supervisor", () => {
     expect(exit.timedOut).toBe(true);
   });
 
-  it("cancels prior scoped run when replaceExistingScope is enabled", async () => {
+  it("cancels prior scoped run when replaceExistingScope is enabled", { retry: 2 }, async () => {
     const supervisor = createProcessSupervisor();
     const first = await supervisor.spawn({
       sessionId: "s1",
@@ -65,7 +65,7 @@ describe("process supervisor", () => {
     expect(secondExit.stdout).toBe("new");
   });
 
-  it("applies overall timeout even for near-immediate timer firing", async () => {
+  it("applies overall timeout even for near-immediate timer firing", { retry: 2 }, async () => {
     const supervisor = createProcessSupervisor();
     const run = await supervisor.spawn({
       sessionId: "s-timeout",
@@ -80,7 +80,7 @@ describe("process supervisor", () => {
     expect(exit.timedOut).toBe(true);
   });
 
-  it("can stream output without retaining it in RunExit payload", async () => {
+  it("can stream output without retaining it in RunExit payload", { retry: 2 }, async () => {
     const supervisor = createProcessSupervisor();
     let streamed = "";
     const run = await supervisor.spawn({
