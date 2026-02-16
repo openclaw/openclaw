@@ -10,6 +10,9 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
 
   const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
     try {
+      if (event.user === ctx.botUserId) {
+        return;
+      }
       const item = event.item;
       if (!item || item.type !== "message") {
         return;
