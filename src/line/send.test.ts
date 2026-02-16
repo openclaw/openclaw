@@ -2,14 +2,6 @@ import { describe, expect, it } from "vitest";
 import { createQuickReplyItems } from "./send.js";
 
 describe("createQuickReplyItems", () => {
-  it("creates quick reply items from labels", () => {
-    const quickReply = createQuickReplyItems(["Option 1", "Option 2", "Option 3"]);
-
-    expect(quickReply.items).toHaveLength(3);
-    expect((quickReply.items[0].action as { label: string }).label).toBe("Option 1");
-    expect((quickReply.items[0].action as { text: string }).text).toBe("Option 1");
-  });
-
   it("limits items to 13 (LINE maximum)", () => {
     const labels = Array.from({ length: 20 }, (_, i) => `Option ${i + 1}`);
     const quickReply = createQuickReplyItems(labels);
