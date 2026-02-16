@@ -74,10 +74,7 @@ describe("before_agent_start hook merger", () => {
     expect(result?.providerOverride).toBe("ollama");
   });
 
-  it("higher-priority plugin wins for modelOverride (last-writer-wins by priority order)", async () => {
-    // Lower priority runs first (priority 1), higher priority runs second (priority 10).
-    // Since merger is sequential and uses `next ?? acc`, the higher-priority plugin's
-    // value (which runs later) overwrites the earlier one.
+  it("higher-priority plugin wins for modelOverride", async () => {
     addBeforeAgentStartHook(registry, "low-priority", () => ({ modelOverride: "gpt-4o" }), 1);
     addBeforeAgentStartHook(
       registry,
@@ -89,11 +86,7 @@ describe("before_agent_start hook merger", () => {
     const runner = createHookRunner(registry);
     const result = await runner.runBeforeAgentStart({ prompt: "PII prompt" }, stubCtx);
 
-    // Higher priority (10) runs first in sorted order, then lower priority (1) runs.
-    // Lower priority's value overwrites since merger uses next ?? acc (next wins if defined).
-    // Actually: sorted by descending priority, so 10 runs first, then 1.
-    // Merger: acc starts as 10's result, then next=1's result overwrites.
-    expect(result?.modelOverride).toBe("gpt-4o");
+    expect(result?.modelOverride).toBe("llama3.3:8b");
   });
 
   it("lower-priority plugin does not overwrite if it returns undefined", async () => {
