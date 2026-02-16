@@ -152,6 +152,8 @@ podman run -d \
   -e TERM=xterm-256color \
   -e OPENCLAW_GATEWAY_TOKEN=$OPENCLAW_TOKEN \
   -e NODE_OPTIONS='--require /home/node/.openclaw/set-proxy.js' \
+  -e GIT_CONFIG_GLOBAL=/home/node/.openclaw/.gitconfig \
+  --env-file /opt/leot_svr/data/openclaw/config/syno.env \
   -e VIRTUAL_HOST=claw.leot.fun \
   -e LETSENCRYPT_HOST=claw.leot.fun \
   -e LETSENCRYPT_EMAIL=admin@leot.fun \
@@ -171,9 +173,19 @@ podman run -d \
 | `--bind lan` | 绑定到局域网接口（容器网络需要） |
 | `--allow-unconfigured` | 允许未完全配置时启动 |
 | `NODE_OPTIONS` | 通过 `--require` 注入代理脚本，仅 Node 进程内部设置 `HTTPS_PROXY`（见下方说明） |
+| `GIT_CONFIG_GLOBAL` | 指定 Git 全局配置文件路径，持久化到 Volume，容器重启不丢失 |
 | `-v .../config/.ssh:/home/node/.ssh:ro` | 只读挂载 SSH 密钥和配置，供容器 SSH 连回宿主机 |
 | `-v .../tools/bin:/opt/tools:ro` | 只读挂载外部 CLI 工具目录 |
 | `-e PATH=/opt/tools:...` | 让容器内直接找到挂载的工具 |
+| `SYNO_USERNAME` + `SYNO_PASSWORD` | syno CLI 自动登录群晖 NAS（从 `syno.env` 文件加载） |
+
+> **syno 配置持久化**：`syno` 的配置和会话默认存在 `~/.config/synology-api/`，容器重建后丢失。启动容器后执行一次符号链接：
+>
+> ```bash
+> podman exec openclaw-gateway sh -c 'mkdir -p /home/node/.config && ln -sf /home/node/.openclaw/synology-api /home/node/.config/synology-api'
+> ```
+>
+> 配置文件（`config.toml`）已持久化在 `/opt/leot_svr/data/openclaw/config/synology-api/`。
 
 > **代理隔离机制**：不在容器环境变量中设置 `HTTPS_PROXY`，而是通过 `NODE_OPTIONS=--require set-proxy.js` 仅在 Node.js 进程内部注入代理变量。`set-proxy.js` 同时拦截 `child_process` 的所有 spawn/exec 方法，在子进程环境中剥掉代理变量。
 >
@@ -544,6 +556,7 @@ mkdir -p /opt/leot_svr/tools/bin
 |---|---|---|
 | `calc-cli` | 高精度数学表达式计算器（Rust 静态二进制，~460KB） | [cli/calc-cli.md](cli/calc-cli.md) |
 | `date-remind` | 日期提醒（农历/阳历生日纪念日，Rust 静态二进制，~845KB） | [cli/date-remind.md](cli/date-remind.md) |
+| `syno` | 群晖 NAS CLI（FileStation/DownloadStation/NoteStation，Rust 静态二进制，~3.2MB） | [cli/syno.md](cli/syno.md) |
 
 **通用交叉编译步骤**（Windows → Linux 静态二进制）：
 
@@ -555,9 +568,11 @@ rustup target add x86_64-unknown-linux-musl
 $env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER='rust-lld'
 cargo build --release --target x86_64-unknown-linux-musl --manifest-path cli/calc-cli/Cargo.toml
 
-# 上传
-scp cli/calc-cli/target/x86_64-unknown-linux-musl/release/calc-cli root@c.leot.fun:/opt/leot_svr/tools/bin/
-ssh root@c.leot.fun chmod +x /opt/leot_svr/tools/bin/calc-cli
+# 上传（通过 MCP SSH 工具）
+# 使用 ssh_upload 将二进制上传到服务器
+ssh_upload: cli/calc-cli/target/x86_64-unknown-linux-musl/release/calc-cli → /opt/leot_svr/tools/bin/calc-cli
+# 使用 ssh_execute 设置可执行权限
+ssh_execute: chmod +x /opt/leot_svr/tools/bin/calc-cli
 ```
 
 ### 3. 启动命令加挂载
@@ -679,6 +694,51 @@ podman exec openclaw-gateway ssh host 'hostname && uptime'
 
 ---
 
+## Git 操作配置（claw 账号）
+
+OpenClaw Agent 可以在容器内通过 Git 拉取仓库、修改代码并提交推送。使用 Gitea `claw` 账号进行认证。
+
+### 已完成的配置
+
+1. **Gitea 用户**：`claw`（`claw@leot.fun`），密码 `Claw@2026!`，已添加为 `leotwang/openclaw` 仓库的 write 协作者
+2. **认证方式**：HTTPS + Access Token（credential store），凭据持久化在 Volume 中
+3. **Git 身份**：`claw <claw@leot.fun>`
+
+### 关键文件
+
+| 文件 | 说明 |
+|---|---|
+| `/opt/leot_svr/data/openclaw/config/.gitconfig` | Git 全局配置（通过 `GIT_CONFIG_GLOBAL` 环境变量引用） |
+| `/opt/leot_svr/data/openclaw/config/.git-credentials` | HTTPS 凭据（Access Token） |
+
+### 容器重启后的持久化
+
+- `.gitconfig` 和 `.git-credentials` 均位于持久化 Volume（`/opt/leot_svr/data/openclaw/config/`）
+- 启动命令中 `-e GIT_CONFIG_GLOBAL=/home/node/.openclaw/.gitconfig` 确保 Git 能找到配置
+- 无需额外操作，重启即恢复
+
+### 验证
+
+```bash
+# 测试 clone
+podman exec openclaw-gateway git clone --depth 1 https://git.leot.fun/leotwang/openclaw.git /tmp/test-clone
+
+# 测试 push
+podman exec openclaw-gateway sh -c 'cd /tmp/test-clone && git commit --allow-empty -m "test" && git push'
+
+# 清理
+podman exec openclaw-gateway rm -rf /tmp/test-clone
+```
+
+### 安全说明
+
+- Access Token 范围：`all`（后续可缩小到 `repo` 权限）
+- `claw` 账号是普通用户（非 admin），仅对被授权的仓库有写权限
+- 凭据文件权限 600，仅 node 用户可读
+- Gitea 内置 SSH 已禁用，仅支持 HTTPS 方式
+
+---
+
 ## 关键文件路径
 
 | 路径 | 说明 |
@@ -690,6 +750,10 @@ podman exec openclaw-gateway ssh host 'hostname && uptime'
 | `/opt/leot_svr/data/openclaw/workspace/SOUL.md` | Agent 人格/语言设置 |
 | `/opt/leot_svr/tools/bin/` | 外部 CLI 工具目录（挂载到容器 `/opt/tools`） |
 | `/opt/leot_svr/data/openclaw/config/.ssh/` | 容器 SSH 密钥和配置（挂载到容器 `/home/node/.ssh`） |
+| `/opt/leot_svr/data/openclaw/config/.gitconfig` | Git 全局配置（通过 `GIT_CONFIG_GLOBAL` 环境变量引用） |
+| `/opt/leot_svr/data/openclaw/config/.git-credentials` | Git HTTPS 凭据（claw 账号 Access Token） |
+| `/opt/leot_svr/data/openclaw/config/syno.env` | syno CLI 环境变量（NAS 用户名密码） |
+| `/opt/leot_svr/data/openclaw/config/synology-api/config.toml` | syno CLI 连接配置（NAS 地址端口） |
 | `/opt/leot_svr/secrets/registry.env` | Registry 凭据 |
 | `/etc/shadowsocks/telegram.json` | Shadowsocks 代理配置 |
 | `/usr/local/bin/sslocal-rust` | Shadowsocks 客户端二进制 |
