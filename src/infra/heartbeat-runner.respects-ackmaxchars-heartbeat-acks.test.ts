@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
@@ -19,6 +19,7 @@ describe("resolveHeartbeatIntervalMs", () => {
     storePath: string;
     heartbeat: Record<string, unknown>;
     channels: Record<string, unknown>;
+    messages?: Record<string, unknown>;
   }): OpenClawConfig {
     return {
       agents: {
@@ -28,6 +29,7 @@ describe("resolveHeartbeatIntervalMs", () => {
         },
       },
       channels: params.channels as never,
+      ...(params.messages ? { messages: params.messages as never } : {}),
       session: { store: params.storePath },
     };
   }
@@ -58,12 +60,14 @@ describe("resolveHeartbeatIntervalMs", () => {
     } = {},
   ) {
     return {
-      ...(params.sendWhatsApp ? { sendWhatsApp: params.sendWhatsApp } : {}),
+      ...(params.sendWhatsApp
+        ? { sendWhatsApp: params.sendWhatsApp as unknown as HeartbeatDeps["sendWhatsApp"] }
+        : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
       webAuthExists: params.webAuthExists ?? (async () => true),
       hasActiveWebListener: params.hasActiveWebListener ?? (() => true),
-    };
+    } satisfies HeartbeatDeps;
   }
 
   function makeTelegramDeps(
@@ -74,10 +78,12 @@ describe("resolveHeartbeatIntervalMs", () => {
     } = {},
   ) {
     return {
-      ...(params.sendTelegram ? { sendTelegram: params.sendTelegram } : {}),
+      ...(params.sendTelegram
+        ? { sendTelegram: params.sendTelegram as unknown as HeartbeatDeps["sendTelegram"] }
+        : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
-    };
+    } satisfies HeartbeatDeps;
   }
 
   async function seedSessionStore(
@@ -238,6 +244,46 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("strips responsePrefix before detecting HEARTBEAT_OK and skips telegram delivery", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: {
+          every: "5m",
+          target: "telegram",
+        },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        messages: { responsePrefix: "[openclaw]" },
+      });
+
+      await seedMainSession(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "[openclaw] HEARTBEAT_OK" });
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
