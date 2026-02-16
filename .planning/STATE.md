@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-16)
 
 **Core value:** Inbound messages from any channel cannot manipulate the agent into leaking system prompts, accessing unauthorized tools, exfiltrating user data, or affecting other channels' sessions.
-**Current focus:** Phase 8 — Browser, Media & WhatsApp Live Tests
+**Current focus:** Planning next milestone
 
 ## Current Position
 
-Phase: 8 of 8 (Browser, Media & WhatsApp)
-Plan: 2 of 2 in current phase (complete)
-Status: Phase 8 complete
-Last activity: 2026-02-16 — 08-02 Telegram e2e live test verified
+Phase: All complete (8 of 8)
+Plan: All complete (17/17 plans across v1.0 + v1.1)
+Status: v1.1 shipped
+Last activity: 2026-02-16 — v1.1 milestone archived
 
-Progress: [██████████████████████████████] 100% (17/17 plans across all milestones)
+Progress: [██████████████████████████████] 100%
 
 ## Performance Metrics
 
@@ -25,16 +25,12 @@ Progress: [███████████████████████
 - Average: ~5 min/plan
 - 115 tests added, 0 regressions
 
-**v1.1:**
+**v1.1 Summary:**
 
-| Phase | Plan               | Duration | Tasks | Files |
-| ----- | ------------------ | -------- | ----- | ----- |
-| 06-01 | Live Test Helpers  | 5min     | 2     | 12    |
-| 06-02 | Live Test Reporter | 4min     | 2     | 2     |
-| 07-01 | Agent Provider Tests | 3min   | 2     | 0     |
-| 07-02 | Gateway Live Tests   | 6min   | 2     | 2     |
-| 08-01 | Browser CDP Test     | 3min   | 2     | 0     |
-| 08-02 | Telegram E2E Test    | 3min   | 2     | 2     |
+- 3 phases, 6 plans completed
+- Total execution time: ~24 min
+- Average: ~4 min/plan
+- 29 files changed, ~2.1K LOC
 
 ## Accumulated Context
 
@@ -42,32 +38,16 @@ Progress: [███████████████████████
 
 Full decision log in PROJECT.md Key Decisions table.
 
-- v1.0 shipped and archived; fresh requirements for v1.1
-- v1.1 focuses on stabilization, not new features
-- Phases 7 and 8 can run in parallel after Phase 6
-- Used vitest/node for TestCase/TestModule types (not exported from vitest/reporters)
-- Static env key-to-file mapping for live test reporter (10 entries)
-- describeLive returns describe/describe.skip reference (no custom test runner hooks)
-- Provider-specific live flags recognized via regex as alternative to global LIVE flag
-- No code changes needed for agent provider live tests — Phase 6 refactor left them correct
-- GatewayClient constructor requires GATEWAY_CLIENT_NAMES enum (not raw string) and clientDisplayName field
-- startGatewayServer uses positional (port, opts) form, not object-style
-- CLI backend test environmental skip in Claude Code sessions is acceptable
-- No code changes needed for browser CDP live test — Phase 6 left it correct
-- Direct fetch to Telegram Bot API for e2e test (no grammy dependency in test)
-- Test getMe + sendMessage as proof of bot connectivity and send capability
-
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-- Pre-existing flaky test: `src/infra/gateway-lock.test.ts` — times out intermittently, unrelated to current work
+- Pre-existing flaky test: `src/infra/gateway-lock.test.ts` — times out intermittently, unrelated to milestone work
 
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 08-02-PLAN.md — Phase 8 complete, all v1.1 plans done
-Resume with: Phase 8 verification or v1.1 wrap-up
-Resume file: `.planning/phases/08-browser-media-whatsapp/08-02-SUMMARY.md`
+Stopped at: v1.1 milestone archived and tagged
+Resume with: `/gsd:new-milestone` to start next milestone
