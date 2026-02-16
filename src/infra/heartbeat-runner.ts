@@ -357,7 +357,7 @@ function normalizeHeartbeatReply(
   ackMaxChars: number,
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
-  // Normalize away responsePrefix so a prefixed HEARTBEAT_OK still strips.
+    
   const prefixPattern = responsePrefix?.trim()
     ? new RegExp(`^${escapeRegExp(responsePrefix.trim())}\\s*`, "i")
     : null;
