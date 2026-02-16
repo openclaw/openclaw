@@ -425,7 +425,18 @@ export async function fetchFirecrawlContent(params: {
   };
 }
 
-async function runWebFetch(params: {
+type FirecrawlRuntimeParams = {
+  firecrawlEnabled: boolean;
+  firecrawlApiKey?: string;
+  firecrawlBaseUrl: string;
+  firecrawlOnlyMainContent: boolean;
+  firecrawlMaxAgeMs: number;
+  firecrawlProxy: "auto" | "basic" | "stealth";
+  firecrawlStoreInCache: boolean;
+  firecrawlTimeoutSeconds: number;
+};
+
+type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   url: string;
   extractMode: ExtractMode;
   maxChars: number;
@@ -435,15 +446,60 @@ async function runWebFetch(params: {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
-  firecrawlEnabled: boolean;
-  firecrawlApiKey?: string;
-  firecrawlBaseUrl: string;
-  firecrawlOnlyMainContent: boolean;
-  firecrawlMaxAgeMs: number;
-  firecrawlProxy: "auto" | "basic" | "stealth";
-  firecrawlStoreInCache: boolean;
-  firecrawlTimeoutSeconds: number;
-}): Promise<Record<string, unknown>> {
+};
+
+function toFirecrawlContentParams(
+  params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
+): Parameters<typeof fetchFirecrawlContent>[0] | null {
+  if (!params.firecrawlEnabled || !params.firecrawlApiKey) {
+    return null;
+  }
+  return {
+    url: params.url,
+    extractMode: params.extractMode,
+    apiKey: params.firecrawlApiKey,
+    baseUrl: params.firecrawlBaseUrl,
+    onlyMainContent: params.firecrawlOnlyMainContent,
+    maxAgeMs: params.firecrawlMaxAgeMs,
+    proxy: params.firecrawlProxy,
+    storeInCache: params.firecrawlStoreInCache,
+    timeoutSeconds: params.firecrawlTimeoutSeconds,
+  };
+}
+
+async function maybeFetchFirecrawlWebFetchPayload(
+  params: WebFetchRuntimeParams & {
+    urlToFetch: string;
+    finalUrlFallback: string;
+    statusFallback: number;
+    cacheKey: string;
+    tookMs: number;
+  },
+): Promise<Record<string, unknown> | null> {
+  const firecrawlParams = toFirecrawlContentParams({
+    ...params,
+    url: params.urlToFetch,
+    extractMode: params.extractMode,
+  });
+  if (!firecrawlParams) {
+    return null;
+  }
+
+  const firecrawl = await fetchFirecrawlContent(firecrawlParams);
+  const payload = buildFirecrawlWebFetchPayload({
+    firecrawl,
+    rawUrl: params.url,
+    finalUrlFallback: params.finalUrlFallback,
+    statusFallback: params.statusFallback,
+    extractMode: params.extractMode,
+    maxChars: params.maxChars,
+    tookMs: params.tookMs,
+  });
+  writeCache(FETCH_CACHE, params.cacheKey, payload, params.cacheTtlMs);
+  return payload;
+}
+
+async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
   );
@@ -494,28 +550,15 @@ async function runWebFetch(params: {
     if (error instanceof SsrFBlockedError) {
       throw error;
     }
-    if (params.firecrawlEnabled && params.firecrawlApiKey) {
-      const firecrawl = await fetchFirecrawlContent({
-        url: finalUrl,
-        extractMode: params.extractMode,
-        apiKey: params.firecrawlApiKey,
-        baseUrl: params.firecrawlBaseUrl,
-        onlyMainContent: params.firecrawlOnlyMainContent,
-        maxAgeMs: params.firecrawlMaxAgeMs,
-        proxy: params.firecrawlProxy,
-        storeInCache: params.firecrawlStoreInCache,
-        timeoutSeconds: params.firecrawlTimeoutSeconds,
-      });
-      const payload = buildFirecrawlWebFetchPayload({
-        firecrawl,
-        rawUrl: params.url,
-        finalUrlFallback: finalUrl,
-        statusFallback: 200,
-        extractMode: params.extractMode,
-        maxChars: params.maxChars,
-        tookMs: Date.now() - start,
-      });
-      writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    const payload = await maybeFetchFirecrawlWebFetchPayload({
+      ...params,
+      urlToFetch: finalUrl,
+      finalUrlFallback: finalUrl,
+      statusFallback: 200,
+      cacheKey,
+      tookMs: Date.now() - start,
+    });
+    if (payload) {
       return payload;
     }
     throw error;
@@ -523,28 +566,15 @@ async function runWebFetch(params: {
 
   try {
     if (!res.ok) {
-      if (params.firecrawlEnabled && params.firecrawlApiKey) {
-        const firecrawl = await fetchFirecrawlContent({
-          url: params.url,
-          extractMode: params.extractMode,
-          apiKey: params.firecrawlApiKey,
-          baseUrl: params.firecrawlBaseUrl,
-          onlyMainContent: params.firecrawlOnlyMainContent,
-          maxAgeMs: params.firecrawlMaxAgeMs,
-          proxy: params.firecrawlProxy,
-          storeInCache: params.firecrawlStoreInCache,
-          timeoutSeconds: params.firecrawlTimeoutSeconds,
-        });
-        const payload = buildFirecrawlWebFetchPayload({
-          firecrawl,
-          rawUrl: params.url,
-          finalUrlFallback: finalUrl,
-          statusFallback: res.status,
-          extractMode: params.extractMode,
-          maxChars: params.maxChars,
-          tookMs: Date.now() - start,
-        });
-        writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+      const payload = await maybeFetchFirecrawlWebFetchPayload({
+        ...params,
+        urlToFetch: params.url,
+        finalUrlFallback: finalUrl,
+        statusFallback: res.status,
+        cacheKey,
+        tookMs: Date.now() - start,
+      });
+      if (payload) {
         return payload;
       }
       const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
@@ -647,33 +677,15 @@ async function runWebFetch(params: {
   }
 }
 
-async function tryFirecrawlFallback(params: {
-  url: string;
-  extractMode: ExtractMode;
-  firecrawlEnabled: boolean;
-  firecrawlApiKey?: string;
-  firecrawlBaseUrl: string;
-  firecrawlOnlyMainContent: boolean;
-  firecrawlMaxAgeMs: number;
-  firecrawlProxy: "auto" | "basic" | "stealth";
-  firecrawlStoreInCache: boolean;
-  firecrawlTimeoutSeconds: number;
-}): Promise<{ text: string; title?: string } | null> {
-  if (!params.firecrawlEnabled || !params.firecrawlApiKey) {
+async function tryFirecrawlFallback(
+  params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
+): Promise<{ text: string; title?: string } | null> {
+  const firecrawlParams = toFirecrawlContentParams(params);
+  if (!firecrawlParams) {
     return null;
   }
   try {
-    const firecrawl = await fetchFirecrawlContent({
-      url: params.url,
-      extractMode: params.extractMode,
-      apiKey: params.firecrawlApiKey,
-      baseUrl: params.firecrawlBaseUrl,
-      onlyMainContent: params.firecrawlOnlyMainContent,
-      maxAgeMs: params.firecrawlMaxAgeMs,
-      proxy: params.firecrawlProxy,
-      storeInCache: params.firecrawlStoreInCache,
-      timeoutSeconds: params.firecrawlTimeoutSeconds,
-    });
+    const firecrawl = await fetchFirecrawlContent(firecrawlParams);
     return { text: firecrawl.text, title: firecrawl.title };
   } catch {
     return null;
