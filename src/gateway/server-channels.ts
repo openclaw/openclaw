@@ -124,105 +124,110 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
 
-    await Promise.all(
-      accountIds.map(async (id) => {
-        if (store.tasks.has(id)) {
-          return;
-        }
-        const account = plugin.config.resolveAccount(cfg, id);
-        const enabled = plugin.config.isEnabled
-          ? plugin.config.isEnabled(account, cfg)
-          : isAccountEnabled(account);
-        if (!enabled) {
-          setRuntime(channelId, id, {
-            accountId: id,
-            running: false,
-            lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
-          });
-          return;
-        }
+    // Stagger account startup to avoid Discord rate limits
+    for (let accountIndex = 0; accountIndex < accountIds.length; accountIndex++) {
+      const id = accountIds[accountIndex];
+      // Add 2-second delay between accounts (except the first)
+      if (accountIndex > 0) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
 
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
-        if (!configured) {
-          setRuntime(channelId, id, {
-            accountId: id,
-            running: false,
-            lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
-          });
-          return;
-        }
-
-        const rKey = restartKey(channelId, id);
-        manuallyStopped.delete(rKey);
-
-        const abort = new AbortController();
-        store.aborts.set(id, abort);
-        restartAttempts.delete(rKey);
+      if (store.tasks.has(id)) {
+        continue;
+      }
+      const account = plugin.config.resolveAccount(cfg, id);
+      const enabled = plugin.config.isEnabled
+        ? plugin.config.isEnabled(account, cfg)
+        : isAccountEnabled(account);
+      if (!enabled) {
         setRuntime(channelId, id, {
           accountId: id,
-          running: true,
-          lastStartAt: Date.now(),
-          lastError: null,
-          reconnectAttempts: 0,
+          running: false,
+          lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
         });
+        continue;
+      }
 
-        const log = channelLogs[channelId];
-        const task = startAccount({
-          cfg,
+      let configured = true;
+      if (plugin.config.isConfigured) {
+        configured = await plugin.config.isConfigured(account, cfg);
+      }
+      if (!configured) {
+        setRuntime(channelId, id, {
           accountId: id,
-          account,
-          runtime: channelRuntimeEnvs[channelId],
-          abortSignal: abort.signal,
-          log,
-          getStatus: () => getRuntime(channelId, id),
-          setStatus: (next) => setRuntime(channelId, id, next),
+          running: false,
+          lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
         });
-        const tracked = Promise.resolve(task)
-          .catch((err) => {
-            const message = formatErrorMessage(err);
-            setRuntime(channelId, id, { accountId: id, lastError: message });
-            log.error?.(`[${id}] channel exited: ${message}`);
-          })
-          .finally(() => {
-            store.aborts.delete(id);
-            store.tasks.delete(id);
-            setRuntime(channelId, id, {
-              accountId: id,
-              running: false,
-              lastStopAt: Date.now(),
-            });
-          })
-          .then(async () => {
-            if (manuallyStopped.has(rKey)) {
-              return;
-            }
-            const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
-            restartAttempts.set(rKey, attempt);
-            if (attempt > MAX_RESTART_ATTEMPTS) {
-              log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
-              return;
-            }
-            const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempt);
-            log.info?.(
-              `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
-            );
-            setRuntime(channelId, id, {
-              accountId: id,
-              reconnectAttempts: attempt,
-            });
-            try {
-              await sleepWithAbort(delayMs);
-              await startChannel(channelId, id);
-            } catch {
-              // abort or startup failure — next crash will retry
-            }
+        continue;
+      }
+
+      const rKey = restartKey(channelId, id);
+      manuallyStopped.delete(rKey);
+
+      const abort = new AbortController();
+      store.aborts.set(id, abort);
+      restartAttempts.delete(rKey);
+      setRuntime(channelId, id, {
+        accountId: id,
+        running: true,
+        lastStartAt: Date.now(),
+        lastError: null,
+        reconnectAttempts: 0,
+      });
+
+      const log = channelLogs[channelId];
+      const task = startAccount({
+        cfg,
+        accountId: id,
+        account,
+        runtime: channelRuntimeEnvs[channelId],
+        abortSignal: abort.signal,
+        log,
+        getStatus: () => getRuntime(channelId, id),
+        setStatus: (next) => setRuntime(channelId, id, next),
+      });
+      const tracked = Promise.resolve(task)
+        .catch((err) => {
+          const message = formatErrorMessage(err);
+          setRuntime(channelId, id, { accountId: id, lastError: message });
+          log.error?.(`[${id}] channel exited: ${message}`);
+        })
+        .finally(() => {
+          store.aborts.delete(id);
+          store.tasks.delete(id);
+          setRuntime(channelId, id, {
+            accountId: id,
+            running: false,
+            lastStopAt: Date.now(),
           });
-        store.tasks.set(id, tracked);
-      }),
-    );
+        })
+        .then(async () => {
+          if (manuallyStopped.has(rKey)) {
+            return;
+          }
+          const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
+          restartAttempts.set(rKey, attempt);
+          if (attempt > MAX_RESTART_ATTEMPTS) {
+            log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
+            return;
+          }
+          const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempt);
+          log.info?.(
+            `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
+          );
+          setRuntime(channelId, id, {
+            accountId: id,
+            reconnectAttempts: attempt,
+          });
+          try {
+            await sleepWithAbort(delayMs);
+            await startChannel(channelId, id);
+          } catch {
+            // abort or startup failure — next crash will retry
+          }
+        });
+      store.tasks.set(id, tracked);
+    }
   };
 
   const stopChannel = async (channelId: ChannelId, accountId?: string) => {
