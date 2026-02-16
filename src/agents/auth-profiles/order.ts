@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { listProfilesForProvider } from "./profiles.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import { clearExpiredCooldowns, isProfileInCooldown } from "./usage.js";
 
 function resolveProfileUnusableUntil(stats: {
@@ -110,12 +110,7 @@ export function resolveAuthProfileOrder(params: {
     }
     return false;
   });
-  const deduped: string[] = [];
-  for (const entry of filtered) {
-    if (!deduped.includes(entry)) {
-      deduped.push(entry);
-    }
-  }
+  const deduped = dedupeProfileIds(filtered);
 
   // If user specified explicit order (store override or config), respect it
   // exactly, but still apply cooldown sorting to avoid repeatedly selecting
