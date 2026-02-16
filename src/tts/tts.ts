@@ -585,14 +585,6 @@ export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: Tts
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
-function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
-  const error = err instanceof Error ? err : new Error(String(err));
-  if (error.name === "AbortError") {
-    return `${provider}: request timed out`;
-  }
-  return `${provider}: ${error.message}`;
-}
-
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
