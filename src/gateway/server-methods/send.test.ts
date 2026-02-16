@@ -5,7 +5,7 @@ import { sendHandlers } from "./send.js";
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
-  recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
+  updateLastRoute: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -37,7 +37,7 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
-    recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
+    updateLastRoute: mocks.updateLastRoute,
   };
 });
 
@@ -225,7 +225,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-4",
     });
 
-    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalled();
+    expect(mocks.updateLastRoute).toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
