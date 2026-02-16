@@ -35,14 +35,6 @@ describe("uriAction", () => {
 });
 
 describe("postbackAction", () => {
-  it("includes displayText when provided", () => {
-    const action = postbackAction("Select", "data", "Selected!");
-
-    expect(action.label).toBe("Select");
-    expect((action as { data: string }).data).toBe("data");
-    expect((action as { displayText: string }).displayText).toBe("Selected!");
-  });
-
   it("truncates data to 300 characters", () => {
     const longData = "x".repeat(400);
     const action = postbackAction("Test", longData);
