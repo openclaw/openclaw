@@ -19,6 +19,7 @@ describe("before_tool_call loop detection behavior", () => {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
   };
+  const defaultToolContext = { agentId: "main", sessionKey: "main" };
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
@@ -32,16 +33,75 @@ describe("before_tool_call loop detection behavior", () => {
     hookRunner.hasHooks.mockReturnValue(false);
   });
 
+  function createWrappedTool(name: string, execute: ReturnType<typeof vi.fn>) {
+    return wrapToolWithBeforeToolCallHook(
+      { name, execute } as unknown as AnyAgentTool,
+      defaultToolContext,
+    );
+  }
+
+  async function withToolLoopEvents(
+    run: (emitted: DiagnosticToolLoopEvent[]) => Promise<void>,
+    filter: (evt: DiagnosticToolLoopEvent) => boolean = () => true,
+  ) {
+    const emitted: DiagnosticToolLoopEvent[] = [];
+    const stop = onDiagnosticEvent((evt) => {
+      if (evt.type === "tool.loop" && filter(evt)) {
+        emitted.push(evt);
+      }
+    });
+    try {
+      await run(emitted);
+    } finally {
+      stop();
+    }
+  }
+
+  function createPingPongTools(options?: { withProgress?: boolean }) {
+    const readExecute = options?.withProgress
+      ? vi.fn().mockImplementation(async (toolCallId: string) => ({
+          content: [{ type: "text", text: `read ${toolCallId}` }],
+          details: { ok: true },
+        }))
+      : vi.fn().mockResolvedValue({
+          content: [{ type: "text", text: "read ok" }],
+          details: { ok: true },
+        });
+    const listExecute = options?.withProgress
+      ? vi.fn().mockImplementation(async (toolCallId: string) => ({
+          content: [{ type: "text", text: `list ${toolCallId}` }],
+          details: { ok: true },
+        }))
+      : vi.fn().mockResolvedValue({
+          content: [{ type: "text", text: "list ok" }],
+          details: { ok: true },
+        });
+    return {
+      readTool: createWrappedTool("read", readExecute),
+      listTool: createWrappedTool("list", listExecute),
+    };
+  }
+
+  async function runPingPongSequence(
+    readTool: ReturnType<typeof createWrappedTool>,
+    listTool: ReturnType<typeof createWrappedTool>,
+    count: number,
+  ) {
+    for (let i = 0; i < count; i += 1) {
+      if (i % 2 === 0) {
+        await readTool.execute(`read-${i}`, { path: "/a.txt" }, undefined, undefined);
+      } else {
+        await listTool.execute(`list-${i}`, { dir: "/workspace" }, undefined, undefined);
+      }
+    }
+  }
+
   it("blocks known poll loops when no progress repeats", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
       details: { status: "running", aggregated: "steady" },
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const tool = createWrappedTool("process", execute);
     const params = { action: "poll", sessionId: "sess-1" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
@@ -60,11 +120,7 @@ describe("before_tool_call loop detection behavior", () => {
         details: { status: "running", aggregated: `output ${toolCallId}` },
       };
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const tool = createWrappedTool("process", execute);
     const params = { action: "poll", sessionId: "sess-2" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
@@ -79,11 +135,7 @@ describe("before_tool_call loop detection behavior", () => {
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const tool = createWrappedTool("read", execute);
     const params = { path: "/tmp/file" };
 
     for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
@@ -96,11 +148,7 @@ describe("before_tool_call loop detection behavior", () => {
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
-      agentId: "main",
-      sessionKey: "main",
-    });
+    const tool = createWrappedTool("read", execute);
     const params = { path: "/tmp/file" };
 
     for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
@@ -113,73 +161,30 @@ describe("before_tool_call loop detection behavior", () => {
   });
 
   it("coalesces repeated generic warning events into threshold buckets", async () => {
-    const emitted: DiagnosticToolLoopEvent[] = [];
-    const stop = onDiagnosticEvent((evt) => {
-      if (evt.type === "tool.loop" && evt.level === "warning") {
-        emitted.push(evt);
-      }
-    });
-    try {
-      const execute = vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "same output" }],
-        details: { ok: true },
-      });
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
-        agentId: "main",
-        sessionKey: "main",
-      });
-      const params = { path: "/tmp/file" };
+    await withToolLoopEvents(
+      async (emitted) => {
+        const execute = vi.fn().mockResolvedValue({
+          content: [{ type: "text", text: "same output" }],
+          details: { ok: true },
+        });
+        const tool = createWrappedTool("read", execute);
+        const params = { path: "/tmp/file" };
 
-      for (let i = 0; i < 21; i += 1) {
-        await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
-      }
+        for (let i = 0; i < 21; i += 1) {
+          await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+        }
 
-      const genericWarns = emitted.filter((evt) => evt.detector === "generic_repeat");
-      expect(genericWarns.map((evt) => evt.count)).toEqual([10, 20]);
-    } finally {
-      stop();
-    }
+        const genericWarns = emitted.filter((evt) => evt.detector === "generic_repeat");
+        expect(genericWarns.map((evt) => evt.count)).toEqual([10, 20]);
+      },
+      (evt) => evt.level === "warning",
+    );
   });
 
   it("emits structured warning diagnostic events for ping-pong loops", async () => {
-    const emitted: DiagnosticToolLoopEvent[] = [];
-    const stop = onDiagnosticEvent((evt) => {
-      if (evt.type === "tool.loop") {
-        emitted.push(evt);
-      }
-    });
-    try {
-      const readExecute = vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "read ok" }],
-        details: { ok: true },
-      });
-      const listExecute = vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "list ok" }],
-        details: { ok: true },
-      });
-      const readTool = wrapToolWithBeforeToolCallHook(
-        { name: "read", execute: readExecute } as unknown as AnyAgentTool,
-        {
-          agentId: "main",
-          sessionKey: "main",
-        },
-      );
-      const listTool = wrapToolWithBeforeToolCallHook(
-        { name: "list", execute: listExecute } as unknown as AnyAgentTool,
-        {
-          agentId: "main",
-          sessionKey: "main",
-        },
-      );
-
-      for (let i = 0; i < 9; i += 1) {
-        if (i % 2 === 0) {
-          await readTool.execute(`read-${i}`, { path: "/a.txt" }, undefined, undefined);
-        } else {
-          await listTool.execute(`list-${i}`, { dir: "/workspace" }, undefined, undefined);
-        }
-      }
+    await withToolLoopEvents(async (emitted) => {
+      const { readTool, listTool } = createPingPongTools();
+      await runPingPongSequence(readTool, listTool, 9);
 
       await listTool.execute("list-9", { dir: "/workspace" }, undefined, undefined);
       await readTool.execute("read-10", { path: "/a.txt" }, undefined, undefined);
@@ -196,49 +201,13 @@ describe("before_tool_call loop detection behavior", () => {
       expect(loopEvent?.detector).toBe("ping_pong");
       expect(loopEvent?.count).toBe(10);
       expect(loopEvent?.toolName).toBe("list");
-    } finally {
-      stop();
-    }
+    });
   });
 
   it("blocks ping-pong loops at critical threshold and emits critical diagnostic events", async () => {
-    const emitted: DiagnosticToolLoopEvent[] = [];
-    const stop = onDiagnosticEvent((evt) => {
-      if (evt.type === "tool.loop") {
-        emitted.push(evt);
-      }
-    });
-    try {
-      const readExecute = vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "read ok" }],
-        details: { ok: true },
-      });
-      const listExecute = vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "list ok" }],
-        details: { ok: true },
-      });
-      const readTool = wrapToolWithBeforeToolCallHook(
-        { name: "read", execute: readExecute } as unknown as AnyAgentTool,
-        {
-          agentId: "main",
-          sessionKey: "main",
-        },
-      );
-      const listTool = wrapToolWithBeforeToolCallHook(
-        { name: "list", execute: listExecute } as unknown as AnyAgentTool,
-        {
-          agentId: "main",
-          sessionKey: "main",
-        },
-      );
-
-      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
-        if (i % 2 === 0) {
-          await readTool.execute(`read-${i}`, { path: "/a.txt" }, undefined, undefined);
-        } else {
-          await listTool.execute(`list-${i}`, { dir: "/workspace" }, undefined, undefined);
-        }
-      }
+    await withToolLoopEvents(async (emitted) => {
+      const { readTool, listTool } = createPingPongTools();
+      await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
       await expect(
         listTool.execute(
@@ -256,49 +225,13 @@ describe("before_tool_call loop detection behavior", () => {
       expect(loopEvent?.detector).toBe("ping_pong");
       expect(loopEvent?.count).toBe(CRITICAL_THRESHOLD);
       expect(loopEvent?.toolName).toBe("list");
-    } finally {
-      stop();
-    }
+    });
   });
 
   it("does not block ping-pong at critical threshold when outcomes are progressing", async () => {
-    const emitted: DiagnosticToolLoopEvent[] = [];
-    const stop = onDiagnosticEvent((evt) => {
-      if (evt.type === "tool.loop") {
-        emitted.push(evt);
-      }
-    });
-    try {
-      const readExecute = vi.fn().mockImplementation(async (toolCallId: string) => ({
-        content: [{ type: "text", text: `read ${toolCallId}` }],
-        details: { ok: true },
-      }));
-      const listExecute = vi.fn().mockImplementation(async (toolCallId: string) => ({
-        content: [{ type: "text", text: `list ${toolCallId}` }],
-        details: { ok: true },
-      }));
-      const readTool = wrapToolWithBeforeToolCallHook(
-        { name: "read", execute: readExecute } as unknown as AnyAgentTool,
-        {
-          agentId: "main",
-          sessionKey: "main",
-        },
-      );
-      const listTool = wrapToolWithBeforeToolCallHook(
-        { name: "list", execute: listExecute } as unknown as AnyAgentTool,
-        {
-          agentId: "main",
-          sessionKey: "main",
-        },
-      );
-
-      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
-        if (i % 2 === 0) {
-          await readTool.execute(`read-${i}`, { path: "/a.txt" }, undefined, undefined);
-        } else {
-          await listTool.execute(`list-${i}`, { dir: "/workspace" }, undefined, undefined);
-        }
-      }
+    await withToolLoopEvents(async (emitted) => {
+      const { readTool, listTool } = createPingPongTools({ withProgress: true });
+      await runPingPongSequence(readTool, listTool, CRITICAL_THRESHOLD - 1);
 
       await expect(
         listTool.execute(
@@ -317,28 +250,16 @@ describe("before_tool_call loop detection behavior", () => {
         (evt) => evt.level === "warning" && evt.detector === "ping_pong",
       );
       expect(warningPingPong).toBeTruthy();
-    } finally {
-      stop();
-    }
+    });
   });
 
   it("emits structured critical diagnostic events when blocking loops", async () => {
-    const emitted: DiagnosticToolLoopEvent[] = [];
-    const stop = onDiagnosticEvent((evt) => {
-      if (evt.type === "tool.loop") {
-        emitted.push(evt);
-      }
-    });
-    try {
+    await withToolLoopEvents(async (emitted) => {
       const execute = vi.fn().mockResolvedValue({
         content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
         details: { status: "running", aggregated: "steady" },
       });
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
-        agentId: "main",
-        sessionKey: "main",
-      });
+      const tool = createWrappedTool("process", execute);
       const params = { action: "poll", sessionId: "sess-crit" };
 
       for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
@@ -356,8 +277,6 @@ describe("before_tool_call loop detection behavior", () => {
       expect(loopEvent?.detector).toBe("known_poll_no_progress");
       expect(loopEvent?.count).toBe(CRITICAL_THRESHOLD);
       expect(loopEvent?.toolName).toBe("process");
-    } finally {
-      stop();
-    }
+    });
   });
 });
