@@ -138,7 +138,7 @@ function coerceDelivery(delivery: UnknownRecord) {
     const mode = delivery.mode.trim().toLowerCase();
     if (mode === "deliver") {
       next.mode = "announce";
-    } else if (mode === "announce" || mode === "none") {
+    } else if (mode === "announce" || mode === "none" || mode === "webhook") {
       next.mode = mode;
     } else {
       delete next.mode;
@@ -166,7 +166,7 @@ function coerceDelivery(delivery: UnknownRecord) {
     if (typeof delivery.threadId === "number") {
       next.threadId = delivery.threadId;
     } else if (typeof delivery.threadId === "string") {
-      const trimmed = (delivery.threadId as string).trim();
+      const trimmed = delivery.threadId.trim();
       if (trimmed) {
         next.threadId = trimmed;
       } else {
