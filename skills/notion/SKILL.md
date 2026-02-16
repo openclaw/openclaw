@@ -38,11 +38,53 @@ curl -X GET "https://api.notion.com/v1/..." \
   -H "Content-Type: application/json"
 ```
 
-> **Note:** The `Notion-Version` header is required. This skill uses `2025-09-03` (latest). In this version, databases are called "data sources" in the API.
+## Creating Databases (2025-09-03)
+
+In version 2025-09-03, creating a database creates a container "View" page + an `initial_data_source` which holds the schema.
+
+**Create a database:**
+
+```bash
+curl -X POST "https://api.notion.com/v1/databases" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2025-09-03" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent": {"type": "page_id", "page_id": "PARENT_PAGE_ID"},
+    "title": [{"text": {"content": "My Database"}}],
+    "initial_data_source": {
+      "properties": {
+        "Name": {"title": {}},
+        "Status": {"select": {"options": [{"name": "Todo"}, {"name": "Done"}]}}
+      }
+    }
+  }'
+```
+
+**Get the Data Source ID:**
+The response will contain `"data_sources": [{"id": "DATA_SOURCE_ID", ...}]`. Use this ID for creating pages.
+
+## Creating Pages (2025-09-03)
+
+To add items to a database, you must target its **Data Source ID**, not the Database ID.
+
+```bash
+curl -X POST "https://api.notion.com/v1/pages" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2025-09-03" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent": {"type": "data_source_id", "data_source_id": "DATA_SOURCE_ID"},
+    "properties": {
+      "Name": {"title": [{"text": {"content": "New Item"}}]},
+      "Status": {"select": {"name": "Todo"}}
+    }
+  }'
+```
 
 ## Common Operations
 
-**Search for pages and data sources:**
+**Search:**
 
 ```bash
 curl -X POST "https://api.notion.com/v1/search" \
@@ -60,31 +102,7 @@ curl "https://api.notion.com/v1/pages/{page_id}" \
   -H "Notion-Version: 2025-09-03"
 ```
 
-**Get page content (blocks):**
-
-```bash
-curl "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
-```
-
-**Create page in a data source:**
-
-```bash
-curl -X POST "https://api.notion.com/v1/pages" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "parent": {"database_id": "xxx"},
-    "properties": {
-      "Name": {"title": [{"text": {"content": "New Item"}}]},
-      "Status": {"select": {"name": "Todo"}}
-    }
-  }'
-```
-
-**Query a data source (database):**
+**Query a data source:**
 
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
@@ -92,26 +110,7 @@ curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
-    "filter": {"property": "Status", "select": {"equals": "Active"}},
-    "sorts": [{"property": "Date", "direction": "descending"}]
-  }'
-```
-
-**Create a data source (database):**
-
-```bash
-curl -X POST "https://api.notion.com/v1/data_sources" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "parent": {"page_id": "xxx"},
-    "title": [{"text": {"content": "My Database"}}],
-    "properties": {
-      "Name": {"title": {}},
-      "Status": {"select": {"options": [{"name": "Todo"}, {"name": "Done"}]}},
-      "Date": {"date": {}}
-    }
+    "filter": {"property": "Status", "select": {"equals": "Active"}}
   }'
 ```
 
@@ -156,17 +155,6 @@ Common property formats for database items:
 
 ## Key Differences in 2025-09-03
 
-- **Databases → Data Sources:** Use `/data_sources/` endpoints for queries and retrieval
-- **Two IDs:** Each database now has both a `database_id` and a `data_source_id`
-  - Use `database_id` when creating pages (`parent: {"database_id": "..."}`)
-  - Use `data_source_id` when querying (`POST /v1/data_sources/{id}/query`)
-- **Search results:** Databases return as `"object": "data_source"` with their `data_source_id`
-- **Parent in responses:** Pages show `parent.data_source_id` alongside `parent.database_id`
-- **Finding the data_source_id:** Search for the database, or call `GET /v1/data_sources/{data_source_id}`
-
-## Notes
-
-- Page/database IDs are UUIDs (with or without dashes)
-- The API cannot set database view filters — that's UI-only
-- Rate limit: ~3 requests/second average
-- Use `is_inline: true` when creating data sources to embed them in pages
+- **Creation:** Use `initial_data_source` inside `POST /v1/databases` for schema.
+- **Page Parent:** Use `type: "data_source_id"` inside `POST /v1/pages`.
+- **Querying:** Use `POST /v1/data_sources/{id}/query`.
