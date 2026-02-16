@@ -86,3 +86,4 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+openclaw-*.log
