@@ -395,10 +395,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false });
   const hasCard = params.card != null && typeof params.card === "object";
+  const hasComponents = params.components != null && typeof params.components === "object";
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
-      required: !mediaHint && !hasCard,
+      required: !mediaHint && !hasCard && !hasComponents,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -464,7 +465,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       message = "";
     }
   }
-  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard) {
+  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard && !hasComponents) {
     throw new Error("send requires text or media");
   }
   params.message = message;
@@ -500,6 +501,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId,
       route: outboundRoute,
     });
+  }
+  if (outboundRoute && !dryRun) {
+    params.__sessionKey = outboundRoute.sessionKey;
+  }
+  if (agentId) {
+    params.__agentId = agentId;
   }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
