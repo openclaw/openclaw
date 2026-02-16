@@ -23,12 +23,14 @@ describe("parseTelegramTarget", () => {
   it("parses plain chatId", () => {
     expect(parseTelegramTarget("-1001234567890")).toEqual({
       chatId: "-1001234567890",
+      chatType: "group",
     });
   });
 
   it("parses @username", () => {
     expect(parseTelegramTarget("@mychannel")).toEqual({
       chatId: "@mychannel",
+      chatType: "unknown",
     });
   });
 
@@ -36,6 +38,7 @@ describe("parseTelegramTarget", () => {
     expect(parseTelegramTarget("-1001234567890:123")).toEqual({
       chatId: "-1001234567890",
       messageThreadId: 123,
+      chatType: "group",
     });
   });
 
@@ -43,6 +46,7 @@ describe("parseTelegramTarget", () => {
     expect(parseTelegramTarget("-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
       messageThreadId: 456,
+      chatType: "group",
     });
   });
 
@@ -50,12 +54,14 @@ describe("parseTelegramTarget", () => {
     expect(parseTelegramTarget("  -1001234567890:99  ")).toEqual({
       chatId: "-1001234567890",
       messageThreadId: 99,
+      chatType: "group",
     });
   });
 
   it("does not treat non-numeric suffix as topicId", () => {
     expect(parseTelegramTarget("-1001234567890:abc")).toEqual({
       chatId: "-1001234567890:abc",
+      chatType: "unknown",
     });
   });
 
@@ -63,6 +69,7 @@ describe("parseTelegramTarget", () => {
     expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
       messageThreadId: 456,
+      chatType: "group",
     });
   });
 });

@@ -10,7 +10,7 @@ export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
 
-export type CronDeliveryMode = "none" | "announce";
+export type CronDeliveryMode = "none" | "announce" | "webhook";
 
 export type CronDelivery = {
   mode: CronDeliveryMode;
@@ -59,6 +59,10 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  /** Number of consecutive execution errors (reset on success). Used for backoff. */
+  consecutiveErrors?: number;
+  /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
+  scheduleErrorCount?: number;
 };
 
 export type CronJob = {

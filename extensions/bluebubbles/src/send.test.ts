@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { BlueBubblesSendTarget } from "./types.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget } from "./send.js";
 
 vi.mock("./accounts.js", () => ({
@@ -14,12 +15,18 @@ vi.mock("./accounts.js", () => ({
   }),
 }));
 
+vi.mock("./probe.js", () => ({
+  getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
+}));
+
 const mockFetch = vi.fn();
 
 describe("send", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -609,6 +616,46 @@ describe("send", () => {
       expect(body.method).toBe("private-api");
       expect(body.selectedMessageGuid).toBe("reply-guid-123");
       expect(body.partIndex).toBe(1);
+    });
+
+    it("downgrades threaded reply to plain send when private API is disabled", async () => {
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                data: { guid: "msg-uuid-plain" },
+              }),
+            ),
+        });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        replyToMessageGuid: "reply-guid-123",
+        replyToPartIndex: 1,
+      });
+
+      expect(result.messageId).toBe("msg-uuid-plain");
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.method).toBeUndefined();
+      expect(body.selectedMessageGuid).toBeUndefined();
+      expect(body.partIndex).toBeUndefined();
     });
 
     it("normalizes effect names and uses private-api for effects", async () => {

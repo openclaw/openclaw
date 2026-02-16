@@ -1,103 +1,26 @@
 import fs from "node:fs/promises";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  compactEmbeddedPiSession: vi.fn(),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
-
-const usageMocks = vi.hoisted(() => ({
-  loadProviderUsageSummary: vi.fn().mockResolvedValue({
-    updatedAt: 0,
-    providers: [],
-  }),
-  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
-  resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
-}));
-
-vi.mock("../infra/provider-usage.js", () => usageMocks);
-
-const modelCatalogMocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn().mockResolvedValue([
-    {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      name: "Claude Opus 4.5",
-      contextWindow: 200000,
-    },
-    {
-      provider: "openrouter",
-      id: "anthropic/claude-opus-4-5",
-      name: "Claude Opus 4.5 (OpenRouter)",
-      contextWindow: 200000,
-    },
-    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
-    { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-    { provider: "openai-codex", id: "gpt-5.2", name: "GPT-5.2 (Codex)" },
-    { provider: "minimax", id: "MiniMax-M2.1", name: "MiniMax M2.1" },
-  ]),
-  resetModelCatalogCacheForTest: vi.fn(),
-}));
-
-vi.mock("../agents/model-catalog.js", () => modelCatalogMocks);
-
-import { abortEmbeddedPiRun, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { getReplyFromConfig } from "./reply.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  getRunEmbeddedPiAgentMock,
+  installTriggerHandlingE2eTestHooks,
+  MAIN_SESSION_KEY,
+  makeCfg,
+  withTempHome,
+} from "./reply.triggers.trigger-handling.test-harness.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-const _MAIN_SESSION_KEY = "agent:main:main";
-
-const webMocks = vi.hoisted(() => ({
-  webAuthExists: vi.fn().mockResolvedValue(true),
-  getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
-  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
-}));
-
-vi.mock("../web/session.js", () => webMocks);
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockClear();
-      vi.mocked(abortEmbeddedPiRun).mockClear();
-      return await fn(home);
-    },
-    { prefix: "openclaw-triggers-" },
-  );
-}
-
-function makeCfg(home: string) {
-  return {
-    agents: {
-      defaults: {
-        model: "anthropic/claude-opus-4-5",
-        workspace: join(home, "openclaw"),
-      },
-    },
-    channels: {
-      whatsapp: {
-        allowFrom: ["*"],
-      },
-    },
-    session: { store: join(home, "sessions.json") },
-  };
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+beforeAll(async () => {
+  ({ getReplyFromConfig } = await import("./reply.js"));
 });
+
+installTriggerHandlingE2eTestHooks();
 
 describe("trigger handling", () => {
   it("includes the error cause when the embedded agent throws", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(new Error("sandbox is not defined."));
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockRejectedValue(new Error("sandbox is not defined."));
 
       const res = await getReplyFromConfig(
         {
@@ -113,12 +36,14 @@ describe("trigger handling", () => {
       expect(text).toBe(
         "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
       );
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     });
   });
+
   it("uses heartbeat model override for heartbeat runs", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 1,
@@ -127,6 +52,18 @@ describe("trigger handling", () => {
       });
 
       const cfg = makeCfg(home);
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify({
+          [MAIN_SESSION_KEY]: {
+            sessionId: "main",
+            updatedAt: Date.now(),
+            providerOverride: "openai",
+            modelOverride: "gpt-5.2",
+          },
+        }),
+        "utf-8",
+      );
       cfg.agents = {
         ...cfg.agents,
         defaults: {
@@ -145,14 +82,57 @@ describe("trigger handling", () => {
         cfg,
       );
 
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
       expect(call?.provider).toBe("anthropic");
       expect(call?.model).toBe("claude-haiku-4-5-20251001");
     });
   });
+
+  it("keeps stored model override for heartbeat runs when heartbeat model is not configured", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home);
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify({
+          [MAIN_SESSION_KEY]: {
+            sessionId: "main",
+            updatedAt: Date.now(),
+            providerOverride: "openai",
+            modelOverride: "gpt-5.2",
+          },
+        }),
+        "utf-8",
+      );
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1002",
+          To: "+2000",
+        },
+        { isHeartbeat: true },
+        cfg,
+      );
+
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+      expect(call?.provider).toBe("openai");
+      expect(call?.model).toBe("gpt-5.2");
+    });
+  });
+
   it("suppresses HEARTBEAT_OK replies outside heartbeat runs", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
         payloads: [{ text: HEARTBEAT_TOKEN }],
         meta: {
           durationMs: 1,
@@ -171,12 +151,14 @@ describe("trigger handling", () => {
       );
 
       expect(res).toBeUndefined();
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     });
   });
+
   it("strips HEARTBEAT_OK at edges outside heartbeat runs", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
         payloads: [{ text: `${HEARTBEAT_TOKEN} hello` }],
         meta: {
           durationMs: 1,
@@ -198,8 +180,10 @@ describe("trigger handling", () => {
       expect(text).toBe("hello");
     });
   });
+
   it("updates group activation when the owner sends /activation", async () => {
     await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       const cfg = makeCfg(home);
       const res = await getReplyFromConfig(
         {
@@ -221,7 +205,7 @@ describe("trigger handling", () => {
         { groupActivation?: string }
       >;
       expect(store["agent:main:whatsapp:group:123@g.us"]?.groupActivation).toBe("always");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 });

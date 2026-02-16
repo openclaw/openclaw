@@ -14,8 +14,8 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { formatRelativeTime } from "../utils/time-format.js";
 import { helpText, parseCommand } from "./commands.js";
 import {
   createFilterableSelectList,
@@ -158,7 +158,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         // Avoid redundant "title (key)" when title matches key
         const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
         // Build description: time + message preview
-        const timePart = session.updatedAt ? formatRelativeTime(session.updatedAt) : "";
+        const timePart = session.updatedAt
+          ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
+          : "";
         const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
         const description =
           timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
@@ -434,7 +436,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
-          await client.resetSession(state.currentSessionKey);
+          await client.resetSession(state.currentSessionKey, name);
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {

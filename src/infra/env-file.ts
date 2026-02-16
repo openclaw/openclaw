@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveConfigDir } from "../utils.js";
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import { escapeRegExp, resolveConfigDir } from "../utils.js";
 
 export function upsertSharedEnvVar(params: {
   key: string;
