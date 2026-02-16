@@ -51,6 +51,7 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+import { cacheTopicName } from "./topic-cache.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -798,6 +799,48 @@ export const registerTelegramHandlers = ({
       }
     } catch (err) {
       runtime.error?.(danger(`[telegram] Group migration handler failed: ${String(err)}`));
+    }
+  });
+
+  // Handle forum topic created - cache the topic name for readable session keys
+  bot.on("message:forum_topic_created", (ctx) => {
+    try {
+      const msg = ctx.message;
+      if (!msg?.forum_topic_created?.name) {
+        return;
+      }
+      const chatId = msg.chat.id;
+      const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+      if (messageThreadId != null) {
+        cacheTopicName(chatId, messageThreadId, msg.forum_topic_created.name);
+        logVerbose(
+          `[telegram] Cached topic name: chat=${chatId} topic=${messageThreadId} name="${msg.forum_topic_created.name}"`,
+        );
+      }
+    } catch (err) {
+      logVerbose(`[telegram] forum_topic_created handler error: ${String(err)}`);
+    }
+  });
+
+  // Handle forum topic edited - update the cached topic name
+  bot.on("message:forum_topic_edited", (ctx) => {
+    try {
+      const msg = ctx.message;
+      const topicEdited = msg?.forum_topic_edited;
+      // forum_topic_edited may only contain icon changes, name is optional
+      if (!topicEdited?.name) {
+        return;
+      }
+      const chatId = msg.chat.id;
+      const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+      if (messageThreadId != null) {
+        cacheTopicName(chatId, messageThreadId, topicEdited.name);
+        logVerbose(
+          `[telegram] Updated cached topic name: chat=${chatId} topic=${messageThreadId} name="${topicEdited.name}"`,
+        );
+      }
+    } catch (err) {
+      logVerbose(`[telegram] forum_topic_edited handler error: ${String(err)}`);
     }
   });
 

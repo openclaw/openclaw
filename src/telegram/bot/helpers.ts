@@ -164,8 +164,36 @@ export function resolveTelegramStreamMode(telegramCfg?: {
   return "partial";
 }
 
-export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
-  return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+import { getCachedTopicName, slugifyTopicName } from "../topic-cache.js";
+
+/**
+ * Build a peer ID for Telegram group/topic.
+ *
+ * If topicName is provided (or cached), appends a slugified version for readability:
+ * - Without topic name: "-1003856094222:topic:49"
+ * - With topic name: "-1003856094222:topic:49-telegram-ops"
+ *
+ * The topic ID remains the canonical identifier; the name is purely cosmetic.
+ */
+export function buildTelegramGroupPeerId(
+  chatId: number | string,
+  messageThreadId?: number,
+  topicName?: string,
+) {
+  if (messageThreadId == null) {
+    return String(chatId);
+  }
+
+  // Try to use provided name, or look up cached name
+  const name = topicName ?? getCachedTopicName(chatId, messageThreadId);
+  if (name) {
+    const slug = slugifyTopicName(name);
+    if (slug) {
+      return `${chatId}:topic:${messageThreadId}-${slug}`;
+    }
+  }
+
+  return `${chatId}:topic:${messageThreadId}`;
 }
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
