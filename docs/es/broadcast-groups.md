@@ -9,7 +9,7 @@ title: "Broadcast Groups"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/broadcast-groups)
+- Ver la versión en inglés: [Open English doc](/channels/broadcast-groups)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.

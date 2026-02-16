@@ -9,7 +9,7 @@ title: "Formal Verification (Security Models)"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/gateway/security/formal-verification)
+- Ver la versión en inglés: [Open English doc](/security/formal-verification)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.

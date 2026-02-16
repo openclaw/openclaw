@@ -9,7 +9,7 @@ title: "Environment Variables"
 
 Esta página ainda não possui tradução completa para pt-BR.
 
-- Ver versão em inglês: [Open English doc](/environment)
+- Ver versão em inglês: [Open English doc](/help/environment)
 - Voltar para a página inicial em português: [OpenClaw PT-BR](/pt-BR)
 
 > Status: tradução em andamento.

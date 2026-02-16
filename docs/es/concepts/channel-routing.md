@@ -9,7 +9,7 @@ title: "Channel Routing"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/concepts/channel-routing)
+- Ver la versión en inglés: [Open English doc](/channels/channel-routing)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.
