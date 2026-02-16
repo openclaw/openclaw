@@ -6,6 +6,8 @@ import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 
 const CLI_NAME = resolveCliName();
+const ROOT_COMMANDS_HINT =
+  "Hint: get help on flags and subcommands by calling --help on each command.";
 
 const EXAMPLES = [
   [
@@ -56,7 +58,16 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
 
   program.configureOutput({
     writeOut: (str) => {
-      const colored = str
+      let output = str;
+      const isRootHelp = new RegExp(
+        `^Usage:\\s+${CLI_NAME}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
+        "m",
+      ).test(output);
+      if (isRootHelp && /^Commands:/m.test(output)) {
+        output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
+      }
+
+      const colored = output
         .replace(/^Usage:/gm, theme.heading("Usage:"))
         .replace(/^Options:/gm, theme.heading("Options:"))
         .replace(/^Commands:/gm, theme.heading("Commands:"));
