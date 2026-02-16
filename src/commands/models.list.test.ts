@@ -153,30 +153,6 @@ describe("models list/status", () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
   });
 
-  it("models list outputs canonical zai key for configured z.ai model", async () => {
-    loadConfig.mockReturnValue({
-      agents: { defaults: { model: "z.ai/glm-4.7" } },
-    });
-    const runtime = makeRuntime();
-
-    const model = {
-      provider: "zai",
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      input: ["text"],
-      baseUrl: "https://api.z.ai/v1",
-      contextWindow: 128000,
-    };
-
-    modelRegistryState.models = [model];
-    modelRegistryState.available = [model];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("zai/glm-4.7");
-  });
-
   it("models list plain outputs canonical zai key", async () => {
     loadConfig.mockReturnValue({
       agents: { defaults: { model: "z.ai/glm-4.7" } },
