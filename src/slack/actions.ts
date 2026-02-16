@@ -167,13 +167,14 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts = {},
+  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
   const client = await getClient(opts);
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: content,
+    text: content || " ",
+    ...(opts.blocks?.length ? { blocks: opts.blocks } : {}),
   });
 }
 
