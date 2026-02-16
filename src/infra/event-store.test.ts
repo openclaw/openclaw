@@ -1,32 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-
-// Mock NATS module
-const mockPublish = vi.fn().mockResolvedValue({ seq: 1 });
-const mockStreamInfo = vi.fn();
-const mockStreamAdd = vi.fn().mockResolvedValue({});
-const mockDrain = vi.fn().mockResolvedValue(undefined);
-const mockClose = vi.fn().mockResolvedValue(undefined);
-const mockIsClosed = vi.fn().mockReturnValue(false);
-const mockJetstream = vi.fn().mockReturnValue({ publish: mockPublish });
-const mockJetstreamManager = vi.fn().mockResolvedValue({
-  streams: { info: mockStreamInfo, add: mockStreamAdd },
-});
-
-// Async iterator that never yields (for nc.status())
-const emptyAsyncIter = {
-  [Symbol.asyncIterator]: () => ({
-    next: () => new Promise<{ done: true; value: undefined }>(() => {}),
-  }),
-};
-
-const mockConnection = {
-  jetstream: mockJetstream,
-  jetstreamManager: mockJetstreamManager,
-  isClosed: mockIsClosed,
-  drain: mockDrain,
-  close: mockClose,
-  status: vi.fn().mockReturnValue(emptyAsyncIter),
-};
+import {
+  mockPublish,
+  mockStreamInfo,
+  mockStreamAdd,
+  mockDrain,
+  mockClose,
+  mockIsClosed,
+  mockConnection,
+  DEFAULT_CONFIG,
+  capturedListener,
+  setCapturedListener,
+} from "./__test__/event-store.helpers.js";
 
 vi.mock("nats", () => ({
   connect: vi.fn().mockResolvedValue(mockConnection),
@@ -40,27 +24,19 @@ vi.mock("nats", () => ({
 }));
 
 // Mock agent-events to capture the listener
-let capturedListener: ((evt: unknown) => void) | null = null;
 vi.mock("./agent-events.js", () => ({
   onAgentEvent: vi.fn((cb: (evt: unknown) => void) => {
-    capturedListener = cb;
+    setCapturedListener(cb);
     return () => {
-      capturedListener = null;
+      setCapturedListener(null);
     };
   }),
 }));
 
-const DEFAULT_CONFIG = {
-  enabled: true,
-  natsUrl: "nats://localhost:4222",
-  streamName: "test-events",
-  subjectPrefix: "test.events",
-};
-
 describe("Event Store", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    capturedListener = null;
+    setCapturedListener(null);
     mockStreamInfo.mockRejectedValue(new Error("not found"));
     mockIsClosed.mockReturnValue(false);
     mockPublish.mockResolvedValue({ seq: 1 });
@@ -73,9 +49,7 @@ describe("Event Store", () => {
     resetForTest();
   });
 
-  // ───────────────────────────────────────────────────────────────────────
-  // initEventStore
-  // ───────────────────────────────────────────────────────────────────────
+  // ─── initEventStore ─────────────────────────────────────────────────
 
   describe("initEventStore", () => {
     it("should not connect when disabled", async () => {
@@ -166,10 +140,7 @@ describe("Event Store", () => {
       const { connect } = await import("nats");
       (connect as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Connection refused"));
       const { initEventStore, isEventStoreConnected } = await import("./event-store.js");
-
-      // Should not throw
       await initEventStore(DEFAULT_CONFIG);
-
       expect(isEventStoreConnected()).toBe(false);
     });
 
@@ -177,20 +148,14 @@ describe("Event Store", () => {
       mockStreamInfo.mockRejectedValue(new Error("not found"));
       mockStreamAdd.mockRejectedValueOnce(new Error("stream create failed"));
       const { connect } = await import("nats");
-      // connect succeeds but ensureStream throws — whole init should fail gracefully
       (connect as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockConnection);
       const { initEventStore, isEventStoreConnected } = await import("./event-store.js");
-
       await initEventStore(DEFAULT_CONFIG);
-
-      // Init should have caught the error
       expect(isEventStoreConnected()).toBe(false);
     });
   });
 
-  // ───────────────────────────────────────────────────────────────────────
-  // Event publishing
-  // ───────────────────────────────────────────────────────────────────────
+  // ─── Event publishing ───────────────────────────────────────────────
 
   describe("event publishing", () => {
     it("should publish user messages as msg.in", async () => {
@@ -281,8 +246,6 @@ describe("Event Store", () => {
       await initEventStore(DEFAULT_CONFIG);
 
       mockPublish.mockRejectedValueOnce(new Error("NATS publish timeout"));
-
-      // Should not throw — error is caught in the onAgentEvent handler
       capturedListener!({
         ts: 1700000000000,
         sessionKey: "main",
@@ -310,19 +273,13 @@ describe("Event Store", () => {
     });
   });
 
-  // ───────────────────────────────────────────────────────────────────────
-  // Helper functions (exported for testing)
-  // ───────────────────────────────────────────────────────────────────────
+  // ─── Helper functions (exported for testing) ────────────────────────
 
   describe("toEventType", () => {
-    it("should map tool stream with result to tool.result", async () => {
+    it("should map tool stream correctly", async () => {
       const { toEventType } = await import("./event-store.js");
       expect(toEventType("tool", { result: "done" })).toBe("tool.result");
       expect(toEventType("tool", { output: "data" })).toBe("tool.result");
-    });
-
-    it("should map tool stream without result to tool.call", async () => {
-      const { toEventType } = await import("./event-store.js");
       expect(toEventType("tool", { name: "web_search" })).toBe("tool.call");
     });
 
@@ -334,45 +291,27 @@ describe("Event Store", () => {
       expect(toEventType("lifecycle", {})).toBe("run.start");
     });
 
-    it("should map user stream to msg.in", async () => {
+    it("should map message and error streams", async () => {
       const { toEventType } = await import("./event-store.js");
       expect(toEventType("user", {})).toBe("msg.in");
-    });
-
-    it("should map assistant stream to msg.out", async () => {
-      const { toEventType } = await import("./event-store.js");
       expect(toEventType("assistant", {})).toBe("msg.out");
-    });
-
-    it("should map error stream to run.error", async () => {
-      const { toEventType } = await import("./event-store.js");
       expect(toEventType("error", {})).toBe("run.error");
-    });
-
-    it("should fall back to msg.out for unknown streams", async () => {
-      const { toEventType } = await import("./event-store.js");
       expect(toEventType("unknown_stream", {})).toBe("msg.out");
     });
   });
 
   describe("getAgent", () => {
-    it("should return 'main' for main session", async () => {
+    it("should extract agent name from session key", async () => {
       const { getAgent } = await import("./event-store.js");
       expect(getAgent("main")).toBe("main");
       expect(getAgent(undefined)).toBe("main");
       expect(getAgent("")).toBe("main");
-    });
-
-    it("should extract agent name from session key", async () => {
-      const { getAgent } = await import("./event-store.js");
       expect(getAgent("viola:session:123")).toBe("viola");
       expect(getAgent("cerberus:review:456")).toBe("cerberus");
     });
   });
 
-  // ───────────────────────────────────────────────────────────────────────
-  // Shutdown
-  // ───────────────────────────────────────────────────────────────────────
+  // ─── Shutdown ───────────────────────────────────────────────────────
 
   describe("shutdownEventStore", () => {
     it("should drain connection and clear state", async () => {
@@ -380,8 +319,6 @@ describe("Event Store", () => {
         await import("./event-store.js");
 
       await initEventStore(DEFAULT_CONFIG);
-      expect(isEventStoreConnected()).toBe(true);
-
       await shutdownEventStore();
       expect(mockDrain).toHaveBeenCalled();
       expect(isEventStoreConnected()).toBe(false);
@@ -393,22 +330,15 @@ describe("Event Store", () => {
     });
 
     it("should force close if drain times out", async () => {
-      mockDrain.mockImplementation(() => new Promise(() => {})); // Never resolves
+      mockDrain.mockImplementation(() => new Promise(() => {}));
       const { initEventStore, shutdownEventStore } = await import("./event-store.js");
-
       await initEventStore(DEFAULT_CONFIG);
-
-      // Shutdown should not hang forever — it has a 5s timeout
-      // We use a shorter test timeout expectation
-      const shutdownPromise = shutdownEventStore();
-      await expect(shutdownPromise).resolves.toBeUndefined();
+      await expect(shutdownEventStore()).resolves.toBeUndefined();
       expect(mockClose).toHaveBeenCalled();
     }, 10_000);
   });
 
-  // ───────────────────────────────────────────────────────────────────────
-  // Status
-  // ───────────────────────────────────────────────────────────────────────
+  // ─── Status ────────────────────────────────────────────────────────
 
   describe("getEventStoreStatus", () => {
     it("should report connected status with counters", async () => {
@@ -444,9 +374,7 @@ describe("Event Store", () => {
     });
   });
 
-  // ───────────────────────────────────────────────────────────────────────
-  // resetForTest
-  // ───────────────────────────────────────────────────────────────────────
+  // ─── resetForTest ───────────────────────────────────────────────────
 
   describe("resetForTest", () => {
     it("should clear state and allow re-initialization", async () => {

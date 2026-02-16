@@ -29,7 +29,7 @@ import {
 } from "../infra/control-ui-assets.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
-import { initEventStore } from "../infra/event-store.js";
+import { EVENT_STORE_DEFAULTS, initEventStore } from "../infra/event-store.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -241,9 +241,9 @@ export async function startGatewayServer(
   if (cfgAtStart.eventStore?.enabled) {
     await initEventStore({
       enabled: true,
-      natsUrl: cfgAtStart.eventStore.natsUrl ?? "nats://localhost:4222",
-      streamName: cfgAtStart.eventStore.streamName ?? "openclaw-events",
-      subjectPrefix: cfgAtStart.eventStore.subjectPrefix ?? "openclaw.events",
+      natsUrl: cfgAtStart.eventStore.natsUrl ?? EVENT_STORE_DEFAULTS.natsUrl,
+      streamName: cfgAtStart.eventStore.streamName ?? EVENT_STORE_DEFAULTS.streamName,
+      subjectPrefix: cfgAtStart.eventStore.subjectPrefix ?? EVENT_STORE_DEFAULTS.subjectPrefix,
       retention: cfgAtStart.eventStore.retention,
     });
   }

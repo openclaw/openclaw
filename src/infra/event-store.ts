@@ -10,12 +10,22 @@
 import { randomUUID } from "node:crypto";
 import type { AgentEventPayload } from "./agent-events.js";
 import { onAgentEvent } from "./agent-events.js";
+import type { EventType } from "../config/types.eventstore.js";
+
+// Re-export EventType so downstream consumers don't need to change imports
+export type { EventType } from "../config/types.eventstore.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type EventStoreConfig = {
+/**
+ * Fully resolved event store config with all fields required.
+ * The config-level `EventStoreConfig` (in types.eventstore.ts) has optional fields
+ * with defaults; this type represents the resolved runtime config after defaults
+ * have been applied by the caller (e.g. server.impl.ts).
+ */
+export type ResolvedEventStoreConfig = {
   enabled: boolean;
   natsUrl: string;
   streamName: string;
@@ -27,15 +37,6 @@ export type EventStoreConfig = {
   };
 };
 
-export type EventType =
-  | "msg.in"
-  | "msg.out"
-  | "tool.call"
-  | "tool.result"
-  | "run.start"
-  | "run.end"
-  | "run.error";
-
 export type ClawEvent = {
   id: string;
   ts: number;
@@ -44,6 +45,16 @@ export type ClawEvent = {
   type: EventType;
   payload: AgentEventPayload;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Defaults (H3: single source of truth, used by server.impl.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const EVENT_STORE_DEFAULTS = {
+  natsUrl: "nats://localhost:4222",
+  streamName: "openclaw-events",
+  subjectPrefix: "openclaw.events",
+} as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lazy NATS import (optional peer dependency)
@@ -76,7 +87,7 @@ type State = {
   js: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sc: any;
-  config: EventStoreConfig;
+  config: ResolvedEventStoreConfig;
   unsub: () => void;
 };
 
@@ -138,6 +149,71 @@ function log(msg: string, err?: unknown): void {
   }
 }
 
+/**
+ * Parse a NATS URL into connection options.
+ *
+ * Only `nats://` URLs are parsed because it's the only scheme supported by the
+ * NATS client library. Other schemes (e.g. `tls://`) would need additional TLS
+ * config that can't be inferred from the URL alone.
+ *
+ * (H2) For unrecognized schemes we log a warning and pass the URL through
+ * as-is, letting the NATS client decide how to handle it.
+ */
+function parseNatsUrl(rawUrl: string): {
+  servers: string;
+  user?: string;
+  pass?: string;
+  safeUrl: string;
+} {
+  if (rawUrl.startsWith("nats://")) {
+    const url = new URL(rawUrl);
+    return {
+      servers: `${url.hostname}:${url.port || 4222}`,
+      user: url.username ? decodeURIComponent(url.username) : undefined,
+      pass: url.password ? decodeURIComponent(url.password) : undefined,
+      safeUrl: `${url.protocol}//${url.hostname}:${url.port || 4222}`,
+    };
+  }
+
+  // Warn about unrecognized scheme — only nats:// is fully parsed
+  const schemeMatch = rawUrl.match(/^([a-z]+):\/\//);
+  if (schemeMatch) {
+    log(`Unrecognized URL scheme "${schemeMatch[1]}://", passing through as-is`);
+  }
+
+  return { servers: rawUrl, safeUrl: rawUrl };
+}
+
+/**
+ * Monitor NATS connection status for reconnects/disconnects. (C2: extracted from initEventStore)
+ * Runs as a background async iterator — exits when state is cleared.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function monitorConnection(nc: any): void {
+  (async () => {
+    for await (const s of nc.status()) {
+      if (!state) {
+        break;
+      }
+      if (s.type === "reconnect") {
+        counters.disconnects = 0;
+        log("Reconnected");
+      } else if (s.type === "disconnect") {
+        counters.disconnects++;
+        if (counters.disconnects <= MAX_DISCONNECTS_BEFORE_WARN) {
+          log(`Disconnected (attempt ${counters.disconnects}), reconnecting...`);
+        } else if (counters.disconnects % MAX_DISCONNECTS_BEFORE_WARN === 0) {
+          log(
+            `Persistent disconnect — ${counters.disconnects} consecutive failures, still reconnecting...`,
+          );
+        }
+      }
+    }
+  })().catch((err: unknown) => {
+    log("Status monitor exited unexpectedly", err);
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Core
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,11 +249,18 @@ async function publish(evt: AgentEventPayload): Promise<void> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function ensureStream(nc: any, cfg: EventStoreConfig, nats: NatsModule): Promise<void> {
+async function ensureStream(nc: any, cfg: ResolvedEventStoreConfig, nats: NatsModule): Promise<void> {
   const jsm = await nc.jetstreamManager();
   try {
     await jsm.streams.info(cfg.streamName);
-  } catch {
+  } catch (err: unknown) {
+    // H1: Only treat "not found" as a cue to create the stream.
+    // Auth/network errors must propagate so init fails visibly.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("not found") && !msg.includes("stream not found")) {
+      throw err;
+    }
+    // Stream doesn't exist, create it
     await jsm.streams.add({
       name: cfg.streamName,
       subjects: [`${cfg.subjectPrefix}.>`],
@@ -196,16 +279,9 @@ async function ensureStream(nc: any, cfg: EventStoreConfig, nats: NatsModule): P
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function initEventStore(config: EventStoreConfig): Promise<void> {
-  if (!config.enabled) {
-    log("Disabled");
-    return;
-  }
-
-  if (state) {
-    log("Already initialized");
-    return;
-  }
+export async function initEventStore(config: ResolvedEventStoreConfig): Promise<void> {
+  if (!config.enabled) { log("Disabled"); return; }
+  if (state) { log("Already initialized"); return; }
 
   const nats = await loadNats();
   if (!nats) {
@@ -214,54 +290,22 @@ export async function initEventStore(config: EventStoreConfig): Promise<void> {
   }
 
   try {
-    // Parse URL
-    const url = config.natsUrl.startsWith("nats://") ? new URL(config.natsUrl) : null;
-
+    const { servers, user, pass, safeUrl } = parseNatsUrl(config.natsUrl);
     const nc = await nats.connect({
-      servers: url ? `${url.hostname}:${url.port || 4222}` : config.natsUrl,
-      user: url?.username ? decodeURIComponent(url.username) : undefined,
-      pass: url?.password ? decodeURIComponent(url.password) : undefined,
+      servers, user, pass,
       reconnect: true,
       maxReconnectAttempts: -1,
       timeout: 5_000,
     });
-
-    // Log without credentials
-    const safeUrl = url ? `${url.protocol}//${url.hostname}:${url.port || 4222}` : config.natsUrl;
     log(`Connected to ${safeUrl}`);
-
-    // Reconnection handler with disconnect tracking
-    (async () => {
-      for await (const s of nc.status()) {
-        if (!state) {
-          break;
-        }
-        if (s.type === "reconnect") {
-          counters.disconnects = 0;
-          log("Reconnected");
-        } else if (s.type === "disconnect") {
-          counters.disconnects++;
-          if (counters.disconnects <= MAX_DISCONNECTS_BEFORE_WARN) {
-            log(`Disconnected (attempt ${counters.disconnects}), reconnecting...`);
-          } else if (counters.disconnects % MAX_DISCONNECTS_BEFORE_WARN === 0) {
-            log(
-              `Persistent disconnect — ${counters.disconnects} consecutive failures, still reconnecting...`,
-            );
-          }
-        }
-      }
-    })().catch((err: unknown) => {
-      log("Status monitor exited unexpectedly", err);
-    });
+    monitorConnection(nc);
 
     const js = nc.jetstream();
     const sc = nats.StringCodec();
     await ensureStream(nc, config, nats);
 
     const unsub = onAgentEvent((evt: AgentEventPayload) => {
-      publish(evt).catch(() => {
-        // Error already logged inside publish() with failure count tracking
-      });
+      publish(evt).catch(() => { /* logged inside publish() */ });
     });
 
     counters.disconnects = 0;
