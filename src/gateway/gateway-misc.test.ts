@@ -7,6 +7,7 @@ import type { RequestFrame } from "./protocol/index.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { GatewayClient } from "./client.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
@@ -17,6 +18,7 @@ import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
+import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 
 const wsMockState = vi.hoisted(() => ({
   last: null as { url: unknown; opts: unknown } | null,
@@ -279,5 +281,29 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("camera.snap")).toBe(true);
     expect(allow.has("screen.record")).toBe(true);
     expect(allow.has("camera.clip")).toBe(false);
+  });
+});
+
+describe("normalizeVoiceWakeTriggers", () => {
+  test("returns defaults when input is empty", () => {
+    expect(normalizeVoiceWakeTriggers([])).toEqual(defaultVoiceWakeTriggers());
+    expect(normalizeVoiceWakeTriggers(null)).toEqual(defaultVoiceWakeTriggers());
+  });
+
+  test("trims and limits entries", () => {
+    const result = normalizeVoiceWakeTriggers(["  hello  ", "", "world"]);
+    expect(result).toEqual(["hello", "world"]);
+  });
+});
+
+describe("formatError", () => {
+  test("prefers message for Error", () => {
+    expect(formatError(new Error("boom"))).toBe("boom");
+  });
+
+  test("handles status/code", () => {
+    expect(formatError({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
+    expect(formatError({ status: 404 })).toBe("status=404 code=unknown");
+    expect(formatError({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
   });
 });
