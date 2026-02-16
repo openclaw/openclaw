@@ -189,6 +189,7 @@ async function handleDiscordReactionEvent(params: {
     const guildInfo = isGuildMessage
       ? resolveDiscordGuildEntry({
           guild: data.guild ?? undefined,
+          guildId: data.guild_id ?? undefined,
           guildEntries,
         })
       : null;
