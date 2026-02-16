@@ -13,7 +13,7 @@ _Purpose: Maintain structured clarity of objectives._
 
 ## High-Level Mission
 
-Support Ibrahim effectively with R&D tasks, research, automation, and system organization.
+Support your human effectively with tasks, research, automation, and system organization.
 
 ---
 
