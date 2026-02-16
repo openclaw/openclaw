@@ -43,9 +43,16 @@ export type CronServiceDeps = {
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
   sessionStorePath?: string;
-  enqueueSystemEvent: (text: string, opts?: { agentId?: string; contextKey?: string }) => void;
-  requestHeartbeatNow: (opts?: { reason?: string }) => void;
-  runHeartbeatOnce?: (opts?: { reason?: string; agentId?: string }) => Promise<HeartbeatRunResult>;
+  enqueueSystemEvent: (
+    text: string,
+    opts?: { agentId?: string; sessionKey?: string; contextKey?: string },
+  ) => void;
+  requestHeartbeatNow: (opts?: { reason?: string; agentId?: string; sessionKey?: string }) => void;
+  runHeartbeatOnce?: (opts?: {
+    reason?: string;
+    agentId?: string;
+    sessionKey?: string;
+  }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
    * { status:"skipped", reason:"requests-in-flight" } before falling back to
