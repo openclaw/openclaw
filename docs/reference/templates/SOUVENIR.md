@@ -1,3 +1,10 @@
+---
+title: "SOUVENIR.md Template"
+summary: "Workspace template for SOUVENIR.md"
+read_when:
+  - Bootstrapping a workspace manually
+---
+
 # SOUVENIR.md — Memory & Reflection Layer
 
 _Purpose: Continuous self-improvement through structured reflection._
