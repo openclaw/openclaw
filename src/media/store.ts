@@ -170,7 +170,7 @@ async function downloadToFile(
           let total = 0;
           const sniffChunks: Buffer[] = [];
           let sniffLen = 0;
-          const out = createWriteStream(dest, { mode: 0o600 });
+          const out = createWriteStream(dest, { mode: 0o644 });
           res.on("data", (chunk) => {
             total += chunk.length;
             if (sniffLen < 16384) {
@@ -284,7 +284,7 @@ export async function saveMediaSource(
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = ext ? `${baseId}${ext}` : baseId;
     const dest = path.join(dir, id);
-    await fs.writeFile(dest, buffer, { mode: 0o600 });
+    await fs.writeFile(dest, buffer, { mode: 0o644 });
     return { id, path: dest, size: stat.size, contentType: mime };
   } catch (err) {
     if (err instanceof SafeOpenError) {
@@ -323,6 +323,6 @@ export async function saveMediaBuffer(
   }
 
   const dest = path.join(dir, id);
-  await fs.writeFile(dest, buffer, { mode: 0o600 });
+  await fs.writeFile(dest, buffer, { mode: 0o644 });
   return { id, path: dest, size: buffer.byteLength, contentType: mime };
 }
