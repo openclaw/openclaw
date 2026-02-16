@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
-import { isProfileInCooldown } from "./usage.js";
+import { clearExpiredCooldowns, isProfileInCooldown } from "./usage.js";
 
 function resolveProfileUnusableUntil(stats: {
   cooldownUntil?: number;
@@ -26,6 +26,11 @@ export function resolveAuthProfileOrder(params: {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
   const now = Date.now();
+
+  // Clear any cooldowns that have expired since the last check so profiles
+  // get a fresh error count and are not immediately re-penalized on the
+  // next transient failure. See #3604.
+  clearExpiredCooldowns(store, now);
   const storedOrder = (() => {
     const order = store.order;
     if (!order) {

@@ -69,6 +69,13 @@ const discordComponentButtonSchema = Type.Object({
   url: Type.Optional(Type.String()),
   emoji: Type.Optional(discordComponentEmojiSchema),
   disabled: Type.Optional(Type.Boolean()),
+  allowedUsers: Type.Optional(
+    Type.Array(
+      Type.String({
+        description: "Discord user ids or names allowed to interact with this button.",
+      }),
+    ),
+  ),
 });
 
 const discordComponentSelectSchema = Type.Object({
@@ -129,17 +136,28 @@ const discordComponentModalSchema = Type.Object({
   fields: Type.Array(discordComponentModalFieldSchema),
 });
 
-const discordComponentMessageSchema = Type.Object({
-  text: Type.Optional(Type.String()),
-  container: Type.Optional(
-    Type.Object({
-      accentColor: Type.Optional(Type.String()),
-      spoiler: Type.Optional(Type.Boolean()),
-    }),
-  ),
-  blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
-  modal: Type.Optional(discordComponentModalSchema),
-});
+const discordComponentMessageSchema = Type.Object(
+  {
+    text: Type.Optional(Type.String()),
+    reusable: Type.Optional(
+      Type.Boolean({
+        description: "Allow components to be used multiple times until they expire.",
+      }),
+    ),
+    container: Type.Optional(
+      Type.Object({
+        accentColor: Type.Optional(Type.String()),
+        spoiler: Type.Optional(Type.Boolean()),
+      }),
+    ),
+    blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
+    modal: Type.Optional(discordComponentModalSchema),
+  },
+  {
+    description:
+      "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
+  },
+);
 
 function buildSendSchema(options: {
   includeButtons: boolean;

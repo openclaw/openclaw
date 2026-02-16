@@ -26,6 +26,27 @@ async function expectLoadRejectionPreservesField(params: {
   });
 }
 
+function expectValidConfigValue(params: {
+  config: unknown;
+  readValue: (config: unknown) => unknown;
+  expectedValue: unknown;
+}) {
+  const res = validateConfigObject(params.config);
+  expect(res.ok).toBe(true);
+  if (!res.ok) {
+    throw new Error("expected config to be valid");
+  }
+  expect(params.readValue(res.config)).toBe(params.expectedValue);
+}
+
+function expectInvalidIssuePath(config: unknown, expectedPath: string) {
+  const res = validateConfigObject(config);
+  expect(res.ok).toBe(false);
+  if (!res.ok) {
+    expect(res.issues[0]?.path).toBe(expectedPath);
+  }
+}
+
 describe("legacy config detection", () => {
   it('accepts imessage.dmPolicy="open" with allowFrom "*"', async () => {
     const res = validateConfigObject({
@@ -36,40 +57,49 @@ describe("legacy config detection", () => {
       expect(res.config.channels?.imessage?.dmPolicy).toBe("open");
     }
   });
-  it("defaults imessage.dmPolicy to pairing when imessage section exists", async () => {
-    const res = validateConfigObject({ channels: { imessage: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.imessage?.dmPolicy).toBe("pairing");
-    }
-  });
-  it("defaults imessage.groupPolicy to allowlist when imessage section exists", async () => {
-    const res = validateConfigObject({ channels: { imessage: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.imessage?.groupPolicy).toBe("allowlist");
-    }
-  });
-  it("defaults discord.groupPolicy to allowlist when discord section exists", async () => {
-    const res = validateConfigObject({ channels: { discord: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.discord?.groupPolicy).toBe("allowlist");
-    }
-  });
-  it("defaults slack.groupPolicy to allowlist when slack section exists", async () => {
-    const res = validateConfigObject({ channels: { slack: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.slack?.groupPolicy).toBe("allowlist");
-    }
-  });
-  it("defaults msteams.groupPolicy to allowlist when msteams section exists", async () => {
-    const res = validateConfigObject({ channels: { msteams: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.msteams?.groupPolicy).toBe("allowlist");
-    }
+  it.each([
+    [
+      "defaults imessage.dmPolicy to pairing when imessage section exists",
+      { channels: { imessage: {} } },
+      (config: unknown) =>
+        (config as { channels?: { imessage?: { dmPolicy?: string } } }).channels?.imessage
+          ?.dmPolicy,
+      "pairing",
+    ],
+    [
+      "defaults imessage.groupPolicy to allowlist when imessage section exists",
+      { channels: { imessage: {} } },
+      (config: unknown) =>
+        (config as { channels?: { imessage?: { groupPolicy?: string } } }).channels?.imessage
+          ?.groupPolicy,
+      "allowlist",
+    ],
+    [
+      "defaults discord.groupPolicy to allowlist when discord section exists",
+      { channels: { discord: {} } },
+      (config: unknown) =>
+        (config as { channels?: { discord?: { groupPolicy?: string } } }).channels?.discord
+          ?.groupPolicy,
+      "allowlist",
+    ],
+    [
+      "defaults slack.groupPolicy to allowlist when slack section exists",
+      { channels: { slack: {} } },
+      (config: unknown) =>
+        (config as { channels?: { slack?: { groupPolicy?: string } } }).channels?.slack
+          ?.groupPolicy,
+      "allowlist",
+    ],
+    [
+      "defaults msteams.groupPolicy to allowlist when msteams section exists",
+      { channels: { msteams: {} } },
+      (config: unknown) =>
+        (config as { channels?: { msteams?: { groupPolicy?: string } } }).channels?.msteams
+          ?.groupPolicy,
+      "allowlist",
+    ],
+  ])("%s", (_name, config, readValue, expectedValue) => {
+    expectValidConfigValue({ config, readValue, expectedValue });
   });
   it("rejects unsafe executable config values", async () => {
     const res = validateConfigObject({
@@ -98,52 +128,46 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(true);
   });
-  it('rejects discord.dm.policy="open" without allowFrom "*"', async () => {
-    const res = validateConfigObject({
-      channels: { discord: { dm: { policy: "open", allowFrom: ["123"] } } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.discord.dm.allowFrom");
-    }
+  it.each([
+    [
+      'rejects discord.dm.policy="open" without allowFrom "*"',
+      { channels: { discord: { dm: { policy: "open", allowFrom: ["123"] } } } },
+      "channels.discord.dm.allowFrom",
+    ],
+    [
+      'rejects discord.dmPolicy="open" without allowFrom "*"',
+      { channels: { discord: { dmPolicy: "open", allowFrom: ["123"] } } },
+      "channels.discord.allowFrom",
+    ],
+    [
+      'rejects slack.dm.policy="open" without allowFrom "*"',
+      { channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] } } } },
+      "channels.slack.dm.allowFrom",
+    ],
+    [
+      'rejects slack.dmPolicy="open" without allowFrom "*"',
+      { channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } } },
+      "channels.slack.allowFrom",
+    ],
+  ])("%s", (_name, config, expectedPath) => {
+    expectInvalidIssuePath(config, expectedPath);
   });
-  it('rejects discord.dmPolicy="open" without allowFrom "*"', async () => {
-    const res = validateConfigObject({
-      channels: { discord: { dmPolicy: "open", allowFrom: ["123"] } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.discord.allowFrom");
-    }
-  });
-  it('accepts discord dm.allowFrom="*" with top-level allowFrom alias', async () => {
-    const res = validateConfigObject({
-      channels: { discord: { dm: { policy: "open", allowFrom: ["123"] }, allowFrom: ["*"] } },
-    });
-    expect(res.ok).toBe(true);
-  });
-  it('rejects slack.dm.policy="open" without allowFrom "*"', async () => {
-    const res = validateConfigObject({
-      channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] } } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.slack.dm.allowFrom");
-    }
-  });
-  it('rejects slack.dmPolicy="open" without allowFrom "*"', async () => {
-    const res = validateConfigObject({
-      channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.slack.allowFrom");
-    }
-  });
-  it('accepts slack dm.allowFrom="*" with top-level allowFrom alias', async () => {
-    const res = validateConfigObject({
-      channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] }, allowFrom: ["*"] } },
-    });
+
+  it.each([
+    {
+      name: 'accepts discord dm.allowFrom="*" with top-level allowFrom alias',
+      config: {
+        channels: { discord: { dm: { policy: "open", allowFrom: ["123"] }, allowFrom: ["*"] } },
+      },
+    },
+    {
+      name: 'accepts slack dm.allowFrom="*" with top-level allowFrom alias',
+      config: {
+        channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] }, allowFrom: ["*"] } },
+      },
+    },
+  ])("$name", ({ config }) => {
+    const res = validateConfigObject(config);
     expect(res.ok).toBe(true);
   });
   it("rejects legacy agent.model string", async () => {
