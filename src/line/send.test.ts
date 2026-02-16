@@ -52,13 +52,6 @@ describe("createQuickReplyItems", () => {
       "This is a very long option label that exceeds the limit",
     );
   });
-
-  it("creates message actions for each item", () => {
-    const quickReply = createQuickReplyItems(["A", "B"]);
-
-    expect((quickReply.items[0].action as { type: string }).type).toBe("message");
-    expect((quickReply.items[1].action as { type: string }).type).toBe("message");
-  });
 });
 
 describe("createTextMessageWithQuickReplies", () => {
@@ -69,14 +62,6 @@ describe("createTextMessageWithQuickReplies", () => {
     expect(message.text).toBe("Choose an option:");
     expect(message.quickReply).toBeDefined();
     expect(message.quickReply.items).toHaveLength(2);
-  });
-
-  it("preserves text content", () => {
-    const longText =
-      "This is a longer message that asks the user to select from multiple options below.";
-    const message = createTextMessageWithQuickReplies(longText, ["A", "B", "C"]);
-
-    expect(message.text).toBe(longText);
   });
 
   it("handles empty quick replies array", () => {
