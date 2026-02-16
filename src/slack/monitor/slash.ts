@@ -34,6 +34,18 @@ const SLACK_COMMAND_ARG_OVERFLOW_MIN = 3;
 const SLACK_COMMAND_ARG_OVERFLOW_MAX = 5;
 const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
 const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
+const SLACK_HEADER_TEXT_MAX = 150;
+
+function truncatePlainText(value: string, max: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) {
+    return trimmed;
+  }
+  if (max <= 1) {
+    return trimmed.slice(0, max);
+  }
+  return `${trimmed.slice(0, max - 1)}…`;
+}
 
 type CommandsRegistry = typeof import("../../auto-reply/commands-registry.js");
 let commandsRegistry: CommandsRegistry | undefined;
@@ -164,10 +176,27 @@ function buildSlackCommandArgMenuBlocks(params: {
             },
           ],
         }));
+  const headerText = truncatePlainText(
+    `/${params.command}: choose ${params.arg}`,
+    SLACK_HEADER_TEXT_MAX,
+  );
+  const sectionText = truncatePlainText(params.title, 3000);
+  const contextText = truncatePlainText(
+    `Select one option to continue /${params.command} (${params.arg})`,
+    3000,
+  );
   return [
     {
+      type: "header",
+      text: { type: "plain_text", text: headerText },
+    },
+    {
       type: "section",
-      text: { type: "mrkdwn", text: params.title },
+      text: { type: "mrkdwn", text: sectionText },
+    },
+    {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: contextText }],
     },
     ...rows,
   ];
