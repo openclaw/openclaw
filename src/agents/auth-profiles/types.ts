@@ -49,12 +49,6 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
-  /**
-   * Per-model cooldown timestamps (ms epoch).
-   * Key = model ID. Prevents one model's rate-limit/timeout from
-   * blocking other models on the same provider profile.
-   */
-  modelCooldowns?: Record<string, number>;
 };
 
 export type AuthProfileStore = {
