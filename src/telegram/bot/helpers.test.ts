@@ -5,6 +5,7 @@ import {
   expandTextLinks,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
+  resolveTelegramThreadSpec,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -29,6 +30,34 @@ describe("resolveTelegramForumThreadId", () => {
 
   it("returns the topic id for forum groups with messageThreadId", () => {
     expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: 99 })).toBe(99);
+  });
+});
+
+describe("resolveTelegramThreadSpec", () => {
+  it("returns dm scope for plain DM (no forum, no thread id)", () => {
+    expect(resolveTelegramThreadSpec({ isGroup: false })).toEqual({ scope: "dm" });
+  });
+
+  it("preserves thread id with dm scope when DM has thread id but is not a forum", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: false, isForum: false, messageThreadId: 42 }),
+    ).toEqual({ id: 42, scope: "dm" });
+  });
+
+  it("returns forum scope when DM has isForum and thread id", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: false, isForum: true, messageThreadId: 99 }),
+    ).toEqual({ id: 99, scope: "forum" });
+  });
+
+  it("falls back to dm scope when DM has isForum but no thread id", () => {
+    expect(resolveTelegramThreadSpec({ isGroup: false, isForum: true })).toEqual({ scope: "dm" });
+  });
+
+  it("delegates to group path for groups", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: true, isForum: true, messageThreadId: 50 }),
+    ).toEqual({ id: 50, scope: "forum" });
   });
 });
 
