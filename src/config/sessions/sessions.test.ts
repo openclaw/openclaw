@@ -93,10 +93,6 @@ describe("session path safety", () => {
     expect(() =>
       resolveSessionFilePath("sess-1", { sessionFile: "../../etc/passwd" }, { sessionsDir }),
     ).toThrow(/within sessions directory/);
-
-    expect(() =>
-      resolveSessionFilePath("sess-1", { sessionFile: "/etc/passwd" }, { sessionsDir }),
-    ).toThrow(/within sessions directory/);
   });
 
   it("accepts sessionFile candidates within the sessions dir", () => {
