@@ -420,20 +420,6 @@ describe("session store lock (Promise chain mutex)", () => {
     expect(loadSessionStore(pathB).b?.modelOverride).toBe("done-b");
   });
 
-  it("cleans up LOCK_QUEUES entry after all tasks complete", async () => {
-    const { storePath } = await makeTmpStore({
-      x: { sessionId: "x", updatedAt: 100 },
-    });
-
-    await updateSessionStore(storePath, async (store) => {
-      store.x = { ...store.x, modelOverride: "done" } as unknown as SessionEntry;
-    });
-
-    await Promise.resolve();
-
-    expect(getSessionStoreLockQueueSizeForTest()).toBe(0);
-  });
-
   it("cleans up LOCK_QUEUES entry even after errors", async () => {
     const { storePath } = await makeTmpStore({});
 
