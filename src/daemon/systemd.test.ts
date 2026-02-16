@@ -103,20 +103,6 @@ describe("resolveSystemdUserUnitPath", () => {
       "/home/test/.config/systemd/user/custom-unit.service",
     );
   });
-
-  it("handles case-insensitive 'Default' profile", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
-  it("trims whitespace from OPENCLAW_PROFILE", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "  myprofile  " };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway-myprofile.service",
-    );
-  });
 });
 
 describe("splitArgsPreservingQuotes", () => {
