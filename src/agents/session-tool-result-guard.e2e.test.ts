@@ -194,6 +194,50 @@ describe("installSessionToolResultGuard", () => {
     expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
   });
 
+  it("normalizes invalid tool call IDs for persistence and keeps toolResult paired", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: " functions.exec:0",
+            name: "exec",
+            arguments: { command: "echo hi" },
+          },
+        ],
+      }),
+    );
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: " functions.exec:0",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    const assistant = messages.find((m) => m.role === "assistant") as
+      | { content?: Array<{ type?: string; id?: string }> }
+      | undefined;
+    const toolResult = messages.find((m) => m.role === "toolResult") as
+      | { toolCallId?: string }
+      | undefined;
+
+    expect(assistant).toBeDefined();
+    expect(toolResult).toBeDefined();
+
+    const toolBlock = assistant?.content?.find((b) => b.type === "toolCall");
+    expect(toolBlock?.id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(toolResult?.toolCallId).toBe(toolBlock?.id);
+  });
+
   it("drops malformed tool calls missing input before persistence", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
