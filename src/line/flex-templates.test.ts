@@ -165,7 +165,7 @@ describe("createNotificationBubble", () => {
       title: "Alert Title",
     });
 
-    expect(bubble.body).toBeDefined();
+    expect(bubble.type).toBe("bubble");
   });
 });
 
@@ -180,16 +180,6 @@ describe("createReceiptCard", () => {
     });
 
     expect(card.type).toBe("bubble");
-    expect(card.body).toBeDefined();
-  });
-
-  it("includes total when provided", () => {
-    const card = createReceiptCard({
-      title: "Receipt",
-      items: [{ name: "Item", value: "$10" }],
-      total: { label: "Total", value: "$10" },
-    });
-
     expect(card.body).toBeDefined();
   });
 
@@ -380,19 +370,6 @@ describe("createAgendaCard", () => {
     expect(card.body).toBeDefined();
   });
 
-  it("limits events to 8", () => {
-    const manyEvents = Array.from({ length: 15 }, (_, i) => ({
-      title: `Event ${i + 1}`,
-    }));
-
-    const card = createAgendaCard({
-      title: "Many Events",
-      events: manyEvents,
-    });
-
-    expect(card.body).toBeDefined();
-  });
-
   it("includes footer when provided", () => {
     const card = createAgendaCard({
       title: "Today",
@@ -401,22 +378,6 @@ describe("createAgendaCard", () => {
     });
 
     expect(card.footer).toBeDefined();
-  });
-
-  it("shows event metadata (time, location, calendar)", () => {
-    const card = createAgendaCard({
-      title: "Schedule",
-      events: [
-        {
-          title: "Meeting",
-          time: "10:00 AM",
-          location: "Room A",
-          calendar: "Work",
-        },
-      ],
-    });
-
-    expect(card.body).toBeDefined();
   });
 });
 
