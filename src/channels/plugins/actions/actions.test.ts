@@ -594,6 +594,25 @@ describe("slack actions adapter", () => {
     expect(handleSlackAction).not.toHaveBeenCalled();
   });
 
+  it("rejects empty blocks arrays for send", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await expect(
+      actions.handleAction?.({
+        channel: "slack",
+        action: "send",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "",
+          blocks: "[]",
+        },
+      }),
+    ).rejects.toThrow(/at least one block/i);
+    expect(handleSlackAction).not.toHaveBeenCalled();
+  });
+
   it("forwards blocks JSON for edit", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     const actions = createSlackActions("slack");
