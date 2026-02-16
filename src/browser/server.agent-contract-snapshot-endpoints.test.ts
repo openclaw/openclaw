@@ -2,12 +2,14 @@ import { fetch as realFetch } from "undici";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 import {
-  getBrowserControlServerBaseUrl,
+  installAgentContractHooks,
+  postJson,
+  startServerAndBase,
+} from "./server.agent-contract.test-harness.js";
+import {
   getBrowserControlServerTestState,
   getCdpMocks,
   getPwMocks,
-  installBrowserControlServerHooks,
-  startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
 
 const state = getBrowserControlServerTestState();
@@ -15,23 +17,7 @@ const cdpMocks = getCdpMocks();
 const pwMocks = getPwMocks();
 
 describe("browser control server", () => {
-  installBrowserControlServerHooks();
-
-  const startServerAndBase = async () => {
-    await startBrowserControlServerFromConfig();
-    const base = getBrowserControlServerBaseUrl();
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
-    return base;
-  };
-
-  const postJson = async <T>(url: string, body?: unknown): Promise<T> => {
-    const res = await realFetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    return (await res.json()) as T;
-  };
+  installAgentContractHooks();
 
   it("agent contract: snapshot endpoints", async () => {
     const base = await startServerAndBase();

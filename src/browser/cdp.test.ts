@@ -8,6 +8,12 @@ describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;
   let wsServer: WebSocketServer | null = null;
 
+  const startWsServer = async () => {
+    wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+    return (wsServer.address() as { port: number }).port;
+  };
+
   afterEach(async () => {
     await new Promise<void>((resolve) => {
       if (!httpServer) {
@@ -26,9 +32,7 @@ describe("cdp", () => {
   });
 
   it("creates a target via the browser websocket", async () => {
-    wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
-    const wsPort = (wsServer.address() as { port: number }).port;
+    const wsPort = await startWsServer();
 
     wsServer.on("connection", (socket) => {
       socket.on("message", (data) => {
@@ -75,9 +79,7 @@ describe("cdp", () => {
   });
 
   it("evaluates javascript via CDP", async () => {
-    wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
-    const wsPort = (wsServer.address() as { port: number }).port;
+    const wsPort = await startWsServer();
 
     wsServer.on("connection", (socket) => {
       socket.on("message", (data) => {
@@ -112,9 +114,7 @@ describe("cdp", () => {
   });
 
   it("captures an aria snapshot via CDP", async () => {
-    wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
-    const wsPort = (wsServer.address() as { port: number }).port;
+    const wsPort = await startWsServer();
 
     wsServer.on("connection", (socket) => {
       socket.on("message", (data) => {
