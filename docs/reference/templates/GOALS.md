@@ -1,3 +1,10 @@
+---
+title: "GOALS.md Template"
+summary: "Workspace template for GOALS.md"
+read_when:
+  - Bootstrapping a workspace manually
+---
+
 # GOALS.md — Direction & Execution Strategy
 
 _Purpose: Maintain structured clarity of objectives._
