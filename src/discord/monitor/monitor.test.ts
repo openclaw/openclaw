@@ -291,6 +291,36 @@ describe("discord component interactions", () => {
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
+  it("keeps reusable buttons active after use", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "btn_1",
+          kind: "button",
+          label: "Approve",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          reusable: true,
+        },
+      ],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction } = createComponentButtonInteraction();
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    const { interaction: secondInteraction } = createComponentButtonInteraction({
+      rawData: { channel_id: "dm-channel", id: "interaction-2" },
+    });
+    await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
+
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(2);
+    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+  });
+
   it("routes modal submissions with field values", async () => {
     registerDiscordComponentEntries({
       entries: [],
@@ -330,6 +360,43 @@ describe("discord component interactions", () => {
     expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReplyMock.mock.calls[0]?.[0]?.replyToId).toBe("msg-2");
     expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
+  });
+
+  it("keeps reusable modal entries active after submission", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [
+        {
+          id: "mdl_1",
+          title: "Details",
+          messageId: "msg-2",
+          sessionKey: "session-2",
+          agentId: "agent-2",
+          accountId: "default",
+          reusable: true,
+          fields: [
+            {
+              id: "fld_1",
+              name: "name",
+              label: "Name",
+              type: "text",
+            },
+          ],
+        },
+      ],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        discordConfig: createDiscordConfig({ replyToMode: "all" }),
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction();
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
   });
 });
 
