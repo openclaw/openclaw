@@ -3,10 +3,7 @@ import {
   registerUnhandledRejectionHandler,
   isUnhandledRejectionHandled,
 } from "../../infra/unhandled-rejections.js";
-import {
-  isSlackPlatformError,
-  isSlackUnrecoverableAuthError,
-} from "./slack-error-detection.js";
+import { isSlackPlatformError, isSlackUnrecoverableAuthError } from "./slack-error-detection.js";
 
 /**
  * These tests verify the Slack-specific unhandled rejection handler integration.
@@ -97,12 +94,16 @@ describe("Slack unhandled rejection handler integration", () => {
 
   describe("distinguishes auth errors from other platform errors", () => {
     it("identifies unrecoverable auth errors", () => {
-      expect(isSlackUnrecoverableAuthError(createSlackPlatformError("account_inactive"))).toBe(true);
+      expect(isSlackUnrecoverableAuthError(createSlackPlatformError("account_inactive"))).toBe(
+        true,
+      );
       expect(isSlackUnrecoverableAuthError(createSlackPlatformError("invalid_auth"))).toBe(true);
     });
 
     it("identifies non-auth platform errors", () => {
-      expect(isSlackUnrecoverableAuthError(createSlackPlatformError("channel_not_found"))).toBe(false);
+      expect(isSlackUnrecoverableAuthError(createSlackPlatformError("channel_not_found"))).toBe(
+        false,
+      );
       expect(isSlackUnrecoverableAuthError(createSlackPlatformError("missing_scope"))).toBe(false);
     });
   });
