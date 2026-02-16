@@ -548,6 +548,7 @@ Docs: https://docs.openclaw.ai
 - Thinking: allow xhigh for `github-copilot/gpt-5.2-codex` and `github-copilot/gpt-5.2`. (#11646) Thanks @LatencyTDH.
 - Thinking: honor `/think off` for reasoning-capable models. (#9564) Thanks @liuy.
 - Discord: support forum/media thread-create starter messages, wire `message thread create --message`, and harden routing. (#10062) Thanks @jarvis89757.
+- Discord: download attachments from forwarded messages. (#17049) Thanks @pip-nomel, @thewilloftheshadow.
 - Paths: structurally resolve `OPENCLAW_HOME`-derived home paths and fix Windows drive-letter handling in tool meta shortening. (#12125) Thanks @mcaxtr.
 - Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
 - Memory: disable async batch embeddings by default for memory indexing (opt-in via `agents.defaults.memorySearch.remote.batch.enabled`). (#13069) Thanks @mcinteerj.
