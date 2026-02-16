@@ -165,7 +165,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
 
-  it("captures select values and skips chat.update for non-button actions", async () => {
+  it("captures select values and updates action rows for non-button actions", async () => {
     enqueueSystemEventMock.mockReset();
     const { ctx, app, getHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
@@ -205,7 +205,19 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.actionType).toBe("static_select");
     expect(payload.selectedValues).toEqual(["canary"]);
     expect(payload.selectedLabels).toEqual(["Canary"]);
-    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expect(app.client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C1",
+        ts: "111.222",
+        blocks: [
+          {
+            type: "context",
+            elements: [{ type: "mrkdwn", text: ":white_check_mark: *Canary* selected" }],
+          },
+        ],
+      }),
+    );
   });
 
   it("falls back to container channel and message timestamps", async () => {
@@ -252,6 +264,62 @@ describe("registerSlackInteractionEvents", () => {
       teamId: "T111",
     });
     expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("summarizes multi-select confirmations in updated message rows", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U222" },
+        channel: { id: "C2" },
+        message: {
+          ts: "333.444",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "multi_block",
+              elements: [{ type: "multi_static_select", action_id: "openclaw:multi" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "multi_static_select",
+        action_id: "openclaw:multi",
+        block_id: "multi_block",
+        selected_options: [
+          { text: { type: "plain_text", text: "Alpha" }, value: "alpha" },
+          { text: { type: "plain_text", text: "Beta" }, value: "beta" },
+          { text: { type: "plain_text", text: "Gamma" }, value: "gamma" },
+          { text: { type: "plain_text", text: "Delta" }, value: "delta" },
+        ],
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+    expect(app.client.chat.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C2",
+        ts: "333.444",
+        blocks: [
+          {
+            type: "context",
+            elements: [
+              { type: "mrkdwn", text: ":white_check_mark: *Alpha, Beta, Gamma +1* selected" },
+            ],
+          },
+        ],
+      }),
+    );
   });
 
   it("captures expanded selection and temporal payload fields", async () => {
