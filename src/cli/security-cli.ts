@@ -1,6 +1,9 @@
 import type { Command } from "commander";
+import { existsSync } from "node:fs";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { verifyAuditLogChain } from "../security/audit-log-verify.js";
+import { resolveAuditLogPath } from "../security/audit-log.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -152,6 +155,53 @@ export function registerSecurityCli(program: Command) {
       render("critical");
       render("warn");
       render("info");
+
+      defaultRuntime.log(lines.join("\n"));
+    });
+
+  security
+    .command("verify-log")
+    .description("Verify integrity of the security audit log hash chain")
+    .option("--json", "Print JSON output", false)
+    .action(async (opts: { json?: boolean }) => {
+      const logPath = resolveAuditLogPath();
+
+      if (!existsSync(logPath)) {
+        const rich = isRich();
+        defaultRuntime.log(
+          rich
+            ? theme.muted(`No audit log found at ${shortenHomePath(logPath)}`)
+            : `No audit log found at ${shortenHomePath(logPath)}`,
+        );
+        return;
+      }
+
+      const result = await verifyAuditLogChain(logPath);
+
+      if (opts.json) {
+        defaultRuntime.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      const rich = isRich();
+      const heading = (text: string) => (rich ? theme.heading(text) : text);
+      const muted = (text: string) => (rich ? theme.muted(text) : text);
+
+      const lines: string[] = [];
+      lines.push(heading("Security audit log verification"));
+
+      if (result.valid) {
+        lines.push(rich ? theme.success("Status: valid") : "Status: valid");
+        lines.push(`Entries: ${result.entryCount}`);
+        lines.push(muted(shortenHomePath(logPath)));
+      } else {
+        lines.push(rich ? theme.error("Status: TAMPERED") : "Status: TAMPERED");
+        lines.push(`Failed at entry: ${result.failedAtSeq}`);
+        lines.push(`Error: ${result.error}`);
+        lines.push(`Entries checked: ${result.entryCount}`);
+        lines.push(muted(shortenHomePath(logPath)));
+        process.exitCode = 1;
+      }
 
       defaultRuntime.log(lines.join("\n"));
     });
