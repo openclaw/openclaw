@@ -108,7 +108,6 @@ export async function deleteSession(state: SessionsState, key: string) {
   state.sessionsError = null;
   try {
     await state.client.request("sessions.delete", { key, deleteTranscript: true });
-    await loadSessions(state);
   } catch (err) {
     state.sessionsError = String(err);
   } finally {
