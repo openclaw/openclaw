@@ -82,30 +82,33 @@ async function runTrustedProxyPrompt(params: {
   tailscaleMode?: "off" | "serve";
 }) {
   return runGatewayPrompt({
-    selectQueue: ["loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
+    selectQueue: ["lan", params.tailscaleMode ?? "off", "trusted-proxy"],
     textQueue: params.textQueue,
     authConfigFactory: ({ mode, trustedProxy }) => ({ mode, trustedProxy }),
   });
 }
 
 describe("promptGatewayConfig", () => {
-  it("generates a token when the prompt returns undefined", async () => {
+  it("skips gateway auth setup for loopback-only gateways", async () => {
     const { result } = await runGatewayPrompt({
-      selectQueue: ["loopback", "token", "off"],
-      textQueue: ["18789", undefined],
+      selectQueue: ["loopback", "off"],
+      textQueue: ["18789"],
       randomToken: "generated-token",
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
-    expect(result.token).toBe("generated-token");
+    expect(result.token).toBeUndefined();
+    expect(result.config.gateway?.auth).toBeUndefined();
+    expect(mocks.buildGatewayAuthConfig).not.toHaveBeenCalled();
   });
 
-  it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
+  it("configures password auth when gateway is exposed", async () => {
     const { call } = await runGatewayPrompt({
-      selectQueue: ["loopback", "password", "off"],
+      selectQueue: ["lan", "off", "password"],
       textQueue: ["18789", undefined],
       randomToken: "unused",
       authConfigFactory: ({ mode, token, password }) => ({ mode, token, password }),
     });
+    expect(call?.mode).toBe("password");
     expect(call?.password).not.toBe("undefined");
     expect(call?.password).toBe("");
   });
