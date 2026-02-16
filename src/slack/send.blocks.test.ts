@@ -62,4 +62,41 @@ describe("sendMessageSlack blocks", () => {
     ).rejects.toThrow(/does not support blocks with mediaUrl/i);
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
+
+  it("rejects empty blocks arrays from runtime callers", async () => {
+    const client = createClient();
+    await expect(
+      sendMessageSlack("channel:C123", "hi", {
+        token: "xoxb-test",
+        client,
+        blocks: [],
+      }),
+    ).rejects.toThrow(/must contain at least one block/i);
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects blocks arrays above Slack max count", async () => {
+    const client = createClient();
+    const blocks = Array.from({ length: 51 }, () => ({ type: "divider" }));
+    await expect(
+      sendMessageSlack("channel:C123", "hi", {
+        token: "xoxb-test",
+        client,
+        blocks,
+      }),
+    ).rejects.toThrow(/cannot exceed 50 items/i);
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects blocks missing type from runtime callers", async () => {
+    const client = createClient();
+    await expect(
+      sendMessageSlack("channel:C123", "hi", {
+        token: "xoxb-test",
+        client,
+        blocks: [{} as { type: string }],
+      }),
+    ).rejects.toThrow(/non-empty string type/i);
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
 });

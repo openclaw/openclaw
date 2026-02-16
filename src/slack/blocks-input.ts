@@ -31,11 +31,15 @@ function assertBlocksArray(raw: unknown) {
   }
 }
 
+export function validateSlackBlocksArray(raw: unknown): (Block | KnownBlock)[] {
+  assertBlocksArray(raw);
+  return raw as (Block | KnownBlock)[];
+}
+
 export function parseSlackBlocksInput(raw: unknown): (Block | KnownBlock)[] | undefined {
   if (raw == null) {
     return undefined;
   }
   const parsed = typeof raw === "string" ? parseBlocksJson(raw) : raw;
-  assertBlocksArray(parsed);
-  return parsed as (Block | KnownBlock)[];
+  return validateSlackBlocksArray(parsed);
 }

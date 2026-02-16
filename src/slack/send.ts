@@ -15,6 +15,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { parseSlackTarget } from "./targets.js";
@@ -222,7 +223,7 @@ export async function sendMessageSlack(
   opts: SlackSendOpts = {},
 ): Promise<SlackSendResult> {
   const trimmedMessage = message?.trim() ?? "";
-  const blocks = opts.blocks?.length ? opts.blocks : undefined;
+  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
