@@ -241,15 +241,13 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
-  it("still shows mutating tool errors when messages.suppressToolErrors is enabled", () => {
+  it("suppresses mutating tool errors when messages.suppressToolErrors is enabled", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "connection timeout" },
       config: { messages: { suppressToolErrors: true } },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("connection timeout");
+    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
@@ -271,17 +269,29 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("required");
   });
 
-  it("shows mutating tool errors even when assistant output exists", () => {
+  it("suppresses recoverable mutating tool errors when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "write", error: "file missing" },
     });
 
+    // "missing" is recoverable — agent already replied, so suppress the warning
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Done.");
+  });
+
+  it("shows non-recoverable mutating tool errors even when assistant output exists", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as AssistantMessage,
+      lastToolError: { toolName: "write", error: "connection timeout" },
+    });
+
     expect(payloads).toHaveLength(2);
     expect(payloads[0]?.text).toBe("Done.");
     expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("missing");
+    expect(payloads[1]?.text).toContain("connection timeout");
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {

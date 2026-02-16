@@ -53,13 +53,21 @@ function shouldShowToolErrorWarning(params: {
   if (params.suppressToolErrorWarnings) {
     return false;
   }
-  const isMutatingToolError =
-    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
-  if (isMutatingToolError) {
-    return true;
-  }
   if (params.suppressToolErrors) {
     return false;
+  }
+  const isMutatingToolError =
+    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
+  // For mutating tools: always surface unless the agent already produced a
+  // user-facing reply AND the error is recoverable (missing/invalid params,
+  // etc.).  Recoverable errors typically mean the agent noticed the failure
+  // and either retried, worked around it, or explained the situation in its
+  // reply — surfacing a raw ⚠️ line on top of that is confusing.
+  if (isMutatingToolError) {
+    if (params.hasUserFacingReply && isRecoverableToolError(params.lastToolError.error)) {
+      return false;
+    }
+    return true;
   }
   return !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error);
 }
