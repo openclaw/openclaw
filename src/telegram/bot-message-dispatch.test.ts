@@ -217,6 +217,52 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
+  it("uses only the latest final payload when multiple finals are emitted", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Okay." });
+        await dispatcherOptions.deliver({ text: "Ok" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Okay." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "Okay.", expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("ignores transient shorter partial prefixes to avoid preview punctuation flicker", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Sure." });
+        await replyOptions?.onPartialReply?.({ text: "Sure" });
+        await replyOptions?.onPartialReply?.({ text: "Sure." });
+        await dispatcherOptions.deliver({ text: "Sure." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(draftStream.update).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).toHaveBeenCalledWith("Sure.");
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "Sure.", expect.any(Object));
+  });
+
   it("falls back to normal delivery when preview final is too long to edit", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
