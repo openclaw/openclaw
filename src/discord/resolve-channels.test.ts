@@ -364,14 +364,15 @@ describe("resolveDiscordChannelAllowlist", () => {
       return new Response("not found", { status: 404 });
     });
 
-    // Without the guild: prefix, a bare numeric string hits /channels/999 → 404 → throws
-    await expect(
-      resolveDiscordChannelAllowlist({
-        token: "test",
-        entries: ["999"],
-        fetcher,
-      }),
-    ).rejects.toThrow(/404/);
+    // Without the guild: prefix, a bare numeric string hits /channels/999 → 404 → resolved: false
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["999"],
+      fetcher,
+    });
+    expect(res[0]?.resolved).toBe(false);
+    expect(res[0]?.channelId).toBe("999");
+    expect(res[0]?.guildId).toBeUndefined();
 
     // With the guild: prefix, it correctly resolves as a guild (never hits /channels/)
     const res2 = await resolveDiscordChannelAllowlist({
