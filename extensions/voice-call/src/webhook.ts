@@ -181,6 +181,13 @@ export class VoiceCallWebhookServer {
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
+        // Auto-end call when media stream disconnects to prevent stuck calls.
+        // Without this, calls can remain active indefinitely after the stream closes.
+        const disconnectedCall = this.manager.getCallByProviderCallId(callId);
+        if (disconnectedCall) {
+          console.log(`[voice-call] Auto-ending call ${disconnectedCall.callId} on stream disconnect`);
+          void this.manager.endCall(disconnectedCall.callId).catch(() => {});
+        }
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).unregisterCallStream(callId);
         }
