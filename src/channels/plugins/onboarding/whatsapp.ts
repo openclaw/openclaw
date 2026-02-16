@@ -79,6 +79,27 @@ async function promptWhatsAppOwnerAllowFrom(params: {
   return { normalized, allowFrom };
 }
 
+async function applyWhatsAppOwnerAllowlist(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  existingAllowFrom: string[];
+  title: string;
+  messageLines: string[];
+}): Promise<OpenClawConfig> {
+  const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
+    prompter: params.prompter,
+    existingAllowFrom: params.existingAllowFrom,
+  });
+  let next = setWhatsAppSelfChatMode(params.cfg, true);
+  next = setWhatsAppDmPolicy(next, "allowlist");
+  next = setWhatsAppAllowFrom(next, allowFrom);
+  await params.prompter.note(
+    [...params.messageLines, `- allowFrom includes ${normalized}`].join("\n"),
+    params.title,
+  );
+  return next;
+}
+
 async function promptWhatsAppAllowFrom(
   cfg: OpenClawConfig,
   _runtime: RuntimeEnv,
@@ -90,18 +111,13 @@ async function promptWhatsAppAllowFrom(
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
 
   if (options?.forceAllowlist) {
-    const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
+    return await applyWhatsAppOwnerAllowlist({
+      cfg,
       prompter,
       existingAllowFrom,
+      title: "WhatsApp allowlist",
+      messageLines: ["Allowlist mode enabled."],
     });
-    let next = setWhatsAppSelfChatMode(cfg, true);
-    next = setWhatsAppDmPolicy(next, "allowlist");
-    next = setWhatsAppAllowFrom(next, allowFrom);
-    await prompter.note(
-      ["Allowlist mode enabled.", `- allowFrom includes ${normalized}`].join("\n"),
-      "WhatsApp allowlist",
-    );
-    return next;
   }
 
   await prompter.note(
@@ -127,22 +143,16 @@ async function promptWhatsAppAllowFrom(
   });
 
   if (phoneMode === "personal") {
-    const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
+    return await applyWhatsAppOwnerAllowlist({
+      cfg,
       prompter,
       existingAllowFrom,
-    });
-    let next = setWhatsAppSelfChatMode(cfg, true);
-    next = setWhatsAppDmPolicy(next, "allowlist");
-    next = setWhatsAppAllowFrom(next, allowFrom);
-    await prompter.note(
-      [
+      title: "WhatsApp personal phone",
+      messageLines: [
         "Personal phone mode enabled.",
         "- dmPolicy set to allowlist (pairing skipped)",
-        `- allowFrom includes ${normalized}`,
-      ].join("\n"),
-      "WhatsApp personal phone",
-    );
-    return next;
+      ],
+    });
   }
 
   const policy = (await prompter.select({
