@@ -8,9 +8,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { EventType } from "../config/types.eventstore.js";
 import type { AgentEventPayload } from "./agent-events.js";
 import { onAgentEvent } from "./agent-events.js";
-import type { EventType } from "../config/types.eventstore.js";
 
 // Re-export EventType so downstream consumers don't need to change imports
 export type { EventType } from "../config/types.eventstore.js";
@@ -249,7 +249,11 @@ async function publish(evt: AgentEventPayload): Promise<void> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function ensureStream(nc: any, cfg: ResolvedEventStoreConfig, nats: NatsModule): Promise<void> {
+async function ensureStream(
+  nc: any,
+  cfg: ResolvedEventStoreConfig,
+  nats: NatsModule,
+): Promise<void> {
   const jsm = await nc.jetstreamManager();
   try {
     await jsm.streams.info(cfg.streamName);
@@ -280,8 +284,14 @@ async function ensureStream(nc: any, cfg: ResolvedEventStoreConfig, nats: NatsMo
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function initEventStore(config: ResolvedEventStoreConfig): Promise<void> {
-  if (!config.enabled) { log("Disabled"); return; }
-  if (state) { log("Already initialized"); return; }
+  if (!config.enabled) {
+    log("Disabled");
+    return;
+  }
+  if (state) {
+    log("Already initialized");
+    return;
+  }
 
   const nats = await loadNats();
   if (!nats) {
@@ -292,7 +302,9 @@ export async function initEventStore(config: ResolvedEventStoreConfig): Promise<
   try {
     const { servers, user, pass, safeUrl } = parseNatsUrl(config.natsUrl);
     const nc = await nats.connect({
-      servers, user, pass,
+      servers,
+      user,
+      pass,
       reconnect: true,
       maxReconnectAttempts: -1,
       timeout: 5_000,
@@ -305,7 +317,9 @@ export async function initEventStore(config: ResolvedEventStoreConfig): Promise<
     await ensureStream(nc, config, nats);
 
     const unsub = onAgentEvent((evt: AgentEventPayload) => {
-      publish(evt).catch(() => { /* logged inside publish() */ });
+      publish(evt).catch(() => {
+        /* logged inside publish() */
+      });
     });
 
     counters.disconnects = 0;
