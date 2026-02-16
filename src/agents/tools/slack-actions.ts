@@ -231,13 +231,18 @@ export async function handleSlackAction(
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
-        const content = readStringParam(params, "content", {
-          required: true,
-        });
+        const content = readStringParam(params, "content", { allowEmpty: true });
+        const blocks = readSlackBlocksParam(params);
+        if (!content && !blocks) {
+          throw new Error("Slack editMessage requires content or blocks.");
+        }
         if (writeOpts) {
-          await editSlackMessage(channelId, messageId, content, writeOpts);
+          await editSlackMessage(channelId, messageId, content ?? "", {
+            ...writeOpts,
+            blocks,
+          });
         } else {
-          await editSlackMessage(channelId, messageId, content);
+          await editSlackMessage(channelId, messageId, content ?? "", { blocks });
         }
         return jsonResult({ ok: true });
       }
