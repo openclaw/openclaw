@@ -264,6 +264,30 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks ping-pong alternating patterns at critical threshold", () => {
+      const state = createState();
+      const readParams = { path: "/a.txt" };
+      const listParams = { dir: "/workspace" };
+
+      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
+        if (i % 2 === 0) {
+          recordToolCall(state, "read", readParams, `read-${i}`);
+        } else {
+          recordToolCall(state, "list", listParams, `list-${i}`);
+        }
+      }
+
+      const loopResult = detectToolCallLoop(state, "list", listParams);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("ping_pong");
+        expect(loopResult.count).toBe(CRITICAL_THRESHOLD);
+        expect(loopResult.message).toContain("CRITICAL");
+        expect(loopResult.message).toContain("ping-pong loop");
+      }
+    });
+
     it("does not flag ping-pong when alternation is broken", () => {
       const state = createState();
       recordToolCall(state, "read", { path: "/a.txt" }, "a1");

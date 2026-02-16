@@ -292,6 +292,20 @@ export function detectToolCallLoop(
     };
   }
 
+  if (pingPong.count >= CRITICAL_THRESHOLD) {
+    log.error(
+      `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "ping_pong",
+      count: pingPong.count,
+      message: `CRITICAL: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This appears to be a stuck ping-pong loop. Session execution blocked to prevent resource waste.`,
+      pairedToolName: pingPong.pairedToolName,
+    };
+  }
+
   if (pingPong.count >= WARNING_THRESHOLD) {
     log.warn(
       `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
