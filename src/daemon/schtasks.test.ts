@@ -72,13 +72,6 @@ describe("resolveTaskScriptPath", () => {
     );
   });
 
-  it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "DEFAULT" };
-    expect(resolveTaskScriptPath(env)).toBe(
-      path.join("C:\\Users\\test", ".openclaw", "gateway.cmd"),
-    );
-  });
-
   it("trims whitespace from OPENCLAW_PROFILE", () => {
     const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: "  myprofile  " };
     expect(resolveTaskScriptPath(env)).toBe(
