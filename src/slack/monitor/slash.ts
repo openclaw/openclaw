@@ -47,6 +47,18 @@ function truncatePlainText(value: string, max: number): string {
   return `${trimmed.slice(0, max - 1)}…`;
 }
 
+function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
+  return {
+    title: { type: "plain_text", text: "Confirm selection" },
+    text: {
+      type: "mrkdwn",
+      text: `Run */${params.command}* with *${params.arg}* set to this value?`,
+    },
+    confirm: { type: "plain_text", text: "Run command" },
+    deny: { type: "plain_text", text: "Cancel" },
+  };
+}
+
 type CommandsRegistry = typeof import("../../auto-reply/commands-registry.js");
 let commandsRegistry: CommandsRegistry | undefined;
 async function getCommandsRegistry(): Promise<CommandsRegistry> {
@@ -141,6 +153,7 @@ function buildSlackCommandArgMenuBlocks(params: {
             {
               type: "overflow",
               action_id: SLACK_COMMAND_ARG_ACTION_ID,
+              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
               options: encodedChoices.map((choice) => ({
                 text: { type: "plain_text", text: choice.label.slice(0, 75) },
                 value: choice.value,
@@ -157,6 +170,7 @@ function buildSlackCommandArgMenuBlocks(params: {
             action_id: SLACK_COMMAND_ARG_ACTION_ID,
             text: { type: "plain_text", text: choice.label },
             value: choice.value,
+            confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
           })),
         }))
       : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map((choices, index) => ({
@@ -165,6 +179,7 @@ function buildSlackCommandArgMenuBlocks(params: {
             {
               type: "static_select",
               action_id: SLACK_COMMAND_ARG_ACTION_ID,
+              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
               placeholder: {
                 type: "plain_text",
                 text: index === 0 ? `Choose ${params.arg}` : `Choose ${params.arg} (${index + 1})`,
