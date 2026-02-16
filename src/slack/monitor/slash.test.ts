@@ -169,7 +169,7 @@ function encodeValue(parts: { command: string; arg: string; value: string; userI
 
 function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
   return payload.blocks?.find((block) => block.type === "actions") as
-    | { type: string; elements?: Array<{ type?: string; action_id?: string }> }
+    | { type: string; elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }> }
     | undefined;
 }
 
@@ -293,6 +293,7 @@ describe("Slack native command argument menus", () => {
     const actions = findFirstActionsBlock(payload);
     const elementType = actions?.elements?.[0]?.type;
     expect(elementType).toBe("button");
+    expect(actions?.elements?.[0]?.confirm).toBeTruthy();
   });
 
   it("shows a static_select menu when choices exceed button row size", async () => {
@@ -321,6 +322,7 @@ describe("Slack native command argument menus", () => {
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("static_select");
     expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.confirm).toBeTruthy();
   });
 
   it("falls back to buttons when static_select value limit would be exceeded", async () => {
@@ -345,6 +347,7 @@ describe("Slack native command argument menus", () => {
     const actions = findFirstActionsBlock(payload);
     const firstElement = actions?.elements?.[0];
     expect(firstElement?.type).toBe("button");
+    expect(firstElement?.confirm).toBeTruthy();
   });
 
   it("shows an overflow menu when choices fit compact range", async () => {
@@ -370,6 +373,7 @@ describe("Slack native command argument menus", () => {
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("overflow");
     expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.confirm).toBeTruthy();
   });
 
   it("dispatches the command when a menu button is clicked", async () => {

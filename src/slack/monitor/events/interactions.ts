@@ -26,6 +26,9 @@ type InteractionSummary = {
   inputKind?: "text" | "number" | "email" | "url" | "rich_text";
   value?: string;
   selectedValues?: string[];
+  selectedUsers?: string[];
+  selectedChannels?: string[];
+  selectedConversations?: string[];
   selectedLabels?: string[];
   selectedDate?: string;
   selectedTime?: string;
@@ -51,6 +54,9 @@ type ModalInputSummary = {
   inputKind?: "text" | "number" | "email" | "url" | "rich_text";
   value?: string;
   selectedValues?: string[];
+  selectedUsers?: string[];
+  selectedChannels?: string[];
+  selectedConversations?: string[];
   selectedLabels?: string[];
   selectedDate?: string;
   selectedTime?: string;
@@ -121,15 +127,24 @@ function summarizeAction(
     rich_text_value?: unknown;
   };
   const actionType = typed.type;
+  const selectedUsers = uniqueNonEmptyStrings([
+    ...(typed.selected_user ? [typed.selected_user] : []),
+    ...(Array.isArray(typed.selected_users) ? typed.selected_users : []),
+  ]);
+  const selectedChannels = uniqueNonEmptyStrings([
+    ...(typed.selected_channel ? [typed.selected_channel] : []),
+    ...(Array.isArray(typed.selected_channels) ? typed.selected_channels : []),
+  ]);
+  const selectedConversations = uniqueNonEmptyStrings([
+    ...(typed.selected_conversation ? [typed.selected_conversation] : []),
+    ...(Array.isArray(typed.selected_conversations) ? typed.selected_conversations : []),
+  ]);
   const selectedValues = uniqueNonEmptyStrings([
     ...(typed.selected_option?.value ? [typed.selected_option.value] : []),
     ...(readOptionValues(typed.selected_options) ?? []),
-    ...(typed.selected_user ? [typed.selected_user] : []),
-    ...(Array.isArray(typed.selected_users) ? typed.selected_users : []),
-    ...(typed.selected_channel ? [typed.selected_channel] : []),
-    ...(Array.isArray(typed.selected_channels) ? typed.selected_channels : []),
-    ...(typed.selected_conversation ? [typed.selected_conversation] : []),
-    ...(Array.isArray(typed.selected_conversations) ? typed.selected_conversations : []),
+    ...selectedUsers,
+    ...selectedChannels,
+    ...selectedConversations,
   ]);
   const selectedLabels = uniqueNonEmptyStrings([
     ...(typed.selected_option?.text?.text ? [typed.selected_option.text.text] : []),
@@ -169,6 +184,9 @@ function summarizeAction(
     inputKind,
     value: typed.value,
     selectedValues: selectedValues.length > 0 ? selectedValues : undefined,
+    selectedUsers: selectedUsers.length > 0 ? selectedUsers : undefined,
+    selectedChannels: selectedChannels.length > 0 ? selectedChannels : undefined,
+    selectedConversations: selectedConversations.length > 0 ? selectedConversations : undefined,
     selectedLabels: selectedLabels.length > 0 ? selectedLabels : undefined,
     selectedDate: typed.selected_date,
     selectedTime: typed.selected_time,

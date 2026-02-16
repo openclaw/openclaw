@@ -504,6 +504,9 @@ describe("registerSlackInteractionEvents", () => {
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType: string;
       selectedValues?: string[];
+      selectedUsers?: string[];
+      selectedChannels?: string[];
+      selectedConversations?: string[];
       selectedLabels?: string[];
       selectedDate?: string;
       selectedTime?: string;
@@ -520,6 +523,9 @@ describe("registerSlackInteractionEvents", () => {
       "G777",
       "G888",
     ]);
+    expect(payload.selectedUsers).toEqual(["U777", "U888"]);
+    expect(payload.selectedChannels).toEqual(["C777", "C888"]);
+    expect(payload.selectedConversations).toEqual(["G777", "G888"]);
     expect(payload.selectedLabels).toEqual(["Alpha", "Beta"]);
     expect(payload.selectedDate).toBe("2026-02-16");
     expect(payload.selectedTime).toBe("14:30");
@@ -719,6 +725,9 @@ describe("registerSlackInteractionEvents", () => {
         actionId: string;
         inputKind?: string;
         selectedValues?: string[];
+        selectedUsers?: string[];
+        selectedChannels?: string[];
+        selectedConversations?: string[];
         selectedLabels?: string[];
         selectedDate?: string;
         selectedTime?: string;
@@ -736,9 +745,21 @@ describe("registerSlackInteractionEvents", () => {
           selectedValues: ["prod"],
           selectedLabels: ["Production"],
         }),
-        expect.objectContaining({ actionId: "assignee_select", selectedValues: ["U900"] }),
-        expect.objectContaining({ actionId: "channel_select", selectedValues: ["C900"] }),
-        expect.objectContaining({ actionId: "convo_select", selectedValues: ["G900"] }),
+        expect.objectContaining({
+          actionId: "assignee_select",
+          selectedValues: ["U900"],
+          selectedUsers: ["U900"],
+        }),
+        expect.objectContaining({
+          actionId: "channel_select",
+          selectedValues: ["C900"],
+          selectedChannels: ["C900"],
+        }),
+        expect.objectContaining({
+          actionId: "convo_select",
+          selectedValues: ["G900"],
+          selectedConversations: ["G900"],
+        }),
         expect.objectContaining({ actionId: "date_select", selectedDate: "2026-02-16" }),
         expect.objectContaining({ actionId: "time_select", selectedTime: "12:45" }),
         expect.objectContaining({ actionId: "datetime_select", selectedDateTime: 1_771_632_300 }),
