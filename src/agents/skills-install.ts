@@ -582,10 +582,15 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
+    const formula = spec.formula ?? "this package";
+    const hint =
+      process.platform === "linux"
+        ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
+        : "Homebrew is not installed. Install it from https://brew.sh";
     return withWarnings(
       {
         ok: false,
-        message: "brew not installed",
+        message: `brew not installed — ${hint}`,
         stdout: "",
         stderr: "",
         code: null,
@@ -610,11 +615,31 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
           warnings,
         );
       }
+    } else if (hasBinary("curl")) {
+      // Official standalone installer — works on Linux/macOS without brew.
+      const curlResult = await runCommandWithTimeout(
+        ["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+        { timeoutMs },
+      );
+      if (curlResult.code !== 0) {
+        return withWarnings(
+          {
+            ok: false,
+            message:
+              "uv not installed — automatic install via curl failed. Install manually: https://docs.astral.sh/uv/getting-started/installation/",
+            stdout: curlResult.stdout.trim(),
+            stderr: curlResult.stderr.trim(),
+            code: curlResult.code,
+          },
+          warnings,
+        );
+      }
     } else {
       return withWarnings(
         {
           ok: false,
-          message: "uv not installed (install via brew)",
+          message:
+            "uv not installed — install manually: https://docs.astral.sh/uv/getting-started/installation/",
           stdout: "",
           stderr: "",
           code: null,
@@ -657,11 +682,30 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
           warnings,
         );
       }
+    } else if (hasBinary("apt-get")) {
+      // Attempt to install Go via apt on Debian/Ubuntu systems.
+      const aptResult = await runCommandWithTimeout(
+        ["sudo", "apt-get", "install", "-y", "golang-go"],
+        { timeoutMs },
+      );
+      if (aptResult.code !== 0) {
+        return withWarnings(
+          {
+            ok: false,
+            message:
+              "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install",
+            stdout: aptResult.stdout.trim(),
+            stderr: aptResult.stderr.trim(),
+            code: aptResult.code,
+          },
+          warnings,
+        );
+      }
     } else {
       return withWarnings(
         {
           ok: false,
-          message: "go not installed (install via brew)",
+          message: "go not installed — install manually: https://go.dev/doc/install",
           stdout: "",
           stderr: "",
           code: null,
