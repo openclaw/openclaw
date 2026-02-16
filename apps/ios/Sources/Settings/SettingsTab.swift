@@ -33,6 +33,7 @@ struct SettingsTab: View {
     @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
+    @State private var talkElevenLabsApiKey: String = ""
     @AppStorage("gateway.setupCode") private var setupCode: String = ""
     @State private var setupStatusText: String?
     @State private var manualGatewayPortText: String = ""
@@ -235,6 +236,12 @@ struct SettingsTab: View {
                             .onChange(of: self.talkEnabled) { _, newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
+                        SecureField("Talk ElevenLabs API Key (optional)", text: self.$talkElevenLabsApiKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Text("Use this local override when gateway config redacts talk.apiKey for mobile clients.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         // Keep this separate so users can hide the side bubble without disabling Talk Mode.
                         Toggle("Show Talk Button", isOn: self.$talkButtonEnabled)
 
@@ -312,6 +319,7 @@ struct SettingsTab: View {
                     self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
                     self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
                 }
+                self.talkElevenLabsApiKey = GatewaySettingsStore.loadTalkElevenLabsApiKey() ?? ""
                 // Keep setup front-and-center when disconnected; keep things compact once connected.
                 self.gatewayExpanded = !self.isGatewayConnected
                 self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
@@ -341,6 +349,9 @@ struct SettingsTab: View {
                 let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !instanceId.isEmpty else { return }
                 GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
+            }
+            .onChange(of: self.talkElevenLabsApiKey) { _, newValue in
+                GatewaySettingsStore.saveTalkElevenLabsApiKey(newValue)
             }
             .onChange(of: self.manualGatewayPort) { _, _ in
                 self.syncManualPortText()
