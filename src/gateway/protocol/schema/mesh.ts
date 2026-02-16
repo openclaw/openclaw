@@ -61,6 +61,19 @@ export const MeshRunParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const MeshPlanAutoParamsSchema = Type.Object(
+  {
+    goal: NonEmptyString,
+    maxSteps: Type.Optional(Type.Integer({ minimum: 1, maximum: 16 })),
+    agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(NonEmptyString),
+    thinking: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 1_000, maximum: 3_600_000 })),
+    lane: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const MeshStatusParamsSchema = Type.Object(
   {
     runId: NonEmptyString,
@@ -79,5 +92,6 @@ export const MeshRetryParamsSchema = Type.Object(
 export type MeshPlanParams = Static<typeof MeshPlanParamsSchema>;
 export type MeshWorkflowPlan = Static<typeof MeshWorkflowPlanSchema>;
 export type MeshRunParams = Static<typeof MeshRunParamsSchema>;
+export type MeshPlanAutoParams = Static<typeof MeshPlanAutoParamsSchema>;
 export type MeshStatusParams = Static<typeof MeshStatusParamsSchema>;
 export type MeshRetryParams = Static<typeof MeshRetryParamsSchema>;
