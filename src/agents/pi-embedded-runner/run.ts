@@ -591,6 +591,7 @@ export async function runEmbeddedPiAgent(
                 bashElevated: params.bashElevated,
                 extraSystemPrompt: params.extraSystemPrompt,
                 ownerNumbers: params.ownerNumbers,
+                customInstructions: "Include a 'Workflow Rules' section preserving any established behavioral protocols, constraints, or review requirements mentioned in the conversation (e.g., approval workflows, mandatory reviews, coding standards).",
                 trigger: "overflow",
                 diagId: overflowDiagId,
                 attempt: overflowCompactionAttempts,
