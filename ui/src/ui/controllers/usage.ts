@@ -98,7 +98,7 @@ export async function loadSessionLogs(state: UsageState, sessionKey: string) {
   try {
     const res = await state.client.request("sessions.usage.logs", {
       key: sessionKey,
-      limit: 2000,
+      limit: 1000,
     });
     if (res && Array.isArray((res as { logs: SessionLogEntry[] }).logs)) {
       state.usageSessionLogs = (res as { logs: SessionLogEntry[] }).logs;
