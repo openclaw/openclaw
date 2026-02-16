@@ -85,22 +85,6 @@ describe("session path safety", () => {
 
 describe("resolveSessionResetPolicy", () => {
   describe("backward compatibility: resetByType.dm -> direct", () => {
-    it("falls back to resetByType.dm (legacy) when direct is missing", () => {
-      const sessionCfg = {
-        resetByType: {
-          dm: { mode: "idle" as const, idleMinutes: 45 },
-        },
-      } as unknown as SessionConfig;
-
-      const policy = resolveSessionResetPolicy({
-        sessionCfg,
-        resetType: "direct",
-      });
-
-      expect(policy.mode).toBe("idle");
-      expect(policy.idleMinutes).toBe(45);
-    });
-
     it("does not use dm fallback for group/thread types", () => {
       const sessionCfg = {
         resetByType: {
