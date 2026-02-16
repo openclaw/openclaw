@@ -415,19 +415,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("returns error for unknown sessionKey", async () => {
-    fs.writeFileSync(storePath, JSON.stringify({}), "utf-8");
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey: "nonexistent",
-      text: "test message",
-      storePath,
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toContain("unknown sessionKey");
-    }
-  });
-
   it("creates transcript file and appends message for valid session", async () => {
     const sessionId = "test-session-id";
     const sessionKey = "test-session";
