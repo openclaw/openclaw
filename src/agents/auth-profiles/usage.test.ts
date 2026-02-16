@@ -219,7 +219,7 @@ describe("clearExpiredCooldowns", () => {
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
   });
 
-  it("does not clear cooldownUntil that equals exactly `now`", () => {
+  it("clears cooldownUntil that equals exactly `now`", () => {
     const fixedNow = 1_700_000_000_000;
     const store = makeStore({
       "anthropic:default": {
