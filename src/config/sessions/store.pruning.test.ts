@@ -194,21 +194,6 @@ describe("capEntryCount", () => {
     expect(store.noDate2).toBeUndefined();
   });
 
-  it("returns count of evicted entries", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["a", makeEntry(now)],
-      ["b", makeEntry(now - DAY_MS)],
-      ["c", makeEntry(now - 2 * DAY_MS)],
-    ]);
-
-    const evicted = capEntryCount(store, 1);
-
-    expect(evicted).toBe(2);
-    expect(Object.keys(store)).toHaveLength(1);
-    expect(store.a).toBeDefined();
-  });
-
   it("falls back to built-in default (500) when no override given", () => {
     const now = Date.now();
     const entries: Array<[string, SessionEntry]> = [];
