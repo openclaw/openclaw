@@ -60,8 +60,15 @@ describe("createChildAdapter", () => {
       options?: { detached?: boolean };
       fallbacks?: Array<{ options?: { detached?: boolean } }>;
     };
-    expect(spawnArgs.options?.detached).toBe(true);
-    expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+    // On Windows, detached defaults to false (headless Scheduled Task compat);
+    // on POSIX, detached is true with a no-detach fallback.
+    if (process.platform === "win32") {
+      expect(spawnArgs.options?.detached).toBe(false);
+      expect(spawnArgs.fallbacks).toEqual([]);
+    } else {
+      expect(spawnArgs.options?.detached).toBe(true);
+      expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+    }
 
     adapter.kill();
 
