@@ -54,22 +54,27 @@ function digestStable(value: unknown): string {
 }
 
 function stableStringifyFallback(value: unknown): string {
+  const fallbackValue: unknown = value === undefined ? null : value;
   try {
-    return stableStringify(value);
+    return stableStringify(fallbackValue);
   } catch {
-    if (value === null || value === undefined) {
-      return `${value}`;
+    if (fallbackValue === null) {
+      return "null";
     }
-    if (typeof value === "string") {
-      return value;
+    if (typeof fallbackValue === "string") {
+      return fallbackValue;
     }
-    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-      return `${value}`;
+    if (
+      typeof fallbackValue === "number" ||
+      typeof fallbackValue === "boolean" ||
+      typeof fallbackValue === "bigint"
+    ) {
+      return `${fallbackValue}`;
     }
-    if (value instanceof Error) {
-      return `${value.name}:${value.message}`;
+    if (fallbackValue instanceof Error) {
+      return `${fallbackValue.name}:${fallbackValue.message}`;
     }
-    return Object.prototype.toString.call(value);
+    return Object.prototype.toString.call(fallbackValue);
   }
 }
 
