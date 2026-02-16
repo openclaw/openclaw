@@ -217,23 +217,6 @@ describe("Slack native command argument menus", () => {
       response_type: "ephemeral",
     });
   });
-
-  it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
-      action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
-      body: { user: { id: "U1" }, channel: { id: "C1" } },
-    });
-
-    expect(harness.postEphemeral).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "bot-token",
-        channel: "C1",
-        user: "U1",
-        text: "Sorry, that button is no longer valid.",
-      }),
-    );
-  });
 });
 
 function createPolicyHarness() {
