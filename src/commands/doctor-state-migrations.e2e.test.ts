@@ -68,6 +68,38 @@ async function runAndReadSessionsStore(params: {
   return readSessionsStore(params.targetDir);
 }
 
+type StateDirMigrationResult = Awaited<ReturnType<typeof autoMigrateLegacyStateDir>>;
+
+const DIR_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
+
+function getStateDirMigrationPaths(root: string) {
+  return {
+    targetDir: path.join(root, ".openclaw"),
+    legacyDir: path.join(root, ".clawdbot"),
+  };
+}
+
+function ensureLegacyAndTargetStateDirs(root: string) {
+  const paths = getStateDirMigrationPaths(root);
+  fs.mkdirSync(paths.targetDir, { recursive: true });
+  fs.mkdirSync(paths.legacyDir, { recursive: true });
+  return paths;
+}
+
+async function runStateDirMigration(root: string, env = {} as NodeJS.ProcessEnv) {
+  return autoMigrateLegacyStateDir({
+    env,
+    homedir: () => root,
+  });
+}
+
+function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targetDir: string) {
+  expect(result.migrated).toBe(false);
+  expect(result.warnings).toEqual([
+    `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
+  ]);
+}
+
 describe("doctor legacy state migrations", () => {
   it("migrates legacy sessions into agents/<id>/sessions", async () => {
     const root = await makeTempRoot();
@@ -383,10 +415,7 @@ describe("doctor legacy state migrations", () => {
 
   it("does nothing when no legacy state dir exists", async () => {
     const root = await makeTempRoot();
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
+    const result = await runStateDirMigration(root);
 
     expect(result.migrated).toBe(false);
     expect(result.skipped).toBe(false);
@@ -395,13 +424,12 @@ describe("doctor legacy state migrations", () => {
 
   it("skips state dir migration when env override is set", async () => {
     const root = await makeTempRoot();
-    const legacyDir = path.join(root, ".openclaw");
+    const { legacyDir } = getStateDirMigrationPaths(root);
     fs.mkdirSync(legacyDir, { recursive: true });
 
-    const result = await autoMigrateLegacyStateDir({
-      env: { OPENCLAW_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
+    const result = await runStateDirMigration(root, {
+      OPENCLAW_STATE_DIR: "/custom/state",
+    } as NodeJS.ProcessEnv);
 
     expect(result.skipped).toBe(true);
     expect(result.migrated).toBe(false);
@@ -409,20 +437,18 @@ describe("doctor legacy state migrations", () => {
 
   it("does not warn when legacy state dir is an already-migrated symlink mirror", async () => {
     const root = await makeTempRoot();
-    const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".clawdbot");
+    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
     fs.mkdirSync(path.join(targetDir, "agent"), { recursive: true });
-    fs.mkdirSync(legacyDir, { recursive: true });
 
-    const dirLinkType = process.platform === "win32" ? "junction" : "dir";
-    fs.symlinkSync(path.join(targetDir, "sessions"), path.join(legacyDir, "sessions"), dirLinkType);
-    fs.symlinkSync(path.join(targetDir, "agent"), path.join(legacyDir, "agent"), dirLinkType);
+    fs.symlinkSync(
+      path.join(targetDir, "sessions"),
+      path.join(legacyDir, "sessions"),
+      DIR_LINK_TYPE,
+    );
+    fs.symlinkSync(path.join(targetDir, "agent"), path.join(legacyDir, "agent"), DIR_LINK_TYPE);
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
+    const result = await runStateDirMigration(root);
 
     expect(result.migrated).toBe(false);
     expect(result.warnings).toEqual([]);
@@ -430,60 +456,34 @@ describe("doctor legacy state migrations", () => {
 
   it("warns when legacy state dir is empty and target already exists", async () => {
     const root = await makeTempRoot();
-    const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".clawdbot");
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.mkdirSync(legacyDir, { recursive: true });
+    const { targetDir } = ensureLegacyAndTargetStateDirs(root);
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-    ]);
+    const result = await runStateDirMigration(root);
+    expectTargetAlreadyExistsWarning(result, targetDir);
   });
 
   it("warns when legacy state dir contains non-symlink entries and target already exists", async () => {
     const root = await makeTempRoot();
-    const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".clawdbot");
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.mkdirSync(legacyDir, { recursive: true });
+    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
     fs.writeFileSync(path.join(legacyDir, "sessions.json"), "{}", "utf-8");
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-    ]);
+    const result = await runStateDirMigration(root);
+    expectTargetAlreadyExistsWarning(result, targetDir);
   });
 
   it("does not warn when legacy state dir contains nested symlink mirrors", async () => {
     const root = await makeTempRoot();
-    const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".clawdbot");
+    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
     fs.mkdirSync(path.join(targetDir, "agents", "main"), { recursive: true });
-    fs.mkdirSync(legacyDir, { recursive: true });
     fs.mkdirSync(path.join(legacyDir, "agents"), { recursive: true });
 
-    const dirLinkType = process.platform === "win32" ? "junction" : "dir";
     fs.symlinkSync(
       path.join(targetDir, "agents", "main"),
       path.join(legacyDir, "agents", "main"),
-      dirLinkType,
+      DIR_LINK_TYPE,
     );
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
+    const result = await runStateDirMigration(root);
 
     expect(result.migrated).toBe(false);
     expect(result.warnings).toEqual([]);
@@ -491,72 +491,41 @@ describe("doctor legacy state migrations", () => {
 
   it("warns when legacy state dir symlink points outside the target tree", async () => {
     const root = await makeTempRoot();
-    const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".clawdbot");
+    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
     const outsideDir = path.join(root, ".outside-state");
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
-    fs.mkdirSync(legacyDir, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
 
-    const dirLinkType = process.platform === "win32" ? "junction" : "dir";
-    fs.symlinkSync(path.join(outsideDir), path.join(legacyDir, "sessions"), dirLinkType);
+    fs.symlinkSync(path.join(outsideDir), path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-    ]);
+    const result = await runStateDirMigration(root);
+    expectTargetAlreadyExistsWarning(result, targetDir);
   });
 
   it("warns when legacy state dir contains a broken symlink target", async () => {
     const root = await makeTempRoot();
-    const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".clawdbot");
+    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
     fs.mkdirSync(path.join(targetDir, "sessions"), { recursive: true });
-    fs.mkdirSync(legacyDir, { recursive: true });
 
-    const dirLinkType = process.platform === "win32" ? "junction" : "dir";
     const targetSessionDir = path.join(targetDir, "sessions");
-    fs.symlinkSync(targetSessionDir, path.join(legacyDir, "sessions"), dirLinkType);
+    fs.symlinkSync(targetSessionDir, path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
     fs.rmSync(targetSessionDir, { recursive: true, force: true });
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-    ]);
+    const result = await runStateDirMigration(root);
+    expectTargetAlreadyExistsWarning(result, targetDir);
   });
 
   it("warns when legacy symlink escapes target tree through second-hop symlink", async () => {
     const root = await makeTempRoot();
-    const targetDir = path.join(root, ".openclaw");
-    const legacyDir = path.join(root, ".clawdbot");
+    const { targetDir, legacyDir } = ensureLegacyAndTargetStateDirs(root);
     const outsideDir = path.join(root, ".outside-state");
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.mkdirSync(legacyDir, { recursive: true });
     fs.mkdirSync(outsideDir, { recursive: true });
 
-    const dirLinkType = process.platform === "win32" ? "junction" : "dir";
     const targetHop = path.join(targetDir, "hop");
-    fs.symlinkSync(outsideDir, targetHop, dirLinkType);
-    fs.symlinkSync(targetHop, path.join(legacyDir, "sessions"), dirLinkType);
+    fs.symlinkSync(outsideDir, targetHop, DIR_LINK_TYPE);
+    fs.symlinkSync(targetHop, path.join(legacyDir, "sessions"), DIR_LINK_TYPE);
 
-    const result = await autoMigrateLegacyStateDir({
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-    ]);
+    const result = await runStateDirMigration(root);
+    expectTargetAlreadyExistsWarning(result, targetDir);
   });
 });
