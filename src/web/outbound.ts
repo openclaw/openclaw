@@ -182,3 +182,74 @@ export async function sendPollWhatsApp(
     throw err;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Group Admin Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type GroupParticipantAction = "add" | "remove" | "promote" | "demote";
+export type GroupSettingValue = "announcement" | "not_announcement" | "locked" | "unlocked";
+
+export async function updateGroupSubjectWhatsApp(
+  groupJid: string,
+  subject: string,
+  options: { accountId?: string },
+): Promise<void> {
+  const { listener: active } = requireActiveWebListener(options.accountId);
+  const jid = toWhatsappJid(groupJid);
+  outboundLog.info(`Updating group subject -> ${jid}: "${subject}"`);
+  await active.updateGroupSubject(jid, subject);
+  outboundLog.info(`Updated group subject -> ${jid}`);
+}
+
+export async function updateGroupDescriptionWhatsApp(
+  groupJid: string,
+  description: string | undefined,
+  options: { accountId?: string },
+): Promise<void> {
+  const { listener: active } = requireActiveWebListener(options.accountId);
+  const jid = toWhatsappJid(groupJid);
+  outboundLog.info(`Updating group description -> ${jid}`);
+  await active.updateGroupDescription(jid, description);
+  outboundLog.info(`Updated group description -> ${jid}`);
+}
+
+export async function updateGroupPhotoWhatsApp(
+  groupJid: string,
+  image: Buffer,
+  options: { accountId?: string },
+): Promise<void> {
+  const { listener: active } = requireActiveWebListener(options.accountId);
+  const jid = toWhatsappJid(groupJid);
+  outboundLog.info(`Updating group photo -> ${jid}`);
+  await active.updateGroupPhoto(jid, image);
+  outboundLog.info(`Updated group photo -> ${jid}`);
+}
+
+export async function updateGroupParticipantsWhatsApp(
+  groupJid: string,
+  participants: string[],
+  action: GroupParticipantAction,
+  options: { accountId?: string },
+): Promise<{ status: string; jid: string }[]> {
+  const { listener: active } = requireActiveWebListener(options.accountId);
+  const jid = toWhatsappJid(groupJid);
+  // Normalize participants to JIDs here (single normalization layer)
+  const participantJids = participants.map((p) => toWhatsappJid(p));
+  outboundLog.info(`Updating group participants -> ${jid}: ${action} ${participantJids.length} participants`);
+  const result = await active.updateGroupParticipants(jid, participantJids, action);
+  outboundLog.info(`Updated group participants -> ${jid}`);
+  return result;
+}
+
+export async function updateGroupSettingsWhatsApp(
+  groupJid: string,
+  setting: GroupSettingValue,
+  options: { accountId?: string },
+): Promise<void> {
+  const { listener: active } = requireActiveWebListener(options.accountId);
+  const jid = toWhatsappJid(groupJid);
+  outboundLog.info(`Updating group settings -> ${jid}: ${setting}`);
+  await active.updateGroupSettings(jid, setting);
+  outboundLog.info(`Updated group settings -> ${jid}`);
+}

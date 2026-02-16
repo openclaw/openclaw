@@ -1,13 +1,21 @@
-import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, WAPresence, ParticipantAction, GroupSettingUpdate } from "@whiskeysockets/baileys";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
+
+export type GroupAdminMethods = {
+  groupUpdateSubject: (jid: string, subject: string) => Promise<void>;
+  groupUpdateDescription: (jid: string, description?: string) => Promise<void>;
+  updateProfilePicture: (jid: string, content: Buffer) => Promise<void>;
+  groupParticipantsUpdate: (jid: string, participants: string[], action: ParticipantAction) => Promise<unknown>;
+  groupSettingUpdate: (jid: string, setting: GroupSettingUpdate) => Promise<void>;
+};
 
 export function createWebSendApi(params: {
   sock: {
     sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
-  };
+  } & Partial<GroupAdminMethods>;
   defaultAccountId: string;
 }) {
   return {
@@ -108,6 +116,53 @@ export function createWebSendApi(params: {
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);
       await params.sock.sendPresenceUpdate("composing", jid);
+    },
+
+    // Group admin methods
+    updateGroupSubject: async (groupJid: string, subject: string): Promise<void> => {
+      if (!params.sock.groupUpdateSubject) {
+        throw new Error("Group admin methods not available");
+      }
+      const jid = toWhatsappJid(groupJid);
+      await params.sock.groupUpdateSubject(jid, subject);
+    },
+
+    updateGroupDescription: async (groupJid: string, description?: string): Promise<void> => {
+      if (!params.sock.groupUpdateDescription) {
+        throw new Error("Group admin methods not available");
+      }
+      const jid = toWhatsappJid(groupJid);
+      await params.sock.groupUpdateDescription(jid, description);
+    },
+
+    updateGroupPhoto: async (groupJid: string, image: Buffer): Promise<void> => {
+      if (!params.sock.updateProfilePicture) {
+        throw new Error("Group admin methods not available");
+      }
+      const jid = toWhatsappJid(groupJid);
+      await params.sock.updateProfilePicture(jid, image);
+    },
+
+    updateGroupParticipants: async (
+      groupJid: string,
+      participants: string[],
+      action: ParticipantAction,
+    ): Promise<{ status: string; jid: string }[]> => {
+      if (!params.sock.groupParticipantsUpdate) {
+        throw new Error("Group admin methods not available");
+      }
+      const jid = toWhatsappJid(groupJid);
+      // Pass participants through as-is; normalization is handled by the outbound.ts caller
+      const result = await params.sock.groupParticipantsUpdate(jid, participants, action);
+      return result as { status: string; jid: string }[];
+    },
+
+    updateGroupSettings: async (groupJid: string, setting: GroupSettingUpdate): Promise<void> => {
+      if (!params.sock.groupSettingUpdate) {
+        throw new Error("Group admin methods not available");
+      }
+      const jid = toWhatsappJid(groupJid);
+      await params.sock.groupSettingUpdate(jid, setting);
     },
   } as const;
 }

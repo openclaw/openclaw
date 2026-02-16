@@ -254,29 +254,68 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       if (gate("polls")) {
         actions.add("poll");
       }
+      if (gate("groupAdmin")) {
+        actions.add("updateGroupSubject" as ChannelMessageActionName);
+        actions.add("updateGroupDescription" as ChannelMessageActionName);
+        actions.add("updateGroupPhoto" as ChannelMessageActionName);
+        actions.add("updateGroupParticipants" as ChannelMessageActionName);
+        actions.add("updateGroupSettings" as ChannelMessageActionName);
+      }
       return Array.from(actions);
     },
-    supportsAction: ({ action }) => action === "react",
+    supportsAction: ({ action }) => {
+      const supportedActions = [
+        "react",
+        "updateGroupSubject",
+        "updateGroupDescription",
+        "updateGroupPhoto",
+        "updateGroupParticipants",
+        "updateGroupSettings",
+      ];
+      return supportedActions.includes(action);
+    },
     handleAction: async ({ action, params, cfg, accountId }) => {
-      if (action !== "react") {
+      const groupAdminActions = [
+        "updateGroupSubject",
+        "updateGroupDescription",
+        "updateGroupPhoto",
+        "updateGroupParticipants",
+        "updateGroupSettings",
+      ];
+      if (action !== "react" && !groupAdminActions.includes(action)) {
         throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
       }
-      const messageId = readStringParam(params, "messageId", {
-        required: true,
-      });
-      const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-      const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+      // For react action, require messageId at plugin level (regression fix)
+      if (action === "react") {
+        return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
+          {
+            action: "react",
+            chatJid:
+              readStringParam(params, "chatJid") ??
+              readStringParam(params, "to", { required: true }),
+            messageId: readStringParam(params, "messageId", { required: true }),
+            emoji: readStringParam(params, "emoji", { allowEmpty: true }),
+            remove: typeof params.remove === "boolean" ? params.remove : undefined,
+            participant: readStringParam(params, "participant"),
+            accountId: accountId ?? undefined,
+            fromMe: typeof params.fromMe === "boolean" ? params.fromMe : undefined,
+          },
+          cfg,
+        );
+      }
+      // Group admin actions
       return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(
         {
-          action: "react",
+          action,
           chatJid:
             readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true }),
-          messageId,
-          emoji,
-          remove,
-          participant: readStringParam(params, "participant"),
+          subject: readStringParam(params, "subject"),
+          description: readStringParam(params, "description"),
+          image: readStringParam(params, "image"),
+          participants: Array.isArray(params.participants) ? params.participants : undefined,
+          operation: readStringParam(params, "operation"),
+          setting: readStringParam(params, "setting"),
           accountId: accountId ?? undefined,
-          fromMe: typeof params.fromMe === "boolean" ? params.fromMe : undefined,
         },
         cfg,
       );
