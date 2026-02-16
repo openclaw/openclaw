@@ -27,23 +27,31 @@ function isRequireOfEsmError(err: unknown): boolean {
 
 /**
  * Load a hook handler module from a file path.
- * For .js and .cjs we try require() first so CJS hooks never hit "require is not defined" when
- * Node parses them as ESM. For .mjs we use import() only. On ESM-style errors we fall back to the other loader.
+ * For .js, .cjs, and .ts we try require() first so CJS hooks (and .ts hooks that use require())
+ * never hit "require is not defined" when Node parses them as ESM. For .mjs we use import() only.
+ * On require() of ESM we fall back to import(); on any other require() failure we also try import().
  */
 export async function loadHookModule(filePath: string): Promise<Record<string, unknown>> {
   const resolved = path.resolve(filePath);
   const ext = path.extname(resolved).toLowerCase();
-  const tryRequireFirst = ext === ".cjs" || ext === ".js";
+  const tryRequireFirst = ext === ".cjs" || ext === ".js" || ext === ".ts";
 
   if (tryRequireFirst) {
     try {
       return require(resolved) as Record<string, unknown>;
     } catch (err) {
+      // ESM file loaded via require(), or .ts not loadable via require: try import().
       if (isRequireOfEsmError(err)) {
         const url = pathToFileURL(resolved).href;
         return (await import(`${url}?t=${Date.now()}`)) as Record<string, unknown>;
       }
-      throw err;
+      // e.g. "Unknown file extension .ts" or other require failure: try import() so tsx/loaders can handle it.
+      const url = pathToFileURL(resolved).href;
+      try {
+        return (await import(`${url}?t=${Date.now()}`)) as Record<string, unknown>;
+      } catch {
+        throw err;
+      }
     }
   }
 
