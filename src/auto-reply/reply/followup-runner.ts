@@ -192,9 +192,9 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      const usage = runResult?.meta?.agentMeta?.usage;
-      const promptTokens = runResult?.meta?.agentMeta?.promptTokens;
-      const modelUsed = runResult?.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const usage = runResult.meta?.agentMeta?.usage;
+      const promptTokens = runResult.meta?.agentMeta?.promptTokens;
+      const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
@@ -206,7 +206,7 @@ export function createFollowupRunner(params: {
           storePath,
           sessionKey,
           usage,
-          lastCallUsage: runResult?.meta?.agentMeta?.lastCallUsage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
@@ -269,7 +269,7 @@ export function createFollowupRunner(params: {
           sessionStore,
           sessionKey,
           storePath,
-          lastCallUsage: runResult?.meta?.agentMeta?.lastCallUsage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {

@@ -363,13 +363,13 @@ export async function runReplyAgent(params: {
       await Promise.allSettled(pendingToolTasks);
     }
 
-    const usage = runResult?.meta?.agentMeta?.usage;
-    const promptTokens = runResult?.meta?.agentMeta?.promptTokens;
-    const modelUsed = runResult?.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+    const usage = runResult.meta?.agentMeta?.usage;
+    const promptTokens = runResult.meta?.agentMeta?.promptTokens;
+    const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
-      runResult?.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+      runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
     const cliSessionId = isCliProvider(providerUsed, cfg)
-      ? runResult?.meta?.agentMeta?.sessionId?.trim()
+      ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
@@ -381,12 +381,12 @@ export async function runReplyAgent(params: {
       storePath,
       sessionKey,
       usage,
-      lastCallUsage: runResult?.meta?.agentMeta?.lastCallUsage,
+      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
       modelUsed,
       providerUsed,
       contextTokensUsed,
-      systemPromptReport: runResult?.meta?.systemPromptReport,
+      systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
 
@@ -450,7 +450,7 @@ export async function runReplyAgent(params: {
           promptTokens,
           total: totalTokens,
         },
-        lastCallUsage: runResult?.meta?.agentMeta?.lastCallUsage,
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
           used: totalTokens,
@@ -496,7 +496,7 @@ export async function runReplyAgent(params: {
         sessionStore: activeSessionStore,
         sessionKey,
         storePath,
-        lastCallUsage: runResult?.meta?.agentMeta?.lastCallUsage,
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
       });
       if (verboseEnabled) {
