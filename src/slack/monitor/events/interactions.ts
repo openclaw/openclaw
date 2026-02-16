@@ -38,6 +38,7 @@ type InteractionSummary = {
   inputEmail?: string;
   inputUrl?: string;
   richTextValue?: unknown;
+  richTextPreview?: string;
   userId?: string;
   teamId?: string;
   triggerId?: string;
@@ -66,6 +67,7 @@ type ModalInputSummary = {
   inputEmail?: string;
   inputUrl?: string;
   richTextValue?: unknown;
+  richTextPreview?: string;
 };
 
 function readOptionValues(options: unknown): string[] | undefined {
@@ -105,6 +107,35 @@ function uniqueNonEmptyStrings(values: string[]): string[] {
     unique.push(trimmed);
   }
   return unique;
+}
+
+function collectRichTextFragments(value: unknown, out: string[]): void {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const typed = value as { text?: unknown; elements?: unknown };
+  if (typeof typed.text === "string" && typed.text.trim().length > 0) {
+    out.push(typed.text.trim());
+  }
+  if (Array.isArray(typed.elements)) {
+    for (const child of typed.elements) {
+      collectRichTextFragments(child, out);
+    }
+  }
+}
+
+function summarizeRichTextPreview(value: unknown): string | undefined {
+  const fragments: string[] = [];
+  collectRichTextFragments(value, fragments);
+  if (fragments.length === 0) {
+    return undefined;
+  }
+  const joined = fragments.join(" ").replace(/\s+/g, " ").trim();
+  if (!joined) {
+    return undefined;
+  }
+  const max = 120;
+  return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
 }
 
 function summarizeAction(
@@ -166,6 +197,7 @@ function summarizeAction(
     }
   }
   const richTextValue = actionType === "rich_text_input" ? typed.rich_text_value : undefined;
+  const richTextPreview = summarizeRichTextPreview(richTextValue);
   const inputKind =
     actionType === "number_input"
       ? "number"
@@ -197,6 +229,7 @@ function summarizeAction(
     inputEmail,
     inputUrl,
     richTextValue,
+    richTextPreview,
   };
 }
 
@@ -241,6 +274,9 @@ function formatInteractionSelectionLabel(params: {
   }
   if (typeof params.summary.selectedDateTime === "number") {
     return new Date(params.summary.selectedDateTime * 1000).toISOString();
+  }
+  if (params.summary.richTextPreview) {
+    return params.summary.richTextPreview;
   }
   if (params.summary.value?.trim()) {
     return params.summary.value.trim();
