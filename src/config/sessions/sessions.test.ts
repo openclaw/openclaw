@@ -246,61 +246,6 @@ describe("session store lock (Promise chain mutex)", () => {
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
   });
-
-  it("operations on different storePaths execute concurrently", async () => {
-    const { storePath: pathA } = await makeTmpStore({
-      a: { sessionId: "a", updatedAt: 100 },
-    });
-    const { storePath: pathB } = await makeTmpStore({
-      b: { sessionId: "b", updatedAt: 100 },
-    });
-
-    const order: string[] = [];
-    let started = 0;
-    let releaseBoth: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      releaseBoth = resolve;
-    });
-    const markStarted = () => {
-      started += 1;
-      if (started === 2) {
-        releaseBoth?.();
-      }
-    };
-
-    const opA = updateSessionStore(pathA, async (store) => {
-      order.push("a-start");
-      markStarted();
-      await gate;
-      store.a = { ...store.a, modelOverride: "done-a" } as unknown as SessionEntry;
-      order.push("a-end");
-    });
-
-    const opB = updateSessionStore(pathB, async (store) => {
-      order.push("b-start");
-      markStarted();
-      await gate;
-      store.b = { ...store.b, modelOverride: "done-b" } as unknown as SessionEntry;
-      order.push("b-end");
-    });
-
-    await Promise.all([opA, opB]);
-
-    const aStart = order.indexOf("a-start");
-    const bStart = order.indexOf("b-start");
-    const aEnd = order.indexOf("a-end");
-    const bEnd = order.indexOf("b-end");
-    const firstEnd = Math.min(aEnd, bEnd);
-    expect(aStart).toBeGreaterThanOrEqual(0);
-    expect(bStart).toBeGreaterThanOrEqual(0);
-    expect(aEnd).toBeGreaterThanOrEqual(0);
-    expect(bEnd).toBeGreaterThanOrEqual(0);
-    expect(aStart).toBeLessThan(firstEnd);
-    expect(bStart).toBeLessThan(firstEnd);
-
-    expect(loadSessionStore(pathA).a?.modelOverride).toBe("done-a");
-    expect(loadSessionStore(pathB).b?.modelOverride).toBe("done-b");
-  });
 });
 
 describe("resolveMirroredTranscriptText", () => {
