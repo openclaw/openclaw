@@ -53,7 +53,8 @@ describe("resolvePreferredNodePath", () => {
       throw new Error("missing");
     });
 
-    const execFile = vi.fn()
+    const execFile = vi
+      .fn()
       .mockResolvedValueOnce({ stdout: "18.0.0\n", stderr: "" }) // execPath too old
       .mockResolvedValueOnce({ stdout: "22.12.0\n", stderr: "" }); // system node ok
 
