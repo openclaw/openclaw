@@ -81,7 +81,7 @@ class I18nManager {
 
     for (const k of keys) {
       if (value && typeof value === "object") {
-        value = value[k];
+        value = (value as Record<string, unknown>)[k];
       } else {
         value = undefined;
         break;
@@ -93,7 +93,7 @@ class I18nManager {
       value = this.translations["en"];
       for (const k of keys) {
         if (value && typeof value === "object") {
-          value = value[k];
+          value = (value as Record<string, unknown>)[k];
         } else {
           value = undefined;
           break;
