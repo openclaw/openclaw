@@ -3,11 +3,8 @@ import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/type
 import type { TelegramStreamMode } from "./types.js";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
-import {
-  firstDefined,
-  normalizeAllowFromWithStore,
-  type NormalizedAllowFrom,
-} from "../bot-access.js";
+import { firstDefined } from "../../utils.js";
+import { normalizeAllowFromWithStore, type NormalizedAllowFrom } from "../bot-access.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 

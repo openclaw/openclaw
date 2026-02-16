@@ -34,9 +34,9 @@ import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { firstDefined } from "../utils.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
-  firstDefined,
   isSenderAllowed,
   normalizeAllowFromWithStore,
   resolveSenderAllowMatch,
