@@ -6,6 +6,43 @@ import Security
 
 private let deepLinkLogger = Logger(subsystem: "ai.openclaw", category: "DeepLink")
 
+enum DeepLinkAgentPolicy {
+    static let maxMessageChars = 20_000
+    static let maxUnkeyedConfirmChars = 240
+
+    enum ValidationError: Error, Equatable, LocalizedError {
+        case messageTooLongForConfirmation(max: Int, actual: Int)
+
+        var errorDescription: String? {
+            switch self {
+            case let .messageTooLongForConfirmation(max, actual):
+                return "Message is too long to confirm safely (\(actual) chars; max \(max) without key)."
+            }
+        }
+    }
+
+    static func validateMessageForHandle(message: String, allowUnattended: Bool) -> Result<Void, ValidationError> {
+        if !allowUnattended, message.count > self.maxUnkeyedConfirmChars {
+            return .failure(.messageTooLongForConfirmation(max: self.maxUnkeyedConfirmChars, actual: message.count))
+        }
+        return .success(())
+    }
+
+    static func effectiveDelivery(
+        link: AgentDeepLink,
+        allowUnattended: Bool) -> (deliver: Bool, to: String?, channel: GatewayAgentChannel)
+    {
+        if !allowUnattended {
+            // Without the unattended key, ignore delivery/routing knobs to reduce exfiltration risk.
+            return (deliver: false, to: nil, channel: .last)
+        }
+        let channel = GatewayAgentChannel(raw: link.channel)
+        let deliver = channel.shouldDeliver(link.deliver)
+        let to = link.to?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        return (deliver: deliver, to: to, channel: channel)
+    }
+}
+
 @MainActor
 final class DeepLinkHandler {
     static let shared = DeepLinkHandler()
@@ -35,7 +72,7 @@ final class DeepLinkHandler {
 
     private func handleAgent(link: AgentDeepLink, originalURL: URL) async {
         let messagePreview = link.message.trimmingCharacters(in: .whitespacesAndNewlines)
-        if messagePreview.count > 20000 {
+        if messagePreview.count > DeepLinkAgentPolicy.maxMessageChars {
             self.presentAlert(title: "Deep link too large", message: "Message exceeds 20,000 characters.")
             return
         }
@@ -48,9 +85,18 @@ final class DeepLinkHandler {
             }
             self.lastPromptAt = Date()
 
-            let trimmed = messagePreview.count > 240 ? "\(messagePreview.prefix(240))…" : messagePreview
+            if case let .failure(error) = DeepLinkAgentPolicy.validateMessageForHandle(
+                message: messagePreview,
+                allowUnattended: allowUnattended)
+            {
+                self.presentAlert(title: "Deep link blocked", message: error.localizedDescription)
+                return
+            }
+
+            let urlText = originalURL.absoluteString
+            let urlPreview = urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText
             let body =
-                "Run the agent with this message?\n\n\(trimmed)\n\nURL:\n\(originalURL.absoluteString)"
+                "Run the agent with this message?\n\n\(messagePreview)\n\nURL:\n\(urlPreview)"
             guard self.confirm(title: "Run OpenClaw agent?", message: body) else { return }
         }
 
@@ -59,7 +105,7 @@ final class DeepLinkHandler {
         }
 
         do {
-            let channel = GatewayAgentChannel(raw: link.channel)
+            let effectiveDelivery = DeepLinkAgentPolicy.effectiveDelivery(link: link, allowUnattended: allowUnattended)
             let explicitSessionKey = link.sessionKey?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .nonEmpty
@@ -72,9 +118,9 @@ final class DeepLinkHandler {
                 message: messagePreview,
                 sessionKey: resolvedSessionKey,
                 thinking: link.thinking?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
-                deliver: channel.shouldDeliver(link.deliver),
-                to: link.to?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
-                channel: channel,
+                deliver: effectiveDelivery.deliver,
+                to: effectiveDelivery.to,
+                channel: effectiveDelivery.channel,
                 timeoutSeconds: link.timeoutSeconds,
                 idempotencyKey: UUID().uuidString)
 

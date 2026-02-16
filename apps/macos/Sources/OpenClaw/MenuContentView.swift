@@ -337,7 +337,7 @@ struct MenuContent: View {
     private func openDashboard() async {
         do {
             let config = try await GatewayEndpointStore.shared.requireConfig()
-            let url = try GatewayEndpointStore.dashboardURL(for: config)
+            let url = try GatewayEndpointStore.dashboardURL(for: config, mode: self.state.connectionMode)
             NSWorkspace.shared.open(url)
         } catch {
             let alert = NSAlert()

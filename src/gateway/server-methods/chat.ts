@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -52,15 +53,22 @@ function resolveTranscriptPath(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
+  agentId?: string;
 }): string | null {
-  const { sessionId, storePath, sessionFile } = params;
-  if (sessionFile) {
-    return sessionFile;
-  }
-  if (!storePath) {
+  const { sessionId, storePath, sessionFile, agentId } = params;
+  if (!storePath && !sessionFile) {
     return null;
   }
-  return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+  try {
+    const sessionsDir = storePath ? path.dirname(storePath) : undefined;
+    return resolveSessionFilePath(
+      sessionId,
+      sessionFile ? { sessionFile } : undefined,
+      sessionsDir || agentId ? { sessionsDir, agentId } : undefined,
+    );
+  } catch {
+    return null;
+  }
 }
 
 function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
@@ -92,12 +100,14 @@ function appendAssistantTranscriptMessage(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
+  agentId?: string;
   createIfMissing?: boolean;
 }): TranscriptAppendResult {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
     storePath: params.storePath,
     sessionFile: params.sessionFile,
+    agentId: params.agentId,
   });
   if (!transcriptPath) {
     return { ok: false, error: "transcript path not resolved" };
@@ -179,6 +189,7 @@ function broadcastChatFinal(params: {
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
+  params.context.agentRunSeq.delete(params.runId);
 }
 
 function broadcastChatError(params: {
@@ -197,6 +208,7 @@ function broadcastChatError(params: {
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
+  params.context.agentRunSeq.delete(params.runId);
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
@@ -565,6 +577,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionId,
                 storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile,
+                agentId,
                 createIfMissing: true,
               });
               if (appended.ok) {
@@ -659,7 +672,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const { storePath, entry } = loadSessionEntry(rawSessionKey);
+    const { cfg, storePath, entry } = loadSessionEntry(rawSessionKey);
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
@@ -672,6 +685,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
+      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
       createIfMissing: false,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {

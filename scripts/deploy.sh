@@ -156,11 +156,30 @@ if [ "$DRY_RUN" = true ]; then
   info "DRY RUN — showing what would be synced:"
 fi
 
+# Directories where custom (non-upstream) content should be preserved.
+# rsync --delete would remove anything not in the source tree, which
+# nukes custom extensions deployed separately (e.g., Beanstalk).
+PRESERVE_CUSTOM_DIRS=(extensions/)
+
 # Sync directories
 for dir in "${RUNTIME_DIRS[@]}"; do
   if [ -d "$SOURCE_DIR/$dir" ]; then
-    info "Syncing $dir"
-    rsync "${RSYNC_FLAGS[@]}" "$SOURCE_DIR/$dir" "$DEPLOY_DIR/$dir"
+    local_flags=("${RSYNC_FLAGS[@]}")
+    for preserve_dir in "${PRESERVE_CUSTOM_DIRS[@]}"; do
+      if [ "$dir" = "$preserve_dir" ]; then
+        # Remove --delete for dirs that may contain custom content
+        local_flags=(-a)
+        if [ "$DRY_RUN" = true ]; then
+          local_flags+=(--dry-run)
+        fi
+        info "Syncing $dir (preserving custom content)"
+        break
+      fi
+    done
+    if [[ ! " ${PRESERVE_CUSTOM_DIRS[*]} " =~ " ${dir} " ]]; then
+      info "Syncing $dir"
+    fi
+    rsync "${local_flags[@]}" "$SOURCE_DIR/$dir" "$DEPLOY_DIR/$dir"
   else
     warn "Directory not found, skipping: $dir"
   fi

@@ -449,6 +449,7 @@ export async function agentCommand(
             lane: opts.lane,
             abortSignal: opts.abortSignal,
             extraSystemPrompt: opts.extraSystemPrompt,
+            inputProvenance: opts.inputProvenance,
             streamParams: opts.streamParams,
             agentDir,
             onAgentEvent: (evt) => {

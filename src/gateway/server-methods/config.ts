@@ -6,6 +6,7 @@ import {
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
   writeConfigFile,
@@ -17,7 +18,8 @@ import {
   redactConfigSnapshot,
   restoreRedactedValues,
 } from "../../config/redact-snapshot.js";
-import { buildConfigSchema } from "../../config/schema.js";
+import { buildConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -91,6 +93,109 @@ function requireConfigBaseHash(
   return true;
 }
 
+function resolveConfigRestartRequest(params: unknown): {
+  sessionKey: string | undefined;
+  note: string | undefined;
+  restartDelayMs: number | undefined;
+  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
+  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
+} {
+  const sessionKey =
+    typeof (params as { sessionKey?: unknown }).sessionKey === "string"
+      ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
+      : undefined;
+  const note =
+    typeof (params as { note?: unknown }).note === "string"
+      ? (params as { note?: string }).note?.trim() || undefined
+      : undefined;
+  const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
+  const restartDelayMs =
+    typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
+      ? Math.max(0, Math.floor(restartDelayMsRaw))
+      : undefined;
+
+  // Extract deliveryContext + threadId for routing after restart
+  // Supports both :thread: (most channels) and :topic: (Telegram)
+  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+
+  return {
+    sessionKey,
+    note,
+    restartDelayMs,
+    deliveryContext,
+    threadId,
+  };
+}
+
+function buildConfigRestartSentinelPayload(params: {
+  kind: RestartSentinelPayload["kind"];
+  mode: string;
+  sessionKey: string | undefined;
+  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
+  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
+  note: string | undefined;
+}): RestartSentinelPayload {
+  return {
+    kind: params.kind,
+    status: "ok",
+    ts: Date.now(),
+    sessionKey: params.sessionKey,
+    deliveryContext: params.deliveryContext,
+    threadId: params.threadId,
+    message: params.note ?? null,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: params.mode,
+      root: CONFIG_PATH,
+    },
+  };
+}
+
+async function tryWriteRestartSentinelPayload(
+  payload: RestartSentinelPayload,
+): Promise<string | null> {
+  try {
+    return await writeRestartSentinel(payload);
+  } catch {
+    return null;
+  }
+}
+
+function loadSchemaWithPlugins(): ConfigSchemaResponse {
+  const cfg = loadConfig();
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const pluginRegistry = loadOpenClawPlugins({
+    config: cfg,
+    cache: true,
+    workspaceDir,
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    },
+  });
+  // Note: We can't easily cache this, as there are no callback that can invalidate
+  // our cache. However, both loadConfig() and loadOpenClawPlugins() already cache
+  // their results, and buildConfigSchema() is just a cheap transformation.
+  return buildConfigSchema({
+    plugins: pluginRegistry.plugins.map((plugin) => ({
+      id: plugin.id,
+      name: plugin.name,
+      description: plugin.description,
+      configUiHints: plugin.configUiHints,
+      configSchema: plugin.configJsonSchema,
+    })),
+    channels: listChannelPlugins().map((entry) => ({
+      id: entry.id,
+      label: entry.meta.label,
+      description: entry.meta.blurb,
+      configSchema: entry.configSchema?.schema,
+      configUiHints: entry.configSchema?.uiHints,
+    })),
+  });
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
     if (!validateConfigGetParams(params)) {
@@ -105,7 +210,8 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const snapshot = await readConfigFileSnapshot();
-    respond(true, redactConfigSnapshot(snapshot), undefined);
+    const schema = loadSchemaWithPlugins();
+    respond(true, redactConfigSnapshot(snapshot, schema.uiHints), undefined);
   },
   "config.schema": ({ params, respond }) => {
     if (!validateConfigSchemaParams(params)) {
@@ -119,35 +225,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = loadConfig();
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-    const pluginRegistry = loadOpenClawPlugins({
-      config: cfg,
-      workspaceDir,
-      logger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      },
-    });
-    const schema = buildConfigSchema({
-      plugins: pluginRegistry.plugins.map((plugin) => ({
-        id: plugin.id,
-        name: plugin.name,
-        description: plugin.description,
-        configUiHints: plugin.configUiHints,
-        configSchema: plugin.configJsonSchema,
-      })),
-      channels: listChannelPlugins().map((entry) => ({
-        id: entry.id,
-        label: entry.meta.label,
-        description: entry.meta.blurb,
-        configSchema: entry.configSchema?.schema,
-        configUiHints: entry.configSchema?.uiHints,
-      })),
-    });
-    respond(true, schema, undefined);
+    respond(true, loadSchemaWithPlugins(), undefined);
   },
   "config.set": async ({ params, respond }) => {
     if (!validateConfigSetParams(params)) {
@@ -161,7 +239,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -179,7 +257,17 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    const validated = validateConfigObjectWithPlugins(parsedRes.parsed);
+    const schemaSet = loadSchemaWithPlugins();
+    const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schemaSet.uiHints);
+    if (!restored.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, restored.humanReadableMessage ?? "invalid config"),
+      );
+      return;
+    }
+    const validated = validateConfigObjectWithPlugins(restored.result);
     if (!validated.ok) {
       respond(
         false,
@@ -190,27 +278,13 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let restored: typeof validated.config;
-    try {
-      restored = restoreRedactedValues(
-        validated.config,
-        snapshot.config,
-      ) as typeof validated.config;
-    } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, String(err instanceof Error ? err.message : err)),
-      );
-      return;
-    }
-    await writeConfigFile(restored);
+    await writeConfigFile(validated.config, writeOptions);
     respond(
       true,
       {
         ok: true,
         path: CONFIG_PATH,
-        config: redactConfigObject(restored),
+        config: redactConfigObject(validated.config, schemaSet.uiHints),
       },
       undefined,
     );
@@ -227,7 +301,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -269,19 +343,21 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed);
-    let restoredMerge: unknown;
-    try {
-      restoredMerge = restoreRedactedValues(merged, snapshot.config);
-    } catch (err) {
+    const schemaPatch = loadSchemaWithPlugins();
+    const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
+    if (!restoredMerge.ok) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, String(err instanceof Error ? err.message : err)),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          restoredMerge.humanReadableMessage ?? "invalid config",
+        ),
       );
       return;
     }
-    const migrated = applyLegacyMigrations(restoredMerge);
-    const resolved = migrated.next ?? restoredMerge;
+    const migrated = applyLegacyMigrations(restoredMerge.result);
+    const resolved = migrated.next ?? restoredMerge.result;
     const validated = validateConfigObjectWithPlugins(resolved);
     if (!validated.ok) {
       respond(
@@ -293,40 +369,19 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    await writeConfigFile(validated.config, writeOptions);
 
-    const sessionKey =
-      typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-        ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-        : undefined;
-    const note =
-      typeof (params as { note?: unknown }).note === "string"
-        ? (params as { note?: string }).note?.trim() || undefined
-        : undefined;
-    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-    const restartDelayMs =
-      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-        ? Math.max(0, Math.floor(restartDelayMsRaw))
-        : undefined;
-
-    const payload: RestartSentinelPayload = {
-      kind: "config-apply",
-      status: "ok",
-      ts: Date.now(),
+    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+      resolveConfigRestartRequest(params);
+    const payload = buildConfigRestartSentinelPayload({
+      kind: "config-patch",
+      mode: "config.patch",
       sessionKey,
-      message: note ?? null,
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: {
-        mode: "config.patch",
-        root: CONFIG_PATH,
-      },
-    };
-    let sentinelPath: string | null = null;
-    try {
-      sentinelPath = await writeRestartSentinel(payload);
-    } catch {
-      sentinelPath = null;
-    }
+      deliveryContext,
+      threadId,
+      note,
+    });
+    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.patch",
@@ -336,7 +391,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: CONFIG_PATH,
-        config: redactConfigObject(validated.config),
+        config: redactConfigObject(validated.config, schemaPatch.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,
@@ -358,7 +413,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
@@ -379,7 +434,17 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    const validated = validateConfigObjectWithPlugins(parsedRes.parsed);
+    const schemaApply = loadSchemaWithPlugins();
+    const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schemaApply.uiHints);
+    if (!restored.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, restored.humanReadableMessage ?? "invalid config"),
+      );
+      return;
+    }
+    const validated = validateConfigObjectWithPlugins(restored.result);
     if (!validated.ok) {
       respond(
         false,
@@ -390,54 +455,19 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let restoredApply: typeof validated.config;
-    try {
-      restoredApply = restoreRedactedValues(
-        validated.config,
-        snapshot.config,
-      ) as typeof validated.config;
-    } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, String(err instanceof Error ? err.message : err)),
-      );
-      return;
-    }
-    await writeConfigFile(restoredApply);
+    await writeConfigFile(validated.config, writeOptions);
 
-    const sessionKey =
-      typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-        ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-        : undefined;
-    const note =
-      typeof (params as { note?: unknown }).note === "string"
-        ? (params as { note?: string }).note?.trim() || undefined
-        : undefined;
-    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-    const restartDelayMs =
-      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-        ? Math.max(0, Math.floor(restartDelayMsRaw))
-        : undefined;
-
-    const payload: RestartSentinelPayload = {
+    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+      resolveConfigRestartRequest(params);
+    const payload = buildConfigRestartSentinelPayload({
       kind: "config-apply",
-      status: "ok",
-      ts: Date.now(),
+      mode: "config.apply",
       sessionKey,
-      message: note ?? null,
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: {
-        mode: "config.apply",
-        root: CONFIG_PATH,
-      },
-    };
-    let sentinelPath: string | null = null;
-    try {
-      sentinelPath = await writeRestartSentinel(payload);
-    } catch {
-      sentinelPath = null;
-    }
+      deliveryContext,
+      threadId,
+      note,
+    });
+    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.apply",
@@ -447,7 +477,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: CONFIG_PATH,
-        config: redactConfigObject(restoredApply),
+        config: redactConfigObject(validated.config, schemaApply.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,

@@ -168,6 +168,10 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
   upsertNode({ nodeId, bins });
 }
 
+export function removeRemoteNodeInfo(nodeId: string) {
+  remoteNodes.delete(nodeId);
+}
+
 function listWorkspaceDirs(cfg: OpenClawConfig): string[] {
   const dirs = new Set<string>();
   const list = cfg.agents?.list;

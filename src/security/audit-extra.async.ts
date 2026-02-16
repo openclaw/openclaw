@@ -3,18 +3,27 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import JSON5 from "json5";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
+import type { AgentToolsConfig } from "../config/types.tools.js";
+import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxToolPolicyForAgent,
+} from "../agents/sandbox.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
+import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { createConfigIO } from "../config/config.js";
-import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
+import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
@@ -22,7 +31,7 @@ import {
   inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
-import { scanDirectoryWithSummary, type SkillScanFinding } from "./skill-scanner.js";
+import * as skillScanner from "./skill-scanner.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -51,88 +60,6 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
     return path.join(home, p.slice(2));
   }
   return null;
-}
-
-function resolveIncludePath(baseConfigPath: string, includePath: string): string {
-  return path.normalize(
-    path.isAbsolute(includePath)
-      ? includePath
-      : path.resolve(path.dirname(baseConfigPath), includePath),
-  );
-}
-
-function listDirectIncludes(parsed: unknown): string[] {
-  const out: string[] = [];
-  const visit = (value: unknown) => {
-    if (!value) {
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        visit(item);
-      }
-      return;
-    }
-    if (typeof value !== "object") {
-      return;
-    }
-    const rec = value as Record<string, unknown>;
-    const includeVal = rec[INCLUDE_KEY];
-    if (typeof includeVal === "string") {
-      out.push(includeVal);
-    } else if (Array.isArray(includeVal)) {
-      for (const item of includeVal) {
-        if (typeof item === "string") {
-          out.push(item);
-        }
-      }
-    }
-    for (const v of Object.values(rec)) {
-      visit(v);
-    }
-  };
-  visit(parsed);
-  return out;
-}
-
-async function collectIncludePathsRecursive(params: {
-  configPath: string;
-  parsed: unknown;
-}): Promise<string[]> {
-  const visited = new Set<string>();
-  const result: string[] = [];
-
-  const walk = async (basePath: string, parsed: unknown, depth: number): Promise<void> => {
-    if (depth > MAX_INCLUDE_DEPTH) {
-      return;
-    }
-    for (const raw of listDirectIncludes(parsed)) {
-      const resolved = resolveIncludePath(basePath, raw);
-      if (visited.has(resolved)) {
-        continue;
-      }
-      visited.add(resolved);
-      result.push(resolved);
-      const rawText = await fs.readFile(resolved, "utf-8").catch(() => null);
-      if (!rawText) {
-        continue;
-      }
-      const nestedParsed = (() => {
-        try {
-          return JSON5.parse(rawText);
-        } catch {
-          return null;
-        }
-      })();
-      if (nestedParsed) {
-        // eslint-disable-next-line no-await-in-loop
-        await walk(resolved, nestedParsed, depth + 1);
-      }
-    }
-  };
-
-  await walk(params.configPath, params.parsed, 0);
-  return result;
 }
 
 function isPathInside(basePath: string, candidatePath: string): boolean {
@@ -194,6 +121,135 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
       return `  - [${finding.ruleId}] ${finding.message} (${normalizedPath}:${finding.line})`;
     })
     .join("\n");
+}
+
+function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
+  if (!Array.isArray(extra) || extra.length === 0) {
+    return base;
+  }
+  if (!Array.isArray(base) || base.length === 0) {
+    return Array.from(new Set(["*", ...extra]));
+  }
+  return Array.from(new Set([...base, ...extra]));
+}
+
+function pickToolPolicy(config?: {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+}): SandboxToolPolicy | undefined {
+  if (!config) {
+    return undefined;
+  }
+  const allow = Array.isArray(config.allow)
+    ? unionAllow(config.allow, config.alsoAllow)
+    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
+      ? unionAllow(undefined, config.alsoAllow)
+      : undefined;
+  const deny = Array.isArray(config.deny) ? config.deny : undefined;
+  if (!allow && !deny) {
+    return undefined;
+  }
+  return { allow, deny };
+}
+
+function resolveToolPolicies(params: {
+  cfg: OpenClawConfig;
+  agentTools?: AgentToolsConfig;
+  sandboxMode?: "off" | "non-main" | "all";
+  agentId?: string | null;
+}): Array<SandboxToolPolicy | undefined> {
+  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
+  const profilePolicy = resolveToolProfilePolicy(profile);
+  const policies: Array<SandboxToolPolicy | undefined> = [
+    profilePolicy,
+    pickToolPolicy(params.cfg.tools ?? undefined),
+    pickToolPolicy(params.agentTools),
+  ];
+  if (params.sandboxMode === "all") {
+    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
+  }
+  return policies;
+}
+
+function normalizePluginIdSet(entries: string[]): Set<string> {
+  return new Set(entries.map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+}
+
+function resolveEnabledExtensionPluginIds(params: {
+  cfg: OpenClawConfig;
+  pluginDirs: string[];
+}): string[] {
+  const normalized = normalizePluginsConfig(params.cfg.plugins);
+  if (!normalized.enabled) {
+    return [];
+  }
+
+  const allowSet = normalizePluginIdSet(normalized.allow);
+  const denySet = normalizePluginIdSet(normalized.deny);
+  const entryById = new Map<string, { enabled?: boolean }>();
+  for (const [id, entry] of Object.entries(normalized.entries)) {
+    entryById.set(id.trim().toLowerCase(), entry);
+  }
+
+  const enabled: string[] = [];
+  for (const id of params.pluginDirs) {
+    const normalizedId = id.trim().toLowerCase();
+    if (!normalizedId) {
+      continue;
+    }
+    if (denySet.has(normalizedId)) {
+      continue;
+    }
+    if (allowSet.size > 0 && !allowSet.has(normalizedId)) {
+      continue;
+    }
+    if (entryById.get(normalizedId)?.enabled === false) {
+      continue;
+    }
+    enabled.push(normalizedId);
+  }
+  return enabled;
+}
+
+function collectAllowEntries(config?: { allow?: string[]; alsoAllow?: string[] }): string[] {
+  const out: string[] = [];
+  if (Array.isArray(config?.allow)) {
+    out.push(...config.allow);
+  }
+  if (Array.isArray(config?.alsoAllow)) {
+    out.push(...config.alsoAllow);
+  }
+  return out.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+}
+
+function hasExplicitPluginAllow(params: {
+  allowEntries: string[];
+  enabledPluginIds: Set<string>;
+}): boolean {
+  return params.allowEntries.some(
+    (entry) => entry === "group:plugins" || params.enabledPluginIds.has(entry),
+  );
+}
+
+function hasProviderPluginAllow(params: {
+  byProvider?: Record<string, { allow?: string[]; alsoAllow?: string[]; deny?: string[] }>;
+  enabledPluginIds: Set<string>;
+}): boolean {
+  if (!params.byProvider) {
+    return false;
+  }
+  for (const policy of Object.values(params.byProvider)) {
+    if (
+      hasExplicitPluginAllow({
+        allowEntries: collectAllowEntries(policy),
+        enabledPluginIds: params.enabledPluginIds,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // --------------------------------------------------------------------------
@@ -295,6 +351,78 @@ export async function collectPluginsTrustFindings(params: {
           : ""),
       remediation: "Set plugins.allow to an explicit list of plugin ids you trust.",
     });
+  }
+
+  const enabledExtensionPluginIds = resolveEnabledExtensionPluginIds({
+    cfg: params.cfg,
+    pluginDirs,
+  });
+  if (enabledExtensionPluginIds.length > 0) {
+    const enabledPluginSet = new Set(enabledExtensionPluginIds);
+    const contexts: Array<{
+      label: string;
+      agentId?: string;
+      tools?: AgentToolsConfig;
+    }> = [{ label: "default" }];
+    for (const entry of params.cfg.agents?.list ?? []) {
+      if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+        continue;
+      }
+      contexts.push({
+        label: `agents.list.${entry.id}`,
+        agentId: entry.id,
+        tools: entry.tools,
+      });
+    }
+
+    const permissiveContexts: string[] = [];
+    for (const context of contexts) {
+      const profile = context.tools?.profile ?? params.cfg.tools?.profile;
+      const restrictiveProfile = Boolean(resolveToolProfilePolicy(profile));
+      const sandboxMode = resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
+      const policies = resolveToolPolicies({
+        cfg: params.cfg,
+        agentTools: context.tools,
+        sandboxMode,
+        agentId: context.agentId,
+      });
+      const broadPolicy = isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
+      const explicitPluginAllow =
+        !restrictiveProfile &&
+        (hasExplicitPluginAllow({
+          allowEntries: collectAllowEntries(params.cfg.tools),
+          enabledPluginIds: enabledPluginSet,
+        }) ||
+          hasProviderPluginAllow({
+            byProvider: params.cfg.tools?.byProvider,
+            enabledPluginIds: enabledPluginSet,
+          }) ||
+          hasExplicitPluginAllow({
+            allowEntries: collectAllowEntries(context.tools),
+            enabledPluginIds: enabledPluginSet,
+          }) ||
+          hasProviderPluginAllow({
+            byProvider: context.tools?.byProvider,
+            enabledPluginIds: enabledPluginSet,
+          }));
+
+      if (broadPolicy || explicitPluginAllow) {
+        permissiveContexts.push(context.label);
+      }
+    }
+
+    if (permissiveContexts.length > 0) {
+      findings.push({
+        checkId: "plugins.tools_reachable_permissive_policy",
+        severity: "warn",
+        title: "Extension plugin tools may be reachable under permissive tool policy",
+        detail:
+          `Enabled extension plugins: ${enabledExtensionPluginIds.join(", ")}.\n` +
+          `Permissive tool policy contexts:\n${permissiveContexts.map((entry) => `- ${entry}`).join("\n")}`,
+        remediation:
+          "Use restrictive profiles (`minimal`/`coding`) or explicit tool allowlists that exclude plugin tools for agents handling untrusted input.",
+      });
+    }
   }
 
   return findings;
@@ -602,19 +730,21 @@ export async function collectPluginsCodeSafetyFindings(params: {
       });
     }
 
-    const summary = await scanDirectoryWithSummary(pluginPath, {
-      includeFiles: forcedScanEntries,
-    }).catch((err) => {
-      findings.push({
-        checkId: "plugins.code_safety.scan_failed",
-        severity: "warn",
-        title: `Plugin "${pluginName}" code scan failed`,
-        detail: `Static code scan could not complete: ${String(err)}`,
-        remediation:
-          "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+    const summary = await skillScanner
+      .scanDirectoryWithSummary(pluginPath, {
+        includeFiles: forcedScanEntries,
+      })
+      .catch((err) => {
+        findings.push({
+          checkId: "plugins.code_safety.scan_failed",
+          severity: "warn",
+          title: `Plugin "${pluginName}" code scan failed`,
+          detail: `Static code scan could not complete: ${String(err)}`,
+          remediation:
+            "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+        });
+        return null;
       });
-      return null;
-    });
     if (!summary) {
       continue;
     }
@@ -675,7 +805,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await scanDirectoryWithSummary(skillDir).catch((err) => {
+      const summary = await skillScanner.scanDirectoryWithSummary(skillDir).catch((err) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",

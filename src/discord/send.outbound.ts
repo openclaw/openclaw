@@ -1,6 +1,9 @@
 import type { RequestClient } from "@buape/carbon";
 import type { APIChannel } from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { RetryConfig } from "../infra/retry.js";
 import type { PollInput } from "../polls.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -8,7 +11,11 @@ import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
+import { maxBytesForKind } from "../media/constants.js";
+import { extensionForMime } from "../media/mime.js";
+import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   buildDiscordSendError,
@@ -20,7 +27,13 @@ import {
   resolveChannelId,
   sendDiscordMedia,
   sendDiscordText,
+  SUPPRESS_NOTIFICATIONS_FLAG,
 } from "./send.shared.js";
+import {
+  ensureOggOpus,
+  getVoiceMessageMetadata,
+  sendDiscordVoiceMessage,
+} from "./voice-message.js";
 
 type DiscordSendOpts = {
   token?: string;
@@ -31,6 +44,7 @@ type DiscordSendOpts = {
   replyTo?: string;
   retry?: RetryConfig;
   embeds?: unknown[];
+  silent?: boolean;
 };
 
 /** Discord thread names are capped at 100 characters. */
@@ -131,6 +145,7 @@ export async function sendMessageDiscord(
           accountInfo.config.maxLinesPerMessage,
           undefined,
           chunkMode,
+          opts.silent,
         );
         for (const chunk of afterMediaChunks) {
           await sendDiscordText(
@@ -142,6 +157,7 @@ export async function sendMessageDiscord(
             accountInfo.config.maxLinesPerMessage,
             undefined,
             chunkMode,
+            opts.silent,
           );
         }
       } else {
@@ -155,6 +171,7 @@ export async function sendMessageDiscord(
             accountInfo.config.maxLinesPerMessage,
             undefined,
             chunkMode,
+            opts.silent,
           );
         }
       }
@@ -191,6 +208,7 @@ export async function sendMessageDiscord(
         accountInfo.config.maxLinesPerMessage,
         opts.embeds,
         chunkMode,
+        opts.silent,
       );
     } else {
       result = await sendDiscordText(
@@ -202,6 +220,7 @@ export async function sendMessageDiscord(
         accountInfo.config.maxLinesPerMessage,
         opts.embeds,
         chunkMode,
+        opts.silent,
       );
     }
   } catch (err) {
@@ -261,13 +280,18 @@ export async function sendPollDiscord(
   const recipient = await parseAndResolveRecipient(to, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const content = opts.content?.trim();
+  if (poll.durationSeconds !== undefined) {
+    throw new Error("Discord polls do not support durationSeconds; use durationHours");
+  }
   const payload = normalizeDiscordPollInput(poll);
+  const flags = opts.silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const res = (await request(
     () =>
       rest.post(Routes.channelMessages(channelId), {
         body: {
           content: content || undefined,
           poll: payload,
+          ...(flags ? { flags } : {}),
         },
       }) as Promise<{ id: string; channel_id: string }>,
     "poll",
@@ -276,4 +300,121 @@ export async function sendPollDiscord(
     messageId: res.id ? String(res.id) : "unknown",
     channelId: String(res.channel_id ?? channelId),
   };
+}
+
+type VoiceMessageOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  rest?: RequestClient;
+  replyTo?: string;
+  retry?: RetryConfig;
+  silent?: boolean;
+};
+
+async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePath: string }> {
+  // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
+  // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
+  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  const extFromName = media.fileName ? path.extname(media.fileName) : "";
+  const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
+  const ext = extFromName || extFromMime || ".bin";
+  const tempDir = resolvePreferredOpenClawTmpDir();
+  const filePath = path.join(tempDir, `voice-src-${crypto.randomUUID()}${ext}`);
+  await fs.writeFile(filePath, media.buffer, { mode: 0o600 });
+  return { filePath };
+}
+
+/**
+ * Send a voice message to Discord.
+ *
+ * Voice messages are a special Discord feature that displays audio with a waveform
+ * visualization. They require OGG/Opus format and cannot include text content.
+ *
+ * @param to - Recipient (user ID for DM or channel ID)
+ * @param audioPath - Path to local audio file (will be converted to OGG/Opus if needed)
+ * @param opts - Send options
+ */
+export async function sendVoiceMessageDiscord(
+  to: string,
+  audioPath: string,
+  opts: VoiceMessageOpts = {},
+): Promise<DiscordSendResult> {
+  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
+  let oggPath: string | null = null;
+  let oggCleanup = false;
+  let token: string | undefined;
+  let rest: RequestClient | undefined;
+  let channelId: string | undefined;
+
+  try {
+    const cfg = loadConfig();
+    const accountInfo = resolveDiscordAccount({
+      cfg,
+      accountId: opts.accountId,
+    });
+    const client = createDiscordClient(opts, cfg);
+    token = client.token;
+    rest = client.rest;
+    const request = client.request;
+    const recipient = await parseAndResolveRecipient(to, opts.accountId);
+    channelId = (await resolveChannelId(rest, recipient, request)).channelId;
+
+    // Convert to OGG/Opus if needed
+    const ogg = await ensureOggOpus(localInputPath);
+    oggPath = ogg.path;
+    oggCleanup = ogg.cleanup;
+
+    // Get voice message metadata (duration and waveform)
+    const metadata = await getVoiceMessageMetadata(oggPath);
+
+    // Read the audio file
+    const audioBuffer = await fs.readFile(oggPath);
+
+    // Send the voice message
+    const result = await sendDiscordVoiceMessage(
+      rest,
+      channelId,
+      audioBuffer,
+      metadata,
+      opts.replyTo,
+      request,
+      opts.silent,
+    );
+
+    recordChannelActivity({
+      channel: "discord",
+      accountId: accountInfo.accountId,
+      direction: "outbound",
+    });
+
+    return {
+      messageId: result.id ? String(result.id) : "unknown",
+      channelId: String(result.channel_id ?? channelId),
+    };
+  } catch (err) {
+    if (channelId && rest && token) {
+      throw await buildDiscordSendError(err, {
+        channelId,
+        rest,
+        token,
+        hasMedia: true,
+      });
+    }
+    throw err;
+  } finally {
+    // Clean up temporary OGG file if we created one
+    if (oggCleanup && oggPath) {
+      try {
+        await fs.unlink(oggPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+    try {
+      await fs.unlink(localInputPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 }

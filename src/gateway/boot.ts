@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CliDeps } from "../cli/deps.js";
@@ -7,6 +8,13 @@ import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
+
+function generateBootSessionId(): string {
+  const now = new Date();
+  const ts = now.toISOString().replace(/[:.]/g, "-").replace("T", "_").replace("Z", "");
+  const suffix = crypto.randomUUID().slice(0, 8);
+  return `boot-${ts}-${suffix}`;
+}
 
 const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
@@ -75,12 +83,14 @@ export async function runBootOnce(params: {
 
   const sessionKey = resolveMainSessionKey(params.cfg);
   const message = buildBootPrompt(result.content ?? "");
+  const sessionId = generateBootSessionId();
 
   try {
     await agentCommand(
       {
         message,
         sessionKey,
+        sessionId,
         deliver: false,
       },
       bootRuntime,
