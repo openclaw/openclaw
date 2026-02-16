@@ -17,7 +17,11 @@ import {
   validateExecApprovalsSetParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
-import { respondUnavailableOnThrow, safeParseJson } from "./nodes.helpers.js";
+import {
+  respondUnavailableOnNodeInvokeError,
+  respondUnavailableOnThrow,
+  safeParseJson,
+} from "./nodes.helpers.js";
 import { assertValidParams } from "./validation.js";
 
 function requireApprovalsBaseHash(
@@ -147,14 +151,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         command: "system.execApprovals.get",
         params: {},
       });
-      if (!res.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
-          }),
-        );
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
@@ -188,14 +185,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         command: "system.execApprovals.set",
         params: { file, baseHash },
       });
-      if (!res.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
-          }),
-        );
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = safeParseJson(res.payloadJSON ?? null);
