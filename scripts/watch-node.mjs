@@ -17,6 +17,7 @@ const initialBuild = spawnSync("pnpm", ["exec", compiler], {
   cwd,
   env,
   stdio: "inherit",
+  shell: true,
 });
 
 if (initialBuild.status !== 0) {
@@ -27,6 +28,7 @@ const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch"], {
   cwd,
   env,
   stdio: "inherit",
+  shell: true,
 });
 
 const nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args], {

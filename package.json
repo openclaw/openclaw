@@ -53,7 +53,7 @@
     "android:test": "cd apps/android && ./gradlew :app:testDebugUnitTest",
     "build": "pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
-    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
+    "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "check": "pnpm format:check && pnpm tsgo && pnpm lint",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-links",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
@@ -128,7 +128,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
     "@aws-sdk/client-bedrock": "^3.990.0",
-    "@buape/carbon": "0.0.0-beta-20260216184201",
+    "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.1",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",

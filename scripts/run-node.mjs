@@ -238,6 +238,7 @@ export async function runNodeMain(params = {}) {
     cwd: deps.cwd,
     env: deps.env,
     stdio: "inherit",
+    shell: true,
   });
 
   const buildRes = await new Promise((resolve) => {
