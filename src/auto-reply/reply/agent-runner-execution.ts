@@ -26,19 +26,14 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
-import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -463,6 +458,18 @@ export async function runAgentTurnWithFallback(params: {
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
+      // Only treat INVALID_ARGUMENT as corrupted session when the session file
+      // already exists (not a fresh conversation) and the error is not about
+      // model/config parameters (e.g. "model not found", "safety_settings").
+      const isGeminiInvalidArgument =
+        !isContextOverflow &&
+        !isCompactionFailure &&
+        !isSessionCorruption &&
+        !isRoleOrderingError &&
+        /(?:INVALID_ARGUMENT|Request contains an invalid argument|400.*invalid argument)/i.test(
+          message,
+        ) &&
+        !/(?:model|safety_settings|generation_config|api[_-]?key|quota)/i.test(message);
 
       if (
         isCompactionFailure &&
@@ -484,6 +491,19 @@ export async function runAgentTurnWithFallback(params: {
             kind: "final",
             payload: {
               text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
+            },
+          };
+        }
+      }
+
+      // Auto-recover from Gemini INVALID_ARGUMENT when likely session corruption
+      if (isGeminiInvalidArgument) {
+        const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
+        if (didReset) {
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Gemini rejected the request (invalid argument). I've reset the conversation - please try again.",
             },
           };
         }
@@ -558,7 +578,9 @@ export async function runAgentTurnWithFallback(params: {
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : isGeminiInvalidArgument
+            ? "⚠️ The API rejected the request (invalid argument). Try /reset to start a fresh session."
+            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
