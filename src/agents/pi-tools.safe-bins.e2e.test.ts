@@ -4,8 +4,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
+import { captureEnv } from "../test-utils/env.js";
 
-const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
 
 beforeAll(() => {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(
@@ -15,11 +16,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (previousBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-  }
+  bundledPluginsDirSnapshot.restore();
 });
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
@@ -109,20 +106,16 @@ describe("createOpenClawCodingTools safeBins", () => {
     expect(execTool).toBeDefined();
 
     const marker = `safe-bins-${Date.now()}`;
-    const prevShellEnvTimeoutMs = process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
-    process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = "1000";
+    const envSnapshot = captureEnv(["OPENCLAW_SHELL_ENV_TIMEOUT_MS"]);
     const result = await (async () => {
       try {
+        process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = "1000";
         return await execTool!.execute("call1", {
           command: `echo ${marker}`,
           workdir: tmpDir,
         });
       } finally {
-        if (prevShellEnvTimeoutMs === undefined) {
-          delete process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
-        } else {
-          process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = prevShellEnvTimeoutMs;
-        }
+        envSnapshot.restore();
       }
     })();
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
