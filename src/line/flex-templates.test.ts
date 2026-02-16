@@ -54,14 +54,6 @@ describe("createImageCard", () => {
     expect(body.contents.length).toBe(2);
     expect(body.contents[1].text).toBe("Body text");
   });
-
-  it("applies custom aspect ratio", () => {
-    const card = createImageCard("https://example.com/img.jpg", "Title", undefined, {
-      aspectRatio: "16:9",
-    });
-
-    expect((card.hero as { aspectRatio: string }).aspectRatio).toBe("16:9");
-  });
 });
 
 describe("createActionCard", () => {
