@@ -82,13 +82,64 @@ See [Hooks](/automation/hooks) for setup and examples.
 These run inside the agent loop or gateway pipeline:
 
 - **`before_agent_start`**: inject context or override system prompt before the run starts.
+- **`before_recall`**: intercept memory recall query/options immediately before memory vector search.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
+- **`agent_error`**: observe failed runs without coupling to successful completion hooks.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
-- **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
+- **`gateway_pre_start` / `gateway_start` / `gateway_pre_stop` / `gateway_stop`**: gateway lifecycle events.
+
+Plugins can register these via either:
+
+- `api.on("<hook_name>", handler, { priority, timeoutMs, mode, onTimeout, retry, maxConcurrency, scope, condition })`
+- `api.lifecycle.on("<phase>", handler, { priority, timeoutMs, mode, onTimeout, retry, maxConcurrency, scope, condition })`
+
+Lifecycle phase aliases exposed by `api.lifecycle.on(...)`:
+
+- `boot.pre` -> `gateway_pre_start`
+- `boot.post` -> `gateway_start`
+- `message.pre` -> `message_sending`
+- `message.post` -> `message_sent`
+- `tool.pre` -> `before_tool_call`
+- `tool.post` -> `after_tool_call`
+- `agent.pre` -> `before_agent_start`
+- `agent.post` -> `agent_end`
+- `request.pre` -> `message_received`
+- `request.post` -> `request_post`
+- `recall.pre` -> `before_recall`
+- `recall.post` -> `after_recall`
+- `error` -> `agent_error`
+- `response.error` -> `response_error`
+- `tool.error` -> `tool_error`
+- `memory.compaction.pre` -> `before_compaction`
+- `memory.compaction.post` -> `after_compaction`
+- `shutdown.pre` -> `gateway_pre_stop`
+- `shutdown.post` -> `gateway_stop`
+
+Proposal-style aliases exposed by `api.lifecycle.on(...)`:
+
+- `preBoot` -> `boot.pre`
+- `postBoot` -> `boot.post`
+- `preShutdown` -> `shutdown.pre`
+- `postShutdown` -> `shutdown.post`
+- `preAgent` -> `agent.pre`
+- `preRequest` -> `request.pre`
+- `postRequestIngress` -> `request.post`
+- `preRecall` -> `recall.pre`
+- `postRecall` -> `recall.post`
+- `preResponse` -> `message.pre`
+- `preToolExecution` -> `tool.pre`
+- `preCompaction` -> `memory.compaction.pre`
+- `postRequest` -> `agent.post`
+- `postResponse` -> `message.post`
+- `postToolExecution` -> `tool.post`
+- `postCompaction` -> `memory.compaction.post`
+- `onResponseError` -> `response.error`
+- `onToolError` -> `tool.error`
+- `onError` -> `error` (only runs when `success === false`)
 
 See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration details.
 

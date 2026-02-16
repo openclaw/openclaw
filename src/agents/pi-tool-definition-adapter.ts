@@ -11,6 +11,7 @@ import { isPlainObject } from "../utils.js";
 import {
   consumeAdjustedParamsForToolCall,
   isToolWrappedWithBeforeToolCallHook,
+  runAfterToolCallHook,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -202,6 +203,7 @@ export function toClientToolDefinitions(
       parameters: func.parameters as any,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
+        const startedAt = Date.now();
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
           params,
@@ -218,11 +220,19 @@ export function toClientToolDefinitions(
           onClientToolCall(func.name, paramsRecord);
         }
         // Return a pending result - the client will execute this tool
-        return jsonResult({
+        const pendingResult = jsonResult({
           status: "pending",
           tool: func.name,
           message: "Tool execution delegated to client",
         });
+        await runAfterToolCallHook({
+          toolName: func.name,
+          params: paramsRecord,
+          result: pendingResult,
+          durationMs: Date.now() - startedAt,
+          ctx: hookContext,
+        });
+        return pendingResult;
       },
     } satisfies ToolDefinition;
   });

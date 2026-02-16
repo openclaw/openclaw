@@ -14,7 +14,7 @@ import {
 installSignalToolResultTestHooks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
-await import("./monitor.js");
+const { monitorSignalProvider } = await import("./monitor.js");
 
 const {
   replyMock,
@@ -27,10 +27,7 @@ const {
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 
-async function runMonitorWithMocks(
-  opts: Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0],
-) {
-  const { monitorSignalProvider } = await import("./monitor.js");
+async function runMonitorWithMocks(opts: Parameters<typeof monitorSignalProvider>[0]) {
   return monitorSignalProvider(opts);
 }
 

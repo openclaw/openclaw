@@ -43,7 +43,8 @@ import {
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isPluginHookExecutionError } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
@@ -258,6 +259,29 @@ export async function startGatewayServer(
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
+  const hookRunner = getGlobalHookRunner();
+  const runGatewayLifecycleHook = async (
+    fn: (() => Promise<void>) | undefined,
+    phase: "gateway_pre_start" | "gateway_start" | "gateway_pre_stop" | "gateway_stop",
+  ) => {
+    if (!fn) {
+      return;
+    }
+    try {
+      await fn();
+    } catch (err) {
+      if (isPluginHookExecutionError(err) && err.failClosed) {
+        if (phase === "gateway_pre_start" || phase === "gateway_start") {
+          throw err;
+        }
+      }
+      log.warn(`${phase} hook failed: ${String(err)}`);
+    }
+  };
+  await runGatewayLifecycleHook(
+    hookRunner ? () => hookRunner.runGatewayPreStart({ port }, { port }) : undefined,
+    "gateway_pre_start",
+  );
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
     port,
@@ -625,16 +649,6 @@ export async function startGatewayServer(
     }));
   }
 
-  // Run gateway_start plugin hook (fire-and-forget)
-  if (!minimalTestGateway) {
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("gateway_start")) {
-      void hookRunner.runGatewayStart({ port }, { port }).catch((err) => {
-        log.warn(`gateway_start hook failed: ${String(err)}`);
-      });
-    }
-  }
-
   const configReloader = minimalTestGateway
     ? { stop: async () => {} }
     : (() => {
@@ -702,15 +716,19 @@ export async function startGatewayServer(
     httpServer,
     httpServers,
   });
+  await runGatewayLifecycleHook(
+    hookRunner ? () => hookRunner.runGatewayStart({ port }, { port }) : undefined,
+    "gateway_start",
+  );
 
   return {
     close: async (opts) => {
-      // Run gateway_stop plugin hook before shutdown
-      await runGlobalGatewayStopSafely({
-        event: { reason: opts?.reason ?? "gateway stopping" },
-        ctx: { port },
-        onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
-      });
+      await runGatewayLifecycleHook(
+        hookRunner
+          ? () => hookRunner.runGatewayPreStop({ reason: opts?.reason }, { port })
+          : undefined,
+        "gateway_pre_stop",
+      );
       if (diagnosticsEnabled) {
         stopDiagnosticHeartbeat();
       }
@@ -721,6 +739,12 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       await close(opts);
+      await runGatewayLifecycleHook(
+        hookRunner
+          ? () => hookRunner.runGatewayStop({ reason: opts?.reason }, { port })
+          : undefined,
+        "gateway_stop",
+      );
     },
   };
 }

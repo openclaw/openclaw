@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { PluginHookExecutionError } from "../../plugins/hooks.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const mocks = vi.hoisted(() => ({
@@ -21,6 +22,10 @@ const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
     runMessageReceived: vi.fn(async () => {}),
+    runRequestPost: vi.fn(async () => {}),
+    runMessageSending: vi.fn(async () => undefined),
+    runMessageSent: vi.fn(async () => {}),
+    runResponseError: vi.fn(async () => {}),
   },
 }));
 
@@ -77,6 +82,10 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageReceived.mockReset();
+    hookMocks.runner.runRequestPost.mockReset();
+    hookMocks.runner.runMessageSending.mockReset();
+    hookMocks.runner.runMessageSent.mockReset();
+    hookMocks.runner.runResponseError.mockReset();
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
@@ -430,6 +439,293 @@ describe("dispatchReplyFromConfig", () => {
         channelId: "telegram",
         accountId: "acc-1",
         conversationId: "telegram:999",
+      }),
+    );
+  });
+
+  it("applies message_received content mutation before reply resolution", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_received");
+    hookMocks.runner.runMessageReceived.mockResolvedValueOnce({
+      content: "rewritten inbound",
+    });
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      BodyForCommands: "original inbound",
+      RawBody: "original inbound",
+      Body: "original inbound",
+    });
+
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext) => ({ text: "ok" }) satisfies ReplyPayload,
+    );
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    const resolvedCtx = replyResolver.mock.calls[0]?.[0];
+    expect(
+      resolvedCtx && "BodyForCommands" in resolvedCtx ? resolvedCtx.BodyForCommands : undefined,
+    ).toBe("rewritten inbound");
+  });
+
+  it("skips processing when message_received hook cancels", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_received");
+    hookMocks.runner.runMessageReceived.mockResolvedValueOnce({ cancel: true });
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      BodyForCommands: "original inbound",
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "ok" }) satisfies ReplyPayload);
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+  });
+
+  it("emits request_post after inbound normalization", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_received" || name === "request_post",
+    );
+    hookMocks.runner.runMessageReceived.mockResolvedValueOnce({
+      content: "mutated inbound",
+    });
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      BodyForCommands: "original inbound",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "ok" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runRequestPost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: ctx.From,
+        content: "mutated inbound",
+      }),
+      expect.objectContaining({
+        accountId: "acc-1",
+      }),
+    );
+  });
+
+  it("emits message_sent hook for final reply delivery", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      To: "slack:C123",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "final hello" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "slack:C123",
+        content: "final hello",
+        success: true,
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "acc-1",
+      }),
+    );
+  });
+
+  it("emits message_sending hook before final reply delivery", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      To: "slack:C123",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "final hello" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "slack:C123",
+        content: "final hello",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "acc-1",
+      }),
+    );
+  });
+
+  it("applies message_sending content mutation before queueing", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValueOnce({
+      content: "mutated by hook",
+    });
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      To: "slack:C123",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "original" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "mutated by hook",
+      }),
+    );
+  });
+
+  it("cancels queueing when message_sending hook returns cancel", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValueOnce({ cancel: true });
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      To: "slack:C123",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "final hello" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "slack:C123",
+        content: "final hello",
+        success: false,
+        error: "message canceled by plugin hook",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("propagates fail-closed message_sending hook errors", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    hookMocks.runner.runMessageSending.mockRejectedValueOnce(
+      new PluginHookExecutionError({
+        hookName: "message_sending",
+        pluginId: "policy",
+        message: "send denied",
+      }),
+    );
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      To: "slack:C123",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "final hello" }) satisfies ReplyPayload;
+    await expect(dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver })).rejects.toThrow(
+      "send denied",
+    );
+  });
+
+  it("emits response_error when final reply queueing fails", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sent" || name === "response_error",
+    );
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      To: "slack:C123",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      AccountId: "acc-1",
+    });
+
+    const replyResolver = async () => ({ text: "final hello" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(hookMocks.runner.runResponseError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "slack:C123",
+        content: "final hello",
+        error: "reply not queued",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "acc-1",
       }),
     );
   });

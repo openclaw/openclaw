@@ -59,7 +59,7 @@ describe("compaction hook wiring", () => {
 
     const ctx = {
       params: { runId: "r2", session: { messages: [1, 2] } },
-      state: { compactionInFlight: true },
+      state: { compactionInFlight: true, compactionStartMessageCount: 3 },
       log: { debug: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
       getCompactionCount: () => 1,
@@ -104,5 +104,7 @@ describe("compaction hook wiring", () => {
     );
 
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
+    expect(ctx.noteCompactionRetry).toHaveBeenCalledTimes(1);
+    expect(ctx.resetForCompactionRetry).toHaveBeenCalledTimes(1);
   });
 });

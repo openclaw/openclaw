@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { PluginHookExecutionError } from "../plugins/hooks.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 
@@ -11,12 +12,16 @@ describe("before_tool_call hook integration", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
+    runToolError: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn(),
+      runToolError: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
@@ -34,6 +39,7 @@ describe("before_tool_call hook integration", () => {
     await tool.execute("call-1", { path: "/tmp/file" }, undefined, undefined);
 
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+    expect(hookRunner.runAfterToolCall).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledWith("call-1", { path: "/tmp/file" }, undefined, undefined);
   });
 
@@ -82,6 +88,25 @@ describe("before_tool_call hook integration", () => {
     expect(execute).toHaveBeenCalledWith("call-4", { path: "/tmp/file" }, undefined, undefined);
   });
 
+  it("fails execution when hook throws fail-closed error", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockRejectedValue(
+      new PluginHookExecutionError({
+        hookName: "before_tool_call",
+        pluginId: "policy",
+        message: "blocked by policy",
+      }),
+    );
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any);
+
+    await expect(
+      tool.execute("call-4b", { path: "/tmp/file" }, undefined, undefined),
+    ).rejects.toThrow("blocked by policy");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("normalizes non-object params for hook contract", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
@@ -104,6 +129,65 @@ describe("before_tool_call hook integration", () => {
         agentId: "main",
         sessionKey: "main",
       },
+    );
+  });
+
+  it("emits after_tool_call on success", async () => {
+    hookRunner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    await tool.execute("call-6", { cmd: "pwd" }, undefined, undefined);
+
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: { cmd: "pwd" },
+        error: undefined,
+      }),
+      expect.objectContaining({
+        toolName: "exec",
+        agentId: "main",
+        sessionKey: "main",
+      }),
+    );
+  });
+
+  it("emits after_tool_call with error when execution throws", async () => {
+    hookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "after_tool_call" || name === "tool_error",
+    );
+    const execute = vi.fn().mockRejectedValue(new Error("tool exploded"));
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+
+    await expect(tool.execute("call-7", { cmd: "pwd" }, undefined, undefined)).rejects.toThrow(
+      "tool exploded",
+    );
+
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: { cmd: "pwd" },
+        error: "tool exploded",
+      }),
+      expect.objectContaining({
+        toolName: "exec",
+      }),
+    );
+    expect(hookRunner.runToolError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: { cmd: "pwd" },
+        error: "tool exploded",
+      }),
+      expect.objectContaining({
+        toolName: "exec",
+      }),
     );
   });
 });
@@ -150,19 +234,25 @@ describe("before_tool_call hook integration for client tools", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
+    runAfterToolCall: ReturnType<typeof vi.fn>;
+    runToolError: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
+      runAfterToolCall: vi.fn(),
+      runToolError: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
   });
 
   it("passes modified params to client tool callbacks", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "before_tool_call" || name === "after_tool_call",
+    );
     hookRunner.runBeforeToolCall.mockResolvedValue({ params: { extra: true } });
     const onClientToolCall = vi.fn();
     const [tool] = toClientToolDefinitions(
@@ -186,5 +276,17 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+    expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "client_tool",
+        params: { value: "ok", extra: true },
+        error: undefined,
+      }),
+      expect.objectContaining({
+        toolName: "client_tool",
+        agentId: "main",
+        sessionKey: "main",
+      }),
+    );
   });
 });
