@@ -30,7 +30,7 @@ const unitIsolatedFilesRaw = [
   "src/browser/server-context.remote-tab-ops.test.ts",
   "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
-  "src/imessage/monitor.skips-group-messages-without-mention-by-default.test.ts",
+  "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
@@ -165,7 +165,7 @@ const defaultWorkerBudget =
             unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
             unitIsolated: 1,
             extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
-            gateway: 1,
+            gateway: 2,
           };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.

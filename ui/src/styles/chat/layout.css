@@ -333,7 +333,7 @@
 
 .chat-controls__session {
   min-width: 140px;
-  max-width: 420px;
+  max-width: 300px;
 }
 
 .chat-controls__thinking {
@@ -400,7 +400,7 @@
 .chat-controls__session select {
   padding: 6px 10px;
   font-size: 13px;
-  max-width: 420px;
+  max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
@@ -73,6 +73,26 @@ function successfulProbeResult(url: string) {
 }
 
 describe("security audit", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  const makeTmpDir = async (label: string) => {
+    const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
+    }
+    await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+  });
+
   it("includes an attack surface summary (info)", async () => {
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { groupPolicy: "open" }, telegram: { groupPolicy: "allowlist" } },
@@ -290,7 +310,7 @@ describe("security audit", () => {
   });
 
   it("treats Windows ACL-only perms as secure", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-win-"));
+    const tmp = await makeTmpDir("win");
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(stateDir, { recursive: true });
     const configPath = path.join(stateDir, "openclaw.json");
@@ -327,7 +347,7 @@ describe("security audit", () => {
   });
 
   it("flags Windows ACLs when Users can read the state dir", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-win-open-"));
+    const tmp = await makeTmpDir("win-open");
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(stateDir, { recursive: true });
     const configPath = path.join(stateDir, "openclaw.json");
@@ -831,7 +851,7 @@ describe("security audit", () => {
 
   it("flags Discord native commands without a guild user allowlist", async () => {
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-discord-"));
+    const tmp = await makeTmpDir("discord");
     process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
     try {
@@ -878,9 +898,7 @@ describe("security audit", () => {
 
   it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-security-audit-discord-allowfrom-snowflake-"),
-    );
+    const tmp = await makeTmpDir("discord-allowfrom-snowflake");
     process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
     try {
@@ -927,7 +945,7 @@ describe("security audit", () => {
 
   it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-discord-open-"));
+    const tmp = await makeTmpDir("discord-open");
     process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
     try {
@@ -975,7 +993,7 @@ describe("security audit", () => {
 
   it("flags Slack slash commands without a channel users allowlist", async () => {
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-slack-"));
+    const tmp = await makeTmpDir("slack");
     process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
     try {
@@ -1017,7 +1035,7 @@ describe("security audit", () => {
 
   it("flags Slack slash commands when access-group enforcement is disabled", async () => {
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-slack-open-"));
+    const tmp = await makeTmpDir("slack-open");
     process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
     try {
@@ -1060,7 +1078,7 @@ describe("security audit", () => {
 
   it("flags Telegram group commands without a sender allowlist", async () => {
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-telegram-"));
+    const tmp = await makeTmpDir("telegram");
     process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
     try {
@@ -1101,9 +1119,7 @@ describe("security audit", () => {
 
   it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
     const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    const tmp = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-security-audit-telegram-invalid-allowfrom-"),
-    );
+    const tmp = await makeTmpDir("telegram-invalid-allowfrom");
     process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
     try {
@@ -1413,7 +1429,7 @@ describe("security audit", () => {
   });
 
   it("flags group/world-readable config include files", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    const tmp = await makeTmpDir("include-perms");
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
 
@@ -1486,7 +1502,7 @@ describe("security audit", () => {
     delete process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.SLACK_BOT_TOKEN;
     delete process.env.SLACK_APP_TOKEN;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    const tmp = await makeTmpDir("extensions-no-allowlist");
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
       recursive: true,
@@ -1533,71 +1549,63 @@ describe("security audit", () => {
   });
 
   it("flags enabled extensions when tool policy can expose plugin tools", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-plugins-"));
+    const tmp = await makeTmpDir("plugins-reachable");
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
       recursive: true,
       mode: 0o700,
     });
 
-    try {
-      const cfg: OpenClawConfig = {
-        plugins: { allow: ["some-plugin"] },
-      };
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: true,
-        includeChannelSecurity: false,
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-      });
+    const cfg: OpenClawConfig = {
+      plugins: { allow: ["some-plugin"] },
+    };
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+    });
 
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "plugins.tools_reachable_permissive_policy",
-            severity: "warn",
-          }),
-        ]),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "plugins.tools_reachable_permissive_policy",
+          severity: "warn",
+        }),
+      ]),
+    );
   });
 
   it("does not flag plugin tool reachability when profile is restrictive", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-plugins-"));
+    const tmp = await makeTmpDir("plugins-restrictive");
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
       recursive: true,
       mode: 0o700,
     });
 
-    try {
-      const cfg: OpenClawConfig = {
-        plugins: { allow: ["some-plugin"] },
-        tools: { profile: "coding" },
-      };
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: true,
-        includeChannelSecurity: false,
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-      });
+    const cfg: OpenClawConfig = {
+      plugins: { allow: ["some-plugin"] },
+      tools: { profile: "coding" },
+    };
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+    });
 
-      expect(
-        res.findings.some((f) => f.checkId === "plugins.tools_reachable_permissive_policy"),
-      ).toBe(false);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    expect(
+      res.findings.some((f) => f.checkId === "plugins.tools_reachable_permissive_policy"),
+    ).toBe(false);
   });
 
   it("flags unallowlisted extensions as critical when native skill commands are exposed", async () => {
     const prevDiscordToken = process.env.DISCORD_BOT_TOKEN;
     delete process.env.DISCORD_BOT_TOKEN;
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    const tmp = await makeTmpDir("extensions-critical");
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
       recursive: true,
@@ -1636,7 +1644,7 @@ describe("security audit", () => {
   });
 
   it("flags plugins with dangerous code patterns (deep audit)", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-scanner-"));
+    const tmpDir = await makeTmpDir("audit-scanner-plugin");
     const pluginDir = path.join(tmpDir, "extensions", "evil-plugin");
     await fs.mkdir(path.join(pluginDir, ".hidden"), { recursive: true });
     await fs.writeFile(
@@ -1675,12 +1683,10 @@ describe("security audit", () => {
         (f) => f.checkId === "plugins.code_safety" && f.severity === "critical",
       ),
     ).toBe(true);
-
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   });
 
   it("reports detailed code-safety issues for both plugins and skills", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-scanner-"));
+    const tmpDir = await makeTmpDir("audit-scanner-plugin-skill");
     const workspaceDir = path.join(tmpDir, "workspace");
     const pluginDir = path.join(tmpDir, "extensions", "evil-plugin");
     const skillDir = path.join(workspaceDir, "skills", "evil-skill");
@@ -1738,12 +1744,10 @@ description: test skill
     expect(skillFinding).toBeDefined();
     expect(skillFinding?.detail).toContain("dangerous-exec");
     expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
-
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   });
 
   it("flags plugin extension entry path traversal in deep audit", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-scanner-"));
+    const tmpDir = await makeTmpDir("audit-scanner-escape");
     const pluginDir = path.join(tmpDir, "extensions", "escape-plugin");
     await fs.mkdir(pluginDir, { recursive: true });
     await fs.writeFile(
@@ -1755,18 +1759,8 @@ description: test skill
     );
     await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
-    const res = await runSecurityAudit({
-      config: {},
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      deep: true,
-      stateDir: tmpDir,
-      probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
-    });
-
-    expect(res.findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
-
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+    expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
   });
 
   it("reports scan_failed when plugin code scanner throws during deep audit", async () => {
@@ -1774,7 +1768,7 @@ description: test skill
       .spyOn(skillScanner, "scanDirectoryWithSummary")
       .mockRejectedValueOnce(new Error("boom"));
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-scanner-"));
+    const tmpDir = await makeTmpDir("audit-scanner-throws");
     try {
       const pluginDir = path.join(tmpDir, "extensions", "scanfail-plugin");
       await fs.mkdir(pluginDir, { recursive: true });
@@ -1791,7 +1785,6 @@ description: test skill
       expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
     } finally {
       scanSpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
 

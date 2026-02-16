@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   connectOk,
+  cronIsolatedRun,
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
@@ -50,6 +51,20 @@ async function waitForNonEmptyFile(pathname: string, timeoutMs = 2000) {
   }
 }
 
+async function waitForCondition(check: () => boolean, timeoutMs = 2000) {
+  const startedAt = process.hrtime.bigint();
+  for (;;) {
+    if (check()) {
+      return;
+    }
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    if (elapsedMs >= timeoutMs) {
+      throw new Error("timeout waiting for condition");
+    }
+    await yieldToEventLoop();
+  }
+}
+
 describe("gateway server cron", () => {
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 120_000 }, async () => {
     const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
@@ -68,6 +83,7 @@ describe("gateway server cron", () => {
       const addRes = await rpcReq(ws, "cron.add", {
         name: "daily",
         enabled: true,
+        notify: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
@@ -84,6 +100,9 @@ describe("gateway server cron", () => {
       expect(Array.isArray(jobs)).toBe(true);
       expect((jobs as unknown[]).length).toBe(1);
       expect(((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "").toBe("daily");
+      expect(
+        ((jobs as Array<{ notify?: unknown }>)[0]?.notify as boolean | undefined) ?? false,
+      ).toBe(true);
 
       const routeAtMs = Date.now() - 1;
       const routeRes = await rpcReq(ws, "cron.add", {
@@ -403,4 +422,132 @@ describe("gateway server cron", () => {
       }
     }
   }, 45_000);
+
+  test("posts webhooks only when notify is true and summary exists", async () => {
+    const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
+    process.env.OPENCLAW_SKIP_CRON = "0";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-webhook-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    testState.cronEnabled = false;
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    expect(typeof configPath).toBe("string");
+    await fs.mkdir(path.dirname(configPath as string), { recursive: true });
+    await fs.writeFile(
+      configPath as string,
+      JSON.stringify(
+        {
+          cron: {
+            webhook: "https://example.invalid/cron-finished",
+            webhookToken: "cron-webhook-token",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const notifyRes = await rpcReq(ws, "cron.add", {
+        name: "notify true",
+        enabled: true,
+        notify: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "send webhook" },
+      });
+      expect(notifyRes.ok).toBe(true);
+      const notifyJobIdValue = (notifyRes.payload as { id?: unknown } | null)?.id;
+      const notifyJobId = typeof notifyJobIdValue === "string" ? notifyJobIdValue : "";
+      expect(notifyJobId.length > 0).toBe(true);
+
+      const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
+      expect(notifyRunRes.ok).toBe(true);
+
+      await waitForCondition(() => fetchMock.mock.calls.length === 1, 5000);
+      const [notifyUrl, notifyInit] = fetchMock.mock.calls[0] as [
+        string,
+        {
+          method?: string;
+          headers?: Record<string, string>;
+          body?: string;
+        },
+      ];
+      expect(notifyUrl).toBe("https://example.invalid/cron-finished");
+      expect(notifyInit.method).toBe("POST");
+      expect(notifyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(notifyInit.headers?.["Content-Type"]).toBe("application/json");
+      const notifyBody = JSON.parse(notifyInit.body ?? "{}");
+      expect(notifyBody.action).toBe("finished");
+      expect(notifyBody.jobId).toBe(notifyJobId);
+
+      const silentRes = await rpcReq(ws, "cron.add", {
+        name: "notify false",
+        enabled: true,
+        notify: false,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "do not send" },
+      });
+      expect(silentRes.ok).toBe(true);
+      const silentJobIdValue = (silentRes.payload as { id?: unknown } | null)?.id;
+      const silentJobId = typeof silentJobIdValue === "string" ? silentJobIdValue : "";
+      expect(silentJobId.length > 0).toBe(true);
+
+      const silentRunRes = await rpcReq(ws, "cron.run", { id: silentJobId, mode: "force" }, 20_000);
+      expect(silentRunRes.ok).toBe(true);
+      await yieldToEventLoop();
+      await yieldToEventLoop();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      cronIsolatedRun.mockResolvedValueOnce({ status: "ok" });
+      const noSummaryRes = await rpcReq(ws, "cron.add", {
+        name: "notify no summary",
+        enabled: true,
+        notify: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+      });
+      expect(noSummaryRes.ok).toBe(true);
+      const noSummaryJobIdValue = (noSummaryRes.payload as { id?: unknown } | null)?.id;
+      const noSummaryJobId = typeof noSummaryJobIdValue === "string" ? noSummaryJobIdValue : "";
+      expect(noSummaryJobId.length > 0).toBe(true);
+
+      const noSummaryRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: noSummaryJobId, mode: "force" },
+        20_000,
+      );
+      expect(noSummaryRunRes.ok).toBe(true);
+      await yieldToEventLoop();
+      await yieldToEventLoop();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      ws.close();
+      await server.close();
+      await rmTempDir(dir);
+      vi.unstubAllGlobals();
+      testState.cronStorePath = undefined;
+      testState.cronEnabled = undefined;
+      if (prevSkipCron === undefined) {
+        delete process.env.OPENCLAW_SKIP_CRON;
+      } else {
+        process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
+      }
+    }
+  }, 60_000);
 });
