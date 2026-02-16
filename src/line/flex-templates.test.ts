@@ -16,7 +16,6 @@ describe("createInfoCard", () => {
   it("includes footer when provided", () => {
     const card = createInfoCard("Title", "Body", "Footer text");
 
-    expect(card.footer).toBeDefined();
     const footer = card.footer as { contents: Array<{ text: string }> };
     expect(footer.contents[0].text).toBe("Footer text");
   });
@@ -89,7 +88,6 @@ describe("createActionCard", () => {
       imageUrl: "https://example.com/hero.jpg",
     });
 
-    expect(card.hero).toBeDefined();
     expect((card.hero as { url: string }).url).toBe("https://example.com/hero.jpg");
   });
 });
@@ -122,7 +120,6 @@ describe("createMediaPlayerCard", () => {
       imageUrl: "https://example.com/album.jpg",
     });
 
-    expect(card.hero).toBeDefined();
     expect((card.hero as { url: string }).url).toBe("https://example.com/album.jpg");
   });
 });
@@ -137,7 +134,6 @@ describe("createDeviceControlCard", () => {
       })),
     });
 
-    expect(card.footer).toBeDefined();
     // Should have max 3 rows of 2 buttons
     const footer = card.footer as { contents: unknown[] };
     expect(footer.contents.length).toBeLessThanOrEqual(3);
