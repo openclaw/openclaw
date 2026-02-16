@@ -276,18 +276,7 @@ export async function onTimer(state: CronServiceState) {
             endedAt: result.endedAt,
           });
 
-          emit(state, {
-            jobId: job.id,
-            action: "finished",
-            status: result.status,
-            error: result.error,
-            summary: result.summary,
-            sessionId: result.sessionId,
-            sessionKey: result.sessionKey,
-            runAtMs: result.startedAt,
-            durationMs: job.state.lastDurationMs,
-            nextRunAtMs: job.state.nextRunAtMs,
-          });
+          emitJobFinished(state, job, result, result.startedAt);
 
           if (shouldDelete && state.store) {
             state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
@@ -565,23 +554,38 @@ export async function executeJob(
     endedAt,
   });
 
-  emit(state, {
-    jobId: job.id,
-    action: "finished",
-    status: coreResult.status,
-    error: coreResult.error,
-    summary: coreResult.summary,
-    sessionId: coreResult.sessionId,
-    sessionKey: coreResult.sessionKey,
-    runAtMs: startedAt,
-    durationMs: job.state.lastDurationMs,
-    nextRunAtMs: job.state.nextRunAtMs,
-  });
+  emitJobFinished(state, job, coreResult, startedAt);
 
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
     emit(state, { jobId: job.id, action: "removed" });
   }
+}
+
+function emitJobFinished(
+  state: CronServiceState,
+  job: CronJob,
+  result: {
+    status: "ok" | "error" | "skipped";
+    error?: string;
+    summary?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  },
+  runAtMs: number,
+) {
+  emit(state, {
+    jobId: job.id,
+    action: "finished",
+    status: result.status,
+    error: result.error,
+    summary: result.summary,
+    sessionId: result.sessionId,
+    sessionKey: result.sessionKey,
+    runAtMs,
+    durationMs: job.state.lastDurationMs,
+    nextRunAtMs: job.state.nextRunAtMs,
+  });
 }
 
 export function wake(
