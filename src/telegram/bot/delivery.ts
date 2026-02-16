@@ -6,7 +6,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
-import { danger, logVerbose } from "../../globals.js";
+import { danger, logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -34,6 +34,7 @@ import {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const FILE_TOO_BIG_RE = /file is too big/i;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -414,10 +415,20 @@ export async function resolveMedia(
       maxDelayMs: 4000,
       jitter: 0.2,
       label: "telegram:getFile",
+      shouldRetry: isRetryableGetFileError,
       onRetry: ({ attempt, maxAttempts }) =>
         logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
     });
   } catch (err) {
+    // Handle "file is too big" separately - Telegram Bot API has a 20MB download limit
+    if (isFileTooBigError(err)) {
+      logVerbose(
+        warn(
+          "telegram: getFile failed - file exceeds Telegram Bot API 20MB limit; skipping attachment",
+        ),
+      );
+      return null;
+    }
     // All retries exhausted — return null so the message still reaches the agent
     // with a type-based placeholder (e.g. <media:audio>) instead of being dropped.
     logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
@@ -440,6 +451,31 @@ function isVoiceMessagesForbidden(err: unknown): boolean {
     return VOICE_FORBIDDEN_RE.test(err.description);
   }
   return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+}
+
+/**
+ * Returns true if the error is Telegram's "file is too big" error.
+ * This happens when trying to download files >20MB via the Bot API.
+ * Unlike network errors, this is a permanent error and should not be retried.
+ */
+function isFileTooBigError(err: unknown): boolean {
+  if (err instanceof GrammyError) {
+    return FILE_TOO_BIG_RE.test(err.description);
+  }
+  return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
+}
+
+/**
+ * Returns true if the error is a transient network error that should be retried.
+ * Returns false for permanent errors like "file is too big" (400 Bad Request).
+ */
+function isRetryableGetFileError(err: unknown): boolean {
+  // Don't retry "file is too big" - it's a permanent 400 error
+  if (isFileTooBigError(err)) {
+    return false;
+  }
+  // Retry all other errors (network issues, timeouts, etc.)
+  return true;
 }
 
 async function sendTelegramVoiceFallbackText(opts: {
