@@ -1115,12 +1115,27 @@ final class TalkModeManager: NSObject {
     }
 
     private func shouldInterrupt(with transcript: String) -> Bool {
+        guard self.shouldAllowSpeechInterruptForCurrentRoute() else { return false }
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
         if let spoken = self.lastSpokenText?.lowercased(), spoken.contains(trimmed.lowercased()) {
             return false
         }
         return true
+    }
+
+    private func shouldAllowSpeechInterruptForCurrentRoute() -> Bool {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        // Built-in speaker/receiver often feeds TTS back into STT, causing false interrupts.
+        // Allow barge-in for isolated outputs (headphones/Bluetooth/USB/CarPlay/AirPlay).
+        return !route.outputs.contains { output in
+            switch output.portType {
+            case .builtInSpeaker, .builtInReceiver:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private func shouldUseIncrementalTTS() -> Bool {
