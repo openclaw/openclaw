@@ -18,6 +18,10 @@ export const BLOCKED_HOST_PATHS = [
   "/dev",
   "/root",
   "/boot",
+  // Directories that commonly contain (or alias) the Docker socket.
+  "/run",
+  "/var/run",
+  "/private/var/run",
   "/var/run/docker.sock",
   "/private/var/run/docker.sock",
   "/run/docker.sock",
@@ -58,27 +62,26 @@ export function normalizeHostPath(raw: string): string {
  * String-only blocked-path check (no filesystem I/O).
  * Blocks:
  * - binds that target blocked paths (equal or under)
- * - binds that cover blocked paths (ancestor mounts like /run or /var)
+ * - binds that cover the system root (mounting "/" is never safe)
  * - non-absolute source paths (relative / volume names) because they are hard to validate safely
  */
-export function getBlockedBindReasonStringOnly(bind: string): BlockedBindReason | null {
+export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   const sourceRaw = parseBindSourcePath(bind);
   if (!sourceRaw.startsWith("/")) {
     return { kind: "non_absolute", sourcePath: sourceRaw };
   }
 
   const normalized = normalizeHostPath(sourceRaw);
+  return getBlockedReasonForSourcePath(normalized);
+}
 
+export function getBlockedReasonForSourcePath(sourceNormalized: string): BlockedBindReason | null {
+  if (sourceNormalized === "/") {
+    return { kind: "covers", blockedPath: "/" };
+  }
   for (const blocked of BLOCKED_HOST_PATHS) {
-    if (normalized === blocked || normalized.startsWith(blocked + "/")) {
+    if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
       return { kind: "targets", blockedPath: blocked };
-    }
-    // Ancestor mounts: mounting /run exposes /run/docker.sock.
-    if (normalized === "/") {
-      return { kind: "covers", blockedPath: blocked };
-    }
-    if (blocked.startsWith(normalized + "/")) {
-      return { kind: "covers", blockedPath: blocked };
     }
   }
 
@@ -131,7 +134,7 @@ export function validateBindMounts(binds: string[] | undefined): void {
     }
 
     // Fast string-only check (covers .., //, ancestor/descendant logic).
-    const blocked = getBlockedBindReasonStringOnly(bind);
+    const blocked = getBlockedBindReason(bind);
     if (blocked) {
       throw formatBindBlockedError({ bind, reason: blocked });
     }
@@ -141,25 +144,9 @@ export function validateBindMounts(binds: string[] | undefined): void {
     const sourceNormalized = normalizeHostPath(sourceRaw);
     const sourceReal = tryRealpathAbsolute(sourceNormalized);
     if (sourceReal !== sourceNormalized) {
-      for (const blockedPath of BLOCKED_HOST_PATHS) {
-        if (sourceReal === blockedPath || sourceReal.startsWith(blockedPath + "/")) {
-          throw formatBindBlockedError({
-            bind,
-            reason: { kind: "targets", blockedPath },
-          });
-        }
-        if (sourceReal === "/") {
-          throw formatBindBlockedError({
-            bind,
-            reason: { kind: "covers", blockedPath },
-          });
-        }
-        if (blockedPath.startsWith(sourceReal + "/")) {
-          throw formatBindBlockedError({
-            bind,
-            reason: { kind: "covers", blockedPath },
-          });
-        }
+      const reason = getBlockedReasonForSourcePath(sourceReal);
+      if (reason) {
+        throw formatBindBlockedError({ bind, reason });
       }
     }
   }
