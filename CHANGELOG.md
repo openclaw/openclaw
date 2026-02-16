@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - OpenClawKit/iOS ChatUI: accept canonical session-key completion events for local pending runs and preserve message IDs across history refreshes, preventing stuck "thinking" state and message flicker after gateway replies. (#18165) Thanks @mbelinky.
 - iOS/Talk: harden mobile talk config handling by ignoring redacted/env-placeholder API keys, support secure local keychain override, improve accessibility motion/contrast behavior in status UI, and tighten ATS to local-network allowance. (#18163) Thanks @mbelinky.
 - iOS/Gateway: stabilize connect/discovery state handling, add onboarding reset recovery in Settings, and fix iOS gateway-controller coverage for command-surface and last-connection persistence behavior. (#18164) Thanks @mbelinky.
+- Agents/Failover: broaden billing error pattern to match Venice-style `"Insufficient USD or Diem balance"` where words separate "insufficient" and "balance", enabling automatic model fallback on 402 billing errors. (#18137)
 
 ## 2026.2.15
 

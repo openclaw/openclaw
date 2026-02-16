@@ -53,6 +53,14 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
   });
+  it("matches Venice billing error with non-adjacent insufficient/balance", () => {
+    expect(
+      isBillingErrorMessage("Insufficient USD or Diem balance to complete request"),
+    ).toBe(true);
+    expect(
+      isBillingErrorMessage("insufficient token balance for this operation"),
+    ).toBe(true);
+  });
   it("ignores unrelated errors", () => {
     expect(isBillingErrorMessage("rate limit exceeded")).toBe(false);
     expect(isBillingErrorMessage("invalid api key")).toBe(false);
@@ -346,5 +354,10 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+  it("classifies Venice billing errors as billing", () => {
+    expect(
+      classifyFailoverReason("Insufficient USD or Diem balance to complete request"),
+    ).toBe("billing");
   });
 });
