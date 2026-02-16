@@ -155,6 +155,13 @@ describe("message tool schema scoping", () => {
 
     expect(properties.components).toBeUndefined();
     expect(properties.buttons).toBeDefined();
+    const buttonItemProps =
+      (
+        properties.buttons as {
+          items?: { items?: { properties?: Record<string, unknown> } };
+        }
+      )?.items?.items?.properties ?? {};
+    expect(buttonItemProps.style).toBeDefined();
     expect(actionEnum).toContain("send");
     expect(actionEnum).toContain("react");
     expect(actionEnum).not.toContain("poll");
