@@ -315,6 +315,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             console.log("  Phase 1c:  Conflict Detection  — Resolve contradictory memories");
             console.log("  Phase 1d:  Entity Dedup        — Merge duplicate entity nodes");
             console.log("  Phase 2:   Extraction          — Extract entities and categorize");
+            console.log("  Phase 2b:  Retroactive Tagging — Tag memories missing topic tags");
             console.log("  Phase 3:   Decay & Pruning     — Remove stale low-importance memories");
             console.log("  Phase 4:   Orphan Cleanup      — Remove disconnected nodes");
             console.log("  Phase 5:   Noise Cleanup       — Remove dangerous pattern memories");
@@ -399,6 +400,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                     conflict: "Phase 1c: Conflict Detection",
                     entityDedup: "Phase 1d: Entity Deduplication",
                     extraction: "Phase 2: Extraction",
+                    retroactiveTagging: "Phase 2b: Retroactive Tagging",
                     decay: "Phase 3: Decay & Pruning",
                     cleanup: "Phase 4: Orphan Cleanup",
                     noiseCleanup: "Phase 5: Noise Cleanup",
@@ -429,6 +431,12 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
               console.log(
                 `   Extraction:     ${result.extraction.succeeded}/${result.extraction.total} extracted` +
                   (result.extraction.failed > 0 ? ` (${result.extraction.failed} failed)` : ""),
+              );
+              console.log(
+                `   Retro-Tagging:  ${result.retroactiveTagging.tagged}/${result.retroactiveTagging.total} tagged` +
+                  (result.retroactiveTagging.failed > 0
+                    ? ` (${result.retroactiveTagging.failed} failed)`
+                    : ""),
               );
               console.log(
                 `   Cleanup:        ${result.cleanup.entitiesRemoved} entities, ${result.cleanup.tagsRemoved} tags removed`,

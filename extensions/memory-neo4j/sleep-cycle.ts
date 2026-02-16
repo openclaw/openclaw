@@ -23,7 +23,12 @@ import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
 import type { Logger } from "./schema.js";
-import { isSemanticDuplicate, resolveConflict, runBackgroundExtraction } from "./extractor.js";
+import {
+  extractTagsOnly,
+  isSemanticDuplicate,
+  resolveConflict,
+  runBackgroundExtraction,
+} from "./extractor.js";
 import { makePairKey } from "./schema.js";
 import { reviewAndArchiveStaleTasks, type StaleTaskResult } from "./task-ledger.js";
 
@@ -57,6 +62,12 @@ export type SleepCycleResult = {
     total: number;
     processed: number;
     succeeded: number;
+    failed: number;
+  };
+  // Phase 2b: Retroactive Tagging
+  retroactiveTagging: {
+    total: number;
+    tagged: number;
     failed: number;
   };
   // Phase 3: Decay & Pruning
@@ -105,6 +116,10 @@ export type SleepCycleOptions = {
   extractionBatchSize?: number; // Memories per batch (default: 50)
   extractionDelayMs?: number; // Delay between batches (default: 1000)
 
+  // Phase 2b: Retroactive Tagging
+  skipRetroactiveTagging?: boolean; // Skip retroactive tagging (default: false)
+  retroactiveTagBatchSize?: number; // Memories per batch (default: 50)
+
   // Phase 4: Cleanup
   singleUseTagMinAgeDays?: number; // Min age before single-use tag pruning (default: 14)
 
@@ -127,6 +142,7 @@ export type SleepCycleOptions = {
       | "entityDedup"
       | "decay"
       | "extraction"
+      | "retroactiveTagging"
       | "cleanup"
       | "noiseCleanup"
       | "credentialScan"
@@ -225,6 +241,8 @@ export async function runSleepCycle(
     decayCurves,
     extractionBatchSize = 50,
     extractionDelayMs = 1000,
+    skipRetroactiveTagging = false,
+    retroactiveTagBatchSize = 50,
     singleUseTagMinAgeDays = 14,
     workspaceDir,
     staleTaskMaxAgeMs,
@@ -239,6 +257,7 @@ export async function runSleepCycle(
     entityDedup: { pairsFound: 0, merged: 0 },
     decay: { memoriesPruned: 0 },
     extraction: { total: 0, processed: 0, succeeded: 0, failed: 0 },
+    retroactiveTagging: { total: 0, tagged: 0, failed: 0 },
     cleanup: { entitiesRemoved: 0, tagsRemoved: 0, singleUseTagsRemoved: 0 },
     credentialScan: { memoriesScanned: 0, credentialsFound: 0, memoriesRemoved: 0 },
     taskLedger: { staleCount: 0, archivedCount: 0, archivedIds: [] },
@@ -541,7 +560,7 @@ export async function runSleepCycle(
     try {
       // Get initial count
       const counts = await db.countByExtractionStatus(agentId);
-      result.extraction.total = counts.pending;
+      result.extraction.total = counts.pending + counts.skipped;
 
       if (result.extraction.total > 0) {
         let hasMore = true;
@@ -614,6 +633,94 @@ export async function runSleepCycle(
     }
   } else if (!config.enabled) {
     logger.info("memory-neo4j: [sleep] Phase 2 skipped — extraction not enabled");
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2b: Retroactive Tagging
+  // Find memories with completed extraction but no tags, and generate tags
+  // using a lightweight LLM prompt. This fixes the historical gap where
+  // the extraction prompt treated tags as optional.
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted && config.enabled && !skipRetroactiveTagging) {
+    onPhaseStart?.("retroactiveTagging");
+    logger.info("memory-neo4j: [sleep] Phase 2b: Retroactive Tagging");
+
+    try {
+      let hasMore = true;
+      while (hasMore && !abortSignal?.aborted) {
+        const untagged = await db.listUntaggedMemories(retroactiveTagBatchSize, agentId);
+
+        if (untagged.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        // Count total on first batch
+        if (result.retroactiveTagging.total === 0) {
+          result.retroactiveTagging.total = untagged.length;
+        }
+
+        // Process in parallel chunks of llmConcurrency
+        for (let i = 0; i < untagged.length && !abortSignal?.aborted; i += llmConcurrency) {
+          const chunk = untagged.slice(i, i + llmConcurrency);
+          const outcomes = await Promise.allSettled(
+            chunk.map((memory) => extractTagsOnly(memory.text, config, abortSignal)),
+          );
+
+          for (let k = 0; k < outcomes.length; k++) {
+            const outcome = outcomes[k];
+            const memory = chunk[k];
+
+            if (outcome.status === "fulfilled" && outcome.value && outcome.value.length > 0) {
+              try {
+                await db.batchEntityOperations(memory.id, [], [], outcome.value);
+                result.retroactiveTagging.tagged++;
+                onProgress?.(
+                  "retroactiveTagging",
+                  `Tagged "${memory.text.slice(0, 50)}..." with ${outcome.value.length} tags`,
+                );
+              } catch (err) {
+                result.retroactiveTagging.failed++;
+                logger.warn(
+                  `memory-neo4j: [sleep] retroactive tagging write failed for ${memory.id.slice(0, 8)}: ${String(err)}`,
+                );
+              }
+            } else {
+              result.retroactiveTagging.failed++;
+            }
+          }
+        }
+
+        // Check if there are more untagged memories
+        const nextBatch = await db.listUntaggedMemories(1, agentId);
+        hasMore = nextBatch.length > 0;
+
+        // Delay between batches (abort-aware)
+        if (hasMore && !abortSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, extractionDelayMs);
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              { once: true },
+            );
+          });
+        }
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 2b complete — ${result.retroactiveTagging.tagged} tagged, ${result.retroactiveTagging.failed} failed`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 2b error: ${String(err)}`);
+    }
+  } else if (!config.enabled) {
+    logger.info("memory-neo4j: [sleep] Phase 2b skipped — extraction not enabled");
+  } else if (skipRetroactiveTagging) {
+    logger.info("memory-neo4j: [sleep] Phase 2b skipped — retroactive tagging disabled");
   }
 
   // --------------------------------------------------------------------------
