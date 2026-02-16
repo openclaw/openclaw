@@ -196,6 +196,17 @@ function isTelegramMessageNotModifiedError(err: unknown): boolean {
   return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
 }
 
+/**
+ * Telegram private chats have positive numeric IDs.
+ * Groups and supergroups have negative IDs (typically -100… for supergroups).
+ * Private chats never support forum topics, so `message_thread_id` must
+ * not be included in API calls targeting them (#17242).
+ */
+function isTelegramPrivateChat(chatId: string): boolean {
+  const n = Number(chatId);
+  return Number.isFinite(n) && n > 0;
+}
+
 function hasMessageThreadIdParam(params?: Record<string, unknown>): boolean {
   if (!params) {
     return false;
@@ -428,9 +439,10 @@ export async function sendMessageTelegram(
   const mediaUrl = opts.mediaUrl?.trim();
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
+  const isPrivate = isTelegramPrivateChat(chatId);
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
+    targetMessageThreadId: isPrivate ? undefined : target.messageThreadId,
+    messageThreadId: isPrivate ? undefined : opts.messageThreadId,
     replyToMessageId: opts.replyToMessageId,
     quoteText: opts.quoteText,
   });
@@ -919,9 +931,10 @@ export async function sendStickerTelegram(
   const target = parseTelegramTarget(to);
   const chatId = normalizeChatId(target.chatId);
 
+  const isPrivate = isTelegramPrivateChat(chatId);
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
+    targetMessageThreadId: isPrivate ? undefined : target.messageThreadId,
+    messageThreadId: isPrivate ? undefined : opts.messageThreadId,
     replyToMessageId: opts.replyToMessageId,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
@@ -997,9 +1010,10 @@ export async function sendPollTelegram(
   // Normalize the poll input (validates question, options, maxSelections)
   const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
 
+  const isPrivate = isTelegramPrivateChat(chatId);
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
+    targetMessageThreadId: isPrivate ? undefined : target.messageThreadId,
+    messageThreadId: isPrivate ? undefined : opts.messageThreadId,
     replyToMessageId: opts.replyToMessageId,
   });
 
