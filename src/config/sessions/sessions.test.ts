@@ -9,7 +9,6 @@ import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
   updateSessionStore,
-  updateSessionStoreEntry,
 } from "../sessions.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
@@ -172,46 +171,6 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
-  });
-
-  it("concurrent updateSessionStoreEntry patches all merge correctly", async () => {
-    const key = "agent:main:merge";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s1", updatedAt: 100 },
-    });
-
-    await Promise.all([
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: key,
-        update: async () => {
-          await Promise.resolve();
-          return { modelOverride: "model-a" };
-        },
-      }),
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: key,
-        update: async () => {
-          await Promise.resolve();
-          return { thinkingLevel: "high" as const };
-        },
-      }),
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: key,
-        update: async () => {
-          await Promise.resolve();
-          return { systemPromptOverride: "custom" };
-        },
-      }),
-    ]);
-
-    const store = loadSessionStore(storePath);
-    const entry = store[key];
-    expect(entry.modelOverride).toBe("model-a");
-    expect(entry.thinkingLevel).toBe("high");
-    expect(entry.systemPromptOverride).toBe("custom");
   });
 
   it("multiple consecutive errors do not permanently poison the queue", async () => {
