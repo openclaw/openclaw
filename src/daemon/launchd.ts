@@ -182,10 +182,13 @@ export async function readLaunchAgentRuntime(
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
+    // Check if plist file exists - if it does, the service is installed but not currently loaded.
+    // Only mark as missingUnit if the plist file also doesn't exist.
+    const plistExists = await launchAgentPlistExists(env);
     return {
       status: "unknown",
       detail: (res.stderr || res.stdout).trim() || undefined,
-      missingUnit: true,
+      missingUnit: !plistExists,
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
