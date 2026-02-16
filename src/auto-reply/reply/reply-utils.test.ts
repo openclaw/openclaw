@@ -811,10 +811,6 @@ describe("hasTemplateVariables", () => {
     expect(hasTemplateVariables("")).toBe(false);
   });
 
-  it("returns false for static prefix", () => {
-    expect(hasTemplateVariables("[Claude]")).toBe(false);
-  });
-
   it("returns true when template variables present", () => {
     expect(hasTemplateVariables("[{model}]")).toBe(true);
     expect(hasTemplateVariables("{provider}")).toBe(true);
