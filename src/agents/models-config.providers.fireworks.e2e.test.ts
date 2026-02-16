@@ -24,11 +24,20 @@ describe("Fireworks provider", () => {
     const provider = buildFireworksProvider();
     expect(provider.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
     expect(provider.api).toBe("openai-completions");
+    expect(provider.models).toHaveLength(17);
     expect(provider.models).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-          name: "Llama 3.1 8B Instruct",
+          id: "accounts/fireworks/models/kimi-k2p5",
+          name: "Kimi K2.5",
+        }),
+        expect.objectContaining({
+          id: "accounts/fireworks/models/glm-5",
+          name: "GLM-5",
+        }),
+        expect.objectContaining({
+          id: "accounts/fireworks/models/deepseek-v3p2",
+          name: "DeepSeek V3.2",
         }),
       ]),
     );

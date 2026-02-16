@@ -57,12 +57,11 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
-  buildFireworksModelDefinition,
+  buildFireworksModelDefinitions,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
   FIREWORKS_BASE_URL,
-  FIREWORKS_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -387,15 +386,14 @@ export function applyFireworksProviderConfig(cfg: OpenClawConfig): OpenClawConfi
     alias: models[FIREWORKS_DEFAULT_MODEL_REF]?.alias ?? "Fireworks",
   };
 
-  const defaultModel = buildFireworksModelDefinition();
+  const fireworksModels = buildFireworksModelDefinitions();
 
-  return applyProviderConfigWithDefaultModel(cfg, {
+  return applyProviderConfigWithModelCatalog(cfg, {
     agentModels: models,
     providerId: "fireworks",
     api: "openai-completions",
     baseUrl: FIREWORKS_BASE_URL,
-    defaultModel,
-    defaultModelId: FIREWORKS_DEFAULT_MODEL_ID,
+    catalogModels: fireworksModels,
   });
 }
 

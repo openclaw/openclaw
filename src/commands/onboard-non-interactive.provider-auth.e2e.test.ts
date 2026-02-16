@@ -514,7 +514,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["fireworks:default"]?.provider).toBe("fireworks");
       expect(cfg.auth?.profiles?.["fireworks:default"]?.mode).toBe("api_key");
       expect(cfg.agents?.defaults?.model?.primary).toBe(
-        "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct",
+        "fireworks/accounts/fireworks/models/kimi-k2p5",
       );
       await expectApiKeyProfile({
         profileId: "fireworks:default",

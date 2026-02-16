@@ -28,7 +28,7 @@ openclaw onboard --non-interactive \
   env: { FIREWORKS_API_KEY: "fw_..." },
   agents: {
     defaults: {
-      model: { primary: "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct" },
+      model: { primary: "fireworks/accounts/fireworks/models/kimi-k2p5" },
     },
   },
   models: {
@@ -46,7 +46,7 @@ openclaw onboard --non-interactive \
 
 ## Notes
 
-- Default model ref: `fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct`.
+- Default model ref: `fireworks/accounts/fireworks/models/kimi-k2p5`.
 - Base URL: `https://api.fireworks.ai/inference/v1`.
 - Auth env var: `FIREWORKS_API_KEY`.
 - For provider-wide rules, see [/concepts/model-providers](/concepts/model-providers).

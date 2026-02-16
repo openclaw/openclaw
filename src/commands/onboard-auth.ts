@@ -87,6 +87,7 @@ export {
 } from "./onboard-auth.credentials.js";
 export {
   buildFireworksModelDefinition,
+  buildFireworksModelDefinitions,
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,

@@ -10,6 +10,8 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { buildFireworksModelDefinitions, FIREWORKS_BASE_URL } from "./fireworks-models.js";
+export { FIREWORKS_DEFAULT_MODEL_ID } from "./fireworks-models.js";
 import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
@@ -79,17 +81,6 @@ export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
 const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
 const XIAOMI_DEFAULT_MAX_TOKENS = 8192;
 const XIAOMI_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
-export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/models/llama-v3p1-8b-instruct";
-const FIREWORKS_DEFAULT_CONTEXT_WINDOW = 131072;
-const FIREWORKS_DEFAULT_MAX_TOKENS = 8192;
-const FIREWORKS_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -551,17 +542,7 @@ export function buildFireworksProvider(): ProviderConfig {
   return {
     baseUrl: FIREWORKS_BASE_URL,
     api: "openai-completions",
-    models: [
-      {
-        id: FIREWORKS_DEFAULT_MODEL_ID,
-        name: "Llama 3.1 8B Instruct",
-        reasoning: false,
-        input: ["text"],
-        cost: FIREWORKS_DEFAULT_COST,
-        contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
-      },
-    ],
+    models: buildFireworksModelDefinitions(),
   };
 }
 

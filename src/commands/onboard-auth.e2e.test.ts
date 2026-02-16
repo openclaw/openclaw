@@ -463,10 +463,15 @@ describe("applyFireworksProviderConfig", () => {
     expect(cfg.models?.providers?.fireworks?.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
     expect(cfg.models?.providers?.fireworks?.api).toBe("openai-completions");
     expect(cfg.models?.providers?.fireworks?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.fireworks?.models.map((m) => m.id)).toEqual([
-      "custom-model",
-      "accounts/fireworks/models/llama-v3p1-8b-instruct",
-    ]);
+    expect(cfg.models?.providers?.fireworks?.models.map((m) => m.id)).toEqual(
+      expect.arrayContaining([
+        "custom-model",
+        "accounts/fireworks/models/kimi-k2p5",
+        "accounts/fireworks/models/glm-5",
+        "accounts/fireworks/models/deepseek-v3p2",
+      ]),
+    );
+    expect(cfg.models?.providers?.fireworks?.models).toHaveLength(18);
   });
 });
 

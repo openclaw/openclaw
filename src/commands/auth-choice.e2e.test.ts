@@ -576,7 +576,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
     expect(result.config.agents?.defaults?.model?.primary).toBe(
-      "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct",
+      "fireworks/accounts/fireworks/models/kimi-k2p5",
     );
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
