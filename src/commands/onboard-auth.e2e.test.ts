@@ -39,13 +39,15 @@ function createLegacyProviderConfig(params: {
   api: string;
   modelId?: string;
   modelName?: string;
+  baseUrl?: string;
+  apiKey?: string;
 }) {
   return {
     models: {
       providers: {
         [params.providerId]: {
-          baseUrl: "https://old.example.com",
-          apiKey: "old-key",
+          baseUrl: params.baseUrl ?? "https://old.example.com",
+          apiKey: params.apiKey ?? "old-key",
           api: params.api,
           models: [
             {
@@ -62,6 +64,42 @@ function createLegacyProviderConfig(params: {
       },
     },
   };
+}
+
+const EXPECTED_FALLBACKS = ["anthropic/claude-opus-4-5"] as const;
+
+function createConfigWithFallbacks() {
+  return {
+    agents: {
+      defaults: {
+        model: { fallbacks: [...EXPECTED_FALLBACKS] },
+      },
+    },
+  };
+}
+
+function expectFallbacksPreserved(cfg: ReturnType<typeof applyMinimaxApiConfig>) {
+  expect(cfg.agents?.defaults?.model?.fallbacks).toEqual([...EXPECTED_FALLBACKS]);
+}
+
+function expectPrimaryModelPreserved(cfg: ReturnType<typeof applyMinimaxApiProviderConfig>) {
+  expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+}
+
+function expectAllowlistContains(
+  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
+  key: string,
+) {
+  const models = cfg.agents?.defaults?.models ?? {};
+  expect(Object.keys(models)).toContain(key);
+}
+
+function expectAliasPreserved(
+  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
+  key: string,
+  alias: string,
+) {
+  expect(cfg.agents?.defaults?.models?.[key]?.alias).toBe(alias);
 }
 
 describe("writeOAuthCredentials", () => {
@@ -177,14 +215,8 @@ describe("applyMinimaxApiConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyMinimaxApiConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyMinimaxApiConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 
   it("adds model alias", () => {
@@ -270,7 +302,7 @@ describe("applyMinimaxApiProviderConfig", () => {
     const cfg = applyMinimaxApiProviderConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     });
-    expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    expectPrimaryModelPreserved(cfg);
   });
 });
 
@@ -312,7 +344,7 @@ describe("applyZaiProviderConfig", () => {
     const cfg = applyZaiProviderConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     });
-    expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    expectPrimaryModelPreserved(cfg);
   });
 });
 
@@ -387,14 +419,8 @@ describe("applyXaiConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyXaiConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyXaiConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 });
 
@@ -424,8 +450,7 @@ describe("applyXaiProviderConfig", () => {
 describe("applyOpencodeZenProviderConfig", () => {
   it("adds allowlist entry for the default model", () => {
     const cfg = applyOpencodeZenProviderConfig({});
-    const models = cfg.agents?.defaults?.models ?? {};
-    expect(Object.keys(models)).toContain("opencode/claude-opus-4-6");
+    expectAllowlistContains(cfg, "opencode/claude-opus-4-6");
   });
 
   it("preserves existing alias for the default model", () => {
@@ -438,7 +463,7 @@ describe("applyOpencodeZenProviderConfig", () => {
         },
       },
     });
-    expect(cfg.agents?.defaults?.models?.["opencode/claude-opus-4-6"]?.alias).toBe("My Opus");
+    expectAliasPreserved(cfg, "opencode/claude-opus-4-6", "My Opus");
   });
 });
 
@@ -449,22 +474,15 @@ describe("applyOpencodeZenConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyOpencodeZenConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyOpencodeZenConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 });
 
 describe("applyOpenrouterProviderConfig", () => {
   it("adds allowlist entry for the default model", () => {
     const cfg = applyOpenrouterProviderConfig({});
-    const models = cfg.agents?.defaults?.models ?? {};
-    expect(Object.keys(models)).toContain(OPENROUTER_DEFAULT_MODEL_REF);
+    expectAllowlistContains(cfg, OPENROUTER_DEFAULT_MODEL_REF);
   });
 
   it("preserves existing alias for the default model", () => {
@@ -477,34 +495,22 @@ describe("applyOpenrouterProviderConfig", () => {
         },
       },
     });
-    expect(cfg.agents?.defaults?.models?.[OPENROUTER_DEFAULT_MODEL_REF]?.alias).toBe("Router");
+    expectAliasPreserved(cfg, OPENROUTER_DEFAULT_MODEL_REF, "Router");
   });
 });
 
 describe("applyLitellmProviderConfig", () => {
   it("preserves existing baseUrl and api key while adding the default model", () => {
-    const cfg = applyLitellmProviderConfig({
-      models: {
-        providers: {
-          litellm: {
-            baseUrl: "https://litellm.example/v1",
-            apiKey: "  old-key  ",
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyLitellmProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "litellm",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+        baseUrl: "https://litellm.example/v1",
+        apiKey: "  old-key  ",
+      }),
+    );
 
     expect(cfg.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
     expect(cfg.models?.providers?.litellm?.api).toBe("openai-completions");
@@ -523,13 +529,7 @@ describe("applyOpenrouterConfig", () => {
   });
 
   it("preserves existing model fallbacks", () => {
-    const cfg = applyOpenrouterConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    const cfg = applyOpenrouterConfig(createConfigWithFallbacks());
+    expectFallbacksPreserved(cfg);
   });
 });
