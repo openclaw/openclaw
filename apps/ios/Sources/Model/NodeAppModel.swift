@@ -57,6 +57,11 @@ final class NodeAppModel {
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
     var gatewayAutoReconnectEnabled: Bool = true
+    // When the gateway requires pairing approval, we pause reconnect churn and show a stable UX.
+    // Reconnect loops (both our own and the underlying WebSocket watchdog) can otherwise generate
+    // multiple pending requests and cause the onboarding UI to "flip-flop".
+    var gatewayPairingPaused: Bool = false
+    var gatewayPairingRequestId: String?
     var seamColorHex: String?
     private var mainSessionBaseKey: String = "main"
     var selectedAgentId: String?
@@ -340,6 +345,7 @@ final class NodeAppModel {
     }
 
     func setTalkEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
             // Voice wake holds the microphone continuously; talk mode needs exclusive access for STT.
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
@@ -351,6 +357,11 @@ final class NodeAppModel {
             self.talkVoiceWakeSuspended = false
         }
         self.talkMode.setEnabled(enabled)
+        Task { [weak self] in
+            await self?.pushTalkModeToGateway(
+                enabled: enabled,
+                phase: enabled ? "enabled" : "disabled")
+        }
     }
 
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
@@ -479,14 +490,47 @@ final class NodeAppModel {
             let stream = await self.operatorGateway.subscribeServerEvents(bufferingNewest: 200)
             for await evt in stream {
                 if Task.isCancelled { return }
-                guard evt.event == "voicewake.changed" else { continue }
                 guard let payload = evt.payload else { continue }
-                struct Payload: Decodable { var triggers: [String] }
-                guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
-                let triggers = VoiceWakePreferences.sanitizeTriggerWords(decoded.triggers)
-                VoiceWakePreferences.saveTriggerWords(triggers)
+                switch evt.event {
+                case "voicewake.changed":
+                    struct Payload: Decodable { var triggers: [String] }
+                    guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
+                    let triggers = VoiceWakePreferences.sanitizeTriggerWords(decoded.triggers)
+                    VoiceWakePreferences.saveTriggerWords(triggers)
+                case "talk.mode":
+                    struct Payload: Decodable {
+                        var enabled: Bool
+                        var phase: String?
+                    }
+                    guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
+                    self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
+                default:
+                    continue
+                }
             }
         }
+    }
+
+    private func applyTalkModeSync(enabled: Bool, phase: String?) {
+        _ = phase
+        guard self.talkMode.isEnabled != enabled else { return }
+        self.setTalkEnabled(enabled)
+    }
+
+    private func pushTalkModeToGateway(enabled: Bool, phase: String?) async {
+        guard await self.isOperatorConnected() else { return }
+        struct TalkModePayload: Encodable {
+            var enabled: Bool
+            var phase: String?
+        }
+        let payload = TalkModePayload(enabled: enabled, phase: phase)
+        guard let data = try? JSONEncoder().encode(payload),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+        _ = try? await self.operatorGateway.request(
+            method: "talk.mode",
+            paramsJSON: json,
+            timeoutSeconds: 8)
     }
 
     private func startGatewayHealthMonitor() {
@@ -577,6 +621,8 @@ final class NodeAppModel {
         switch route {
         case let .agent(link):
             await self.handleAgentDeepLink(link, originalURL: url)
+        case .gateway:
+            break
         }
     }
 
@@ -1506,6 +1552,8 @@ extension NodeAppModel {
 
     func disconnectGateway() {
         self.gatewayAutoReconnectEnabled = false
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
         self.nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         self.operatorGatewayTask?.cancel()
@@ -1535,6 +1583,8 @@ extension NodeAppModel {
 private extension NodeAppModel {
     func prepareForGatewayConnect(url: URL, stableID: String) {
         self.gatewayAutoReconnectEnabled = true
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
         self.nodeGatewayTask?.cancel()
         self.operatorGatewayTask?.cancel()
         self.gatewayHealthMonitor.stop()
@@ -1564,6 +1614,10 @@ private extension NodeAppModel {
             guard let self else { return }
             var attempt = 0
             while !Task.isCancelled {
+                if self.gatewayPairingPaused {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
                 if await self.isOperatorConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1639,8 +1693,13 @@ private extension NodeAppModel {
             var attempt = 0
             var currentOptions = nodeOptions
             var didFallbackClientId = false
+            var pausedForPairingApproval = false
 
             while !Task.isCancelled {
+                if self.gatewayPairingPaused {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
                 if await self.isGatewayConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1669,12 +1728,13 @@ private extension NodeAppModel {
                                 self.screen.errorText = nil
                                 UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
                             }
-                            GatewayDiagnostics.log(
-                                "gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
+                            GatewayDiagnostics.log("gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
                             if let addr = await self.nodeGateway.currentRemoteAddress() {
                                 await MainActor.run { self.gatewayRemoteAddress = addr }
                             }
                             await self.showA2UIOnConnectIfNeeded()
+                            await self.onNodeGatewayConnected()
+                            await MainActor.run { SignificantLocationMonitor.startIfNeeded(locationService: self.locationService, locationMode: self.locationMode(), gateway: self.nodeGateway) }
                         },
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
@@ -1726,9 +1786,50 @@ private extension NodeAppModel {
                         self.showLocalCanvasOnDisconnect()
                     }
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
+
+                    // If pairing is required, stop reconnect churn. The user must approve the request
+                    // on the gateway before another connect attempt will succeed, and retry loops can
+                    // generate multiple pending requests.
+                    let lower = error.localizedDescription.lowercased()
+                    if lower.contains("not_paired") || lower.contains("pairing required") {
+                        let requestId: String? = {
+                            // GatewayResponseError for connect decorates the message with `(requestId: ...)`.
+                            // Keep this resilient since other layers may wrap the text.
+                            let text = error.localizedDescription
+                            guard let start = text.range(of: "(requestId: ")?.upperBound else { return nil }
+                            guard let end = text[start...].firstIndex(of: ")") else { return nil }
+                            let raw = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            return raw.isEmpty ? nil : raw
+                        }()
+                        await MainActor.run {
+                            self.gatewayAutoReconnectEnabled = false
+                            self.gatewayPairingPaused = true
+                            self.gatewayPairingRequestId = requestId
+                            if let requestId, !requestId.isEmpty {
+                                self.gatewayStatusText =
+                                    "Pairing required (requestId: \(requestId)). Approve on gateway, then tap Resume."
+                            } else {
+                                self.gatewayStatusText = "Pairing required. Approve on gateway, then tap Resume."
+                            }
+                        }
+                        // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
+                        // we don't generate multiple pending requests while waiting for approval.
+                        pausedForPairingApproval = true
+                        self.operatorGatewayTask?.cancel()
+                        self.operatorGatewayTask = nil
+                        await self.operatorGateway.disconnect()
+                        await self.nodeGateway.disconnect()
+                        break
+                    }
+
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
                 }
+            }
+
+            if pausedForPairingApproval {
+                // Leave the status text + request id intact so onboarding can guide the user.
+                return
             }
 
             await MainActor.run {
@@ -1757,7 +1858,7 @@ private extension NodeAppModel {
             clientId: clientId,
             clientMode: "ui",
             clientDisplayName: displayName,
-            includeDeviceIdentity: false)
+            includeDeviceIdentity: true)
     }
 
     func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
@@ -1773,6 +1874,17 @@ private extension NodeAppModel {
     func isOperatorConnected() async -> Bool {
         self.operatorConnected
     }
+}
+
+extension NodeAppModel {
+    func reloadTalkConfig() {
+        Task { [weak self] in
+            await self?.talkMode.reloadConfig()
+        }
+    }
+
+    /// Back-compat hook retained for older gateway-connect flows.
+    func onNodeGatewayConnected() async {}
 }
 
 #if DEBUG
@@ -1807,6 +1919,10 @@ extension NodeAppModel {
 
     func _test_showLocalCanvasOnDisconnect() {
         self.showLocalCanvasOnDisconnect()
+    }
+
+    func _test_applyTalkModeSync(enabled: Bool, phase: String? = nil) {
+        self.applyTalkModeSync(enabled: enabled, phase: phase)
     }
 }
 #endif

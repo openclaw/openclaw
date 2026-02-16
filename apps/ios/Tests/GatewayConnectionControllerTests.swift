@@ -101,16 +101,9 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
                 host: "gateway.example.com",
                 port: 443,
                 useTLS: true,
-                stableID: "manual:gateway.example.com:443")
+                stableID: "manual|gateway.example.com|443")
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            guard case let .manual(host, port, useTLS, stableID) = loaded else {
-                Issue.record("Expected manual last-gateway connection")
-                return
-            }
-            #expect(host == "gateway.example.com")
-            #expect(port == 443)
-            #expect(useTLS == true)
-            #expect(stableID == "manual:gateway.example.com:443")
+            #expect(loaded == .manual(host: "gateway.example.com", port: 443, useTLS: true, stableID: "manual|gateway.example.com|443"))
         }
     }
 
@@ -120,7 +113,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
             "gateway.last.host": "",
             "gateway.last.port": 0,
             "gateway.last.tls": false,
-            "gateway.last.stableID": "manual:bad:0",
+            "gateway.last.stableID": "manual|invalid|0",
         ]) {
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
             #expect(loaded == nil)
