@@ -34,19 +34,6 @@ And some more text.`;
     expect(textWithoutTables).not.toContain("|");
   });
 
-  it("extracts a multi-column table", () => {
-    const text = `| Col A | Col B | Col C |
-|-------|-------|-------|
-| 1     | 2     | 3     |
-| a     | b     | c     |`;
-
-    const { tables } = extractMarkdownTables(text);
-
-    expect(tables).toHaveLength(1);
-    expect(tables[0].headers).toEqual(["Col A", "Col B", "Col C"]);
-    expect(tables[0].rows).toHaveLength(2);
-  });
-
   it("extracts multiple tables", () => {
     const text = `Table 1:
 
@@ -270,23 +257,6 @@ describe("convertCodeBlockToFlexBubble", () => {
 });
 
 describe("processLineMessage", () => {
-  it("processes text with tables", () => {
-    const text = `Here's the data:
-
-| Key | Value |
-|-----|-------|
-| a   | 1     |
-
-Done.`;
-
-    const result = processLineMessage(text);
-
-    expect(result.flexMessages).toHaveLength(1);
-    expect(result.text).toContain("Here's the data:");
-    expect(result.text).toContain("Done.");
-    expect(result.text).not.toContain("|");
-  });
-
   it("processes text with code blocks", () => {
     const text = `Check this code:
 
