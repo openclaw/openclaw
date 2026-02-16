@@ -60,6 +60,10 @@ describe("sleep", () => {
 });
 
 describe("assertWebChannel", () => {
+  it("accepts valid channel", () => {
+    expect(() => assertWebChannel("web")).not.toThrow();
+  });
+
   it("throws for invalid channel", () => {
     expect(() => assertWebChannel("bad" as string)).toThrow();
   });
