@@ -65,19 +65,21 @@ export async function ensureQueueDir(stateDir?: string): Promise<string> {
 }
 
 /** Persist a delivery entry to disk before attempting send. Returns the entry ID. */
+type QueuedDeliveryParams = {
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  payloads: ReplyPayload[];
+  threadId?: string | number | null;
+  replyToId?: string | null;
+  bestEffort?: boolean;
+  gifPlayback?: boolean;
+  silent?: boolean;
+  mirror?: DeliveryMirrorPayload;
+};
+
 export async function enqueueDelivery(
-  params: {
-    channel: Exclude<OutboundChannel, "none">;
-    to: string;
-    accountId?: string;
-    payloads: ReplyPayload[];
-    threadId?: string | number | null;
-    replyToId?: string | null;
-    bestEffort?: boolean;
-    gifPlayback?: boolean;
-    silent?: boolean;
-    mirror?: DeliveryMirrorPayload;
-  },
+  params: QueuedDeliveryParams,
   stateDir?: string,
 ): Promise<string> {
   const queueDir = await ensureQueueDir(stateDir);
@@ -191,20 +193,13 @@ export function computeBackoffMs(retryCount: number): number {
   return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
 }
 
-export type DeliverFn = (params: {
-  cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  payloads: ReplyPayload[];
-  threadId?: string | number | null;
-  replyToId?: string | null;
-  bestEffort?: boolean;
-  gifPlayback?: boolean;
-  silent?: boolean;
-  mirror?: DeliveryMirrorPayload;
-  skipQueue?: boolean;
-}) => Promise<unknown>;
+export type DeliverFn = (
+  params: {
+    cfg: OpenClawConfig;
+  } & QueuedDeliveryParams & {
+      skipQueue?: boolean;
+    },
+) => Promise<unknown>;
 
 export interface RecoveryLogger {
   info(msg: string): void;

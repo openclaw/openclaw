@@ -933,6 +933,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (suspiciousReasons.length === 0) {
         return;
       }
+      // Tests often write minimal configs (missing meta, etc); keep output quiet unless requested.
+      const isVitest = deps.env.VITEST === "true";
+      const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
+      if (isVitest && !shouldLogInVitest) {
+        return;
+      }
       deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
     };
     const auditRecordBase = {

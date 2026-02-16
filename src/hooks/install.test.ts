@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { isAddressInUseError } from "./gmail-watcher.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
 let tempDirIndex = 0;
@@ -294,5 +295,15 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.error).toContain("unsupported npm spec");
+  });
+});
+
+describe("gmail watcher", () => {
+  it("detects address already in use errors", () => {
+    expect(isAddressInUseError("listen tcp 127.0.0.1:8788: bind: address already in use")).toBe(
+      true,
+    );
+    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
+    expect(isAddressInUseError("some other error")).toBe(false);
   });
 });
