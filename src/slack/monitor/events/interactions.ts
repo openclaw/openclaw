@@ -348,6 +348,31 @@ function resolveModalSessionRouting(params: {
   };
 }
 
+function summarizeSlackViewLifecycleContext(view: {
+  root_view_id?: string;
+  previous_view_id?: string;
+  external_id?: string;
+  hash?: string;
+}): {
+  rootViewId?: string;
+  previousViewId?: string;
+  externalId?: string;
+  viewHash?: string;
+  isStackedView?: boolean;
+} {
+  const rootViewId = view.root_view_id;
+  const previousViewId = view.previous_view_id;
+  const externalId = view.external_id;
+  const viewHash = view.hash;
+  return {
+    rootViewId,
+    previousViewId,
+    externalId,
+    viewHash,
+    isStackedView: Boolean(previousViewId),
+  };
+}
+
 export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
   if (typeof ctx.app.action !== "function") {
@@ -513,6 +538,10 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
           id?: string;
           callback_id?: string;
           private_metadata?: string;
+          root_view_id?: string;
+          previous_view_id?: string;
+          external_id?: string;
+          hash?: string;
           state?: { values?: unknown };
         };
       };
@@ -532,6 +561,12 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         viewId,
         userId,
         teamId: typedBody.team?.id,
+        ...summarizeSlackViewLifecycleContext({
+          root_view_id: typedBody.view?.root_view_id,
+          previous_view_id: typedBody.view?.previous_view_id,
+          external_id: typedBody.view?.external_id,
+          hash: typedBody.view?.hash,
+        }),
         privateMetadata: typedBody.view?.private_metadata,
         routedChannelId: sessionRouting.channelId,
         routedChannelType: sessionRouting.channelType,
@@ -576,6 +611,10 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
           id?: string;
           callback_id?: string;
           private_metadata?: string;
+          root_view_id?: string;
+          previous_view_id?: string;
+          external_id?: string;
+          hash?: string;
           state?: { values?: unknown };
         };
         is_cleared?: boolean;
@@ -596,6 +635,12 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         viewId,
         userId,
         teamId: typedBody.team?.id,
+        ...summarizeSlackViewLifecycleContext({
+          root_view_id: typedBody.view?.root_view_id,
+          previous_view_id: typedBody.view?.previous_view_id,
+          external_id: typedBody.view?.external_id,
+          hash: typedBody.view?.hash,
+        }),
         isCleared: typedBody.is_cleared === true,
         privateMetadata: typedBody.view?.private_metadata,
         routedChannelId: sessionRouting.channelId,
