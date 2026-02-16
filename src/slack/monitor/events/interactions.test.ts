@@ -202,6 +202,7 @@ describe("registerSlackInteractionEvents", () => {
         view: {
           id: "V123",
           callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({ channelId: "D123", channelType: "im" }),
           state: {
             values: {
               env_block: {
@@ -226,7 +227,10 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(resolveSessionKey).toHaveBeenCalledWith({});
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "D123",
+      channelType: "im",
+    });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
@@ -235,6 +239,7 @@ describe("registerSlackInteractionEvents", () => {
       callbackId: string;
       viewId: string;
       userId: string;
+      routedChannelId?: string;
       inputs: Array<{ actionId: string; selectedValues?: string[]; inputValue?: string }>;
     };
     expect(payload).toMatchObject({
@@ -243,6 +248,7 @@ describe("registerSlackInteractionEvents", () => {
       callbackId: "openclaw:deploy_form",
       viewId: "V123",
       userId: "U777",
+      routedChannelId: "D123",
     });
     expect(payload.inputs).toEqual(
       expect.arrayContaining([
@@ -269,7 +275,7 @@ describe("registerSlackInteractionEvents", () => {
         view: {
           id: "V900",
           callback_id: "openclaw:deploy_form",
-          private_metadata: "run:123",
+          private_metadata: JSON.stringify({ sessionKey: "agent:main:slack:channel:C99" }),
           state: {
             values: {
               env_block: {
@@ -288,9 +294,12 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    expect(resolveSessionKey).toHaveBeenCalledWith({});
+    expect(resolveSessionKey).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const [eventText, options] = enqueueSystemEventMock.mock.calls[0] as [
+      string,
+      { sessionKey?: string },
+    ];
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       actionId: string;
@@ -308,12 +317,13 @@ describe("registerSlackInteractionEvents", () => {
       viewId: "V900",
       userId: "U900",
       isCleared: true,
-      privateMetadata: "run:123",
+      privateMetadata: JSON.stringify({ sessionKey: "agent:main:slack:channel:C99" }),
     });
     expect(payload.inputs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ actionId: "env_select", selectedValues: ["canary"] }),
       ]),
     );
+    expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
   });
 });
