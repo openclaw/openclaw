@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
-import { formatUpdateOneLiner, resolveUpdateAvailability } from "./status.update.js";
+import {
+  formatUpdateAvailableHint,
+  formatUpdateOneLiner,
+  resolveUpdateAvailability,
+} from "./status.update.js";
 
 function buildUpdate(partial: Partial<UpdateCheckResult>): UpdateCheckResult {
   return {
@@ -104,5 +108,40 @@ describe("formatUpdateOneLiner", () => {
     });
 
     expect(formatUpdateOneLiner(update)).toBe("Update: npm · npm latest unknown · deps missing");
+  });
+});
+
+describe("formatUpdateAvailableHint", () => {
+  it("returns null when no update is available", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "pnpm",
+      registry: { latestVersion: VERSION },
+    });
+
+    expect(formatUpdateAvailableHint(update)).toBeNull();
+  });
+
+  it("renders git and registry update details", () => {
+    const latestVersion = nextMajorVersion(VERSION);
+    const update = buildUpdate({
+      installKind: "git",
+      git: {
+        root: "/tmp/repo",
+        sha: null,
+        tag: null,
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 2,
+        fetchOk: true,
+      },
+      registry: { latestVersion },
+    });
+
+    expect(formatUpdateAvailableHint(update)).toBe(
+      `Update available (git behind 2 · npm ${latestVersion}). Run: openclaw update`,
+    );
   });
 });
