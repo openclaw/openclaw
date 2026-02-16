@@ -30,6 +30,7 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+const NUL_MARKER_RE = /\\x00|\\u0000|\u0000/;
 
 type CollectionRoot = {
   path: string;
@@ -47,7 +48,6 @@ type ListedCollection = {
   pattern?: string;
 };
 
-type QmdManagerMode = "full" | "status";
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
     cfg: OpenClawConfig;
@@ -89,6 +89,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
+  private attemptedNullByteCollectionRepair = false;
 
   private constructor(params: {
     cfg: OpenClawConfig;
