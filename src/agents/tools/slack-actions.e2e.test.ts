@@ -207,6 +207,55 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/requires content, blocks, or mediaUrl/i);
   });
 
+  it("passes blocks JSON to editSlackMessage with empty content", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    editSlackMessage.mockClear();
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        blocks: JSON.stringify([{ type: "section", text: { type: "mrkdwn", text: "Updated" } }]),
+      },
+      cfg,
+    );
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "Updated" } }],
+    });
+  });
+
+  it("passes blocks arrays to editSlackMessage", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    editSlackMessage.mockClear();
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        blocks: [{ type: "divider" }],
+      },
+      cfg,
+    );
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
+      blocks: [{ type: "divider" }],
+    });
+  });
+
+  it("requires content or blocks for editMessage", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "editMessage",
+          channelId: "C123",
+          messageId: "123.456",
+          content: "",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/requires content or blocks/i);
+  });
+
   it("auto-injects threadTs from context when replyToMode=all", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     sendSlackMessage.mockClear();
