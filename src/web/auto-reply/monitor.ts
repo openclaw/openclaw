@@ -1,3 +1,4 @@
+import { isJidGroup } from "@whiskeysockets/baileys";
 import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
@@ -205,6 +206,30 @@ export async function monitorWebChannel(
         emitStatus();
         _lastInboundMsg = msg;
         await onMessage(msg);
+      },
+      onReaction: async (reaction) => {
+        // Surface reaction events to the conversation session (not main)
+        const isGroup = isJidGroup(reaction.chatId) === true;
+        const reactionRoute = resolveAgentRoute({
+          cfg,
+          channel: "whatsapp",
+          accountId: account.accountId,
+          peer: {
+            kind: isGroup ? "group" : "direct",
+            id: reaction.chatId,
+          },
+        });
+        const reactor = reaction.reactorE164 ?? reaction.reactorJid ?? "unknown";
+        const targetMsgShort = reaction.targetMessageId?.slice(0, 12) ?? "?";
+        const eventText =
+          reaction.action === "add"
+            ? `[Reaction] ${reaction.emoji} from ${reactor} on message ${targetMsgShort}`
+            : `[Reaction removed] from ${reactor} on message ${targetMsgShort}`;
+        enqueueSystemEvent(eventText, {
+          sessionKey: reactionRoute.sessionKey,
+        });
+        status.lastEventAt = Date.now();
+        emitStatus();
       },
     });
 
