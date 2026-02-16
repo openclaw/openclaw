@@ -169,7 +169,7 @@ export const dispatchTelegramMessage = async ({
   const disableBlockStreaming =
     typeof telegramCfg.blockStreaming === "boolean"
       ? !telegramCfg.blockStreaming
-      : draftStream
+      : draftStream || streamMode === "off"
         ? true
         : undefined;
 
