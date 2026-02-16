@@ -1,0 +1,4 @@
+/target/
+/.cargo/
+Cargo.lock
+src/data.json.gz
