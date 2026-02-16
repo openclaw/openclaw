@@ -1,17 +1,27 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import { type ResolvedSpixiAccount, type SpixiAccountConfig } from "./types.js";
 
+type SpixiChannelConfig = SpixiAccountConfig & {
+  accounts?: Record<string, SpixiAccountConfig>;
+};
+
+function getSpixiChannelConfig(cfg: unknown): SpixiChannelConfig | undefined {
+  if (!cfg || typeof cfg !== "object") {
+    return undefined;
+  }
+  const channels = (cfg as { channels?: unknown }).channels;
+  if (!channels || typeof channels !== "object") {
+    return undefined;
+  }
+  const spixi = (channels as { spixi?: unknown }).spixi;
+  if (!spixi || typeof spixi !== "object") {
+    return undefined;
+  }
+  return spixi as SpixiChannelConfig;
+}
+
 export function listSpixiAccountIds(cfg: unknown): string[] {
-  // Type guard for config shape
-  const channels =
-    typeof cfg === "object" &&
-    cfg !== null &&
-    "channels" in cfg &&
-    typeof (cfg as unknown as { channels?: unknown }).channels === "object"
-      ? (cfg as unknown as { channels?: unknown }).channels
-      : undefined;
-  const spixi = channels && typeof channels.spixi === "object" ? channels.spixi : undefined;
-  const accounts = spixi && typeof spixi.accounts === "object" ? spixi.accounts : undefined;
+  const accounts = getSpixiChannelConfig(cfg)?.accounts;
   if (!accounts) {
     return [DEFAULT_ACCOUNT_ID];
   }
@@ -29,19 +39,11 @@ export function resolveSpixiAccount(params: {
   cfg: unknown;
   accountId?: string | null;
 }): ResolvedSpixiAccount {
-  // Type guard for config shape
-  const channels =
-    typeof params.cfg === "object" &&
-    params.cfg !== null &&
-    "channels" in params.cfg &&
-    typeof (params.cfg as unknown as { channels?: unknown }).channels === "object"
-      ? (params.cfg as unknown as { channels?: unknown }).channels
-      : undefined;
-  const spixi = channels && typeof channels.spixi === "object" ? channels.spixi : undefined;
-  const accounts = spixi && typeof spixi.accounts === "object" ? spixi.accounts : {};
+  const spixi = getSpixiChannelConfig(params.cfg) ?? {};
+  const accounts = spixi.accounts ?? {};
   const accountId = normalizeAccountId(params.accountId);
   const accountConfig = (accounts[accountId] || {}) as SpixiAccountConfig;
-  const baseConfig = (spixi || {}) as SpixiAccountConfig;
+  const baseConfig = spixi as SpixiAccountConfig;
   const merged = { ...baseConfig, ...accountConfig };
 
   // Check if configured (has any meaningful config set)

@@ -441,9 +441,20 @@ export async function startGatewayServer(
     },
     onReply: async (channelId, accountId, to, text) => {
       const runtime = channelRuntimeEnvs[channelId];
-      if (runtime && (runtime as any).channel && (runtime as any).channel.spixi) {
-        // Spixi specific for now, but generic channels should have standardized send
-        await (runtime as any).channel.spixi.sendMessage(to, text);
+      const sendMessage = (
+        runtime as
+          | {
+              channel?: {
+                spixi?: {
+                  sendMessage?: (to: string, text: string) => Promise<unknown>;
+                };
+              };
+            }
+          | undefined
+      )?.channel?.spixi?.sendMessage;
+      if (typeof sendMessage === "function") {
+        // Spixi specific for now, but generic channels should have standardized send.
+        await sendMessage(to, text);
       } else {
         log.warn(`[${channelId}:${accountId}] No sendMessage capability found on runtime`);
       }

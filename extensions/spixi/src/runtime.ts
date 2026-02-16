@@ -1,44 +1,25 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import axios from "axios";
-import { type ExtensionRuntime } from "openclaw/plugin-sdk";
 
-export interface SpixiRuntime extends ExtensionRuntime {
+type SpixiChannelRuntime = {
+  sendMessage: (to: string, text: string, opts?: { baseUrl?: string }) => Promise<unknown>;
+  addContact: (address: string, opts?: { baseUrl?: string }) => Promise<unknown>;
+  getFriendList: (opts?: { baseUrl?: string }) => Promise<string[]>;
+  acceptContact: (address: string, opts?: { baseUrl?: string }) => Promise<unknown>;
+};
+
+export type SpixiRuntime = {
   channel: {
-    spixi: {
-      sendMessage: (to: string, text: string, opts?: { baseUrl?: string }) => Promise<unknown>;
-      addContact: (address: string, opts?: { baseUrl?: string }) => Promise<unknown>;
-      getFriendList: (opts?: { baseUrl?: string }) => Promise<string[]>;
-      acceptContact: (address: string, opts?: { baseUrl?: string }) => Promise<unknown>;
-    };
+    spixi: SpixiChannelRuntime;
   };
-}
+};
 
-let runtime: SpixiRuntime | undefined;
-
-// Default QuIXI API URL - can be overridden via config
+// Default QuIXI API URL - can be overridden via config.
 let defaultBaseUrl = "http://localhost:8001";
 
-export function setSpixiBaseUrl(url: string) {
-  defaultBaseUrl = url;
-}
-
-export const getSpixiRuntime = () => {
-  if (!runtime) {
-    // Fallback if runtime not yet set (e.g. tests or early init)
-    runtime = {
-      channel: {
-        spixi: undefined as unknown as SpixiRuntime["channel"]["spixi"],
-      },
-    } as SpixiRuntime;
-  }
-
-  // Ensure channel exists
-  if (!runtime.channel) {
-    runtime.channel = { spixi: undefined as unknown as SpixiRuntime["channel"]["spixi"] };
-  }
-
-  // Only attach spixi if not present
-  if (!runtime.channel.spixi) {
-    const spixiMethods: SpixiRuntime["channel"]["spixi"] = {
+const spixiRuntime: SpixiRuntime = {
+  channel: {
+    spixi: {
       sendMessage: async (to, text, opts) => {
         const baseUrl = opts?.baseUrl || defaultBaseUrl;
         try {
@@ -116,13 +97,14 @@ export const getSpixiRuntime = () => {
           throw new Error("Spixi acceptContact failed: Unknown error", { cause: e });
         }
       },
-    };
-    runtime.channel.spixi = spixiMethods;
-  }
-
-  return runtime;
+    },
+  },
 };
 
-export const setSpixiRuntime = (r: SpixiRuntime) => {
-  runtime = r;
-};
+export function setSpixiBaseUrl(url: string) {
+  defaultBaseUrl = url;
+}
+
+export const getSpixiRuntime = (): SpixiRuntime => spixiRuntime;
+
+export const setSpixiRuntime = (_runtime: PluginRuntime) => {};
