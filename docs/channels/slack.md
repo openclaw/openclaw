@@ -296,7 +296,7 @@ Use this when you want richer layouts than plain text, including:
 {
   "action": "send",
   "providerId": "slack",
-  "channelId": "channel:C12345678",
+  "to": "channel:C12345678",
   "blocks": [
     {
       "type": "header",
