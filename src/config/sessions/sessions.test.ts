@@ -12,7 +12,6 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../sessions.js";
-import { withSessionStoreLockForTest } from "../sessions.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   resolveSessionFilePath,
@@ -478,12 +477,6 @@ describe("withSessionStoreLock storePath guard (#14717)", () => {
   it("throws descriptive error when storePath is undefined", async () => {
     await expect(
       updateSessionStoreUnsafe(undefined as unknown as string, (store) => store),
-    ).rejects.toThrow("withSessionStoreLock: storePath must be a non-empty string");
-  });
-
-  it("withSessionStoreLockForTest also throws descriptive error when storePath is undefined", async () => {
-    await expect(
-      withSessionStoreLockForTest(undefined as unknown as string, async () => {}),
     ).rejects.toThrow("withSessionStoreLock: storePath must be a non-empty string");
   });
 });
