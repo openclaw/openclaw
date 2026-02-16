@@ -64,21 +64,36 @@ function runGroupGating(params: {
   return { result, groupHistories };
 }
 
+function createGroupMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "g1",
+    from: "123@g.us",
+    conversationId: "123@g.us",
+    chatId: "123@g.us",
+    chatType: "group",
+    to: "+2",
+    body: "hello group",
+    senderE164: "+111",
+    senderName: "Alice",
+    selfE164: "+999",
+    sendComposing: async () => {},
+    reply: async () => {},
+    sendMedia: async () => {},
+    ...overrides,
+  };
+}
+
 describe("applyGroupGating", () => {
   it("treats reply-to-bot as implicit mention", () => {
     const cfg = makeConfig({});
     const { result } = runGroupGating({
       cfg,
-      msg: {
+      msg: createGroupMessage({
         id: "m1",
-        from: "123@g.us",
-        conversationId: "123@g.us",
         to: "+15550000",
         accountId: "default",
         body: "following up",
         timestamp: Date.now(),
-        chatType: "group",
-        chatId: "123@g.us",
         selfJid: "15551234567@s.whatsapp.net",
         selfE164: "+15551234567",
         replyToId: "m0",
@@ -86,10 +101,7 @@ describe("applyGroupGating", () => {
         replyToSender: "+15551234567",
         replyToSenderJid: "15551234567@s.whatsapp.net",
         replyToSenderE164: "+15551234567",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      }),
     });
 
     expect(result.shouldProcess).toBe(true);
@@ -107,21 +119,12 @@ describe("applyGroupGating", () => {
 
     const { result } = runGroupGating({
       cfg,
-      msg: {
+      msg: createGroupMessage({
         id: "g-new",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatId: "123@g.us",
-        chatType: "group",
-        to: "+2",
         body: "/new",
         senderE164: "+111",
         senderName: "Owner",
-        selfE164: "+999",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      }),
     });
 
     expect(result.shouldProcess).toBe(true);
@@ -139,21 +142,12 @@ describe("applyGroupGating", () => {
 
     const { result, groupHistories } = runGroupGating({
       cfg,
-      msg: {
+      msg: createGroupMessage({
         id: "g-new-unauth",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatId: "123@g.us",
-        chatType: "group",
-        to: "+2",
         body: "/new",
         senderE164: "+111",
         senderName: "NotOwner",
-        selfE164: "+999",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      }),
     });
 
     expect(result.shouldProcess).toBe(false);
@@ -172,21 +166,12 @@ describe("applyGroupGating", () => {
 
     const { result } = runGroupGating({
       cfg,
-      msg: {
+      msg: createGroupMessage({
         id: "g-status",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatId: "123@g.us",
-        chatType: "group",
-        to: "+2",
         body: "/status",
         senderE164: "+111",
         senderName: "Owner",
-        selfE164: "+999",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      }),
     });
 
     expect(result.shouldProcess).toBe(true);
@@ -232,42 +217,24 @@ describe("applyGroupGating", () => {
     const { result: globalMention } = runGroupGating({
       cfg,
       agentId: route.agentId,
-      msg: {
+      msg: createGroupMessage({
         id: "g1",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatId: "123@g.us",
-        chatType: "group",
-        to: "+2",
         body: "@global ping",
         senderE164: "+111",
         senderName: "Alice",
-        selfE164: "+999",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      }),
     });
     expect(globalMention.shouldProcess).toBe(false);
 
     const { result: workMention } = runGroupGating({
       cfg,
       agentId: route.agentId,
-      msg: {
+      msg: createGroupMessage({
         id: "g2",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatId: "123@g.us",
-        chatType: "group",
-        to: "+2",
         body: "@workbot ping",
         senderE164: "+222",
         senderName: "Bob",
-        selfE164: "+999",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      }),
     });
     expect(workMention.shouldProcess).toBe(true);
   });
@@ -285,21 +252,7 @@ describe("applyGroupGating", () => {
 
     const { result } = runGroupGating({
       cfg,
-      msg: {
-        id: "g1",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatId: "123@g.us",
-        chatType: "group",
-        to: "+2",
-        body: "hello group",
-        senderE164: "+111",
-        senderName: "Alice",
-        selfE164: "+999",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      msg: createGroupMessage(),
     });
 
     expect(result.shouldProcess).toBe(true);
@@ -319,23 +272,11 @@ describe("applyGroupGating", () => {
 
     const { result } = runGroupGating({
       cfg,
-      msg: {
-        id: "g1",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        chatId: "123@g.us",
-        chatType: "group",
-        to: "+2",
+      msg: createGroupMessage({
         body: "@workbot ping",
-        senderE164: "+111",
-        senderName: "Alice",
-        selfE164: "+999",
         mentionedJids: ["999@s.whatsapp.net"],
         selfJid: "999@s.whatsapp.net",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-      },
+      }),
     });
 
     expect(result.shouldProcess).toBe(false);
@@ -350,22 +291,15 @@ describe("buildInboundLine", () => {
         channels: { whatsapp: { messagePrefix: "" } },
       } as never,
       agentId: "main",
-      msg: {
-        from: "123@g.us",
-        conversationId: "123@g.us",
+      msg: createGroupMessage({
         to: "+15550009999",
         accountId: "default",
         body: "ping",
         timestamp: 1700000000000,
-        chatType: "group",
-        chatId: "123@g.us",
         senderJid: "111@s.whatsapp.net",
         senderE164: "+15550001111",
         senderName: "Bob",
-        sendComposing: async () => undefined,
-        reply: async () => undefined,
-        sendMedia: async () => undefined,
-      } as never,
+      }) as never,
     });
 
     expect(line).toContain("Bob (+15550001111):");
