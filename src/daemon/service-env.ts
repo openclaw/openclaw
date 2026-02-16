@@ -35,6 +35,71 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
 }
 
 /**
+ * Resolve common user bin directories for macOS.
+ * These are paths where npm global installs and node version managers typically place binaries.
+ *
+ * Key differences from Linux:
+ * - fnm: macOS uses ~/Library/Application Support/fnm (not ~/.local/share/fnm)
+ * - pnpm: macOS uses ~/Library/pnpm (not ~/.local/share/pnpm)
+ */
+export function resolveDarwinUserBinDirs(
+  home: string | undefined,
+  env?: Record<string, string | undefined>,
+): string[] {
+  if (!home) {
+    return [];
+  }
+
+  const dirs: string[] = [];
+
+  const add = (dir: string | undefined) => {
+    if (dir) {
+      dirs.push(dir);
+    }
+  };
+  const appendSubdir = (base: string | undefined, subdir: string) => {
+    if (!base) {
+      return undefined;
+    }
+    return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
+  };
+
+  // Env-configured bin roots (override defaults when present).
+  // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
+  // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
+  add(env?.PNPM_HOME);
+  add(appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
+  add(appendSubdir(env?.BUN_INSTALL, "bin"));
+  add(appendSubdir(env?.VOLTA_HOME, "bin"));
+  add(appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+  // nvm: no stable default path, relies on env or user's shell config
+  // User must set NVM_DIR and source nvm.sh for it to work
+  add(env?.NVM_DIR);
+  // fnm: use aliases/default (not current)
+  add(appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
+  // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
+
+  // Common user bin directories
+  dirs.push(`${home}/.local/bin`); // XDG standard, pip, etc.
+  dirs.push(`${home}/.npm-global/bin`); // npm custom prefix
+  dirs.push(`${home}/bin`); // User's personal bin
+
+  // Node version managers - macOS specific paths
+  // nvm: no stable default path, depends on user's shell configuration
+  // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
+  dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
+  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
+  dirs.push(`${home}/.volta/bin`); // Volta (same on all platforms)
+  dirs.push(`${home}/.asdf/shims`); // asdf (same on all platforms)
+  // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
+  dirs.push(`${home}/Library/pnpm`); // pnpm default
+  dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
+  dirs.push(`${home}/.bun/bin`); // Bun (same on all platforms)
+
+  return dirs;
+}
+
+/**
  * Resolve common user bin directories for Linux.
  * These are paths where npm global installs and node version managers typically place binaries.
  */
@@ -95,9 +160,13 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
 
-  // Add Linux user bin directories (npm global, nvm, fnm, volta, etc.)
-  const linuxUserDirs =
-    platform === "linux" ? resolveLinuxUserBinDirs(options.home, options.env) : [];
+  // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
+  const userDirs =
+    platform === "linux"
+      ? resolveLinuxUserBinDirs(options.home, options.env)
+      : platform === "darwin"
+        ? resolveDarwinUserBinDirs(options.home, options.env)
+        : [];
 
   const add = (dir: string) => {
     if (!dir) {
@@ -112,7 +181,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
     add(dir);
   }
   // User dirs first so user-installed binaries take precedence
-  for (const dir of linuxUserDirs) {
+  for (const dir of userDirs) {
     add(dir);
   }
   for (const dir of systemDirs) {
