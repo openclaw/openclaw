@@ -48,6 +48,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       messageId: vi.fn().mockReturnValue(messageId),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn(),
+      forceNewMessage: vi.fn(),
     };
   }
 
@@ -215,6 +216,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
+  it("does not overwrite finalized preview when additional final payloads are sent", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Primary result" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        { text: "⚠️ Recovered tool error details" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Primary result",
+      expect.any(Object),
+    );
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "⚠️ Recovered tool error details" })],
+      }),
+    );
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
   it("falls back to normal delivery when preview final is too long to edit", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -256,6 +289,128 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replyOptions: expect.objectContaining({
           disableBlockStreaming: true,
         }),
+      }),
+    );
+  });
+
+  it("forces new message when new assistant message starts after previous output", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // First assistant message: partial text
+        await replyOptions?.onPartialReply?.({ text: "First response" });
+        // New assistant message starts (e.g., after tool call)
+        await replyOptions?.onAssistantMessageStart?.();
+        // Second assistant message: new text
+        await replyOptions?.onPartialReply?.({ text: "After tool call" });
+        await dispatcherOptions.deliver({ text: "After tool call" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    // Should force new message when assistant message starts after previous output
+    expect(draftStream.forceNewMessage).toHaveBeenCalled();
+  });
+
+  it("does not force new message on first assistant message start", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // First assistant message starts (no previous output)
+        await replyOptions?.onAssistantMessageStart?.();
+        // Partial updates
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await replyOptions?.onPartialReply?.({ text: "Hello world" });
+        await dispatcherOptions.deliver({ text: "Hello world" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    // First message start shouldn't trigger forceNewMessage (no previous output)
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("forces new message when reasoning ends after previous output", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // First partial: text before thinking
+        await replyOptions?.onPartialReply?.({ text: "Let me check" });
+        // Reasoning stream (thinking block)
+        await replyOptions?.onReasoningStream?.({ text: "Analyzing..." });
+        // Reasoning ends
+        await replyOptions?.onReasoningEnd?.();
+        // Second partial: text after thinking
+        await replyOptions?.onPartialReply?.({ text: "Here's the answer" });
+        await dispatcherOptions.deliver({ text: "Here's the answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    // Should force new message when reasoning ends
+    expect(draftStream.forceNewMessage).toHaveBeenCalled();
+  });
+
+  it("does not force new message on reasoning end without previous output", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Reasoning starts immediately (no previous text output)
+        await replyOptions?.onReasoningStream?.({ text: "Thinking..." });
+        // Reasoning ends
+        await replyOptions?.onReasoningEnd?.();
+        // First actual text output
+        await replyOptions?.onPartialReply?.({ text: "Here's my answer" });
+        await dispatcherOptions.deliver({ text: "Here's my answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    // No previous text output, so no forceNewMessage needed
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not edit preview message when final payload is an error", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Partial text output
+        await replyOptions?.onPartialReply?.({ text: "Let me check that file" });
+        // Error payload should not edit the preview message
+        await dispatcherOptions.deliver(
+          { text: "⚠️ 🛠️ Exec: cat /nonexistent failed: No such file", isError: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    // Should NOT edit preview message (which would overwrite the partial text)
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    // Should deliver via normal path as a new message
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: expect.stringContaining("⚠️") })],
       }),
     );
   });

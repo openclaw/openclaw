@@ -26,6 +26,32 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
 }
 
 /**
+ * Return the soonest `unusableUntil` timestamp (ms epoch) among the given
+ * profiles, or `null` when no profile has a recorded cooldown. Note: the
+ * returned timestamp may be in the past if the cooldown has already expired.
+ */
+export function getSoonestCooldownExpiry(
+  store: AuthProfileStore,
+  profileIds: string[],
+): number | null {
+  let soonest: number | null = null;
+  for (const id of profileIds) {
+    const stats = store.usageStats?.[id];
+    if (!stats) {
+      continue;
+    }
+    const until = resolveProfileUnusableUntil(stats);
+    if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
+      continue;
+    }
+    if (soonest === null || until < soonest) {
+      soonest = until;
+    }
+  }
+  return soonest;
+}
+
+/**
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */

@@ -27,16 +27,14 @@ const unitIsolatedFilesRaw = [
   "src/browser/server.agent-contract-form-layout-act-commands.test.ts",
   "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts",
   "src/browser/server.auth-token-gates-http.test.ts",
-  "src/browser/server-context.remote-tab-ops.test.ts",
-  "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
   // Keep this high-variance heavy file off the unit-fast critical path.
   "src/auto-reply/reply.block-streaming.test.ts",
-  // Integration test is process-heavy and can bottleneck unit-fast.
-  "test/git-hooks-pre-commit.integration.test.ts",
   // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
   "src/hooks/install.test.ts",
   // Setup-heavy bot bootstrap suite.
   "src/telegram/bot.create-telegram-bot.test.ts",
+  // Medium-heavy bot behavior suite; move off unit-fast critical path.
+  "src/telegram/bot.test.ts",
   // Slack slash registration tests are setup-heavy and can bottleneck unit-fast.
   "src/slack/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.

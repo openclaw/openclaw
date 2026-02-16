@@ -1,12 +1,24 @@
 {
   "name": "openclaw",
-  "version": "2026.2.15",
+  "version": "2026.2.16",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
   "license": "MIT",
   "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git"
+  },
   "bin": {
     "openclaw": "openclaw.mjs"
+  },
+  "directories": {
+    "doc": "docs",
+    "test": "test"
   },
   "files": [
     "CHANGELOG.md",

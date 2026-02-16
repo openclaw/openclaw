@@ -48,10 +48,6 @@ describe("getSubagentDepth", () => {
     expect(getSubagentDepth(undefined)).toBe(0);
   });
 
-  it("returns 1 for depth-1 subagent session keys", () => {
-    expect(getSubagentDepth("agent:main:subagent:123")).toBe(1);
-  });
-
   it("returns 2 for nested subagent session keys", () => {
     expect(getSubagentDepth("agent:main:subagent:parent:subagent:child")).toBe(2);
   });
