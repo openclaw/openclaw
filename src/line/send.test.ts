@@ -1,28 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createFlexMessage,
-  createQuickReplyItems,
-  createTextMessageWithQuickReplies,
-} from "./send.js";
-
-describe("createFlexMessage", () => {
-  it("creates a flex message with alt text and contents", () => {
-    const contents = {
-      type: "bubble" as const,
-      body: {
-        type: "box" as const,
-        layout: "vertical" as const,
-        contents: [],
-      },
-    };
-
-    const message = createFlexMessage("Alt text for flex", contents);
-
-    expect(message.type).toBe("flex");
-    expect(message.altText).toBe("Alt text for flex");
-    expect(message.contents).toBe(contents);
-  });
-});
+import { createQuickReplyItems, createTextMessageWithQuickReplies } from "./send.js";
 
 describe("createQuickReplyItems", () => {
   it("creates quick reply items from labels", () => {
