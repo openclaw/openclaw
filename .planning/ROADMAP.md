@@ -36,11 +36,11 @@
   1. Running a live test without the required API key produces a clear skip message naming the missing key, not a cryptic failure or stack trace
   2. The live test runner output shows each test file with an unambiguous pass/fail/skip status and a summary count at the end
   3. Any single live test file can be run independently with `bun run test:live <file>` without requiring other test files or shared setup to execute first
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
+- [ ] 06-01-PLAN.md — Shared live test helpers (skip messaging, error classification, retry) + refactor all live tests
+- [ ] 06-02-PLAN.md — Custom Vitest reporter for live test diagnostics + wire into config
 
 ### Phase 7: Agent & Gateway Live Tests
 **Goal**: Every agent provider integration and gateway CLI/profile test passes against real services
@@ -84,6 +84,6 @@ Phase 6 first. Phases 7 and 8 can execute in parallel after Phase 6 completes.
 | 3. Plugin Security | v1.0 | 2/2 | Complete | 2026-02-16 |
 | 4. Output Controls & Execution Tracing | v1.0 | 2/2 | Complete | 2026-02-16 |
 | 5. Tamper-Evident Audit Infrastructure | v1.0 | 2/2 | Complete | 2026-02-16 |
-| 6. Test Infrastructure | v1.1 | 0/? | Not started | - |
+| 6. Test Infrastructure | v1.1 | 0/2 | Planned | - |
 | 7. Agent & Gateway Live Tests | v1.1 | 0/? | Not started | - |
 | 8. Browser, Media & WhatsApp | v1.1 | 0/? | Not started | - |
