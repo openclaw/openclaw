@@ -1,31 +1,10 @@
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles, type SessionLockInspection } from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 const DEFAULT_STALE_MS = 30 * 60 * 1000;
-
-async function resolveAgentSessionDirs(stateDir: string): Promise<string[]> {
-  const agentsDir = path.join(stateDir, "agents");
-  let entries: Dirent[] = [];
-  try {
-    entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(agentsDir, entry.name, "sessions"))
-    .toSorted((a, b) => a.localeCompare(b));
-}
 
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
