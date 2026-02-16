@@ -707,7 +707,15 @@ describe("registerSlackInteractionEvents", () => {
                   type: "rich_text_input",
                   rich_text_value: {
                     type: "rich_text",
-                    elements: [{ type: "rich_text_section", elements: [] }],
+                    elements: [
+                      {
+                        type: "rich_text_section",
+                        elements: [
+                          { type: "text", text: "Ship this now" },
+                          { type: "text", text: "with canary metrics" },
+                        ],
+                      },
+                    ],
                   },
                 },
               },
@@ -736,6 +744,7 @@ describe("registerSlackInteractionEvents", () => {
         inputEmail?: string;
         inputUrl?: string;
         richTextValue?: unknown;
+        richTextPreview?: string;
       }>;
     };
     expect(payload.inputs).toEqual(
@@ -791,13 +800,70 @@ describe("registerSlackInteractionEvents", () => {
         expect.objectContaining({
           actionId: "richtext_input",
           inputKind: "rich_text",
+          richTextPreview: "Ship this now with canary metrics",
           richTextValue: {
             type: "rich_text",
-            elements: [{ type: "rich_text_section", elements: [] }],
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "text", text: "Ship this now" },
+                  { type: "text", text: "with canary metrics" },
+                ],
+              },
+            ],
           },
         }),
       ]),
     );
+  });
+
+  it("truncates rich text preview to keep payload summaries compact", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const longText = "deploy ".repeat(40).trim();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U555" },
+        view: {
+          id: "V555",
+          callback_id: "openclaw:long_richtext",
+          state: {
+            values: {
+              richtext_block: {
+                richtext_input: {
+                  type: "rich_text_input",
+                  rich_text_value: {
+                    type: "rich_text",
+                    elements: [
+                      {
+                        type: "rich_text_section",
+                        elements: [{ type: "text", text: longText }],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      inputs: Array<{ actionId: string; richTextPreview?: string }>;
+    };
+    const richInput = payload.inputs.find((input) => input.actionId === "richtext_input");
+    expect(richInput?.richTextPreview).toBeTruthy();
+    expect((richInput?.richTextPreview ?? "").length).toBeLessThanOrEqual(120);
   });
 
   it("captures modal close events and enqueues view closed event", async () => {
