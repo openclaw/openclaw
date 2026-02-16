@@ -290,6 +290,107 @@ describe("QmdMemoryManager", () => {
     await manager?.close();
   });
 
+  it("rebinds sessions collection when existing collection path targets another agent", async () => {
+    const devAgentId = "dev";
+    const devWorkspaceDir = path.join(tmpRoot, "workspace-dev");
+    await fs.mkdir(devWorkspaceDir);
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [
+          { id: agentId, default: true, workspace: workspaceDir },
+          { id: devAgentId, workspace: devWorkspaceDir },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: devWorkspaceDir, pattern: "**/*.md", name: "workspace" }],
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const wrongSessionsPath = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([{ name: "sessions", path: wrongSessionsPath, mask: "**/*.md" }]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: devAgentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId: devAgentId, resolved, mode: "full" });
+    expect(manager).toBeTruthy();
+    await manager?.close();
+
+    const commands = spawnMock.mock.calls.map((call) => call[1] as string[]);
+    const removeSessions = commands.find(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === "sessions",
+    );
+    expect(removeSessions).toBeDefined();
+
+    const addSessions = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === "sessions";
+    });
+    expect(addSessions).toBeDefined();
+    expect(addSessions?.[2]).toBe(path.join(stateDir, "agents", devAgentId, "qmd", "sessions"));
+  });
+
+  it("rebinds sessions collection when qmd only reports collection names", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify(["workspace", "sessions"]));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call) => call[1] as string[]);
+    const removeSessions = commands.find(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === "sessions",
+    );
+    expect(removeSessions).toBeDefined();
+
+    const addSessions = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === "sessions";
+    });
+    expect(addSessions).toBeDefined();
+  });
+
   it("times out qmd update during sync when configured", async () => {
     vi.useFakeTimers();
     cfg = {
