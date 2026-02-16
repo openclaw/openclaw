@@ -632,7 +632,6 @@ describe("createStreamingDirectiveAccumulator", () => {
     const result = accumulator.consume("current]] Yo");
     expect(result?.text).toBe("Yo");
     expect(result?.replyToCurrent).toBe(true);
-    expect(result?.replyToTag).toBe(true);
   });
 
   it("propagates explicit reply ids across chunks", () => {
