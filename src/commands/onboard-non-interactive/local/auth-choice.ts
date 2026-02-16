@@ -82,7 +82,11 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "codex-cli") {
     runtime.error(
-      ['Auth choice "codex-cli" is deprecated.', 'Use "--auth-choice openai-codex".'].join("\n"),
+      [
+        'Auth choice "codex-cli" is deprecated.',
+        'It maps to OpenAI Codex OAuth ("--auth-choice openai-codex"), which requires interactive mode.',
+        'For non-interactive onboarding, use "--auth-choice openai-api-key".',
+      ].join("\n"),
     );
     runtime.exit(1);
     return null;

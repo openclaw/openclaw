@@ -325,6 +325,17 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("shows explicit non-interactive guidance for legacy codex-cli auth choice", async () => {
+    await withOnboardEnv("openclaw-onboard-codex-cli-legacy-", async ({ runtime }) => {
+      await expect(
+        runNonInteractiveOnboardingWithDefaults(runtime, {
+          authChoice: "codex-cli",
+          skipSkills: true,
+        }),
+      ).rejects.toThrow('For non-interactive onboarding, use "--auth-choice openai-api-key".');
+    });
+  }, 60_000);
+
   it("stores OpenAI API key and sets OpenAI default model", async () => {
     await withOnboardEnv("openclaw-onboard-openai-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
