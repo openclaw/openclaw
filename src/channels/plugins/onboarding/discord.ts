@@ -17,23 +17,14 @@ import { resolveDiscordUserAllowlist } from "../../../discord/resolve-users.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { promptChannelAccessConfig } from "./channel-access.js";
-import { promptAccountId } from "./helpers.js";
-
-function addDiscordWildcardAllowFrom(allowFrom?: string[] | null): string[] {
-  const next = (allowFrom ?? []).map((entry) => entry.trim()).filter(Boolean);
-  if (!next.includes("*")) {
-    next.push("*");
-  }
-  return next;
-}
+import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
 
 const channel = "discord" as const;
 
 function setDiscordDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
   const existingAllowFrom =
     cfg.channels?.discord?.allowFrom ?? cfg.channels?.discord?.dm?.allowFrom;
-  const allowFrom =
-    dmPolicy === "open" ? addDiscordWildcardAllowFrom(existingAllowFrom) : undefined;
+  const allowFrom = dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -221,9 +212,7 @@ async function promptDiscordAllowFrom(params: {
         );
         continue;
       }
-      const unique = [...new Set([...existing.map((v) => String(v).trim()), ...ids])].filter(
-        Boolean,
-      );
+      const unique = mergeAllowFromEntries(existing, ids);
       return setDiscordAllowFrom(params.cfg, unique);
     }
 
@@ -244,7 +233,7 @@ async function promptDiscordAllowFrom(params: {
       continue;
     }
     const ids = results.map((res) => res.id as string);
-    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
+    const unique = mergeAllowFromEntries(existing, ids);
     return setDiscordAllowFrom(params.cfg, unique);
   }
 }
