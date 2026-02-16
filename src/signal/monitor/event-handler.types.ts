@@ -83,7 +83,7 @@ export type SignalEventHandlerDeps = {
   groupPolicy: GroupPolicy;
   reactionMode: SignalReactionNotificationMode;
   reactionAllowlist: string[];
-  reactionDelivery?: "deferred" | "immediate";
+  reactionDelivery?: import("../../config/types.reactions.js").ReactionDelivery;
   reactionBundleWindowMs?: number;
   reactionIncludeMessage?: boolean;
   mediaMaxBytes: number;

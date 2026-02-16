@@ -450,6 +450,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             },
           );
         }
+        logVerbose(
+          `telegram: ${addedReactions.length} reaction(s) enqueued for immediate dispatch on msg ${messageId}`,
+        );
       } else {
         for (const r of addedReactions) {
           const emoji = r.emoji;

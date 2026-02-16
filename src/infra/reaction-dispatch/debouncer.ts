@@ -37,6 +37,7 @@ export function createReactionDebouncer(params: {
       await params.onFlush(bundle);
     },
     onError: (err, items) => {
+      console.error("[reaction-debouncer] flush error:", err);
       if (items.length > 0) {
         const first = items[0];
         const key = `${first.context.sessionKey}:${first.context.messageId}`;

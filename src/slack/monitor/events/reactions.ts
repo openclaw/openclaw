@@ -8,7 +8,7 @@ import type { SlackReactionEvent } from "../types.js";
 export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
 
-  const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
+  const handleReactionEvent = async (event: SlackReactionEvent, action: "added" | "removed") => {
     try {
       const item = event.item;
       if (!item || item.type !== "message") {
@@ -74,7 +74,7 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
             emoji: emojiLabel,
             actorLabel: actorLabel ?? "unknown",
             actorId: event.user,
-            action: action as "added" | "removed",
+            action,
             ts: Date.now(),
           },
           {

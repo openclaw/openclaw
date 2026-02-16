@@ -21,7 +21,7 @@ export type DiscordGuildEntryResolved = {
   slug?: string;
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
-  reactionDelivery?: "deferred" | "immediate";
+  reactionDelivery?: import("../../config/types.reactions.js").ReactionDelivery;
   reactionBundleWindowMs?: number;
   reactionIncludeMessage?: boolean;
   users?: string[];

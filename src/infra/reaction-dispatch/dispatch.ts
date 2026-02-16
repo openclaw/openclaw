@@ -13,6 +13,7 @@ function resolveReactionReplyPayload(
   if (!Array.isArray(replyResult)) {
     return replyResult;
   }
+  // Iterate backwards: prefer the last non-empty payload (closest to final agent output).
   for (let idx = replyResult.length - 1; idx >= 0; idx -= 1) {
     const payload = replyResult[idx];
     if (payload && (payload.text || payload.mediaUrl || payload.mediaUrls?.length)) {
