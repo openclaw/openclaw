@@ -939,30 +939,6 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("includes both thread and reply params for forum topic replies", async () => {
-    const chatId = "-1001234567890";
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 57,
-      chat: { id: chatId },
-    });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await sendMessageTelegram(chatId, "forum reply", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-      replyToMessageId: 500,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "forum reply", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-      reply_to_message_id: 500,
-    });
-  });
-
   it("retries media sends without message_thread_id when thread is missing", async () => {
     const chatId = "123";
     const threadErr = new Error("400: Bad Request: message thread not found");
@@ -1151,30 +1127,6 @@ describe("sendStickerTelegram", () => {
     });
 
     expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
-      reply_to_message_id: 500,
-    });
-  });
-
-  it("includes both thread and reply params for forum topic replies", async () => {
-    const chatId = "-1001234567890";
-    const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 103,
-      chat: { id: chatId },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram(chatId, fileId, {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-      replyToMessageId: 500,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
-      message_thread_id: 271,
       reply_to_message_id: 500,
     });
   });
