@@ -268,7 +268,12 @@ Use `skills/video-quote-finder` to locate where a quote appears in a YouTube vid
 
 Original prompt:
 
-> "OK I want to make a PR with this skill back to openclaw... make a new one that will search for a point on the video and give me the timestamp. For example I want to find the timestamp in this video where peter says 'I think vibe coding is a slur' https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV"
+> "OK I want to make a PR with this skill back to openclaw... make a new one that
+> will search for a point on the video and give me the timestamp. For example I
+> want to find the timestamp in this video where Peter says 'I think vibe coding
+> is a slur'"
+>
+> Video: <https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV>
 
 ## Chat commands
 
