@@ -224,6 +224,35 @@ Notes:
 - `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 - `process` is scoped per agent; sessions from other agents are not visible.
 
+### `loop-detection` (tool-call loop guardrails)
+
+OpenClaw tracks recent tool-call history and blocks or warns when it detects repetitive no-progress loops.
+Enable with `tools.loopDetection.enabled: true` (default is `false`).
+
+```json5
+{
+  tools: {
+    loopDetection: {
+      enabled: true,
+      warningThreshold: 10,
+      criticalThreshold: 20,
+      globalCircuitBreakerThreshold: 30,
+      historySize: 30,
+      detectors: {
+        genericRepeat: true,
+        knownPollNoProgress: true,
+        pingPong: true,
+      },
+    },
+  },
+}
+```
+
+- `genericRepeat`: repeated same tool + same params call pattern.
+- `knownPollNoProgress`: repeating poll-like tools with identical outputs.
+- `pingPong`: alternating `A/B/A/B` no-progress patterns.
+- Per-agent override: `agents.list[].tools.loopDetection`.
+
 ### `web_search`
 
 Search the web using Brave Search API.

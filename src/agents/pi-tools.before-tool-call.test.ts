@@ -19,7 +19,17 @@ describe("before_tool_call loop detection behavior", () => {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
   };
-  const defaultToolContext = { agentId: "main", sessionKey: "main" };
+  const enabledLoopDetectionContext = {
+    agentId: "main",
+    sessionKey: "main",
+    loopDetection: { enabled: true },
+  };
+
+  const disabledLoopDetectionContext = {
+    agentId: "main",
+    sessionKey: "main",
+    loopDetection: { enabled: false },
+  };
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
@@ -33,10 +43,14 @@ describe("before_tool_call loop detection behavior", () => {
     hookRunner.hasHooks.mockReturnValue(false);
   });
 
-  function createWrappedTool(name: string, execute: ReturnType<typeof vi.fn>) {
+  function createWrappedTool(
+    name: string,
+    execute: ReturnType<typeof vi.fn>,
+    loopDetectionContext = enabledLoopDetectionContext,
+  ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,
-      defaultToolContext,
+      loopDetectionContext,
     );
   }
 
@@ -95,7 +109,6 @@ describe("before_tool_call loop detection behavior", () => {
       }
     }
   }
-
   it("blocks known poll loops when no progress repeats", async () => {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
@@ -111,6 +124,22 @@ describe("before_tool_call loop detection behavior", () => {
     await expect(
       tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
     ).rejects.toThrow("CRITICAL");
+  });
+
+  it("does nothing when loopDetection.enabled is false", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+      details: { status: "running", aggregated: "steady" },
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
+      ...disabledLoopDetectionContext,
+    });
+    const params = { action: "poll", sessionId: "sess-off" };
+
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+      await expect(tool.execute(`poll-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+    }
   });
 
   it("does not block known poll loops when output progresses", async () => {
