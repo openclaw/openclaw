@@ -253,7 +253,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       // Pass undefined (not "unknown") to allow proper main session fallback
       const sessionKey = ctx.resolveSlackSystemEventSessionKey({
         channelId: channelId,
-        channelType: "channel",
+        channelType: undefined,
       });
 
       // Build context key - only include defined values to avoid "unknown" noise

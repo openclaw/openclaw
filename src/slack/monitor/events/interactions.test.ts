@@ -87,7 +87,7 @@ function createContext() {
 describe("registerSlackInteractionEvents", () => {
   it("enqueues structured events and updates button rows", async () => {
     enqueueSystemEventMock.mockReset();
-    const { ctx, app, getHandler } = createContext();
+    const { ctx, app, getHandler, resolveSessionKey } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -141,6 +141,10 @@ describe("registerSlackInteractionEvents", () => {
       userId: "U123",
       channelId: "C1",
       messageTs: "100.200",
+    });
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "C1",
+      channelType: undefined,
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
