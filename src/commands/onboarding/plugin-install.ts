@@ -156,6 +156,18 @@ function isBundledCatalogEntry(entry: ChannelPluginCatalogEntry, workspaceDir?: 
   if (workspaceDir && workspaceDir !== process.cwd()) {
     candidates.push(path.resolve(workspaceDir, raw));
   }
+  // Also check relative to the package root (parent of the bundled extensions
+  // dir). This covers the npm global-install case where cwd is NOT the package
+  // root: the localPath "extensions/feishu" must be resolved against the
+  // installed package location, not the user's working directory.
+  const bundledDir = resolveBundledPluginsDir();
+  if (bundledDir) {
+    const packageRoot = path.dirname(bundledDir);
+    const fromPackageRoot = path.resolve(packageRoot, raw);
+    if (!candidates.includes(fromPackageRoot)) {
+      candidates.push(fromPackageRoot);
+    }
+  }
   return candidates.some((candidate) => fs.existsSync(candidate) && isBundledPluginPath(candidate));
 }
 

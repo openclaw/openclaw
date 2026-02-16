@@ -195,6 +195,20 @@ run_onboard_after_npm_install() {
     return 0
   fi
 
+  # When the script is piped (curl … | bash), stdin is the pipe, not the
+  # terminal.  Onboarding needs interactive input, so we reopen stdin from
+  # /dev/tty.  If /dev/tty is unavailable (e.g. non-interactive CI), skip
+  # onboarding gracefully.
+  if [[ ! -t 0 ]]; then
+    if [[ -e /dev/tty ]]; then
+      exec </dev/tty
+    else
+      echo "Non-interactive shell detected; skipping onboarding."
+      echo "Run 'qverisbot onboard' (or 'openclaw onboard') manually later."
+      return 0
+    fi
+  fi
+
   if command_exists qverisbot; then
     qverisbot onboard
     return 0
@@ -231,7 +245,20 @@ install_from_git() {
     pnpm ui:build
     pnpm build
     if [[ "$NO_ONBOARD" != "1" ]]; then
-      pnpm openclaw onboard
+      # Reopen stdin from /dev/tty when piped (curl … | bash) so the
+      # interactive onboarding wizard can read user input.
+      if [[ ! -t 0 ]]; then
+        if [[ -e /dev/tty ]]; then
+          exec </dev/tty
+        else
+          echo "Non-interactive shell detected; skipping onboarding."
+          echo "Run 'pnpm openclaw onboard' manually later."
+          NO_ONBOARD=1
+        fi
+      fi
+      if [[ "$NO_ONBOARD" != "1" ]]; then
+        pnpm openclaw onboard
+      fi
     fi
   )
 }

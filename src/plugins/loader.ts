@@ -321,7 +321,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = "missing config schema";
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -339,7 +338,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -412,7 +410,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -433,7 +430,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = "plugin export missing register/activate";
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -467,7 +463,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,

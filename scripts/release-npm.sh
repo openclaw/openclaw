@@ -3,15 +3,14 @@
 # CI (GitHub Actions) publishes on tag push. Use --local to publish locally instead.
 #
 # Usage:
-#   ./scripts/release-npm.sh [patch|minor|major] [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local]
-#   ./scripts/release-npm.sh 2026.2.17 [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local]
+#   ./scripts/release-npm.sh [patch|minor|major] [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local] [--tag-only]
+#   ./scripts/release-npm.sh 2026.2.17 [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local] [--tag-only]
 #
 # Examples:
 #   ./scripts/release-npm.sh patch               # Bump, tag, push → CI publishes
+#   ./scripts/release-npm.sh 2026.2.17 --tag-only  # Tag + push only (version already committed)
 #   ./scripts/release-npm.sh patch --skip-smoke # Skip install smoke (faster)
-#   ./scripts/release-npm.sh patch --skip-tests # Skip unit tests (use only when failures are known false positives)
 #   ./scripts/release-npm.sh patch --local      # Publish locally (no CI)
-#   ./scripts/release-npm.sh --dry-run          # Bump + validate only, no tag/publish
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,10 +22,15 @@ SKIP_TESTS=0
 DRY_RUN=0
 NO_PUSH=0
 LOCAL_PUBLISH=0
+TAG_ONLY=0
 BUMP="patch"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --tag-only)
+      TAG_ONLY=1
+      shift
+      ;;
     --skip-smoke)
       SKIP_SMOKE=1
       shift
@@ -56,7 +60,7 @@ while [[ $# -gt 0 ]]; do
         BUMP="$1"
       else
         echo "Unknown argument: $1" >&2
-        echo "Usage: $0 [patch|minor|major|VERSION] [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local]" >&2
+        echo "Usage: $0 [patch|minor|major|VERSION] [--skip-smoke] [--skip-tests] [--dry-run] [--no-push] [--local] [--tag-only]" >&2
         exit 2
       fi
       shift
@@ -64,12 +68,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$(git status --porcelain)" ]]; then
+if [[ -n "$(git status --porcelain)" ]] && [[ "$TAG_ONLY" -eq 0 ]]; then
   echo "Working tree is dirty. Commit or stash changes first." >&2
   exit 1
 fi
 
-echo "==> Bump version: $BUMP"
+if [[ "$TAG_ONLY" -eq 1 ]]; then
+  if [[ "$BUMP" == "patch" || "$BUMP" == "minor" || "$BUMP" == "major" ]]; then
+    NEW_VER="$(node -p "require('./package.json').version")"
+  else
+    NEW_VER="$BUMP"
+  fi
+  TAG="v${NEW_VER}"
+  echo "==> Tag-only mode: $TAG (skip bump, build, test, commit)"
+else
+  echo "==> Bump version: $BUMP"
 if [[ "$BUMP" == "patch" || "$BUMP" == "minor" || "$BUMP" == "major" ]]; then
   npm version "$BUMP" --no-git-tag-version
 else
@@ -113,21 +126,33 @@ else
   echo "==> Skip install smoke (--skip-smoke)"
 fi
 
-if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "==> Dry run: skipping git commit, tag, and npm publish"
-  echo "Version in package.json is $NEW_VER. Run without --dry-run to publish."
-  exit 0
-fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "==> Dry run: skipping git commit, tag, and npm publish"
+    echo "Version in package.json is $NEW_VER. Run without --dry-run to publish."
+    exit 0
+  fi
 
-echo "==> Stage and commit"
+  echo "==> Stage and commit"
 git add package.json pnpm-lock.yaml package-lock.json
 for f in extensions/*/package.json extensions/*/CHANGELOG.md; do
   [[ -f "$f" ]] && git add "$f" 2>/dev/null || true
 done
-git commit -m "release: $NEW_VER"
+  if ! git diff --staged --quiet 2>/dev/null; then
+    git commit -m "release: $NEW_VER"
+  else
+    echo "Nothing to commit (working tree clean). Version may already be $NEW_VER."
+  fi
+fi
 
 echo "==> Tag $TAG"
-git tag "$TAG"
+TAG_FORCE_PUSH=0
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+  git tag -f "$TAG"
+  echo "Tag $TAG already existed; moved to current HEAD"
+  TAG_FORCE_PUSH=1
+else
+  git tag "$TAG"
+fi
 
 if [[ "$LOCAL_PUBLISH" -eq 1 ]]; then
   echo "==> Publish to npm (local)"
@@ -137,7 +162,11 @@ fi
 echo "==> Push"
 git push origin main
 if [[ "$NO_PUSH" -eq 0 ]]; then
-  git push origin "$TAG"
+  if [[ "$TAG_FORCE_PUSH" -eq 1 ]]; then
+    git push -f origin "$TAG"
+  else
+    git push origin "$TAG"
+  fi
   if [[ "$LOCAL_PUBLISH" -eq 0 ]]; then
     echo "==> CI will publish $PKG_NAME@$NEW_VER on tag push"
   fi

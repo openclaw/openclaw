@@ -481,4 +481,46 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.origin).toBe("config");
     expect(overridden?.origin).toBe("bundled");
   });
+
+  it("falls back to bundled plugin when higher-precedence plugin fails to load", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "fallback-demo",
+      body: `export default { id: "fallback-demo", register() {} };`,
+      dir: bundledDir,
+      filename: "fallback-demo.js",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const brokenOverride = writePlugin({
+      id: "fallback-demo",
+      body: `throw new Error("broken override");`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [brokenOverride.file] },
+          entries: {
+            "fallback-demo": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const entries = registry.plugins.filter((entry) => entry.id === "fallback-demo");
+    const loaded = entries.find((entry) => entry.status === "loaded");
+    const failed = entries.find((entry) => entry.status === "error");
+    expect(loaded?.origin).toBe("bundled");
+    expect(failed?.origin).toBe("config");
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "error" &&
+          diag.pluginId === "fallback-demo" &&
+          diag.message.includes("failed to load plugin"),
+      ),
+    ).toBe(true);
+  });
 });
