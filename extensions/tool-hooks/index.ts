@@ -1,5 +1,4 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { execFile, spawn } from "node:child_process";
 
 type HookDefinition = {
   tool: string;
@@ -21,31 +20,27 @@ function matchesToolPattern(pattern: string, toolName: string): boolean {
   return new RegExp(`^${escaped}$`).test(toolName);
 }
 
-function runCommand(
+async function runHookCommand(
+  api: OpenClawPluginApi,
   command: string,
   env: Record<string, string>,
   opts: { timeoutMs: number; background: boolean },
-  log: { info: (msg: string) => void; warn: (msg: string) => void },
-): void {
-  const fullEnv = { ...process.env, ...env };
-  const child = spawn("sh", ["-c", command], {
-    env: fullEnv,
-    stdio: "ignore",
-    detached: opts.background,
-    timeout: opts.timeoutMs,
-  });
-
-  if (opts.background) {
-    child.unref();
-  } else {
-    child.on("error", (err) => {
-      log.warn(`tool-hooks command failed: ${command} — ${err.message}`);
-    });
-    child.on("exit", (code) => {
-      if (code && code !== 0) {
-        log.warn(`tool-hooks command exited with code ${code}: ${command}`);
-      }
-    });
+): Promise<void> {
+  try {
+    // Use the runtime exec system which respects OpenClaw's security model.
+    // Commands are run via sh -c since hook commands are shell expressions.
+    const result = await api.runtime.system.runCommandWithTimeout(
+      ["sh", "-c", command],
+      {
+        timeoutMs: opts.timeoutMs,
+        env,
+      },
+    );
+    if (result.code !== 0 && result.stderr) {
+      api.logger.warn(`tool-hooks command exited ${result.code}: ${command} — ${result.stderr.slice(0, 200)}`);
+    }
+  } catch (err) {
+    api.logger.warn(`tool-hooks command failed: ${command} — ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -57,7 +52,7 @@ const toolHooksPlugin = {
   kind: "extension" as const,
   configSchema: {},
   register(api: OpenClawPluginApi) {
-    const config = (api.config ?? {}) as PluginConfig;
+    const config = (api.pluginConfig ?? {}) as PluginConfig;
     const hooks = config.hooks;
 
     if (!hooks || hooks.length === 0) {
@@ -86,15 +81,15 @@ const toolHooksPlugin = {
             env.TOOL_ERROR = event.error;
           }
 
-          runCommand(
-            hook.command,
-            env,
-            {
-              timeoutMs: hook.timeoutMs ?? 10_000,
-              background: hook.background ?? true,
-            },
-            api.logger,
-          );
+          const background = hook.background ?? true;
+          const timeoutMs = hook.timeoutMs ?? 10_000;
+
+          if (background) {
+            // Fire-and-forget: don't await
+            void runHookCommand(api, hook.command, env, { timeoutMs, background: true });
+          } else {
+            void runHookCommand(api, hook.command, env, { timeoutMs, background: false });
+          }
         }
       });
     }
@@ -112,15 +107,14 @@ const toolHooksPlugin = {
             SESSION_KEY: ctx?.sessionKey ?? "",
           };
 
-          runCommand(
-            hook.command,
-            env,
-            {
-              timeoutMs: hook.timeoutMs ?? 10_000,
-              background: hook.background ?? true,
-            },
-            api.logger,
-          );
+          const background = hook.background ?? true;
+          const timeoutMs = hook.timeoutMs ?? 10_000;
+
+          if (background) {
+            void runHookCommand(api, hook.command, env, { timeoutMs, background: true });
+          } else {
+            void runHookCommand(api, hook.command, env, { timeoutMs, background: false });
+          }
         }
       });
     }
