@@ -1,5 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import {
+  getConfigValueAtPath,
+  parseConfigPath,
+  setConfigValueAtPath,
+  unsetConfigValueAtPath,
+} from "./config-paths.js";
+import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import { withTempHome } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -165,5 +174,120 @@ describe("cron webhook schema", () => {
     });
 
     expect(res.success).toBe(false);
+  });
+});
+
+describe("broadcast", () => {
+  it("accepts a broadcast peer map with strategy", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "alfred" }, { id: "baerbel" }],
+      },
+      broadcast: {
+        strategy: "parallel",
+        "120363403215116621@g.us": ["alfred", "baerbel"],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid broadcast strategy", () => {
+    const res = validateConfigObject({
+      broadcast: { strategy: "nope" },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects non-array broadcast entries", () => {
+    const res = validateConfigObject({
+      broadcast: { "120363403215116621@g.us": 123 },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe("model compat config schema", () => {
+  it("accepts full openai-completions compat fields", () => {
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          local: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "qwen3-32b",
+                name: "Qwen3 32B",
+                compat: {
+                  supportsUsageInStreaming: true,
+                  supportsStrictMode: false,
+                  thinkingFormat: "qwen",
+                  requiresToolResultName: true,
+                  requiresAssistantAfterToolResult: false,
+                  requiresThinkingAsText: false,
+                  requiresMistralToolIds: false,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+});
+
+describe("config paths", () => {
+  it("rejects empty and blocked paths", () => {
+    expect(parseConfigPath("")).toEqual({
+      ok: false,
+      error: "Invalid path. Use dot notation (e.g. foo.bar).",
+    });
+    expect(parseConfigPath("__proto__.polluted").ok).toBe(false);
+    expect(parseConfigPath("constructor.polluted").ok).toBe(false);
+    expect(parseConfigPath("prototype.polluted").ok).toBe(false);
+  });
+
+  it("sets, gets, and unsets nested values", () => {
+    const root: Record<string, unknown> = {};
+    const parsed = parseConfigPath("foo.bar");
+    if (!parsed.ok || !parsed.path) {
+      throw new Error("path parse failed");
+    }
+    setConfigValueAtPath(root, parsed.path, 123);
+    expect(getConfigValueAtPath(root, parsed.path)).toBe(123);
+    expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
+    expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
+  });
+});
+
+describe("config strict validation", () => {
+  it("rejects unknown fields", async () => {
+    const res = validateConfigObject({
+      agents: { list: [{ id: "pi" }] },
+      customUnknownField: { nested: "value" },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("flags legacy config entries without auto-migrating", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          agents: { list: [{ id: "pi" }] },
+          routing: { allowFrom: ["+15555550123"] },
+        }),
+        "utf-8",
+      );
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues).not.toHaveLength(0);
+    });
   });
 });
