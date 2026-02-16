@@ -404,4 +404,16 @@ describe("cron cli", () => {
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.bestEffort).toBe(false);
   });
+
+  it("uses 90s default timeout for cron commands", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(["cron", "status"], { from: "user" });
+
+    const statusCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.status");
+    const opts = statusCall?.[1] as { timeout?: string };
+    expect(opts?.timeout).toBe("90000");
+  });
 });

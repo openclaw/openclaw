@@ -22,6 +22,7 @@ export function registerCronSimpleCommands(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 
   addGatewayClientOptions(
@@ -42,6 +43,7 @@ export function registerCronSimpleCommands(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 
   addGatewayClientOptions(
@@ -62,6 +64,7 @@ export function registerCronSimpleCommands(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 
   addGatewayClientOptions(
@@ -85,6 +88,7 @@ export function registerCronSimpleCommands(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 
   addGatewayClientOptions(
@@ -105,5 +109,6 @@ export function registerCronSimpleCommands(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 }
