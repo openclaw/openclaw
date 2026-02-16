@@ -506,7 +506,7 @@ describe("telegramMessageActions", () => {
 
     expect(handleTelegramAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "sendPoll",
+        action: "poll",
         to: "-100123",
         question: "Ready?",
         options: ["Yes", "No", "Maybe"],
