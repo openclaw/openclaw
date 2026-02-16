@@ -3,11 +3,7 @@ import crypto from "node:crypto";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
   type GatewayMessageChannel,
@@ -16,13 +12,13 @@ import {
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
+  createSessionVisibilityGuard,
   createAgentToAgentPolicy,
   extractAssistantText,
-  listSpawnedSessionKeys,
+  isRequesterSpawnedSessionVisible,
   resolveEffectiveSessionToolsVisibility,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
   resolveSessionReference,
+  resolveSandboxedSessionToolContext,
   stripToolMessages,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
@@ -51,21 +47,12 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
-      const { mainKey, alias } = resolveMainSessionAlias(cfg);
-      const visibility = cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
-      const requesterKeyInput =
-        typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
-          ? opts.agentSessionKey
-          : "main";
-      const requesterInternalKey = resolveInternalSessionKey({
-        key: requesterKeyInput,
-        alias,
-        mainKey,
-      });
-      const restrictToSpawned =
-        opts?.sandboxed === true &&
-        visibility === "spawned" &&
-        !isSubagentSessionKey(requesterInternalKey);
+      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+        resolveSandboxedSessionToolContext({
+          cfg,
+          agentSessionKey: opts?.agentSessionKey,
+          sandboxed: opts?.sandboxed,
+        });
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
@@ -84,30 +71,14 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      const listSessions = async (listParams: Record<string, unknown>) => {
-        const result = await callGateway<{ sessions: Array<{ key: string }> }>({
-          method: "sessions.list",
-          params: listParams,
-          timeoutMs: 10_000,
-        });
-        return Array.isArray(result?.sessions) ? result.sessions : [];
-      };
-
       let sessionKey = sessionKeyParam;
       if (!sessionKey && labelParam) {
-        const requesterAgentId = requesterInternalKey
-          ? resolveAgentIdFromSessionKey(requesterInternalKey)
-          : undefined;
+        const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
 
-        if (
-          restrictToSpawned &&
-          requestedAgentId &&
-          requesterAgentId &&
-          requestedAgentId !== requesterAgentId
-        ) {
+        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
@@ -136,7 +107,7 @@ export function createSessionsSendTool(opts?: {
         const resolveParams: Record<string, unknown> = {
           label: labelParam,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          ...(restrictToSpawned ? { spawnedBy: requesterInternalKey } : {}),
+          ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
         };
         let resolvedKey = "";
         try {
@@ -190,7 +161,7 @@ export function createSessionsSendTool(opts?: {
         sessionKey,
         alias,
         mainKey,
-        requesterInternalKey,
+        requesterInternalKey: effectiveRequesterKey,
         restrictToSpawned,
       });
       if (!resolvedSession.ok) {
@@ -205,14 +176,11 @@ export function createSessionsSendTool(opts?: {
       const displayKey = resolvedSession.displayKey;
       const resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
 
-      if (restrictToSpawned && !resolvedViaSessionId && resolvedKey !== requesterInternalKey) {
-        const sessions = await listSessions({
-          includeGlobal: false,
-          includeUnknown: false,
-          limit: 500,
-          spawnedBy: requesterInternalKey,
+      if (restrictToSpawned && !resolvedViaSessionId && resolvedKey !== effectiveRequesterKey) {
+        const ok = await isRequesterSpawnedSessionVisible({
+          requesterSessionKey: effectiveRequesterKey,
+          targetSessionKey: resolvedKey,
         });
-        const ok = sessions.some((entry) => entry?.key === resolvedKey);
         if (!ok) {
           return jsonResult({
             runId: crypto.randomUUID(),
@@ -230,60 +198,20 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
-      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
-      const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
-      const isCrossAgent = requesterAgentId !== targetAgentId;
-      if (isCrossAgent && sessionVisibility !== "all") {
+      const visibilityGuard = await createSessionVisibilityGuard({
+        action: "send",
+        requesterSessionKey: effectiveRequesterKey,
+        visibility: sessionVisibility,
+        a2aPolicy,
+      });
+      const access = visibilityGuard.check(resolvedKey);
+      if (!access.allowed) {
         return jsonResult({
           runId: crypto.randomUUID(),
-          status: "forbidden",
-          error:
-            "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+          status: access.status,
+          error: access.error,
           sessionKey: displayKey,
         });
-      }
-      if (isCrossAgent) {
-        if (!a2aPolicy.enabled) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "forbidden",
-            error:
-              "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-            sessionKey: displayKey,
-          });
-        }
-        if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "forbidden",
-            error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
-            sessionKey: displayKey,
-          });
-        }
-      } else {
-        if (sessionVisibility === "self" && resolvedKey !== requesterInternalKey) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "forbidden",
-            error:
-              "Session send visibility is restricted to the current session (tools.sessions.visibility=self).",
-            sessionKey: displayKey,
-          });
-        }
-        if (sessionVisibility === "tree" && resolvedKey !== requesterInternalKey) {
-          const spawned = await listSpawnedSessionKeys({
-            requesterSessionKey: requesterInternalKey,
-          });
-          if (!spawned.has(resolvedKey)) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error:
-                "Session send visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
-              sessionKey: displayKey,
-            });
-          }
-        }
       }
 
       const agentMessageContext = buildAgentToAgentMessageContext({

@@ -88,7 +88,7 @@ vi.mock("../auto-reply/skill-commands.js", () => ({
 const systemEventsHoisted = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
 }));
-export const enqueueSystemEventSpy = systemEventsHoisted.enqueueSystemEventSpy;
+export const enqueueSystemEventSpy: AnyMock = systemEventsHoisted.enqueueSystemEventSpy;
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventSpy,

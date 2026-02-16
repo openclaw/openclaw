@@ -195,3 +195,23 @@
 - Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
 - Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
 - Kill the tmux session after publish.
+
+## Plugin Release Fast Path (no core `openclaw` publish)
+
+- Release only already-on-npm plugins. Source list is in `docs/reference/RELEASING.md` under "Current npm plugin list".
+- Run all CLI `op` calls and `npm publish` inside tmux to avoid hangs/interruption:
+  - `tmux new -d -s release-plugins-$(date +%Y%m%d-%H%M%S)`
+  - `eval "$(op signin --account my.1password.com)"`
+- 1Password helpers:
+  - password used by `npm login`:
+    `op item get Npmjs --format=json | jq -r '.fields[] | select(.id=="password").value'`
+  - OTP:
+    `op read 'op://Private/Npmjs/one-time password?attribute=otp'`
+- Fast publish loop (local helper script in `/tmp` is fine; keep repo clean):
+  - compare local plugin `version` to `npm view <name> version`
+  - only run `npm publish --access public --otp="<otp>"` when versions differ
+  - skip if package is missing on npm or version already matches.
+- Keep `openclaw` untouched: never run publish from repo root unless explicitly requested.
+- Post-check for each release:
+  - per-plugin: `npm view @openclaw/<name> version --userconfig "$(mktemp)"` should be `2026.2.15`
+  - core guard: `npm view openclaw version --userconfig "$(mktemp)"` should stay at previous version unless explicitly requested.

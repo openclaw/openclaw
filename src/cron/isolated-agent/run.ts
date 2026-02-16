@@ -6,6 +6,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentModelFallbacksOverride,
+  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
@@ -529,9 +530,11 @@ export async function runCronIsolatedAgentTurn(params: {
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const needsSkillsSnapshot =
       !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
+    const skillFilter = resolveAgentSkillsFilter(cfgWithAgentDefaults, agentId);
     if (needsSkillsSnapshot) {
       skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
+        skillFilter,
         eligibility: { remote: getRemoteSkillEligibility() },
         snapshotVersion: skillsSnapshotVersion,
       });
