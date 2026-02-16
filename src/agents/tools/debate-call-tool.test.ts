@@ -59,11 +59,16 @@ describe("debate_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: JSON.stringify({
-            output: { proposal: "Test proposal" },
-            confidence: 0.6,
-            assumptions: ["Assumption 1"],
-          }),
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                output: { proposal: "Test proposal" },
+                confidence: 0.6,
+                assumptions: ["Assumption 1"],
+              }),
+            },
+          ],
         },
       ],
     }); // chat.history for proposer
@@ -75,11 +80,16 @@ describe("debate_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: JSON.stringify({
-            flaws: ["Flaw 1"],
-            alternatives: ["Alternative 1"],
-            confidence: 0.8,
-          }),
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                flaws: ["Flaw 1"],
+                alternatives: ["Alternative 1"],
+                confidence: 0.8,
+              }),
+            },
+          ],
         },
       ],
     }); // chat.history for critic
@@ -91,11 +101,16 @@ describe("debate_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: JSON.stringify({
-            output: { proposal: "Refined proposal" },
-            confidence: 0.85,
-            assumptions: ["Assumption 2"],
-          }),
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                output: { proposal: "Refined proposal" },
+                confidence: 0.85,
+                assumptions: ["Assumption 2"],
+              }),
+            },
+          ],
         },
       ],
     }); // chat.history for refinement
@@ -107,11 +122,16 @@ describe("debate_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: JSON.stringify({
-            output: { conclusion: "Final conclusion" },
-            confidence: 0.9,
-            assumptions: [],
-          }),
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                output: { conclusion: "Final conclusion" },
+                confidence: 0.9,
+                assumptions: [],
+              }),
+            },
+          ],
         },
       ],
     }); // chat.history for resolver
@@ -147,11 +167,16 @@ describe("debate_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: JSON.stringify({
-            output: { proposal: "High confidence proposal" },
-            confidence: 0.98, // Exceeds minConfidence of 0.95
-            assumptions: [],
-          }),
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                output: { proposal: "High confidence proposal" },
+                confidence: 0.98, // Exceeds minConfidence of 0.95
+                assumptions: [],
+              }),
+            },
+          ],
         },
       ],
     });
@@ -163,11 +188,16 @@ describe("debate_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: JSON.stringify({
-            output: { conclusion: "Early resolved" },
-            confidence: 0.99,
-            assumptions: [],
-          }),
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                output: { conclusion: "Early resolved" },
+                confidence: 0.99,
+                assumptions: [],
+              }),
+            },
+          ],
         },
       ],
     });

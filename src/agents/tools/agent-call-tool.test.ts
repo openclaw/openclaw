@@ -45,7 +45,12 @@ describe("agent_call tool", () => {
     callGatewayMock.mockResolvedValueOnce({ runId: "run-1" });
     callGatewayMock.mockResolvedValueOnce({ status: "ok" });
     callGatewayMock.mockResolvedValueOnce({
-      messages: [{ role: "assistant", content: JSON.stringify({ output: "ok", confidence: 0.8 }) }],
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: JSON.stringify({ output: "ok", confidence: 0.8 }) }],
+        },
+      ],
     });
 
     const tool = createAgentCallTool({
@@ -61,22 +66,8 @@ describe("agent_call tool", () => {
     expect(result.details).toMatchObject({ status: "completed" });
   });
 
-  it("allows self-calls regardless of policy", async () => {
-    // Mock agent invocation
-    callGatewayMock.mockResolvedValueOnce({ runId: "run-1" });
-    callGatewayMock.mockResolvedValueOnce({ status: "ok" }); // agent.wait
-    callGatewayMock.mockResolvedValueOnce({
-      messages: [
-        {
-          role: "assistant",
-          content: JSON.stringify({
-            output: { result: "self-call worked" },
-            confidence: 0.9,
-          }),
-        },
-      ],
-    }); // chat.history
-
+  it("blocks self-calls to prevent infinite loops", async () => {
+    // Self-calls are blocked to prevent infinite loops
     const tool = createAgentCallTool({
       agentSessionKey: "agent:test-agent:main",
     });
@@ -87,11 +78,13 @@ describe("agent_call tool", () => {
       input: {},
     });
 
-    expect(callGatewayMock).toHaveBeenCalled();
+    // Self-call should be blocked
     expect(result.details).toMatchObject({
-      status: "completed",
-      confidence: 0.9,
+      status: "error",
+      error: expect.stringContaining("Self-call not allowed"),
     });
+    // Gateway should never be called
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("calls agent with structured input and returns parsed output", async () => {
@@ -102,16 +95,21 @@ describe("agent_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: JSON.stringify({
-            output: {
-              root_cause: "pump_impeller_wear",
-              confidence_score: 0.87,
-              evidence: ["vibration_data", "maintenance_history"],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                output: {
+                  root_cause: "pump_impeller_wear",
+                  confidence_score: 0.87,
+                  evidence: ["vibration_data", "maintenance_history"],
+                },
+                confidence: 0.87,
+                assumptions: ["Sensor data is accurate", "Maintenance logs complete"],
+                caveats: ["Limited runtime data available"],
+              }),
             },
-            confidence: 0.87,
-            assumptions: ["Sensor data is accurate", "Maintenance logs complete"],
-            caveats: ["Limited runtime data available"],
-          }),
+          ],
         },
       ],
     }); // chat.history
@@ -214,7 +212,12 @@ describe("agent_call tool", () => {
       messages: [
         {
           role: "assistant",
-          content: "The analysis suggests motor bearing failure as the most likely cause.",
+          content: [
+            {
+              type: "text",
+              text: "The analysis suggests motor bearing failure as the most likely cause.",
+            },
+          ],
         },
       ],
     });
