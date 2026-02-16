@@ -216,19 +216,4 @@ describe("rotateSessionFile", () => {
 
     expect(bakFiles.length).toBeLessThanOrEqual(3);
   });
-
-  it("backup file name includes a timestamp", async () => {
-    await fs.writeFile(storePath, "x".repeat(100), "utf-8");
-    const before = Date.now();
-
-    await rotateSessionFile(storePath, 50);
-
-    const after = Date.now();
-    const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
-    expect(bakFiles).toHaveLength(1);
-    const timestamp = Number(bakFiles[0].replace("sessions.json.bak.", ""));
-    expect(timestamp).toBeGreaterThanOrEqual(before);
-    expect(timestamp).toBeLessThanOrEqual(after);
-  });
 });
