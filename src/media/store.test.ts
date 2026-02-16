@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -152,6 +152,29 @@ describe("media store", () => {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       );
       expect(path.extname(saved.path)).toBe(".xlsx");
+    });
+  });
+
+  it("prefers header mime extension when sniffed mime lacks mapping", async () => {
+    await withTempStore(async (_store, home) => {
+      vi.resetModules();
+      vi.doMock("./mime.js", async () => {
+        const actual = await vi.importActual<typeof import("./mime.js")>("./mime.js");
+        return {
+          ...actual,
+          detectMime: vi.fn(async () => "audio/opus"),
+        };
+      });
+
+      try {
+        const storeWithMock = await import("./store.js");
+        const buf = Buffer.from("fake-audio");
+        const saved = await storeWithMock.saveMediaBuffer(buf, "audio/ogg; codecs=opus");
+        expect(path.extname(saved.path)).toBe(".ogg");
+        expect(saved.path.startsWith(home)).toBe(true);
+      } finally {
+        vi.doUnmock("./mime.js");
+      }
     });
   });
 
