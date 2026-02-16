@@ -51,13 +51,13 @@ export class HeimdallRateLimiter {
     }
   }
 
-  check(senderId: string | number, senderTier: SenderTier): RateLimitResult {
+  check(senderId: string | number, senderTier: SenderTier, scope?: string): RateLimitResult {
     // OWNER is never rate-limited
     if (senderTier === SenderTier.OWNER) {
       return { allowed: true, remaining: Infinity, resetMs: 0 };
     }
 
-    const key = String(senderId);
+    const key = scope ? `${scope}:${senderId}` : String(senderId);
     const now = Date.now();
     const cutoff = now - this.windowMs;
     const limit = senderTier === SenderTier.GUEST ? this.guestMaxMessages : this.maxMessages;

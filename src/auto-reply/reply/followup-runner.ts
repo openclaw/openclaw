@@ -285,7 +285,15 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(finalPayloads, queued);
+      // Heimdall FILTER: redact secrets from followup reply payloads.
+      const heimdallCfg = queued.run.config?.agents?.defaults?.heimdall;
+      let filteredPayloads = finalPayloads;
+      if (heimdallCfg?.enabled && heimdallCfg.outputFilter?.enabled !== false) {
+        const { applyOutputFilter } = await import("../../security/heimdall/apply-filter.js");
+        filteredPayloads = applyOutputFilter(finalPayloads, heimdallCfg);
+      }
+
+      await sendFollowupPayloads(filteredPayloads, queued);
     } finally {
       typing.markRunComplete();
     }
