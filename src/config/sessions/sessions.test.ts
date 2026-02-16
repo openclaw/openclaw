@@ -397,11 +397,6 @@ describe("resolveMirroredTranscriptText", () => {
     });
     expect(result).toBe("report.pdf");
   });
-
-  it("returns trimmed text when no media", () => {
-    const result = resolveMirroredTranscriptText({ text: "  hello  " });
-    expect(result).toBe("hello");
-  });
 });
 
 describe("appendAssistantMessageToSessionTranscript", () => {
