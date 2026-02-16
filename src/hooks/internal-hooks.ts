@@ -7,6 +7,9 @@
 
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("hooks/internal");
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
 
@@ -134,9 +137,8 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     try {
       await handler(event);
     } catch (err) {
-      console.error(
-        `Hook error [${event.type}:${event.action}]:`,
-        err instanceof Error ? err.message : String(err),
+      log.error(
+        `Hook error [${event.type}:${event.action}]: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
