@@ -16,6 +16,15 @@ import { ensureLoaded, persist } from "./store.js";
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
+ * Minimum gap between consecutive fires of the same cron job.  This is a
+ * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
+ * a value within the same second as the just-completed run.  The guard
+ * is intentionally generous (2 s) so it never masks a legitimate schedule
+ * but always breaks an infinite re-trigger cycle.  (See #17821)
+ */
+const MIN_REFIRE_GAP_MS = 2_000;
+
+/**
  * Maximum wall-clock time for a single job execution. Acts as a safety net
  * on top of the per-provider / per-agent timeouts to prevent one stuck job
  * from wedging the entire cron lane.
@@ -107,7 +116,18 @@ function applyJobResult(
         "cron: applying error backoff",
       );
     } else if (job.enabled) {
-      job.state.nextRunAtMs = computeJobNextRunAtMs(job, result.endedAt);
+      const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+      if (job.schedule.kind === "cron") {
+        // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
+        // after the current run ended.  Prevents spin-loops when the
+        // schedule computation lands in the same second due to
+        // timezone/croner edge cases (see #17821).
+        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+        job.state.nextRunAtMs =
+          naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
+      } else {
+        job.state.nextRunAtMs = naturalNext;
+      }
     } else {
       job.state.nextRunAtMs = undefined;
     }
