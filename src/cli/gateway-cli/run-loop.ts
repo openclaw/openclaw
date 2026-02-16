@@ -74,6 +74,10 @@ export async function runGatewayLoop(params: {
           }
         }
 
+        if (isRestart) {
+          setGatewayRestarting(true);
+        }
+
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
@@ -129,7 +133,6 @@ export async function runGatewayLoop(params: {
       );
       return;
     }
-    setGatewayRestarting(true);
     markGatewaySigusr1RestartHandled();
     request("restart", "SIGUSR1");
   };
