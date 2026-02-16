@@ -1,93 +1,78 @@
-# Helios — Documentation TOC
-## Source Files (Core)
-- src/gateway/ — OpenClaw gateway server implementation
-- src/agents/ — Agent management and spawning logic  
-- src/memory/ — Memory system integration (Cortex, working memory)
-- src/tools/ — MCP tool implementations (browser, nodes, synapse, etc.)
-- src/channels/ — Communication channel implementations
-- src/models/ — LLM model integration and failover
-- src/sessions/ — Agent session management
-- src/skills/ — Skill system for extensibility
+# helios.ai.toc — OpenClaw/Helios
 
-## Extensions (Helios-Specific)
-- extensions/synapse/ — Inter-agent messaging system
-- extensions/cortex/ — Long-term memory and knowledge management
-- extensions/atoms/ — Causal reasoning and atomic knowledge
-- extensions/working-memory/ — Episodic memory management  
-- extensions/temporal/ — Time-based reasoning and patterns
-- extensions/browser/ — Enhanced browser automation
-- extensions/canvas/ — Node canvas rendering
-- extensions/nodes/ — Multi-device control and monitoring
-- extensions/lbf/ — Enterprise task board integration
-- extensions/message/ — Advanced messaging capabilities
+## What This Is
+OpenClaw/Helios is an advanced AI agent platform combining OpenClaw's core gateway infrastructure with Helios extensions for autonomous reasoning, memory management, and multi-modal interaction. It supports multi-agent orchestration, long-term memory with semantic search, browser automation, device control, and inter-agent messaging.
 
-## Configuration
-- .env — Environment variables and API keys
-- package.json — Node.js dependencies and scripts
-- tsconfig.json — TypeScript compilation settings
-- docker-compose.yml — Container orchestration
-- pnpm-workspace.yaml — Monorepo workspace configuration
+## Quick Start
+```bash
+# Install dependencies
+pnpm install
 
-## Scripts
-- scripts/build.mjs — Build system for extensions and core
-- scripts/test.mjs — Test runner for unit and integration tests
-- scripts/deploy.mjs — Deployment automation
-- openclaw.mjs — Main entry point and CLI
+# Set up environment
+cp .env.example .env
+# Edit .env with API keys
 
-## UI Components
-- ui/gateway/ — Web-based gateway management interface
-- ui/chat/ — Chat interface components
-- ui/canvas/ — Canvas rendering UI
-- ui/settings/ — Configuration management UI
+# Start gateway
+openclaw gateway start
 
-## Documentation
-- README.md — Main project overview and setup
-- CHANGELOG.md — Version history and breaking changes
-- CONTRIBUTING.md — Development guidelines
-- SECURITY.md — Security policies and reporting
-- AGENTS.md — Agent configuration and usage guide
-- docs/ — Comprehensive documentation directory
-  - docs/concepts/ — Core concept explanations
-  - docs/start/ — Getting started guides
-  - docs/install/ — Installation instructions
-  - docs/channels/ — Channel setup guides
-  - docs/skills/ — Skill development
-  - docs/api/ — API documentation
+# In another terminal, start chat
+openclaw chat
+```
 
-## Test Suite
-- test/unit/ — Unit tests for core functionality
-- test/integration/ — Integration tests for system components
-- test/e2e/ — End-to-end testing
-- vitest.config.ts — Test framework configuration
+## Directory Layout
+```
+├── src/                  # Core OpenClaw source code (2,521 TypeScript files)
+│   ├── gateway/          # Gateway server implementation
+│   ├── agents/           # Agent management and spawning
+│   ├── memory/           # Memory system (Cortex integration)
+│   ├── channels/         # Communication channels (Signal, WhatsApp, etc.)
+│   ├── browser/          # Browser automation (Chrome + Playwright)
+│   ├── tts/              # Text-to-speech providers
+│   ├── cli/              # Command-line interface
+│   └── utils/            # Shared utilities
+├── extensions/           # Helios-specific extensions (35+ modules)
+│   ├── synapse/          # Inter-agent messaging
+│   ├── cortex/           # Long-term memory and knowledge
+│   ├── atoms/            # Causal reasoning atoms
+│   ├── working-memory/   # Episodic memory management
+│   └── browser/          # Enhanced browser automation
+├── skills/               # Skill system for extensibility
+├── ui/                   # Web-based interfaces
+├── test/                 # Test suite (unit, integration, e2e)
+├── docs/                 # Documentation
+└── scripts/              # Build and deployment scripts
+```
 
-## Skills
-- skills/web-search/ — Web search capabilities
-- skills/code-review/ — Code analysis and review
-- skills/data-analysis/ — Data processing and visualization
-- skills/content-creation/ — Content generation tools
-- skills/automation/ — Task automation workflows
+## Entry Points
+- **Main**: `openclaw.mjs` — CLI entry point and gateway launcher
+- **Gateway**: `src/gateway/server.ts` — Core gateway server
+- **Agent**: `src/agents/agent-runner.ts` — Agent spawning and management
+- **CLI**: `src/cli/run-main.js` — Command-line interface handler
+- **Tests**: `pnpm test` — Run test suite via vitest
 
-## Assets
-- assets/icons/ — UI icons and imagery
-- assets/audio/ — Audio assets for TTS/voice
-- assets/templates/ — Template files
+## Key Concepts
+- **Gateway**: Central server coordinating all agent interactions
+- **Agents**: Independent AI instances with unique sessions and capabilities
+- **Extensions**: Modular enhancements providing specialized functionality
+- **Memory**: Persistent storage with embeddings for semantic search
+- **Channels**: Communication interfaces (Signal, WhatsApp, Discord, etc.)
+- **Tools**: MCP-compatible tool implementations for external interactions
+- **Sessions**: Isolated conversation contexts with state management
+- **Nodes**: Paired devices for distributed operation
 
-## Packages (Monorepo)
-- packages/core/ — Core OpenClaw functionality
-- packages/gateway/ — Gateway server package
-- packages/tools/ — Tool implementations
-- packages/channels/ — Channel packages
-- packages/ui/ — UI component packages
+## Dependencies
+- **Runtime**: Node.js 22+, TypeScript 5.5+, pnpm workspace
+- **Database**: SQLite with WAL mode, sqlite-vec extension
+- **AI Models**: Anthropic Claude, OpenAI GPT, Google Gemini
+- **Browser**: Chrome with custom extension, Playwright
+- **Messaging**: signal-cli, whatsapp-web.js
+- **Dev**: Vitest, ESLint, Prettier, Oxlint
 
-## Vendor Dependencies
-- vendor/signal/ — Signal messaging integration
-- vendor/browser/ — Browser automation libraries
-- node_modules/ — NPM package dependencies
-
-## Development Tools
-- .github/ — GitHub workflows and templates
-- .pre-commit-config.yaml — Pre-commit hooks
-- .secrets.baseline — Security baseline
-- .detect-secrets.cfg — Secret detection configuration
-- patches/ — NPM package patches
-- git-hooks/ — Git hook scripts
+## Status
+- **Version**: 2026.1.30 (OpenClaw 0.40+ with Helios Extensions)
+- **Files**: 2,521 TypeScript files, 349,533 total lines of code
+- **Test Coverage**: ~900 test files (gaps identified in 1,123 source files)
+- **Extensions**: 35+ active Helios extensions
+- **CI**: GitHub Actions with pre-commit hooks
+- **Memory**: Unified brain.db with embeddings and FTS5 search
+- **Architecture**: Monorepo with pnpm workspaces

@@ -1,47 +1,118 @@
-# Helios — AI Version Register
-CURRENT VERSION: OpenClaw 0.40+ with Helios Extensions
+# helios.ai.register — OpenClaw/Helios
+# Version forensics + external interfaces. Forensic trail for debugging 6 months from now.
+
+## Current Version
+# VERSION: 2026.1.30 (OpenClaw 0.40+ with Helios Extensions)
+# LAST UPDATED: 2026-02-15
+
 ## Active Features
-FEATURE: Helios Extensions Layer (v0.40+)
-  SIGNATURE: extensions/ directory with 35+ custom extensions, HELIOS_VISION.md present
-  FAILURE MODE: Extension loading failures, Node.js dependency conflicts
-  ROLLBACK: Disable extensions in gateway config, use vanilla OpenClaw
-
-FEATURE: SYNAPSE Inter-Agent Messaging (v0.39+)
-  SIGNATURE: SYNAPSE_UPGRADE.md present, agent-to-agent messaging tools
-  FAILURE MODE: Message delivery failures, thread ID conflicts
-  ROLLBACK: Remove synapse tools from MCP server configuration
-
-FEATURE: Cortex Memory Integration (v0.38+)
-  SIGNATURE: Cortex STM tools, memory categorization, embeddings support
-  FAILURE MODE: Memory corruption, embedding service unavailable
-  ROLLBACK: Disable cortex tools, use session-only memory
-
-FEATURE: Canvas Rendering (v0.37+)
-  SIGNATURE: Canvas tool available, node canvas rendering capability
-  FAILURE MODE: Rendering timeouts, node connection failures
-  ROLLBACK: Disable canvas tool, use text-only interaction
-
-FEATURE: Multi-Node Support (v0.36+)
-  SIGNATURE: nodes/ tool for paired device control, camera/screen capture
-  FAILURE MODE: Node pairing failures, gateway token issues
-  ROLLBACK: Remove nodes from tool configuration
+# For each feature, document how to FIND IT in logs and how to DISABLE IT.
+#
+# FEATURE: Helios Extensions Layer (v0.40+)
+#   DESCRIPTION: 35+ custom extensions for enhanced AI capabilities
+#   SIGNATURE: extensions/ directory present | GREP: ls extensions/ | wc -l
+#   FAILURE MODE: Extension loading failures, dependency conflicts | GREP: grep "extension.*error" *.log
+#   ROLLBACK: Remove extensions from gateway config | SIDE EFFECTS: Loss of advanced features
+#   INTERACTS WITH: Gateway server, MCP tools, agent spawning
+#
+# FEATURE: SYNAPSE Inter-Agent Messaging (v0.39+)
+#   DESCRIPTION: Agent-to-agent communication system
+#   SIGNATURE: SYNAPSE message tools available | GREP: grep "synapse.*message" *.log
+#   FAILURE MODE: Message delivery failures, thread conflicts | GREP: grep "synapse.*failed" *.log
+#   ROLLBACK: Remove synapse tools from MCP config | SIDE EFFECTS: No sub-agent coordination
+#   INTERACTS WITH: Agent spawning, session management, working memory
+#
+# FEATURE: Cortex Memory Integration (v0.38+)
+#   DESCRIPTION: Long-term memory with embeddings and semantic search
+#   SIGNATURE: brain.db database present | GREP: ls ~/.openclaw/workspace/memory/brain.db
+#   FAILURE MODE: Memory corruption, embedding service unavailable | GREP: grep "cortex.*error" *.log
+#   ROLLBACK: Disable cortex tools, remove brain.db | SIDE EFFECTS: Session-only memory
+#   INTERACTS WITH: Memory manager, embedding providers, search system
+#
+# FEATURE: Canvas Rendering (v0.37+)
+#   DESCRIPTION: Visual UI rendering on paired nodes
+#   SIGNATURE: Canvas tool available, snapshots created | GREP: ls canvas_snapshots/
+#   FAILURE MODE: Rendering timeouts, node disconnections | GREP: grep "canvas.*timeout" *.log
+#   ROLLBACK: Disable canvas tool in MCP config | SIDE EFFECTS: Text-only interaction
+#   INTERACTS WITH: Node pairing system, WebSocket connections
+#
+# FEATURE: Multi-Node Support (v0.36+)
+#   DESCRIPTION: Control paired devices (camera, screen, notifications)
+#   SIGNATURE: Node pairing active | GREP: grep "node.*paired" *.log
+#   FAILURE MODE: Pairing failures, gateway token issues | GREP: grep "node.*error" *.log
+#   ROLLBACK: Remove nodes tool from MCP config | SIDE EFFECTS: Single-device operation
+#   INTERACTS WITH: Gateway authentication, WebSocket protocol
+#
+# FEATURE: Browser Automation (v0.35+)
+#   DESCRIPTION: Chrome extension + Playwright browser control
+#   SIGNATURE: Browser sessions active | GREP: grep "browser.*session" *.log
+#   FAILURE MODE: Chrome extension not attached, Playwright crashes | GREP: grep "browser.*error" *.log
+#   ROLLBACK: Disable browser tool | SIDE EFFECTS: No web automation
+#   INTERACTS WITH: Chrome extension relay, gateway WebSocket
 
 ## Known Bugs
-BUG: Extension loading order dependencies
-  SYMPTOMS: Some extensions fail to load due to dependency resolution
-  WORKAROUND: Manual extension ordering in package.json
-
-BUG: Memory tool performance
-  SYMPTOMS: Slow cortex operations with large knowledge bases
-  WORKAROUND: Use working memory for active context only
-
-BUG: WebSocket connection stability
-  SYMPTOMS: Intermittent disconnections in browser tool
-  WORKAROUND: Increase connection timeout, enable auto-reconnect
+# BUG: Memory manager excessive complexity
+#   SUSPECTED FEATURE: Cortex Memory Integration
+#   EVIDENCE: MemoryIndexManager class 2396 lines, multiple responsibilities
+#   GREP: wc -l src/memory/manager.ts
+#
+# BUG: TTS service monolith
+#   SUSPECTED FEATURE: TTS provider integration
+#   EVIDENCE: Single file handling 4 providers, 1579 lines
+#   GREP: wc -l src/tts/tts.ts
+#
+# BUG: Test coverage gaps
+#   SUSPECTED FEATURE: All features
+#   EVIDENCE: 1123 files without corresponding test files
+#   GREP: comm -23 <(find src -name "*.ts" | grep -v test | sort) <(find src -name "*.test.ts" | sed 's/.test//' | sort) | wc -l
 
 ## Bug Fix History
-2026-02-14: Fixed H0 phase implementation, trimmed workspace files
-2026-02-13: Enhanced SYNAPSE integration, improved message threading  
-2026-02-12: Added atomic knowledge tools, causal reasoning capabilities
-2026-02-11: Integrated brain-db unified memory system
-2026-02-10: Enhanced browser control with Chrome extension support
+# VERSION: 2026-02-15 → 2026-02-16 (PENDING)
+#   BUG FIXED: Codebase audit completed, refactoring opportunities identified
+#   ROOT CAUSE: Technical debt accumulation, monolithic file growth
+#   FIX: Comprehensive refactoring plan created
+#   VERIFICATION: REFACTORING.md created with prioritized action items
+#   REGRESSION RISKS: Breaking changes during refactoring
+
+## Environment Variables
+# [required] ANTHROPIC_API_KEY — Anthropic AI model access (sk-ant-...)
+# [required] OPENAI_API_KEY — OpenAI model access (sk-...)
+# [optional] GEMINI_API_KEY — Google Gemini embedding access
+# [optional] ELEVENLABS_API_KEY — ElevenLabs TTS access
+# [optional] NODE_OPTIONS — Node.js runtime options (--disable-warning=ExperimentalWarning)
+
+## API Endpoints
+# [endpoint] GET /api/v1/status — System health check
+# [endpoint] POST /api/v1/chat — Chat completion endpoint
+# [endpoint] GET /api/v1/sessions — List active sessions
+# [endpoint] POST /api/v1/agents/spawn — Spawn sub-agent
+# [endpoint] WebSocket /ws — Real-time gateway communication
+
+## CLI Commands
+# [cmd] openclaw gateway start — Start gateway server
+# [cmd] openclaw gateway status — Check gateway status
+# [cmd] openclaw agents spawn — Create sub-agent
+# [cmd] openclaw memory search — Search memory system
+
+## Ports / Network
+# [port] 3000 — Gateway HTTP server (configurable)
+# [port] 8080 — Canvas host server
+# [port] 8022 — Node SSH access (Android devices)
+
+## Secrets / Auth
+# [secret] ANTHROPIC_API_KEY — From Anthropic console
+# [secret] GATEWAY_TOKEN — Internal authentication token
+# [secret] NODE_PAIRING_TOKEN — Device pairing authentication
+
+## Integration Points
+# [integrates] Signal — Messaging via signal-cli
+# [integrates] WhatsApp — Messaging via whatsapp-web.js
+# [integrates] Chrome — Browser automation via extension
+# [integrates] Anthropic — Claude model access
+# [integrates] OpenAI — GPT model access and embeddings
+
+## Data Sources
+# [source] brain.db — ~/.openclaw/workspace/memory/brain.db — Unified memory database
+# [source] Session transcripts — ~/.openclaw/workspace/sessions/ — Agent conversation logs
+# [source] Canvas snapshots — ./canvas_snapshots/ — Visual rendering outputs
+# [source] Extension logs — ./extensions/*/logs/ — Extension-specific logs
