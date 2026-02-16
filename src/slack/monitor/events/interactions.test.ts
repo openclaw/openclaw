@@ -11,7 +11,11 @@ type RegisteredHandler = (args: {
   ack: () => Promise<void>;
   body: {
     user: { id: string };
+    team?: { id?: string };
+    trigger_id?: string;
+    response_url?: string;
     channel?: { id?: string };
+    container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
     message?: { ts?: string; text?: string; blocks?: unknown[] };
   };
   action: Record<string, unknown>;
@@ -100,7 +104,11 @@ describe("registerSlackInteractionEvents", () => {
       respond,
       body: {
         user: { id: "U123" },
+        team: { id: "T9" },
+        trigger_id: "123.trigger",
+        response_url: "https://hooks.slack.test/response",
         channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
         message: {
           ts: "100.200",
           text: "fallback",
@@ -131,16 +139,24 @@ describe("registerSlackInteractionEvents", () => {
       actionType: string;
       value: string;
       userId: string;
+      teamId?: string;
+      triggerId?: string;
+      responseUrl?: string;
       channelId: string;
       messageTs: string;
+      threadTs?: string;
     };
     expect(payload).toMatchObject({
       actionId: "openclaw:verify",
       actionType: "button",
       value: "approved",
       userId: "U123",
+      teamId: "T9",
+      triggerId: "123.trigger",
+      responseUrl: "https://hooks.slack.test/response",
       channelId: "C1",
       messageTs: "100.200",
+      threadTs: "100.100",
     });
     expect(resolveSessionKey).toHaveBeenCalledWith({
       channelId: "C1",
@@ -189,6 +205,52 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.actionType).toBe("static_select");
     expect(payload.selectedValues).toEqual(["canary"]);
     expect(payload.selectedLabels).toEqual(["Canary"]);
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("falls back to container channel and message timestamps", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, app, getHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U111" },
+        team: { id: "T111" },
+        container: { channel_id: "C222", message_ts: "222.333", thread_ts: "222.111" },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:container",
+        block_id: "container_block",
+        value: "ok",
+        text: { type: "plain_text", text: "Container" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "C222",
+      channelType: undefined,
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      channelId?: string;
+      messageTs?: string;
+      threadTs?: string;
+      teamId?: string;
+    };
+    expect(payload).toMatchObject({
+      channelId: "C222",
+      messageTs: "222.333",
+      threadTs: "222.111",
+      teamId: "T111",
+    });
     expect(app.client.chat.update).not.toHaveBeenCalled();
   });
 

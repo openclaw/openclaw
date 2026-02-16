@@ -31,8 +31,12 @@ type InteractionSummary = {
   selectedDateTime?: number;
   inputValue?: string;
   userId?: string;
+  teamId?: string;
+  triggerId?: string;
+  responseUrl?: string;
   channelId?: string;
   messageTs?: string;
+  threadTs?: string;
 };
 
 type ModalInputSummary = {
@@ -205,7 +209,11 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const { ack, body, action, respond } = args;
       const typedBody = body as unknown as {
         user?: { id?: string };
+        team?: { id?: string };
+        trigger_id?: string;
+        response_url?: string;
         channel?: { id?: string };
+        container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
         message?: { ts?: string; text?: string; blocks?: unknown[] };
       };
 
@@ -222,8 +230,9 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const actionId = typedAction.action_id ?? "unknown";
       const blockId = typedAction.block_id;
       const userId = typedBody.user?.id ?? "unknown";
-      const channelId = typedBody.channel?.id;
-      const messageTs = typedBody.message?.ts;
+      const channelId = typedBody.channel?.id ?? typedBody.container?.channel_id;
+      const messageTs = typedBody.message?.ts ?? typedBody.container?.message_ts;
+      const threadTs = typedBody.container?.thread_ts;
       const actionSummary = summarizeAction(typedAction);
       const eventPayload: InteractionSummary = {
         interactionType: "block_action",
@@ -231,8 +240,12 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         blockId,
         ...actionSummary,
         userId,
+        teamId: typedBody.team?.id,
+        triggerId: typedBody.trigger_id,
+        responseUrl: typedBody.response_url,
         channelId,
         messageTs,
+        threadTs,
       };
 
       // Log the interaction for debugging
