@@ -205,7 +205,7 @@
       "form-data": "2.5.4",
       "qs": "6.14.2",
       "@sinclair/typebox": "0.34.48",
-      "tar": "7.5.7",
+      "tar": "7.5.9",
       "tough-cookie": "4.1.3"
     },
     "onlyBuiltDependencies": [
