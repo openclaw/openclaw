@@ -26,6 +26,7 @@ import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramThreadParams,
+  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   type TelegramThreadSpec,
 } from "./helpers.js";
@@ -429,16 +430,7 @@ export async function resolveMedia(
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
   const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
-  let placeholder = "<media:document>";
-  if (msg.photo) {
-    placeholder = "<media:image>";
-  } else if (msg.video) {
-    placeholder = "<media:video>";
-  } else if (msg.video_note) {
-    placeholder = "<media:video>";
-  } else if (msg.audio || msg.voice) {
-    placeholder = "<media:audio>";
-  }
+  const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
 
