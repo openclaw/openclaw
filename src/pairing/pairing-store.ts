@@ -110,7 +110,9 @@ async function readJsonFile<T>(
     if (code === "ENOENT") {
       return { value: fallback, exists: false };
     }
-    return { value: fallback, exists: false };
+    // Re-throw unexpected errors (e.g. EACCES, EIO) instead of silently
+    // returning the fallback, which could mask real filesystem problems.
+    throw err;
   }
 }
 
@@ -118,11 +120,17 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
-  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf-8",
-  });
-  await fs.promises.chmod(tmp, 0o600);
-  await fs.promises.rename(tmp, filePath);
+  try {
+    await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf-8",
+    });
+    await fs.promises.chmod(tmp, 0o600);
+    await fs.promises.rename(tmp, filePath);
+  } catch (err) {
+    // Clean up the temp file on failure to avoid dangling files
+    await fs.promises.unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 async function ensureJsonFile(filePath: string, fallback: unknown) {

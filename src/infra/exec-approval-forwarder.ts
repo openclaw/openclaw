@@ -292,7 +292,9 @@ export function createExecApprovalForwarder(
         pending.delete(request.id);
         const expiredText = buildExpiredMessage(request);
         await deliverToTargets({ cfg, targets: entry.targets, text: expiredText, deliver });
-      })();
+      })().catch((err) => {
+        log.error(`exec-approval expiry delivery failed: ${String(err)}`);
+      });
     }, expiresInMs);
     timeoutId.unref?.();
 

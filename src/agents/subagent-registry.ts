@@ -72,9 +72,13 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     endedAt: entry.endedAt,
     label: entry.label,
     outcome: entry.outcome,
-  }).then((didAnnounce) => {
-    finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
-  });
+  })
+    .then((didAnnounce) => {
+      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+    })
+    .catch((err) => {
+      console.error(`[openclaw] subagent announce/cleanup failed for ${runId}: ${String(err)}`);
+    });
   return true;
 }
 
