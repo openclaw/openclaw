@@ -27,7 +27,7 @@ async function listSandboxRegistryItems<
   TEntry extends { containerName: string; image: string; sessionKey: string },
 >(params: {
   read: () => Promise<{ entries: TEntry[] }>;
-  resolveConfiguredImage: (agentId: string) => string;
+  resolveConfiguredImage: (agentId?: string) => string;
 }): Promise<Array<TEntry & { running: boolean; imageMatch: boolean }>> {
   const registry = await params.read();
   const results: Array<TEntry & { running: boolean; imageMatch: boolean }> = [];

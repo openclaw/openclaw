@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawTools } from "./openclaw-tools.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
@@ -10,6 +9,19 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const callGatewayMock = getCallGatewayMock();
 
+type CreateOpenClawTools = (typeof import("./openclaw-tools.js"))["createOpenClawTools"];
+type CreateOpenClawToolsOpts = Parameters<CreateOpenClawTools>[0];
+
+async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
+  // Dynamic import: ensure harness mocks are installed before tool modules load.
+  const { createOpenClawTools } = await import("./openclaw-tools.js");
+  const tool = createOpenClawTools(opts).find((candidate) => candidate.name === "sessions_spawn");
+  if (!tool) {
+    throw new Error("missing sessions_spawn tool");
+  }
+  return tool;
+}
+
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
@@ -19,13 +31,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
 
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
     const result = await tool.execute("call6", {
       task: "do thing",
@@ -57,13 +66,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       },
     });
 
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
     const result = await tool.execute("call9", {
       task: "do thing",
@@ -78,7 +84,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   it("sessions_spawn allows cross-agent spawning when configured", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    setConfigOverride({
+    setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
@@ -109,13 +115,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
     const result = await tool.execute("call7", {
       task: "do thing",
@@ -132,7 +135,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   it("sessions_spawn allows any agent when allowlist is *", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    setConfigOverride({
+    setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
@@ -163,13 +166,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
     const result = await tool.execute("call8", {
       task: "do thing",
@@ -186,7 +186,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   it("sessions_spawn normalizes allowlisted agent ids", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    setConfigOverride({
+    setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
@@ -217,13 +217,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
     const result = await tool.execute("call10", {
       task: "do thing",
