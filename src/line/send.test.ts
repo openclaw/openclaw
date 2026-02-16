@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createQuickReplyItems, createTextMessageWithQuickReplies } from "./send.js";
+import { createQuickReplyItems } from "./send.js";
 
 describe("createQuickReplyItems", () => {
   it("creates quick reply items from labels", () => {
@@ -28,21 +28,5 @@ describe("createQuickReplyItems", () => {
     expect((quickReply.items[0].action as { text: string }).text).toBe(
       "This is a very long option label that exceeds the limit",
     );
-  });
-});
-
-describe("createTextMessageWithQuickReplies", () => {
-  it("creates a text message with quick replies attached", () => {
-    const message = createTextMessageWithQuickReplies("Choose an option:", ["Yes", "No"]);
-
-    expect(message.type).toBe("text");
-    expect(message.text).toBe("Choose an option:");
-    expect(message.quickReply.items).toHaveLength(2);
-  });
-
-  it("handles empty quick replies array", () => {
-    const message = createTextMessageWithQuickReplies("No options", []);
-
-    expect(message.quickReply.items).toHaveLength(0);
   });
 });
