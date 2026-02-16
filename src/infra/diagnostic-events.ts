@@ -156,6 +156,10 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
 let seq = 0;
 const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
 
+// Prevent unbounded listener growth
+const MAX_LISTENERS = 1000;
+const LISTENER_WARN_THRESHOLD = 500;
+
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
@@ -169,13 +173,27 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   for (const listener of listeners) {
     try {
       listener(enriched);
-    } catch {
-      // Ignore listener failures.
+    } catch (err) {
+      // Log listener errors to help debug issues, but don't crash the event system
+      console.error(
+        "[diagnostic-events] Listener error:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+  if (listeners.size >= MAX_LISTENERS) {
+    console.error(
+      `[diagnostic-events] Max listeners (${MAX_LISTENERS}) reached. Possible memory leak.`,
+    );
+    // Still add to prevent breaking functionality, but warn
+  } else if (listeners.size >= LISTENER_WARN_THRESHOLD) {
+    console.warn(
+      `[diagnostic-events] High listener count (${listeners.size}/${MAX_LISTENERS}). Consider checking for missing cleanup.`,
+    );
+  }
   listeners.add(listener);
   return () => listeners.delete(listener);
 }

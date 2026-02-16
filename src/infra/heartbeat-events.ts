@@ -36,19 +36,37 @@ export function resolveIndicatorType(
 let lastHeartbeat: HeartbeatEventPayload | null = null;
 const listeners = new Set<(evt: HeartbeatEventPayload) => void>();
 
+// Prevent unbounded listener growth
+const MAX_LISTENERS = 1000;
+const LISTENER_WARN_THRESHOLD = 500;
+
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   const enriched: HeartbeatEventPayload = { ts: Date.now(), ...evt };
   lastHeartbeat = enriched;
   for (const listener of listeners) {
     try {
       listener(enriched);
-    } catch {
-      /* ignore */
+    } catch (err) {
+      // Log listener errors to help debug issues, but don't crash the event system
+      console.error(
+        "[heartbeat-events] Listener error:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 }
 
 export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void {
+  if (listeners.size >= MAX_LISTENERS) {
+    console.error(
+      `[heartbeat-events] Max listeners (${MAX_LISTENERS}) reached. Possible memory leak.`,
+    );
+    // Still add to prevent breaking functionality, but warn
+  } else if (listeners.size >= LISTENER_WARN_THRESHOLD) {
+    console.warn(
+      `[heartbeat-events] High listener count (${listeners.size}/${MAX_LISTENERS}). Consider checking for missing cleanup.`,
+    );
+  }
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
