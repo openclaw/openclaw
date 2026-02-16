@@ -572,7 +572,6 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   const changes: string[] = [];
 
   const ensureWildcard = (
-    channelName: string,
     account: Record<string, unknown>,
     prefix: string,
   ) => {
@@ -616,7 +615,7 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
     }
 
     // Check the top-level channel config
-    ensureWildcard(channelName, channelConfig, `channels.${channelName}`);
+    ensureWildcard(channelConfig, `channels.${channelName}`);
 
     // Check per-account configs (e.g. channels.discord.accounts.mybot)
     const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
@@ -624,7 +623,6 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
       for (const [accountName, accountConfig] of Object.entries(accounts)) {
         if (accountConfig && typeof accountConfig === "object") {
           ensureWildcard(
-            channelName,
             accountConfig,
             `channels.${channelName}.accounts.${accountName}`,
           );
