@@ -328,7 +328,12 @@ describe("QmdMemoryManager", () => {
     });
 
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: devAgentId });
-    const manager = await QmdMemoryManager.create({ cfg, agentId: devAgentId, resolved, mode: "full" });
+    const manager = await QmdMemoryManager.create({
+      cfg,
+      agentId: devAgentId,
+      resolved,
+      mode: "full",
+    });
     expect(manager).toBeTruthy();
     await manager?.close();
 
