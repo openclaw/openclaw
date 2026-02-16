@@ -228,16 +228,31 @@ export function makeForumGroupMessageCtx(params?: {
 
 beforeEach(() => {
   resetInboundDedupe();
+  loadConfig.mockReset();
   loadConfig.mockReturnValue({
+    agents: {
+      defaults: {
+        envelopeTimezone: "utc",
+      },
+    },
     channels: {
       telegram: { dmPolicy: "open", allowFrom: ["*"] },
     },
   });
   loadWebMedia.mockReset();
+  readChannelAllowFromStore.mockReset();
+  readChannelAllowFromStore.mockResolvedValue([]);
+  upsertChannelPairingRequest.mockReset();
+  upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRCODE", created: true } as const);
   onSpy.mockReset();
   commandSpy.mockReset();
   stopSpy.mockReset();
   useSpy.mockReset();
+  replySpy.mockReset();
+  replySpy.mockImplementation(async (_ctx, opts) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  });
 
   sendAnimationSpy.mockReset();
   sendAnimationSpy.mockResolvedValue({ message_id: 78 });
