@@ -103,4 +103,38 @@ describe("handleControlUiHttpRequest", () => {
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });
+
+  it("serves bootstrap config JSON under basePath", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    try {
+      await fs.writeFile(path.join(tmp, "index.html"), "<html></html>\n");
+      const { res, end } = makeResponse();
+      const handled = handleControlUiHttpRequest(
+        { url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, method: "GET" } as IncomingMessage,
+        res,
+        {
+          basePath: "/openclaw",
+          root: { kind: "resolved", path: tmp },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+            ui: { assistant: { name: "Ops", avatar: "ops.png" } },
+          },
+        },
+      );
+      expect(handled).toBe(true);
+      const payload = String(end.mock.calls[0]?.[0] ?? "");
+      const parsed = JSON.parse(payload) as {
+        basePath: string;
+        assistantName: string;
+        assistantAvatar: string;
+        assistantAgentId: string;
+      };
+      expect(parsed.basePath).toBe("/openclaw");
+      expect(parsed.assistantName).toBe("Ops");
+      expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
+      expect(parsed.assistantAgentId).toBe("main");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
 });
