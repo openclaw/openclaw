@@ -126,7 +126,13 @@ export function armTimer(state: CronServiceState) {
     return;
   }
   const nextAt = nextWakeAtMs(state);
-  if (!nextAt) {
+  // Even when no jobs are due, schedule a periodic maintenance tick to clear
+  // stuck runningAtMs markers that survived crashes or hung executions (#18120).
+  const MAINTENANCE_TICK_MS = 5 * 60_000; // 5 minutes
+  const hasStuckJobs = (state.store?.jobs ?? []).some(
+    (j) => j.enabled && typeof j.state.runningAtMs === "number",
+  );
+  if (!nextAt && !hasStuckJobs) {
     const jobCount = state.store?.jobs.length ?? 0;
     const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
     const withNextRun =
@@ -139,7 +145,8 @@ export function armTimer(state: CronServiceState) {
     return;
   }
   const now = state.deps.nowMs();
-  const delay = Math.max(nextAt - now, 0);
+  const effectiveNextAt = nextAt ?? now + MAINTENANCE_TICK_MS;
+  const delay = Math.max(effectiveNextAt - now, 0);
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
@@ -152,7 +159,7 @@ export function armTimer(state: CronServiceState) {
     });
   }, clampedDelay);
   state.deps.log.debug(
-    { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
+    { nextAt: nextAt ?? null, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS, maintenance: !nextAt },
     "cron: timer armed",
   );
 }
@@ -536,6 +543,11 @@ export async function executeJob(
   job.state.lastError = undefined;
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
+  const jobTimeoutMs =
+    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+      ? job.payload.timeoutSeconds * 1_000
+      : DEFAULT_JOB_TIMEOUT_MS;
+
   let coreResult: {
     status: "ok" | "error" | "skipped";
     error?: string;
@@ -544,7 +556,16 @@ export async function executeJob(
     sessionKey?: string;
   };
   try {
-    coreResult = await executeJobCore(state, job);
+    let timeoutId: NodeJS.Timeout;
+    coreResult = await Promise.race([
+      executeJobCore(state, job),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("cron: job execution timed out")),
+          jobTimeoutMs,
+        );
+      }),
+    ]).finally(() => clearTimeout(timeoutId!));
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }

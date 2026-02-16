@@ -19,7 +19,7 @@ import {
   normalizeRequiredName,
 } from "./normalize.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const STUCK_RUN_MS = 30 * 60 * 1000;
 
 function resolveEveryAnchorMs(params: {
   schedule: { everyMs: number; anchorMs?: number };
