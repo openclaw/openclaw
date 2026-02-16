@@ -34,6 +34,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathMissing: "gateway-path-missing",
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
+  gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
@@ -200,6 +201,28 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
+function auditGatewayToken(
+  command: GatewayServiceCommand,
+  issues: ServiceConfigIssue[],
+  expectedGatewayToken?: string,
+) {
+  const expectedToken = expectedGatewayToken?.trim();
+  if (!expectedToken) {
+    return;
+  }
+  const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (serviceToken === expectedToken) {
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
+    message:
+      "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token in openclaw.json",
+    detail: serviceToken ? "service token is stale" : "service token is missing",
+    level: "recommended",
+  });
+}
+
 function isNodeRuntime(execPath: string): boolean {
   const base = path.basename(execPath).toLowerCase();
   return base === "node" || base === "node.exe";
@@ -341,11 +364,13 @@ export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
   platform?: NodeJS.Platform;
+  expectedGatewayToken?: string;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
   auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayServicePath(params.command, issues, params.env, platform);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 
