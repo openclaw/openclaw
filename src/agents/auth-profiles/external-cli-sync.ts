@@ -1,8 +1,10 @@
 import {
   readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
+  readClaudeCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
+  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_NEAR_EXPIRY_MS,
   EXTERNAL_CLI_SYNC_TTL_MS,
   QWEN_CLI_PROFILE_ID,
@@ -37,7 +39,11 @@ function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: nu
   if (cred.type !== "oauth" && cred.type !== "token") {
     return false;
   }
-  if (cred.provider !== "qwen-portal" && cred.provider !== "minimax-portal") {
+  if (
+    cred.provider !== "anthropic" &&
+    cred.provider !== "qwen-portal" &&
+    cred.provider !== "minimax-portal"
+  ) {
     return false;
   }
   if (typeof cred.expires !== "number") {
@@ -82,13 +88,34 @@ function syncExternalCliCredentialsForProvider(
 }
 
 /**
- * Sync OAuth credentials from external CLI tools (Qwen Code CLI, MiniMax CLI) into the store.
+ * Sync OAuth credentials from external CLI tools (Claude Code CLI, Qwen Code CLI, MiniMax CLI)
+ * into the store.
  *
  * Returns true if any credentials were updated.
  */
 export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
   let mutated = false;
   const now = Date.now();
+
+  // Sync from Claude Code CLI (keychain / credentials file)
+  if (
+    syncExternalCliCredentialsForProvider(
+      store,
+      CLAUDE_CLI_PROFILE_ID,
+      "anthropic",
+      () => {
+        const cred = readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS });
+        // Only sync OAuth credentials (not static tokens — those aren't refreshable)
+        if (!cred || cred.type !== "oauth") {
+          return null;
+        }
+        return cred;
+      },
+      now,
+    )
+  ) {
+    mutated = true;
+  }
 
   // Sync from Qwen Code CLI
   const existingQwen = store.profiles[QWEN_CLI_PROFILE_ID];
