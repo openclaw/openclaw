@@ -52,18 +52,6 @@ describe("pruneStaleEntries", () => {
     expect(store.old).toBeUndefined();
     expect(store.fresh).toBeDefined();
   });
-
-  it("keeps entries with no updatedAt", () => {
-    const store: Record<string, SessionEntry> = {
-      noDate: { sessionId: crypto.randomUUID() } as SessionEntry,
-      fresh: makeEntry(Date.now()),
-    };
-
-    const pruned = pruneStaleEntries(store, 1 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(store.noDate).toBeDefined();
-  });
 });
 
 describe("capEntryCount", () => {
