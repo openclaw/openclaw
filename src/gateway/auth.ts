@@ -270,8 +270,7 @@ export function resolveGatewayAuth(params: {
   }
 
   const allowTailscale =
-    authConfig.allowTailscale ??
-    (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
+    authConfig.allowTailscale ?? (params.tailscaleMode === "serve" && mode !== "password");
 
   return {
     mode,
@@ -369,6 +368,13 @@ export async function authorizeGatewayConnect(
     params.allowRealIpFallback === true,
   );
 
+  const limiter = params.rateLimiter;
+  const ip =
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
+  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
+
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
@@ -386,6 +392,48 @@ export async function authorizeGatewayConnect(
     if ("user" in result) {
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
+
+    // Trusted-proxy auth failed — try shared-secret fallback for internal
+    // services (CLI, node host, ACP) that bypass the reverse proxy.
+    // If no token/password is configured, there's no fallback available.
+    if (!auth.token && !auth.password) {
+      return { ok: false, reason: result.reason };
+    }
+
+    // Rate-limit fallback attempts
+    if (limiter) {
+      const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+      if (!rlCheck.allowed) {
+        return {
+          ok: false,
+          reason: "rate_limited",
+          rateLimited: true,
+          retryAfterMs: rlCheck.retryAfterMs,
+        };
+      }
+    }
+
+    // Try token fallback
+    if (connectAuth?.token && auth.token) {
+      if (safeEqualSecret(connectAuth.token, auth.token)) {
+        limiter?.reset(ip, rateLimitScope);
+        return { ok: true, method: "token" };
+      }
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "token_mismatch" };
+    }
+
+    // Try password fallback
+    if (connectAuth?.password && auth.password) {
+      if (safeEqualSecret(connectAuth.password, auth.password)) {
+        limiter?.reset(ip, rateLimitScope);
+        return { ok: true, method: "password" };
+      }
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "password_mismatch" };
+    }
+
+    // Client didn't provide matching credentials — return original proxy failure
     return { ok: false, reason: result.reason };
   }
 
@@ -393,12 +441,6 @@ export async function authorizeGatewayConnect(
     return { ok: true, method: "none" };
   }
 
-  const limiter = params.rateLimiter;
-  const ip =
-    params.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
-    req?.socket?.remoteAddress;
-  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
     if (!rlCheck.allowed) {
