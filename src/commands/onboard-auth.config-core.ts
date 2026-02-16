@@ -12,6 +12,11 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
+  buildNovitaModelDefinition,
+  NOVITA_BASE_URL,
+  NOVITA_MODEL_CATALOG,
+} from "../agents/novita-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -31,6 +36,7 @@ import {
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  NOVITA_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -316,6 +322,81 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, VENICE_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Novita provider configuration without changing the default model.
+ * Registers Novita models and sets up the provider, but preserves existing model selection.
+ */
+export function applyNovitaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[NOVITA_DEFAULT_MODEL_REF] = {
+    ...models[NOVITA_DEFAULT_MODEL_REF],
+    alias: models[NOVITA_DEFAULT_MODEL_REF]?.alias ?? "Novita AI",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.novita;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const novitaModels = NOVITA_MODEL_CATALOG.map(buildNovitaModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...novitaModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.novita = {
+    ...existingProviderRest,
+    baseUrl: NOVITA_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : novitaModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Novita provider configuration AND set Novita as the default model.
+ * Use this when Novita is the primary provider choice during onboarding.
+ */
+export function applyNovitaConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyNovitaProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: NOVITA_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 /**

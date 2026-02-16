@@ -1307,6 +1307,10 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     expect(resolvePreferredProviderForAuthChoice("qwen-portal")).toBe("qwen-portal");
   });
 
+  it("maps novita-api-key to the provider", () => {
+    expect(resolvePreferredProviderForAuthChoice("novita-api-key")).toBe("novita");
+  });
+
   it("returns undefined for unknown choices", () => {
     expect(resolvePreferredProviderForAuthChoice("unknown" as AuthChoice)).toBeUndefined();
   });
