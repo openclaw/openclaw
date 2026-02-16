@@ -35,7 +35,7 @@ export type MemoryProviderStatus = {
   sources?: MemorySource[];
   sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>;
   cache?: { enabled: boolean; entries?: number; maxEntries?: number };
-  fts?: { enabled: boolean; available: boolean; error?: string };
+  fts?: { enabled: boolean; available: boolean; error?: string; extensionPath?: string };
   fallback?: { from: string; reason?: string };
   vector?: {
     enabled: boolean;

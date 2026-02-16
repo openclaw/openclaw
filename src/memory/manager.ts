@@ -1,7 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
@@ -14,7 +16,9 @@ import type {
 } from "./types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveUserPath } from "../utils.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -37,6 +41,73 @@ const BATCH_FAILURE_LIMIT = 2;
 const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
+
+const PLATFORM_DEFAULT_FTS_FILENAMES: Partial<Record<NodeJS.Platform, string>> = {
+  darwin: "fts5.dylib",
+  linux: "fts5.so",
+  win32: "fts5.dll",
+};
+
+const BUNDLED_FTS_VARIANTS: Record<"darwin", { filename: string; assetRelativePath: string }> = {
+  darwin: {
+    filename: "fts5.dylib",
+    assetRelativePath: "../../assets/native/sqlite/darwin-universal/fts5.dylib",
+  },
+};
+
+function resolveFtsExtensionPath(): string | undefined {
+  const envOverride = process.env.OPENCLAW_SQLITE_FTS5_PATH?.trim();
+  if (envOverride) {
+    return resolveUserPath(envOverride);
+  }
+
+  const stateDir = resolveStateDir(process.env);
+  const nativeDir = path.join(stateDir, "native", "sqlite");
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  const platformDefault = PLATFORM_DEFAULT_FTS_FILENAMES[process.platform];
+  if (platformDefault) {
+    candidates.push(path.join(nativeDir, platformDefault));
+  }
+  candidates.push(path.join(nativeDir, "fts5.dylib"));
+  candidates.push(path.join(nativeDir, "fts5.so"));
+  candidates.push(path.join(nativeDir, "fts5.dll"));
+
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    try {
+      if (fsSync.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {}
+  }
+
+  const variant = BUNDLED_FTS_VARIANTS[process.platform as "darwin"];
+  if (!variant) {
+    return undefined;
+  }
+  try {
+    const assetPath = fileURLToPath(new URL(variant.assetRelativePath, import.meta.url));
+    if (!fsSync.existsSync(assetPath)) {
+      return undefined;
+    }
+    fsSync.mkdirSync(nativeDir, { recursive: true });
+    const targetPath = path.join(nativeDir, variant.filename);
+    fsSync.copyFileSync(assetPath, targetPath);
+    try {
+      fsSync.chmodSync(targetPath, 0o755);
+    } catch {}
+    log.debug(`installed bundled fts extension to ${targetPath}`);
+    return targetPath;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.debug(`failed to install bundled fts extension: ${message}`);
+    return undefined;
+  }
+}
 
 export class MemoryIndexManager implements MemorySearchManager {
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -80,6 +151,8 @@ export class MemoryIndexManager implements MemorySearchManager {
     available: boolean;
     loadError?: string;
   };
+  private readonly ftsExtensionPath?: string;
+  private readonly allowExtensions: boolean;
   private vectorReady: Promise<boolean> | null = null;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
@@ -158,6 +231,8 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
     this.sources = new Set(params.settings.sources);
+    this.ftsExtensionPath = resolveFtsExtensionPath();
+    this.allowExtensions = Boolean(this.settings.store.vector.enabled || this.ftsExtensionPath);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
     this.cache = {
@@ -475,6 +550,7 @@ export class MemoryIndexManager implements MemorySearchManager {
         enabled: this.fts.enabled,
         available: this.fts.available,
         error: this.fts.loadError,
+        extensionPath: this.ftsExtensionPath,
       },
       fallback: this.fallbackReason
         ? { from: this.fallbackFrom ?? "local", reason: this.fallbackReason }

@@ -175,7 +175,25 @@ class MemoryManagerSyncOps {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    const allowExtension = this.allowExtensions ?? this.settings.store.vector.enabled;
+    const db = new DatabaseSync(dbPath, { allowExtension });
+    this.loadFtsExtension(db);
+    return db;
+  }
+
+  private loadFtsExtension(db: DatabaseSync): void {
+    if (!this.ftsExtensionPath) {
+      return;
+    }
+    if (typeof db.loadExtension !== "function") {
+      return;
+    }
+    try {
+      db.loadExtension(this.ftsExtensionPath, "sqlite3_fts5_init");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`fts extension load failed: ${message}`);
+    }
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {
