@@ -92,6 +92,51 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("passes OpenRouter provider routing payload from model params", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/moonshotai/kimi-k2.5": {
+              params: {
+                provider: {
+                  order: ["baseten", "together"],
+                  allow_fallbacks: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openrouter", "moonshotai/kimi-k2.5");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "moonshotai/kimi-k2.5",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.provider).toEqual({
+      order: ["baseten", "together"],
+      allow_fallbacks: false,
+    });
+  });
+
   it("forces store=true for direct OpenAI Responses payloads", () => {
     const payload = { store: false };
     const baseStreamFn: StreamFn = (_model, _context, options) => {

@@ -172,6 +172,37 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
     });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function createOpenRouterProviderRoutingWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams: Record<string, unknown> | undefined,
+): StreamFn {
+  const routing = extraParams?.provider;
+  if (!isRecord(routing)) {
+    return baseStreamFn ?? streamSimple;
+  }
+
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (isRecord(payload)) {
+          payload.provider = {
+            ...routing,
+            ...(isRecord(payload.provider) ? payload.provider : {}),
+          };
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -205,6 +236,11 @@ export function applyExtraParamsToAgent(
   }
 
   if (provider === "openrouter") {
+    if (isRecord(merged.provider)) {
+      log.debug(`applying OpenRouter provider routing for ${provider}/${modelId}`);
+      agent.streamFn = createOpenRouterProviderRoutingWrapper(agent.streamFn, merged);
+    }
+
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
   }
