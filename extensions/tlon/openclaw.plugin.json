@@ -1,9 +1,0 @@
-{
-  "id": "tlon",
-  "channels": ["tlon"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

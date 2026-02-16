@@ -1,13 +1,4 @@
 import type { GroupPolicy } from "./types.base.js";
-import type { DiscordConfig } from "./types.discord.js";
-import type { GoogleChatConfig } from "./types.googlechat.js";
-import type { IMessageConfig } from "./types.imessage.js";
-import type { IrcConfig } from "./types.irc.js";
-import type { MSTeamsConfig } from "./types.msteams.js";
-import type { SignalConfig } from "./types.signal.js";
-import type { SlackConfig } from "./types.slack.js";
-import type { TelegramConfig } from "./types.telegram.js";
-import type { WhatsAppConfig } from "./types.whatsapp.js";
 
 export type ChannelHeartbeatVisibilityConfig = {
   /** Show HEARTBEAT_OK acknowledgments in chat (default: false). */
@@ -39,16 +30,7 @@ export type ExtensionChannelConfig = {
 
 export type ChannelsConfig = {
   defaults?: ChannelDefaultsConfig;
-  whatsapp?: WhatsAppConfig;
-  telegram?: TelegramConfig;
-  discord?: DiscordConfig;
-  irc?: IrcConfig;
-  googlechat?: GoogleChatConfig;
-  slack?: SlackConfig;
-  signal?: SignalConfig;
-  imessage?: IMessageConfig;
-  msteams?: MSTeamsConfig;
-  // Extension channels use dynamic keys - use ExtensionChannelConfig in extensions
+  // Channel-specific configs are provided by plugins at runtime.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 };
