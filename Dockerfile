@@ -16,24 +16,25 @@ RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
 
-# Optionally install Chromium and Xvfb for browser automation.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
-# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
-ARG OPENCLAW_INSTALL_BROWSER=""
-RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      npx playwright install --with-deps chromium && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
-
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
 COPY scripts ./scripts
 
 RUN pnpm install --frozen-lockfile
+
+# Optionally install Chromium and Xvfb for browser automation.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
+# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
+# Must run after pnpm install so playwright-core is available in node_modules.
+ARG OPENCLAW_INSTALL_BROWSER=""
+RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
+      node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
+      apt-get clean && \
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
 
 COPY . .
 RUN pnpm build
