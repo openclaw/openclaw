@@ -5,6 +5,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "anthropicApiKey"
   | "openaiApiKey"
   | "openrouterApiKey"
+  | "aimlapiApiKey"
   | "aiGatewayApiKey"
   | "cloudflareAiGatewayApiKey"
   | "moonshotApiKey"
@@ -53,6 +54,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--openrouter-api-key",
     cliOption: "--openrouter-api-key <key>",
     description: "OpenRouter API key",
+  },
+  {
+    optionKey: "aimlapiApiKey",
+    authChoice: "aimlapi-api-key",
+    cliFlag: "--aimlapi-api-key",
+    cliOption: "--openrouter-api-key <key>",
+    description: "AI/ML API key",
   },
   {
     optionKey: "aiGatewayApiKey",

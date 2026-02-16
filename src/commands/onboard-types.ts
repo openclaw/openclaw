@@ -57,6 +57,7 @@ export type AuthChoiceGroupId =
   | "google"
   | "copilot"
   | "openrouter"
+  | "aimlapi"
   | "litellm"
   | "ai-gateway"
   | "cloudflare-ai-gateway"
