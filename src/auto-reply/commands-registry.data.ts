@@ -219,12 +219,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
           type: "string",
           required: false,
         },
-        {
-          name: "open",
-          description: "Open in browser after export",
-          type: "boolean",
-          required: false,
-        },
       ],
     }),
     defineChatCommand({
