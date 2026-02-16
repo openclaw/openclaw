@@ -218,6 +218,12 @@
 
 ## Changelog Release Notes
 
+- When cutting a mac release with beta GitHub prerelease:
+  - Tag `vYYYY.M.D-beta.N` from the release commit (example: `v2026.2.15-beta.1`).
+  - Create prerelease with title `openclaw YYYY.M.D-beta.N`.
+  - Use release notes from `CHANGELOG.md` version section (`Changes` + `Fixes`, no title duplicate).
+  - Attach at least `OpenClaw-YYYY.M.D.zip` and `OpenClaw-YYYY.M.D.dSYM.zip`; include `.dmg` if available.
+
 - Keep top version entries in `CHANGELOG.md` sorted by impact:
   - `### Changes` first.
   - `### Fixes` deduped and ranked with user-facing fixes first.
