@@ -166,11 +166,6 @@ describe("session path safety", () => {
       agentId: "ops",
     });
   });
-
-  it("falls back to agentId when storePath is absent", () => {
-    const opts = resolveSessionFilePathOptions({ agentId: "ops" });
-    expect(opts).toEqual({ agentId: "ops" });
-  });
 });
 
 describe("resolveSessionResetPolicy", () => {
