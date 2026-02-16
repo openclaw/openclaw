@@ -91,6 +91,47 @@ describe("gateway config methods", () => {
     expect(primary?.workspace).toBe("/tmp/primary-updated");
     expect(secondary?.workspace).toBe("/tmp/secondary");
   });
+
+  it("rejects mixed-id agents.list patches without mutating persisted config", async () => {
+    const setRes = await rpcReq<{ ok?: boolean }>(ws, "config.set", {
+      raw: JSON.stringify({
+        agents: {
+          list: [
+            { id: "primary", default: true, workspace: "/tmp/primary" },
+            { id: "secondary", workspace: "/tmp/secondary" },
+          ],
+        },
+      }),
+    });
+    expect(setRes.ok).toBe(true);
+
+    const beforeRes = await rpcReq<{ hash?: string }>(ws, "config.get", {});
+    expect(beforeRes.ok).toBe(true);
+    expect(typeof beforeRes.payload?.hash).toBe("string");
+
+    const patchRes = await rpcReq<{ ok?: boolean }>(ws, "config.patch", {
+      baseHash: beforeRes.payload?.hash,
+      raw: JSON.stringify({
+        agents: {
+          list: [
+            {
+              id: "primary",
+              workspace: "/tmp/primary-updated",
+            },
+            {
+              workspace: "/tmp/orphan-no-id",
+            },
+          ],
+        },
+      }),
+    });
+    expect(patchRes.ok).toBe(false);
+    expect(patchRes.error?.message ?? "").toContain("invalid config");
+
+    const afterRes = await rpcReq<{ hash?: string }>(ws, "config.get", {});
+    expect(afterRes.ok).toBe(true);
+    expect(afterRes.payload?.hash).toBe(beforeRes.payload?.hash);
+  });
 });
 
 describe("gateway server sessions", () => {

@@ -14,23 +14,34 @@ function isObjectWithStringId(value: unknown): value is Record<string, unknown> 
 }
 
 function mergeObjectArraysById(base: unknown[], patch: unknown[], options: MergePatchOptions) {
-  if (!base.every(isObjectWithStringId) || !patch.every(isObjectWithStringId)) {
+  // Require all *base* entries to have string ids — if the existing array
+  // isn't id-keyed there's nothing sensible to merge against.
+  if (!base.every(isObjectWithStringId)) {
     return undefined;
   }
+
   const merged = [...base] as Array<Record<string, unknown> & { id: string }>;
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
     indexById.set(entry.id, index);
   }
 
-  for (const entry of patch) {
-    const existingIndex = indexById.get(entry.id);
-    if (existingIndex === undefined) {
-      merged.push(structuredClone(entry));
-      indexById.set(entry.id, merged.length - 1);
+  for (const patchEntry of patch) {
+    // Patch entries without a valid id are appended as-is (best-effort).
+    // This prevents the entire merge from falling back to full replacement
+    // just because one patch element is missing an id field.
+    if (!isObjectWithStringId(patchEntry)) {
+      merged.push(structuredClone(patchEntry) as Record<string, unknown> & { id: string });
       continue;
     }
-    merged[existingIndex] = applyMergePatch(merged[existingIndex], entry, options) as Record<
+
+    const existingIndex = indexById.get(patchEntry.id);
+    if (existingIndex === undefined) {
+      merged.push(structuredClone(patchEntry));
+      indexById.set(patchEntry.id, merged.length - 1);
+      continue;
+    }
+    merged[existingIndex] = applyMergePatch(merged[existingIndex], patchEntry, options) as Record<
       string,
       unknown
     > & { id: string };

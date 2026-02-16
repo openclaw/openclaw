@@ -59,6 +59,76 @@ describe("applyMergePatch", () => {
     expect(secondary?.workspace).toBe("/tmp/two");
   });
 
+  it("merges by id even when patch entries lack id (appends them)", () => {
+    const base = {
+      agents: {
+        list: [
+          { id: "primary", workspace: "/tmp/one" },
+          { id: "secondary", workspace: "/tmp/two" },
+        ],
+      },
+    };
+    const patch = {
+      agents: {
+        list: [
+          { id: "primary", model: "new-model" },
+          { workspace: "/tmp/orphan" }, // no id
+        ],
+      },
+    };
+
+    const merged = applyMergePatch(base, patch, {
+      mergeObjectArraysById: true,
+    }) as {
+      agents?: {
+        list?: Array<{ id?: string; workspace?: string; model?: string }>;
+      };
+    };
+    // Both original entries preserved, patch without id appended
+    expect(merged.agents?.list).toHaveLength(3);
+    const primary = merged.agents?.list?.find((entry) => entry.id === "primary");
+    expect(primary?.workspace).toBe("/tmp/one");
+    expect(primary?.model).toBe("new-model");
+    expect(merged.agents?.list?.[1]?.id).toBe("secondary");
+    expect(merged.agents?.list?.[2]?.workspace).toBe("/tmp/orphan");
+  });
+
+  it("does not destroy agents list when patching a single agent by id", () => {
+    const base = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/home/main" },
+          { id: "ota", workspace: "/home/ota" },
+          { id: "trading", workspace: "/home/trading" },
+          { id: "codex", workspace: "/home/codex" },
+        ],
+      },
+    };
+    const patch = {
+      agents: {
+        list: [{ id: "main", model: "claude-opus-4-20250918" }],
+      },
+    };
+
+    const merged = applyMergePatch(base, patch, {
+      mergeObjectArraysById: true,
+    }) as {
+      agents?: {
+        list?: Array<{ id?: string; workspace?: string; model?: string; default?: boolean }>;
+      };
+    };
+    // All 4 agents must survive
+    expect(merged.agents?.list).toHaveLength(4);
+    const main = merged.agents?.list?.find((e) => e.id === "main");
+    expect(main?.model).toBe("claude-opus-4-20250918");
+    expect(main?.default).toBe(true);
+    expect(main?.workspace).toBe("/home/main");
+    // Others untouched
+    expect(merged.agents?.list?.find((e) => e.id === "ota")?.workspace).toBe("/home/ota");
+    expect(merged.agents?.list?.find((e) => e.id === "trading")?.workspace).toBe("/home/trading");
+    expect(merged.agents?.list?.find((e) => e.id === "codex")?.workspace).toBe("/home/codex");
+  });
+
   it("falls back to replacement for non-id arrays even when enabled", () => {
     const base = {
       channels: {
