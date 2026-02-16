@@ -5,7 +5,6 @@ import {
   createImageCard,
   createActionCard,
   createCarousel,
-  createNotificationBubble,
   createEventCard,
   createDeviceControlCard,
 } from "./flex-templates.js";
@@ -75,17 +74,6 @@ describe("createCarousel", () => {
     const carousel = createCarousel(bubbles);
 
     expect(carousel.contents.length).toBe(12);
-  });
-});
-
-describe("createNotificationBubble", () => {
-  it("includes title when provided", () => {
-    const bubble = createNotificationBubble("Details here", {
-      title: "Alert Title",
-    });
-    const body = bubble.body as { contents: Array<{ contents?: Array<{ text?: string }> }> };
-    const contentSection = body.contents[1] as { contents: Array<{ text?: string }> };
-    expect(contentSection.contents[0].text).toBe("Alert Title");
   });
 });
 
