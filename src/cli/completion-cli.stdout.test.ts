@@ -47,7 +47,7 @@ describe("completion stdout cleanliness", () => {
     // Spy on the actual stdout stream to verify no log leakage.
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
-    setLoggerOverride({ level: "info", file: "/dev/null" });
+    setLoggerOverride({ level: "info", consoleLevel: "info", file: "/dev/null" });
     enableConsoleCapture();
     routeLogsToStderr();
 
