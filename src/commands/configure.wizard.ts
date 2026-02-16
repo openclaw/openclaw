@@ -132,12 +132,11 @@ async function promptWebToolsConfig(
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const hasSearchKey = Boolean(existingSearch?.apiKey);
 
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "Supported providers: Brave (default), Perplexity, Grok (xAI), and Parallel.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -145,39 +144,182 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search (Brave Search)?",
-      initialValue: existingSearch?.enabled ?? hasSearchKey,
+      message: "Enable web_search?",
+      initialValue: existingSearch?.enabled ?? true,
     }),
     runtime,
   );
 
-  let nextSearch = {
+  let nextSearch: Record<string, unknown> = {
     ...existingSearch,
     enabled: enableSearch,
   };
 
   if (enableSearch) {
-    const keyInput = guardCancel(
-      await text({
-        message: hasSearchKey
-          ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
-          : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
-        placeholder: hasSearchKey ? "Leave blank to keep current" : "BSA...",
+    const currentProvider = (existingSearch as Record<string, unknown> | undefined)?.provider;
+    const provider = guardCancel(
+      await select({
+        message: "Search provider",
+        options: [
+          { value: "brave", label: "Brave", hint: "Fast structured results, free tier" },
+          {
+            value: "perplexity",
+            label: "Perplexity",
+            hint: "AI-synthesized answers with citations",
+          },
+          { value: "grok", label: "Grok (xAI)", hint: "AI-synthesized answers via xAI" },
+          {
+            value: "parallel",
+            label: "Parallel",
+            hint: "LLM-optimized excerpts for agentic workflows",
+          },
+        ],
+        initialValue: typeof currentProvider === "string" ? currentProvider : "brave",
       }),
       runtime,
     );
-    const key = String(keyInput ?? "").trim();
-    if (key) {
-      nextSearch = { ...nextSearch, apiKey: key };
-    } else if (!hasSearchKey) {
-      note(
-        [
-          "No key stored yet, so web_search will stay unavailable.",
-          "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
-          "Docs: https://docs.openclaw.ai/tools/web",
-        ].join("\n"),
-        "Web search",
+
+    nextSearch = { ...nextSearch, provider };
+
+    if (provider === "brave") {
+      const hasKey = Boolean(existingSearch?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
+            : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "BSA...",
+        }),
+        runtime,
       );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = { ...nextSearch, apiKey: key };
+      } else if (!hasKey) {
+        note(
+          [
+            "No key stored. Set BRAVE_API_KEY in the Gateway environment to enable.",
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Brave Search",
+        );
+      }
+    }
+
+    if (provider === "perplexity") {
+      const existingPerplexity = (existingSearch as Record<string, unknown> | undefined)
+        ?.perplexity as Record<string, unknown> | undefined;
+      const hasKey = Boolean(existingPerplexity?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "Perplexity/OpenRouter API key (leave blank to keep current or use env var)"
+            : "Perplexity/OpenRouter API key (leave blank to use PERPLEXITY_API_KEY or OPENROUTER_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "pplx-... or sk-or-...",
+        }),
+        runtime,
+      );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = {
+          ...nextSearch,
+          perplexity: { ...existingPerplexity, apiKey: key },
+        };
+      } else if (!hasKey) {
+        note(
+          [
+            "No key stored. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment.",
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Perplexity",
+        );
+      }
+    }
+
+    if (provider === "grok") {
+      const existingGrok = (existingSearch as Record<string, unknown> | undefined)?.grok as
+        | Record<string, unknown>
+        | undefined;
+      const hasKey = Boolean(existingGrok?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "xAI API key (leave blank to keep current or use XAI_API_KEY)"
+            : "xAI API key (leave blank to use XAI_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "xai-...",
+        }),
+        runtime,
+      );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = {
+          ...nextSearch,
+          grok: { ...existingGrok, apiKey: key },
+        };
+      } else if (!hasKey) {
+        note(
+          [
+            "No key stored. Set XAI_API_KEY in the Gateway environment to enable.",
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Grok",
+        );
+      }
+    }
+
+    if (provider === "parallel") {
+      const existingParallel = (existingSearch as Record<string, unknown> | undefined)?.parallel as
+        | Record<string, unknown>
+        | undefined;
+      const hasKey = Boolean(existingParallel?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "Parallel API key (leave blank to keep current or use PARALLEL_API_KEY)"
+            : "Parallel API key (leave blank to use PARALLEL_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "Your Parallel API key",
+        }),
+        runtime,
+      );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = {
+          ...nextSearch,
+          parallel: { ...existingParallel, apiKey: key },
+        };
+      } else if (!hasKey) {
+        note(
+          [
+            "No key stored. Set PARALLEL_API_KEY in the Gateway environment to enable.",
+            "Get a key at https://platform.parallel.ai",
+            "Docs: https://docs.parallel.ai",
+          ].join("\n"),
+          "Parallel",
+        );
+      }
+
+      const currentMode = (existingParallel?.mode as string) ?? "one-shot";
+      const mode = guardCancel(
+        await select({
+          message: "Parallel search mode",
+          options: [
+            { value: "one-shot", label: "One-shot", hint: "Comprehensive results (default)" },
+            {
+              value: "agentic",
+              label: "Agentic",
+              hint: "Concise, token-efficient for multi-step workflows",
+            },
+            { value: "fast", label: "Fast", hint: "Optimized for latency (~1s response)" },
+          ],
+          initialValue: currentMode,
+        }),
+        runtime,
+      );
+
+      nextSearch = {
+        ...nextSearch,
+        parallel: { ...(nextSearch.parallel as Record<string, unknown> | undefined), mode },
+      };
     }
   }
 

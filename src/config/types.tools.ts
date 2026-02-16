@@ -356,8 +356,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", or "grok"). */
-      provider?: "brave" | "perplexity" | "grok";
+      /** Search provider ("brave", "perplexity", "grok", or "parallel"). */
+      provider?: "brave" | "perplexity" | "grok" | "parallel";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -383,6 +383,21 @@ export type ToolsConfig = {
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
+      };
+      /** Parallel-specific configuration (used when provider="parallel"). */
+      parallel?: {
+        /** API key for Parallel (defaults to PARALLEL_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for Parallel API (default: https://api.parallel.ai/v1beta). */
+        baseUrl?: string;
+        /** Search mode: one-shot, agentic, or fast (default: "one-shot"). */
+        mode?: "one-shot" | "agentic" | "fast";
+        /** Maximum results to return (1-20, default: 10). */
+        maxResults?: number;
+        /** Maximum characters per result excerpt (default: 10000). */
+        maxCharsPerResult?: number;
+        /** Maximum total characters across all excerpts. */
+        maxCharsTotal?: number;
       };
     };
     fetch?: {

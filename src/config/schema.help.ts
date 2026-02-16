@@ -85,7 +85,7 @@ export const FIELD_HELP: Record<string, string> = {
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
-  "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
+  "tools.web.search.provider": 'Search provider ("brave", "perplexity", "grok", or "parallel").',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
@@ -96,6 +96,17 @@ export const FIELD_HELP: Record<string, string> = {
     "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
+  "tools.web.search.parallel.apiKey":
+    "Parallel API key (fallback: PARALLEL_API_KEY env var). Get a key at https://platform.parallel.ai.",
+  "tools.web.search.parallel.baseUrl":
+    "Parallel API base URL override (default: https://api.parallel.ai/v1beta).",
+  "tools.web.search.parallel.mode":
+    'Search mode: "one-shot" (comprehensive, default), "agentic" (concise, multi-step), or "fast" (~1s latency).',
+  "tools.web.search.parallel.maxResults": "Maximum results to return (1-20, default: 10).",
+  "tools.web.search.parallel.maxCharsPerResult":
+    "Maximum characters per result excerpt (default: 10000).",
+  "tools.web.search.parallel.maxCharsTotal":
+    "Maximum total characters across all excerpts (optional cap).",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":

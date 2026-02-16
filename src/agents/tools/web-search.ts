@@ -18,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "parallel"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -100,6 +100,30 @@ type GrokConfig = {
   apiKey?: string;
   model?: string;
   inlineCitations?: boolean;
+};
+
+type ParallelConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  mode?: "one-shot" | "agentic" | "fast";
+  maxResults?: number;
+  maxCharsPerResult?: number;
+  maxCharsTotal?: number;
+};
+
+type ParallelSearchResponse = {
+  search_id: string;
+  results: Array<{
+    url: string;
+    title: string;
+    publish_date: string | null;
+    excerpts: string[];
+  }>;
+  warnings: string[] | null;
+  usage: Array<{
+    name: string;
+    count: number;
+  }>;
 };
 
 type GrokSearchResponse = {
@@ -205,6 +229,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "parallel") {
+    return {
+      error: "missing_parallel_api_key",
+      message:
+        "web_search (parallel) needs a Parallel API key. Set PARALLEL_API_KEY in the Gateway environment, or configure tools.web.search.parallel.apiKey.",
+      docs: "https://docs.parallel.ai",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -222,6 +254,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "grok") {
     return "grok";
+  }
+  if (raw === "parallel") {
+    return "parallel";
   }
   if (raw === "brave") {
     return "brave";
@@ -365,6 +400,58 @@ function resolveGrokModel(grok?: GrokConfig): string {
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
+}
+
+const PARALLEL_API_BASE_URL = "https://api.parallel.ai/v1beta";
+const DEFAULT_PARALLEL_MODE = "one-shot";
+const DEFAULT_PARALLEL_MAX_RESULTS = 10;
+const DEFAULT_PARALLEL_MAX_CHARS_PER_RESULT = 10000;
+
+function resolveParallelConfig(search?: WebSearchConfig): ParallelConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const parallel = "parallel" in search ? search.parallel : undefined;
+  if (!parallel || typeof parallel !== "object") {
+    return {};
+  }
+  return parallel as ParallelConfig;
+}
+
+function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
+  const fromConfig = normalizeApiKey(parallel?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.PARALLEL_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveParallelBaseUrl(parallel?: ParallelConfig): string {
+  return parallel?.baseUrl?.trim() || PARALLEL_API_BASE_URL;
+}
+
+function resolveParallelMode(parallel?: ParallelConfig): "one-shot" | "agentic" | "fast" {
+  const mode = parallel?.mode;
+  if (mode === "agentic" || mode === "fast") {
+    return mode;
+  }
+  return DEFAULT_PARALLEL_MODE;
+}
+
+function resolveParallelMaxResults(parallel?: ParallelConfig): number {
+  const max = parallel?.maxResults ?? DEFAULT_PARALLEL_MAX_RESULTS;
+  return Math.max(1, Math.min(20, Math.floor(max)));
+}
+
+function resolveParallelExcerpts(parallel?: ParallelConfig): {
+  max_chars_per_result: number;
+  max_chars_total?: number;
+} {
+  return {
+    max_chars_per_result: parallel?.maxCharsPerResult ?? DEFAULT_PARALLEL_MAX_CHARS_PER_RESULT,
+    ...(parallel?.maxCharsTotal ? { max_chars_total: parallel.maxCharsTotal } : {}),
+  };
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -551,6 +638,50 @@ async function runGrokSearch(params: {
   return { content, citations, inlineCitations };
 }
 
+async function runParallelSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  mode: "one-shot" | "agentic" | "fast";
+  maxResults: number;
+  timeoutSeconds: number;
+  excerpts?: {
+    max_chars_per_result: number;
+    max_chars_total?: number;
+  };
+}): Promise<ParallelSearchResponse> {
+  const endpoint = `${params.baseUrl.replace(/\/$/, "")}/search`;
+
+  const requestBody = {
+    objective: params.query,
+    max_results: params.maxResults,
+    mode: params.mode,
+    excerpts: params.excerpts,
+    // Add search_queries for better results as per Parallel best practices
+    search_queries: [params.query],
+  };
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": params.apiKey,
+      "parallel-beta": "search-extract-2025-10-10",
+    },
+    body: JSON.stringify(requestBody),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+    const detail = detailResult.text;
+    throw new Error(`Parallel API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as ParallelSearchResponse;
+  return data;
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -566,13 +697,22 @@ async function runWebSearch(params: {
   perplexityModel?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  parallelBaseUrl?: string;
+  parallelMode?: "one-shot" | "agentic" | "fast";
+  parallelMaxResults?: number;
+  parallelExcerpts?: {
+    max_chars_per_result: number;
+    max_chars_total?: number;
+  };
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "grok"
+          ? `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
+          : `${params.provider}:${params.query}:${params.parallelBaseUrl ?? PARALLEL_API_BASE_URL}:${params.parallelMode ?? DEFAULT_PARALLEL_MODE}:${params.parallelMaxResults ?? DEFAULT_PARALLEL_MAX_RESULTS}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -632,6 +772,44 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "parallel") {
+    const response = await runParallelSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.parallelBaseUrl ?? PARALLEL_API_BASE_URL,
+      mode: params.parallelMode ?? DEFAULT_PARALLEL_MODE,
+      maxResults: params.parallelMaxResults ?? params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      excerpts: params.parallelExcerpts ?? {
+        max_chars_per_result: DEFAULT_PARALLEL_MAX_CHARS_PER_RESULT,
+      },
+    });
+
+    const mapped = response.results.map((entry) => {
+      const rawSiteName = resolveSiteName(entry.url);
+      return {
+        title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+        url: entry.url,
+        description: entry.excerpts?.[0] ? wrapWebContent(entry.excerpts[0], "web_search") : "",
+        published: entry.publish_date || undefined,
+        siteName: rawSiteName,
+        excerpts: entry.excerpts,
+      };
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      mode: params.parallelMode ?? DEFAULT_PARALLEL_MODE,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      results: mapped,
+      searchId: response.search_id,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -717,13 +895,16 @@ export function createWebSearchTool(options?: {
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
+  const parallelConfig = resolveParallelConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "parallel"
+          ? "Search the web using Parallel. Returns LLM-optimized excerpts from web sources, optimized for agentic workflows and multi-step research."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -738,7 +919,9 @@ export function createWebSearchTool(options?: {
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+            : provider === "parallel"
+              ? resolveParallelApiKey(parallelConfig)
+              : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -786,6 +969,10 @@ export function createWebSearchTool(options?: {
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        parallelBaseUrl: resolveParallelBaseUrl(parallelConfig),
+        parallelMode: resolveParallelMode(parallelConfig),
+        parallelMaxResults: resolveParallelMaxResults(parallelConfig),
+        parallelExcerpts: resolveParallelExcerpts(parallelConfig),
       });
       return jsonResult(result);
     },
@@ -803,4 +990,9 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveParallelApiKey,
+  resolveParallelBaseUrl,
+  resolveParallelMode,
+  resolveParallelMaxResults,
+  resolveParallelExcerpts,
 } as const;
