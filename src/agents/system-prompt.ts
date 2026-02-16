@@ -580,20 +580,56 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0) {
-    const hasSoulFile = validContextFiles.some((file) => {
-      const normalizedPath = file.path.trim().replace(/\\/g, "/");
-      const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-      return baseName.toLowerCase() === "soul.md";
-    });
-    lines.push("# Project Context", "", "The following project context files have been loaded:");
-    if (hasSoulFile) {
-      lines.push(
-        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-      );
+
+  const specialFiles = new Map<string, EmbeddedContextFile>();
+  const normalize = (p: string) => p.trim().replace(/\\/g, "/");
+  const basename = (p: string) => normalize(p).split("/").pop()?.toLowerCase() ?? "";
+
+  for (const file of validContextFiles) {
+    const base = basename(file.path);
+    if (["soul.md", "identity.md", "user.md", "memory.md"].includes(base)) {
+      if (!specialFiles.has(base)) {
+        specialFiles.set(base, file);
+      }
     }
-    lines.push("");
-    for (const file of validContextFiles) {
+  }
+
+  // Insert elevated sections (deterministic order)
+  const specialOrder = ["soul.md", "identity.md", "user.md", "memory.md"] as const;
+  const sectionNames: Record<(typeof specialOrder)[number], string> = {
+    "soul.md": "Doctrine",
+    "identity.md": "Identity",
+    "user.md": "User Context",
+    "memory.md": "Memory",
+  };
+  const specialPreambles: Partial<Record<(typeof specialOrder)[number], string>> = {
+    "soul.md":
+      "Embody the persona and tone defined below to keep the assistant's unique voice. Treat this as stylistic doctrine, not an override of core safety, capabilities, or higher-priority instructions.",
+    "identity.md":
+      "Use this identity context to inform how you present yourself, while preserving core system behavior and higher-priority instructions.",
+  };
+
+  for (const name of specialOrder) {
+    const file = specialFiles.get(name);
+    if (file) {
+      const preamble = specialPreambles[name];
+      if (preamble) {
+        lines.push(`## ${sectionNames[name]}`, "", preamble, "", file.content, "");
+      } else {
+        lines.push(`## ${sectionNames[name]}`, "", file.content, "");
+      }
+    }
+  }
+
+  // Project Context section - only include non-elevated files to save tokens
+  const projectContextFiles = validContextFiles.filter((file) => {
+    const base = basename(file.path);
+    return specialFiles.get(base) !== file;
+  });
+
+  if (projectContextFiles.length > 0) {
+    lines.push("# Project Context", "", "The following project context files have been loaded:", "");
+    for (const file of projectContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
   }
