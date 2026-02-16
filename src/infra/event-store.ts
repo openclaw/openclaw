@@ -258,10 +258,10 @@ async function ensureStream(
   try {
     await jsm.streams.info(cfg.streamName);
   } catch (err: unknown) {
-    // H1: Only treat "not found" as a cue to create the stream.
+    // H1: Only treat "not found" (404) as a cue to create the stream.
     // Auth/network errors must propagate so init fails visibly.
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes("not found") && !msg.includes("stream not found")) {
+    const apiErr = (err as { api_error?: { code?: number } })?.api_error;
+    if (apiErr?.code !== 404) {
       throw err;
     }
     // Stream doesn't exist, create it
@@ -331,13 +331,14 @@ export async function shutdownEventStore(): Promise<void> {
   state.unsub();
 
   // Drain with timeout to avoid hanging on shutdown
+  let timer: ReturnType<typeof setTimeout>;
   try {
     await Promise.race([
       state.nc.drain(),
-      new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error("Drain timeout")), DRAIN_TIMEOUT_MS),
-      ),
-    ]);
+      new Promise<void>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Drain timeout")), DRAIN_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer!));
   } catch (err) {
     log("Drain timed out, forcing close", err);
     try {

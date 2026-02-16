@@ -37,7 +37,9 @@ describe("Event Store", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setCapturedListener(null);
-    mockStreamInfo.mockRejectedValue(new Error("not found"));
+    mockStreamInfo.mockRejectedValue(
+      Object.assign(new Error("not found"), { api_error: { code: 404 } }),
+    );
     mockIsClosed.mockReturnValue(false);
     mockPublish.mockResolvedValue({ seq: 1 });
     mockDrain.mockResolvedValue(undefined);
@@ -143,7 +145,9 @@ describe("Event Store", () => {
     });
 
     it("should handle stream creation failure gracefully", async () => {
-      mockStreamInfo.mockRejectedValue(new Error("not found"));
+      mockStreamInfo.mockRejectedValue(
+        Object.assign(new Error("not found"), { api_error: { code: 404 } }),
+      );
       mockStreamAdd.mockRejectedValueOnce(new Error("stream create failed"));
       const { connect } = await import("nats");
       (connect as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockConnection);
