@@ -57,6 +57,24 @@ async function withTempStore(
   }
 }
 
+function mockGatewaySuccessReply(text = "hello") {
+  vi.mocked(callGateway).mockResolvedValue({
+    runId: "idem-1",
+    status: "ok",
+    result: {
+      payloads: [{ text }],
+      meta: { stub: true },
+    },
+  });
+}
+
+function mockLocalAgentReply(text = "local") {
+  vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
+    rt.log?.(text);
+    return { payloads: [{ text }], meta: { stub: true } };
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -64,14 +82,7 @@ beforeEach(() => {
 describe("agentCliCommand", () => {
   it("uses a timer-safe max gateway timeout when --timeout is 0", async () => {
     await withTempStore(async () => {
-      vi.mocked(callGateway).mockResolvedValue({
-        runId: "idem-1",
-        status: "ok",
-        result: {
-          payloads: [{ text: "hello" }],
-          meta: { stub: true },
-        },
-      });
+      mockGatewaySuccessReply();
 
       await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
 
@@ -83,14 +94,7 @@ describe("agentCliCommand", () => {
 
   it("uses gateway by default", async () => {
     await withTempStore(async () => {
-      vi.mocked(callGateway).mockResolvedValue({
-        runId: "idem-1",
-        status: "ok",
-        result: {
-          payloads: [{ text: "hello" }],
-          meta: { stub: true },
-        },
-      });
+      mockGatewaySuccessReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
@@ -103,10 +107,7 @@ describe("agentCliCommand", () => {
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
-      vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
-        rt.log?.("local");
-        return { payloads: [{ text: "local" }], meta: { stub: true } };
-      });
+      mockLocalAgentReply();
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
@@ -118,10 +119,7 @@ describe("agentCliCommand", () => {
 
   it("skips gateway when --local is set", async () => {
     await withTempStore(async () => {
-      vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
-        rt.log?.("local");
-        return { payloads: [{ text: "local" }], meta: { stub: true } };
-      });
+      mockLocalAgentReply();
 
       await agentCliCommand(
         {
