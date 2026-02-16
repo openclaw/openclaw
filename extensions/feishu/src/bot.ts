@@ -21,6 +21,7 @@ import {
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
 } from "./policy.js";
+import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
@@ -168,15 +169,16 @@ export type FeishuBotAddedEvent = {
 };
 
 function parseMessageContent(content: string, messageType: string): string {
+  if (messageType === "post") {
+    // Extract text content from rich text post
+    const { textContent } = parsePostContent(content);
+    return textContent;
+  }
+
   try {
     const parsed = JSON.parse(content);
     if (messageType === "text") {
       return parsed.text || "";
-    }
-    if (messageType === "post") {
-      // Extract text content from rich text post
-      const { textContent } = parsePostContent(content);
-      return textContent;
     }
     return content;
   } catch {
@@ -234,50 +236,6 @@ function parseMediaKeys(
     }
   } catch {
     return {};
-  }
-}
-
-/**
- * Parse post (rich text) content and extract embedded image keys.
- * Post structure: { title?: string, content: [[{ tag, text?, image_key?, ... }]] }
- */
-function parsePostContent(content: string): {
-  textContent: string;
-  imageKeys: string[];
-} {
-  try {
-    const parsed = JSON.parse(content);
-    const title = parsed.title || "";
-    const contentBlocks = parsed.content || [];
-    let textContent = title ? `${title}\n\n` : "";
-    const imageKeys: string[] = [];
-
-    for (const paragraph of contentBlocks) {
-      if (Array.isArray(paragraph)) {
-        for (const element of paragraph) {
-          if (element.tag === "text") {
-            textContent += element.text || "";
-          } else if (element.tag === "a") {
-            // Link: show text or href
-            textContent += element.text || element.href || "";
-          } else if (element.tag === "at") {
-            // Mention: @username
-            textContent += `@${element.user_name || element.user_id || ""}`;
-          } else if (element.tag === "img" && element.image_key) {
-            // Embedded image
-            imageKeys.push(element.image_key);
-          }
-        }
-        textContent += "\n";
-      }
-    }
-
-    return {
-      textContent: textContent.trim() || "[富文本消息]",
-      imageKeys,
-    };
-  } catch {
-    return { textContent: "[富文本消息]", imageKeys: [] };
   }
 }
 
