@@ -1,3 +1,4 @@
+import type { DiscordActionConfig } from "../../../config/types.discord.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { createActionGate } from "../../../agents/tools/common.js";
 import { listEnabledDiscordAccounts } from "../../../discord/accounts.js";
@@ -11,7 +12,10 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return [];
     }
-    const gate = createActionGate(cfg.channels?.discord?.actions);
+    // Union of all accounts' action gates (any account enabling an action makes it available)
+    const gates = accounts.map((a) => createActionGate(a.config.actions));
+    const gate = (key: keyof DiscordActionConfig, defaultValue = true) =>
+      gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
     if (gate("polls")) {
       actions.add("poll");
