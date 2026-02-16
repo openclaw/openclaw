@@ -51,3 +51,28 @@ export function safeParseJson(value: string | null | undefined): unknown {
     return { payloadJSON: value };
   }
 }
+
+export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(
+  respond: RespondFn,
+  res: T,
+): res is T & { ok: true } {
+  if (res.ok) {
+    return true;
+  }
+  const message =
+    res.error && typeof res.error === "object" && "message" in res.error
+      ? (res.error as { message?: unknown }).message
+      : null;
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.UNAVAILABLE,
+      typeof message === "string" ? message : "node invoke failed",
+      {
+        details: { nodeError: res.error ?? null },
+      },
+    ),
+  );
+  return false;
+}
