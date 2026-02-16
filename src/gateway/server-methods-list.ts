@@ -47,6 +47,8 @@ const BASE_METHODS = [
   "update.run",
   "voicewake.get",
   "voicewake.set",
+  "voicewake.routing.get",
+  "voicewake.routing.set",
   "sessions.list",
   "sessions.preview",
   "sessions.patch",
@@ -114,6 +116,7 @@ export const GATEWAY_EVENTS = [
   "device.pair.requested",
   "device.pair.resolved",
   "voicewake.changed",
+  "voicewake.routing.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
 ];

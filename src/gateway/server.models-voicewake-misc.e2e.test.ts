@@ -215,6 +215,115 @@ describe("gateway server models + voicewake", () => {
     restoreHome();
   });
 
+  test("voicewake.routing.get/set persists and broadcasts", { timeout: 60_000 }, async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
+    const restoreHome = setTempHome(homeDir);
+
+    const initial = await rpcReq<{
+      config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
+    }>(ws, "voicewake.routing.get");
+    expect(initial.ok).toBe(true);
+    expect(initial.payload?.config?.version).toBe(1);
+    expect(initial.payload?.config?.defaultTarget).toEqual({ mode: "current" });
+    expect(initial.payload?.config?.routes).toEqual([]);
+
+    const changedP = onceMessage<{
+      type: "event";
+      event: string;
+      payload?: unknown;
+    }>(ws, (o) => o.type === "event" && o.event === "voicewake.routing.changed");
+
+    const setRes = await rpcReq<{
+      config?: { routes?: Array<{ trigger?: string; target?: unknown }>; updatedAtMs?: number };
+    }>(ws, "voicewake.routing.set", {
+      config: {
+        defaultTarget: { mode: "current" },
+        routes: [
+          { trigger: "  Robot   Wake ", target: { agentId: "main" } },
+          { trigger: "", target: { sessionKey: "agent:main:main" } },
+        ],
+      },
+    });
+    expect(setRes.ok).toBe(true);
+    expect(setRes.payload?.config?.routes).toEqual([
+      { trigger: "robot wake", target: { agentId: "main" } },
+    ]);
+    expect(typeof setRes.payload?.config?.updatedAtMs).toBe("number");
+
+    const changed = await changedP;
+    expect(changed.event).toBe("voicewake.routing.changed");
+    expect(
+      (changed.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
+    ).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+
+    const after = await rpcReq<{
+      config?: { routes?: Array<{ trigger?: string; target?: unknown }> };
+    }>(ws, "voicewake.routing.get");
+    expect(after.ok).toBe(true);
+    expect(after.payload?.config?.routes).toEqual([
+      { trigger: "robot wake", target: { agentId: "main" } },
+    ]);
+
+    const onDisk = JSON.parse(
+      await fs.readFile(
+        path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"),
+        "utf8",
+      ),
+    ) as { routes?: unknown };
+    expect(onDisk.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+
+    restoreHome();
+  });
+
+  test("pushes voicewake.routing.changed to nodes on connect and on updates", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
+    const restoreHome = setTempHome(homeDir);
+
+    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+    const firstEventP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+      nodeWs,
+      (o) => o.type === "event" && o.event === "voicewake.routing.changed",
+    );
+    await connectOk(nodeWs, {
+      role: "node",
+      client: {
+        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        version: "1.0.0",
+        platform: "ios",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+    });
+
+    const first = await firstEventP;
+    expect(first.event).toBe("voicewake.routing.changed");
+    expect(
+      (first.payload as { config?: { routes?: unknown[] } } | undefined)?.config?.routes,
+    ).toEqual([]);
+
+    const broadcastP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+      nodeWs,
+      (o) => o.type === "event" && o.event === "voicewake.routing.changed",
+    );
+
+    const setRes = await rpcReq(ws, "voicewake.routing.set", {
+      config: {
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "hello", target: { sessionKey: "agent:main:main" } }],
+      },
+    });
+    expect(setRes.ok).toBe(true);
+
+    const broadcast = await broadcastP;
+    expect(broadcast.event).toBe("voicewake.routing.changed");
+    expect(
+      (broadcast.payload as { config?: { routes?: unknown } } | undefined)?.config?.routes,
+    ).toEqual([{ trigger: "hello", target: { sessionKey: "agent:main:main" } }]);
+
+    nodeWs.close();
+    restoreHome();
+  });
+
   test("models.list returns model catalog", async () => {
     piSdkMock.enabled = true;
     piSdkMock.models = [

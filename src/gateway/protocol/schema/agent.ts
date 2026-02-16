@@ -84,6 +84,7 @@ export const AgentParamsSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(Type.String()),

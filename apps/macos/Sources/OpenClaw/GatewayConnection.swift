@@ -42,6 +42,7 @@ struct GatewayAgentInvocation: Sendable {
     var channel: GatewayAgentChannel = .last
     var timeoutSeconds: Int?
     var idempotencyKey: String = UUID().uuidString
+    var voiceWakeTrigger: String?
 }
 
 /// Single, shared Gateway websocket connection for the whole app.
@@ -459,6 +460,9 @@ extension GatewayConnection {
         ]
         if let timeout = invocation.timeoutSeconds {
             params["timeout"] = AnyCodable(timeout)
+        }
+        if let trigger = invocation.voiceWakeTrigger?.trimmingCharacters(in: .whitespacesAndNewlines), !trigger.isEmpty {
+            params["voiceWakeTrigger"] = AnyCodable(trigger)
         }
 
         do {
