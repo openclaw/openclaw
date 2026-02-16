@@ -279,6 +279,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.appToken": "Slack App Token",
   "channels.slack.userToken": "Slack User Token",
   "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
+  "channels.slack.streamMode": "Slack Stream Mode",
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
   "channels.slack.thread.initialHistoryLimit": "Slack Thread Initial History Limit",
