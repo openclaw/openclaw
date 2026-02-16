@@ -8,7 +8,6 @@ import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { DEFAULT_MEMORY_FLUSH_PROMPT } from "./memory-flush.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -948,7 +947,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
   it("enforces <final> during memory flush on fallback providers", async () => {
     runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedPiAgentParams) => {
-      if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
+      if (params.prompt?.includes("Pre-compaction memory flush.")) {
         return { payloads: [], meta: {} };
       }
       return { payloads: [{ text: "ok" }], meta: {} };
@@ -970,7 +969,9 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     const flushCall = runEmbeddedPiAgentMock.mock.calls.find(
       ([params]) =>
-        (params as EmbeddedPiAgentParams | undefined)?.prompt === DEFAULT_MEMORY_FLUSH_PROMPT,
+        (params as EmbeddedPiAgentParams | undefined)?.prompt?.includes(
+          "Pre-compaction memory flush.",
+        ),
     )?.[0] as EmbeddedPiAgentParams | undefined;
 
     expect(flushCall?.enforceFinalTag).toBe(true);
