@@ -167,7 +167,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("does not include message_thread_id for DMs (threads don't exist in private chats)", async () => {
+  it("includes message_thread_id for DM topics", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 4,
@@ -179,14 +179,14 @@ describe("deliverReplies", () => {
       replies: [{ text: "Hello" }],
       runtime,
       bot,
-      thread: { id: 1, scope: "dm" },
+      thread: { id: 42, scope: "dm" },
     });
 
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
-      expect.not.objectContaining({
-        message_thread_id: 1,
+      expect.objectContaining({
+        message_thread_id: 42,
       }),
     );
   });
