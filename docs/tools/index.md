@@ -461,7 +461,7 @@ List sessions, inspect transcript history, or send to another session.
 
 Core parameters:
 
-- `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
+- `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `updatedAfter?`, `updatedBefore?`, `createdAfter?`, `createdBefore?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey` (or `sessionId`), `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey` (or `sessionId`), `message`, `timeoutSeconds?` (0 = fire-and-forget)
 - `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `runTimeoutSeconds?`, `cleanup?`

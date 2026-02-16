@@ -35,6 +35,10 @@ Parameters:
 - `kinds?: string[]` filter: any of `"main" | "group" | "cron" | "hook" | "node" | "other"`
 - `limit?: number` max rows (default: server default, clamp e.g. 200)
 - `activeMinutes?: number` only sessions updated within N minutes
+- `updatedAfter?: number` only sessions updated at or after this timestamp (ms since epoch)
+- `updatedBefore?: number` only sessions updated at or before this timestamp (ms since epoch)
+- `createdAfter?: number` only sessions created at or after this timestamp (ms since epoch)
+- `createdBefore?: number` only sessions created at or before this timestamp (ms since epoch)
 - `messageLimit?: number` 0 = no messages (default 0); >0 = include last N messages
 
 Behavior:
