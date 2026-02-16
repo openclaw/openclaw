@@ -9,7 +9,7 @@ title: "Testing"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/testing)
+- Ver la versión en inglés: [Open English doc](/help/testing)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.
