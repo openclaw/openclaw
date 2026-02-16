@@ -43,6 +43,30 @@ export function formatUsd(value?: number): string | undefined {
   return `$${value.toFixed(4)}`;
 }
 
+const toNumber = (value: number | undefined): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+// Cost per 1M tokens (USD)
+const DEFAULT_MODEL_COSTS: Record<string, ModelCostConfig> = {
+  // OpenAI
+  "gpt-4o": { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 2.5 }, // 2024-08 pricing
+  "gpt-4o-mini": { input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0.15 },
+  "gpt-4-turbo": { input: 10, output: 30, cacheRead: 10, cacheWrite: 10 },
+  
+  // Anthropic
+  "claude-3-5-sonnet-20240620": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-3-5-sonnet-latest": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  "claude-3-5-haiku-20241022": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-3-opus-20240229": { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  
+  // Google
+  "gemini-1.5-pro": { input: 3.5, output: 10.5, cacheRead: 0.875, cacheWrite: 3.5 }, // approximate
+  "gemini-1.5-flash": { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0.075 },
+  
+  // DeepSeek (approx)
+  "deepseek-chat": { input: 0.14, output: 0.28, cacheRead: 0.014, cacheWrite: 0.14 },
+};
+
 export function resolveModelCostConfig(params: {
   provider?: string;
   model?: string;
@@ -50,16 +74,35 @@ export function resolveModelCostConfig(params: {
 }): ModelCostConfig | undefined {
   const provider = params.provider?.trim();
   const model = params.model?.trim();
-  if (!provider || !model) {
+  if (!model) {
     return undefined;
   }
-  const providers = params.config?.models?.providers ?? {};
-  const entry = providers[provider]?.models?.find((item) => item.id === model);
-  return entry?.cost;
-}
+  
+  // 1. Check user config overrides
+  if (provider && params.config?.models?.providers) {
+    const providers = params.config.models.providers;
+    const entry = providers[provider]?.models?.find((item) => item.id === model);
+    if (entry?.cost) {
+      return entry.cost;
+    }
+  }
 
-const toNumber = (value: number | undefined): number =>
-  typeof value === "number" && Number.isFinite(value) ? value : 0;
+  // 2. Check default costs map
+  const normalized = model.toLowerCase();
+  for (const [key, cost] of Object.entries(DEFAULT_MODEL_COSTS)) {
+    if (normalized === key) {
+      return cost;
+    }
+  }
+  // Fuzzy match: if config model is "anthropic/claude-3-5-sonnet-20240620"
+  for (const [key, cost] of Object.entries(DEFAULT_MODEL_COSTS)) {
+    if (normalized.endsWith(key)) {
+      return cost;
+    }
+  }
+
+  return undefined;
+}
 
 export function estimateUsageCost(params: {
   usage?: NormalizedUsage | UsageTotals | null;
