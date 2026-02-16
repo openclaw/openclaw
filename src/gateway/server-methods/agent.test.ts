@@ -49,11 +49,14 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
+  resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+  resolveAgentConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
+  extractSkillInvocationRouting: vi.fn(() => null),
 }));
 
 vi.mock("./sessions.js", () => ({
