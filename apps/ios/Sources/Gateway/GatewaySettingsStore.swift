@@ -207,6 +207,25 @@ enum GatewaySettingsStore {
         return .manual(host: host, port: port, useTLS: useTLS, stableID: stableID)
     }
 
+    static func clearLastGatewayConnection(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: self.lastGatewayKindDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayHostDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayPortDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayTlsDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayStableIDDefaultsKey)
+    }
+
+    static func deleteGatewayCredentials(instanceId: String) {
+        let trimmed = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayTokenAccount(instanceId: trimmed))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayPasswordAccount(instanceId: trimmed))
+    }
+
     static func loadGatewayClientIdOverride(stableID: String) -> String? {
         let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedID.isEmpty else { return nil }
