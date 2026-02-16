@@ -94,7 +94,6 @@ export function resolveTranscriptPolicy(params: {
     modelId,
   });
 
-  const isMinimax = provider === "minimax";
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
   const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
@@ -120,11 +119,10 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,
-    // MiniMax uses anthropic-messages API, so isAnthropic is also true.
-    // validateAnthropicTurns merges consecutive user messages first,
-    // then validateStrictTurns catches any remaining same-role pairs (developer, assistant, system).
-    // This two-layer composition is intentional.
-    validateStrictTurns: isMinimax,
+    // Merge any remaining consecutive same-role messages (developer, assistant, system).
+    // Many providers (MiniMax, DeepSeek, Mistral, etc.) require strict role alternation.
+    // This is safe for all providers since merging consecutive same-role messages is semantically neutral.
+    validateStrictTurns: true,
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }
