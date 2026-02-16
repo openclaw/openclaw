@@ -51,11 +51,11 @@ const MAX_BODY_CHARS = 4000;
 const SNAPSHOT_PATH = process.env.SNAPSHOT_PATH || ".pr-triage-snapshot.json";
 const SNAPSHOT_MAX_AGE_MS = Number(process.env.SNAPSHOT_MAX_AGE_MS) || 60 * 60 * 1000; // 1 hour
 
-// Opus 4.6 GA pricing (Feb 2026)
+// Pricing per MTok (Feb 2026) — cache_write reflects 1h TTL (2x base input)
 const PRICING = {
-  "claude-opus-4-6": { input: 5.0, cache_read: 0.5, cache_write: 6.25, output: 25.0 },
-  "claude-sonnet-4-5-20250929": { input: 3.0, cache_read: 0.3, cache_write: 3.75, output: 15.0 },
-  "claude-haiku-4-5-20251001": { input: 1.0, cache_read: 0.1, cache_write: 1.25, output: 5.0 },
+  "claude-opus-4-6": { input: 5.0, cache_read: 0.5, cache_write: 10.0, output: 25.0 },
+  "claude-sonnet-4-5-20250929": { input: 3.0, cache_read: 0.3, cache_write: 6.0, output: 15.0 },
+  "claude-haiku-4-5-20251001": { input: 1.0, cache_read: 0.1, cache_write: 2.0, output: 5.0 },
 };
 const { gh, ghGraphQL, ghPaginate } = createGitHubClient(GITHUB_TOKEN);
 
@@ -73,9 +73,9 @@ async function loadContributing() {
 
 /**
  * Snapshot caching: freeze open PR context for 1 hour so all PRs triaged
- * in that window send byte-identical system prompts → Anthropic cache hit.
- * First call in the hour: cache WRITE. All subsequent: cache READ (90% discount).
- * Trade-off: 1-hour context staleness vs ~74% cost reduction.
+ * in that window send byte-identical system prompts → Anthropic 1h cache hit.
+ * First call in the hour: cache WRITE (2x base). All subsequent: cache READ (90% discount).
+ * Uses Anthropic's 1h TTL (cache_control.ttl="1h") to survive gaps between PRs.
  */
 async function loadSnapshot() {
   try {
@@ -181,8 +181,8 @@ Analyze this PR and respond with the triage JSON. PR #${targetPR.number} may app
       },
     },
     system: [
-      { type: "text", text: stableInstructions, cache_control: { type: "ephemeral" } },
-      { type: "text", text: dynamicContext },
+      { type: "text", text: stableInstructions, cache_control: { type: "ephemeral", ttl: "1h" } },
+      { type: "text", text: dynamicContext, cache_control: { type: "ephemeral", ttl: "1h" } },
     ],
     messages: [{ role: "user", content: userPrompt }],
   };
@@ -194,7 +194,6 @@ Analyze this PR and respond with the triage JSON. PR #${targetPR.number} may app
       headers: {
         "x-api-key": ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "structured-outputs-2025-11-13",
         "content-type": "application/json",
       },
       body: JSON.stringify(body),

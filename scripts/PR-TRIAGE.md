@@ -50,17 +50,17 @@ Write GitHub Action summary (private)
 
 One API call per PR with two cached system blocks:
 
-1. **Stable instructions** (~2K tokens, high cache hit rate): task description, rules, project focus from CONTRIBUTING.md
-2. **Dynamic context** (~20-50K tokens, 5-min cache window): all open PR summaries + merged/rejected decisions
+1. **Stable instructions** (~2K tokens, 1h TTL cache): task description, rules, project focus from CONTRIBUTING.md
+2. **Dynamic context** (~20-50K tokens, 1h TTL cache): all open PR summaries + merged/rejected decisions
 
 The user message (~2K tokens) contains only the new PR's details.
 
 ### Model Configuration
 
-- **Default**: Claude Opus 4.6 with adaptive thinking (`thinking: { type: "adaptive" }`)
-- **Structured output**: `output_config.format` with `json_schema` type
-- **Effort**: configurable via `TRIAGE_EFFORT` env var (default: `high`)
-- **Override model**: `TRIAGE_MODEL` env var
+- **Default**: Claude Sonnet 4.5 (override via `TRIAGE_MODEL`)
+- **Opus mode**: adaptive thinking + configurable effort via `TRIAGE_EFFORT` (default: `medium`)
+- **Structured output**: `output_config.format` with `json_schema` (GA, no beta header needed)
+- **Cache TTL**: 1-hour (`cache_control.ttl="1h"`) on both system blocks
 
 ### Hourly Snapshot Caching
 
@@ -68,21 +68,23 @@ The system caches open PR context as a JSON snapshot (`actions/cache`) keyed by 
 All PRs triaged within the same hour share **byte-identical system prompts**, enabling
 Anthropic's prompt caching (90% discount on cached input tokens).
 
-**How it works:**
-1. First PR of the hour: cache miss → fetch all open PRs + decisions → save snapshot → Anthropic cache WRITE
-2. All subsequent PRs that hour: cache hit → load snapshot → Anthropic cache READ (90% discount)
+**Two-layer caching (application + API):**
+1. First PR of the hour: snapshot miss → fetch all open PRs + decisions → save snapshot → Anthropic 1h cache WRITE (2x base input)
+2. All subsequent PRs that hour: snapshot hit → load snapshot → byte-identical system prompt → Anthropic 1h cache READ (90% discount)
 3. Target PR is NOT filtered from context (would break byte-identity); user prompt instructs LLM to skip self-match
+
+The 1h TTL (`cache_control.ttl="1h"`) ensures cache hits even when PRs arrive >5 minutes apart (~1 every 5.6 min at openclaw scale).
 
 **Trade-off:** PRs opened in the last hour may not appear in context. Most duplicates target older PRs,
 so the accuracy impact is minimal. Configurable via `SNAPSHOT_MAX_AGE_MS`.
 
 ### Cost
 
-| Model      | First call/hour | Cached calls (93% of volume) | Monthly est. (7,684 PRs) |
-| ---------- | --------------- | ---------------------------- | ------------------------ |
-| Opus 4.6   | ~$0.15-0.30     | ~$0.03-0.06                  | ~$130-200                |
-| Sonnet 4.5 | ~$0.09-0.18     | ~$0.02-0.04                  | ~$70-120                 |
-| Haiku 4.5  | ~$0.03-0.06     | ~$0.006-0.01                 | ~$30-50                  |
+| Model      | First call/hour (1h write) | Cached calls (93%) | Monthly est. (7,684 PRs) |
+| ---------- | -------------------------- | ------------------- | ------------------------ |
+| Opus 4.6   | ~$0.40-0.60                | ~$0.03-0.06         | ~$60-100                 |
+| Sonnet 4.5 | ~$0.20-0.35                | ~$0.02-0.04         | ~$40-70                  |
+| Haiku 4.5  | ~$0.07 (verified)          | ~$0.007 (verified)  | ~$10-20                  |
 
 ## Duplicate Detection
 
