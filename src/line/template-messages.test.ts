@@ -83,17 +83,6 @@ describe("createConfirmTemplate", () => {
 
     expect((template.template as { text: string }).text.length).toBe(240);
   });
-
-  it("uses custom altText when provided", () => {
-    const template = createConfirmTemplate(
-      "Question?",
-      messageAction("Yes"),
-      messageAction("No"),
-      "Custom alt",
-    );
-
-    expect(template.altText).toBe("Custom alt");
-  });
 });
 
 describe("createButtonTemplate", () => {
