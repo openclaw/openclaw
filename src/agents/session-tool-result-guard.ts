@@ -244,9 +244,10 @@ export function installSessionToolResultGuard(
     message: AgentMessage,
     meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
   ) => {
-    const mapped = applyPersistedIdMapping(message);
+    // `persistMessage` already applies the persisted tool id mapping; keep this
+    // focused on the optional tool-result persistence hook.
     const transformer = opts?.transformToolResultForPersistence;
-    return transformer ? transformer(mapped, meta) : mapped;
+    return transformer ? transformer(message, meta) : message;
   };
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
