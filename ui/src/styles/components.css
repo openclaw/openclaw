@@ -966,12 +966,13 @@
   display: grid;
   gap: 4px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .session-key-cell .session-link,
 .session-key-display-name {
   overflow-wrap: anywhere;
-  word-break: break-word;
+  word-break: break-all;
 }
 
 .session-key-display-name {

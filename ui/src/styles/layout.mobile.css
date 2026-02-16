@@ -127,9 +127,73 @@
     display: none;
   }
 
+  /* Keep chat controls visible on mobile — session selector is critical */
+  .content--chat .content-header {
+    display: flex !important;
+    padding: 4px;
+    margin-bottom: 0;
+    gap: 4px;
+    max-height: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  /* Hide title/subtitle but keep controls */
+  .content--chat .content-header > div:first-child {
+    display: none;
+  }
+
+  .content--chat .content-header .page-meta {
+    width: 100%;
+    flex: 1;
+  }
+
+  .content--chat .chat-controls {
+    width: 100%;
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .content--chat .chat-controls__session {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .content--chat .chat-controls__session select {
+    width: 100%;
+    max-width: 100%;
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+
+  .content--chat .chat-controls__separator {
+    display: none;
+  }
+
+  /* Override focus-mode header hiding for chat on mobile —
+     session selector must remain accessible */
+  .shell--chat-focus .content--chat .content-header {
+    display: flex !important;
+    opacity: 1 !important;
+    transform: none !important;
+    max-height: none !important;
+    padding: 4px !important;
+    pointer-events: auto !important;
+  }
+
+  /* iOS Safari: ensure content area is scrollable */
   .content {
     padding: 4px 4px 16px;
     gap: 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* iOS Safari: fix content being clipped */
+  .content--chat {
+    overflow: visible;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Cards */
@@ -191,6 +255,73 @@
   .pill {
     padding: 4px 10px;
     font-size: 12px;
+  }
+
+  /* Sessions table — card layout on mobile */
+  .table-head {
+    display: none !important;
+  }
+
+  .table-row {
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .table-row > div {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  /* Label each cell using ::before with data-label */
+  .table-row > div[data-label]::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    min-width: 70px;
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .table-row > div input,
+  .table-row > div select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Session key needs word break */
+  .table-row .session-key-cell {
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .table-row .session-key-cell .mono {
+    font-size: 12px;
+  }
+
+  /* Delete button full width on mobile */
+  .table-row .btn.danger {
+    width: 100%;
+  }
+
+  /* Filters wrap vertically on mobile */
+  .filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filters .field {
+    width: 100%;
+  }
+
+  .filters .field.checkbox {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
   }
 
   /* Chat */

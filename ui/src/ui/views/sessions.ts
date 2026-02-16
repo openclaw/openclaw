@@ -243,11 +243,11 @@ function renderRow(
 
   return html`
     <div class="table-row">
-      <div class="mono session-key-cell">
+      <div class="mono session-key-cell" data-label="Key">
         ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
       </div>
-      <div>
+      <div data-label="Label">
         <input
           .value=${row.label ?? ""}
           ?disabled=${disabled}
@@ -258,10 +258,10 @@ function renderRow(
           }}
         />
       </div>
-      <div>${row.kind}</div>
-      <div>${updated}</div>
-      <div>${formatSessionTokens(row)}</div>
-      <div>
+      <div data-label="Kind">${row.kind}</div>
+      <div data-label="Updated">${updated}</div>
+      <div data-label="Tokens">${formatSessionTokens(row)}</div>
+      <div data-label="Thinking">
         <select
           ?disabled=${disabled}
           @change=${(e: Event) => {
@@ -279,7 +279,7 @@ function renderRow(
           )}
         </select>
       </div>
-      <div>
+      <div data-label="Verbose">
         <select
           ?disabled=${disabled}
           @change=${(e: Event) => {
@@ -295,7 +295,7 @@ function renderRow(
           )}
         </select>
       </div>
-      <div>
+      <div data-label="Reasoning">
         <select
           ?disabled=${disabled}
           @change=${(e: Event) => {
@@ -311,7 +311,7 @@ function renderRow(
           )}
         </select>
       </div>
-      <div>
+      <div data-label="">
         <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
           Delete
         </button>

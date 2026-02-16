@@ -441,6 +441,9 @@
   gap: 24px;
   overflow: hidden;
   padding-bottom: 0;
+  /* iOS Safari fix: ensure flex children can shrink */
+  min-height: 0;
+  height: 100%;
 }
 
 .content--chat > * + * {
@@ -577,12 +580,18 @@
       "content";
   }
 
+  /* On tablet, the shell is stacked — content must be scrollable */
+  .shell--chat {
+    overflow: hidden;
+  }
+
   .nav {
     position: static;
     max-height: none;
     display: flex;
     gap: 6px;
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 10px 14px;
@@ -617,5 +626,14 @@
 
   .list-item {
     grid-template-columns: 1fr;
+  }
+
+  /* Ensure content area doesn't overflow on iOS Safari */
+  .content {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .content--chat {
+    min-height: 0;
   }
 }
