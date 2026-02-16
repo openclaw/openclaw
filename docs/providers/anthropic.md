@@ -16,7 +16,7 @@ In OpenClaw you can authenticate with **Claude Code OAuth**, an API key, or a **
 **Best for:** standard API access and usage-based billing.
 Create your API key in the Anthropic Console.
 
-### CLI setup
+### CLI setup (API key)
 
 ```bash
 openclaw onboard
@@ -39,7 +39,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 **Best for:** primary Claude subscription auth without an Anthropic API key.
 
-### CLI setup
+### CLI setup (Claude Code OAuth)
 
 ```bash
 openclaw onboard --auth-choice claude-code-cli
