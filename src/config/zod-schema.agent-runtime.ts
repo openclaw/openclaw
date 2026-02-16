@@ -551,6 +551,12 @@ export const ToolsSchema = z
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
+    sessions: z
+      .object({
+        visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+      })
+      .strict()
+      .optional(),
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

@@ -710,7 +710,11 @@ Common use cases:
           scope: "agent",
           workspaceAccess: "none",
         },
+        // Session tools can reveal sensitive data from transcripts. By default OpenClaw limits these tools
+        // to the current session + spawned subagent sessions, but you can clamp further if needed.
+        // See `tools.sessions.visibility` in the configuration reference.
         tools: {
+          sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
             "sessions_history",

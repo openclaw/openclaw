@@ -44,6 +44,62 @@ export type SessionListRow = {
   messages?: unknown[];
 };
 
+export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
+
+export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
+  const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
+    ?.visibility;
+  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (value === "self" || value === "tree" || value === "agent" || value === "all") {
+    return value;
+  }
+  return "tree";
+}
+
+export function resolveEffectiveSessionToolsVisibility(params: {
+  cfg: OpenClawConfig;
+  sandboxed: boolean;
+}): SessionToolsVisibility {
+  const visibility = resolveSessionToolsVisibility(params.cfg);
+  if (!params.sandboxed) {
+    return visibility;
+  }
+  const sandboxClamp = params.cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
+  if (sandboxClamp === "spawned" && visibility !== "tree") {
+    return "tree";
+  }
+  return visibility;
+}
+
+export async function listSpawnedSessionKeys(params: {
+  requesterSessionKey: string;
+  limit?: number;
+}): Promise<Set<string>> {
+  const limit =
+    typeof params.limit === "number" && Number.isFinite(params.limit)
+      ? Math.max(1, Math.floor(params.limit))
+      : 500;
+  try {
+    const list = await callGateway<{ sessions: Array<{ key?: unknown }> }>({
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        limit,
+        spawnedBy: params.requesterSessionKey,
+      },
+    });
+    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+    const keys = sessions
+      .map((entry) => (typeof entry?.key === "string" ? entry.key : ""))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return new Set(keys);
+  } catch {
+    return new Set();
+  }
+}
+
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;

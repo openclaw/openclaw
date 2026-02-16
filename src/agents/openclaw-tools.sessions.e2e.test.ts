@@ -20,6 +20,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
         scope: "per-sender",
         agentToAgent: { maxPingPongTurns: 2 },
       },
+      tools: {
+        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+        sessions: { visibility: "all" },
+      },
     }),
     resolveGatewayPort: () => 18789,
   };
