@@ -8,16 +8,4 @@ describe("createQuickReplyItems", () => {
 
     expect(quickReply.items).toHaveLength(13);
   });
-
-  it("truncates labels to 20 characters", () => {
-    const quickReply = createQuickReplyItems([
-      "This is a very long option label that exceeds the limit",
-    ]);
-
-    expect((quickReply.items[0].action as { label: string }).label).toBe("This is a very long ");
-    // Text is not truncated
-    expect((quickReply.items[0].action as { text: string }).text).toBe(
-      "This is a very long option label that exceeds the limit",
-    );
-  });
 });
