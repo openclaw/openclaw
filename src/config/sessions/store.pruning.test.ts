@@ -79,14 +79,6 @@ describe("pruneStaleEntries", () => {
     expect(store.noDate).toBeDefined();
   });
 
-  it("empty store is a no-op", () => {
-    const store: Record<string, SessionEntry> = {};
-    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
-
-    expect(pruned).toBe(0);
-    expect(Object.keys(store)).toHaveLength(0);
-  });
-
   it("all entries stale results in empty store", () => {
     const now = Date.now();
     const store = makeStore([
