@@ -43,11 +43,64 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "C123",
-        text: " ",
+        text: "Shared a Block Kit message",
         blocks: [{ type: "divider" }],
       }),
     );
     expect(result).toEqual({ messageId: "171234.567", channelId: "C123" });
+  });
+
+  it("derives fallback text from image blocks", async () => {
+    const client = createClient();
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      client,
+      blocks: [{ type: "image", image_url: "https://example.com/a.png", alt_text: "Build chart" }],
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Build chart",
+      }),
+    );
+  });
+
+  it("derives fallback text from video blocks", async () => {
+    const client = createClient();
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      client,
+      blocks: [
+        {
+          type: "video",
+          title: { type: "plain_text", text: "Release demo" },
+          video_url: "https://example.com/demo.mp4",
+          thumbnail_url: "https://example.com/thumb.jpg",
+          alt_text: "demo",
+        },
+      ],
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Release demo",
+      }),
+    );
+  });
+
+  it("derives fallback text from file blocks", async () => {
+    const client = createClient();
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      client,
+      blocks: [{ type: "file", source: "remote", external_id: "F123" }],
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Shared a file",
+      }),
+    );
   });
 
   it("rejects blocks combined with mediaUrl", async () => {
