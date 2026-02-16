@@ -49,23 +49,26 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  // Ask croner for the next occurrence starting from the NEXT second.
-  // This prevents re-scheduling into the current second when a job fires
-  // at 13:00:00.014 and completes at 13:00:00.021 — without this fix,
-  // croner could return 13:00:00.000 (same second) causing a spin loop
-  // where the job fires hundreds of times per second (see #17821).
-  //
-  // By asking from the next second (e.g., 13:00:01.000), we ensure croner
-  // returns the following day's occurrence (e.g., 13:00:00.000 tomorrow).
-  //
-  // This also correctly handles the "before match" case: if nowMs is
-  // 11:59:59.500, we ask from 12:00:00.000, and croner returns 12:00:00.000
-  // (today's match) since it uses >= semantics for the start time.
-  const askFromNextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
-  const next = cron.nextRun(new Date(askFromNextSecondMs));
+  const next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
   }
   const nextMs = next.getTime();
-  return Number.isFinite(nextMs) ? nextMs : undefined;
+  if (!Number.isFinite(nextMs)) {
+    return undefined;
+  }
+  if (nextMs > nowMs) {
+    return nextMs;
+  }
+
+  // Guard against same-second rescheduling loops: if croner returns
+  // "now" (or an earlier instant) when the job completed mid-second,
+  // retry from the next whole second.
+  const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+  const retry = cron.nextRun(new Date(nextSecondMs));
+  if (!retry) {
+    return undefined;
+  }
+  const retryMs = retry.getTime();
+  return Number.isFinite(retryMs) ? retryMs : undefined;
 }

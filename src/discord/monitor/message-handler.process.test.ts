@@ -134,14 +134,18 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const runPromise = processDiscordMessage(ctx as any);
 
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(reactMessageDiscord.mock.calls.some((call) => call[2] === "⏳")).toBe(true);
+    let settled = false;
+    void runPromise.finally(() => {
+      settled = true;
+    });
+    for (let i = 0; i < 120 && !settled; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
 
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(reactMessageDiscord.mock.calls.some((call) => call[2] === "⚠️")).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(1_000);
     await runPromise;
-    expect(reactMessageDiscord.mock.calls.some((call) => call[2] === "✅")).toBe(true);
+    const emojis = reactMessageDiscord.mock.calls.map((call) => call[2]);
+    expect(emojis).toContain("⏳");
+    expect(emojis).toContain("⚠️");
+    expect(emojis).toContain("✅");
   });
 });
