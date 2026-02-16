@@ -3,6 +3,7 @@
  * Handles user and group ID formats for message targeting.
  */
 
+import { getInfoflowSendLog } from "./logging.js";
 import { getInfoflowRuntime } from "./runtime.js";
 
 // ---------------------------------------------------------------------------
@@ -41,13 +42,13 @@ export function normalizeInfoflowTarget(raw: string): string | undefined {
   }
 
   if (verbose) {
-    console.log(`[infoflow:normalizeTarget] input: "${raw}"`);
+    getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] input: "${raw}"`);
   }
 
   const trimmed = raw.trim();
   if (!trimmed) {
     if (verbose) {
-      console.log(`[infoflow:normalizeTarget] empty input, returning undefined`);
+      getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] empty input, returning undefined`);
     }
     return undefined;
   }
@@ -63,7 +64,7 @@ export function normalizeInfoflowTarget(raw: string): string | undefined {
   // Keep group: prefix as-is
   if (target.toLowerCase().startsWith(GROUP_PREFIX)) {
     if (verbose) {
-      console.log(`[infoflow:normalizeTarget] output: "${target}" (group)`);
+      getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] output: "${target}" (group)`);
     }
     return target;
   }
@@ -72,14 +73,16 @@ export function normalizeInfoflowTarget(raw: string): string | undefined {
   if (/^\d+$/.test(target)) {
     const result = `${GROUP_PREFIX}${target}`;
     if (verbose) {
-      console.log(`[infoflow:normalizeTarget] output: "${result}" (digits -> group)`);
+      getInfoflowSendLog().debug?.(
+        `[infoflow:normalizeTarget] output: "${result}" (digits -> group)`,
+      );
     }
     return result;
   }
 
   // Otherwise it's a username
   if (verbose) {
-    console.log(`[infoflow:normalizeTarget] output: "${target}" (username)`);
+    getInfoflowSendLog().debug?.(`[infoflow:normalizeTarget] output: "${target}" (username)`);
   }
   return target;
 }

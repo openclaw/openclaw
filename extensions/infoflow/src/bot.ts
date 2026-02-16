@@ -323,3 +323,10 @@ export async function handleInfoflowMessage(params: HandleInfoflowMessageParams)
     getInfoflowBotLog().debug?.(`[infoflow] dispatch complete: ${chatType} from ${fromuser}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only exports (@internal)
+// ---------------------------------------------------------------------------
+
+/** @internal — Check if bot was mentioned in message body. Only exported for tests. */
+export const _checkBotMentioned = checkBotMentioned;

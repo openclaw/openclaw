@@ -76,30 +76,56 @@ export function getInfoflowParseLog(): RuntimeLogger {
 // Utility Functions
 // ---------------------------------------------------------------------------
 
+export type FormatErrorOptions = {
+  /** Include stack trace in the output (default: false) */
+  includeStack?: boolean;
+};
+
 /**
  * Format error message for logging.
+ * @param err - The error to format
+ * @param options - Formatting options
  */
-export function formatInfoflowError(err: unknown): string {
+export function formatInfoflowError(err: unknown, options?: FormatErrorOptions): string {
   if (err instanceof Error) {
+    if (options?.includeStack && err.stack) {
+      return err.stack;
+    }
     return err.message;
   }
   return String(err);
 }
 
+export type LogApiErrorOptions = {
+  /** Logger to use (defaults to send logger) */
+  logger?: RuntimeLogger;
+  /** Include stack trace in the log (default: false) */
+  includeStack?: boolean;
+};
+
 /**
- * Log an API error with operation context.
+ * Log an API error with operation context and structured metadata.
  * @param operation - The API operation name (e.g., "sendPrivate", "getToken")
  * @param error - The error to log
- * @param logger - Optional logger to use (defaults to send logger)
+ * @param options - Logging options
  */
 export function logInfoflowApiError(
   operation: string,
   error: unknown,
-  logger?: RuntimeLogger,
+  options?: LogApiErrorOptions | RuntimeLogger,
 ): void {
-  const log = logger ?? getInfoflowSendLog();
-  const errMsg = formatInfoflowError(error);
-  log.error(`[infoflow:${operation}] ${errMsg}`);
+  // Support legacy signature: logInfoflowApiError(op, err, logger)
+  const opts: LogApiErrorOptions =
+    options && "error" in options ? { logger: options as RuntimeLogger } : (options ?? {});
+
+  const log = opts.logger ?? getInfoflowSendLog();
+  const errMsg = formatInfoflowError(error, { includeStack: opts.includeStack });
+
+  // Use structured meta for better log aggregation and filtering
+  log.error(`[infoflow:${operation}] ${errMsg}`, {
+    operation,
+    errorType: error instanceof Error ? error.constructor.name : typeof error,
+  });
 }
 
 // ---------------------------------------------------------------------------

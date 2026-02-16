@@ -7,6 +7,7 @@ import type { ResolvedInfoflowAccount } from "./channel.js";
 // Message deduplication
 // ---------------------------------------------------------------------------
 import { handlePrivateChatMessage, handleGroupChatMessage } from "./bot.js";
+import { getInfoflowParseLog } from "./logging.js";
 
 const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DEDUP_MAX_SIZE = 1000;
@@ -219,7 +220,7 @@ export async function parseAndDispatchInfoflowRequest(
   const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
 
   if (verbose) {
-    console.log(
+    getInfoflowParseLog().debug?.(
       `[infoflow] parseAndDispatch: contentType=${contentType}, bodyLen=${rawBody.length}`,
     );
   }
@@ -242,12 +243,12 @@ export async function parseAndDispatchInfoflowRequest(
           .digest("hex");
         if (signature === expectedSig) {
           if (verbose) {
-            console.log(`[infoflow] echostr verified successfully`);
+            getInfoflowParseLog().debug?.(`[infoflow] echostr verified successfully`);
           }
           return { handled: true, statusCode: 200, body: echostr };
         }
       }
-      console.error(`[infoflow] echostr signature mismatch`);
+      getInfoflowParseLog().error(`[infoflow] echostr signature mismatch`);
       return { handled: true, statusCode: 403, body: "Invalid signature" };
     }
 
@@ -257,7 +258,7 @@ export async function parseAndDispatchInfoflowRequest(
       return handlePrivateMessage(messageJsonStr, targets, verbose);
     }
 
-    console.error(`[infoflow] form-urlencoded but missing echostr or messageJson`);
+    getInfoflowParseLog().error(`[infoflow] form-urlencoded but missing echostr or messageJson`);
     return { handled: true, statusCode: 400, body: "missing echostr or messageJson" };
   }
 
@@ -267,7 +268,7 @@ export async function parseAndDispatchInfoflowRequest(
   }
 
   // --- unsupported Content-Type ---
-  console.error(`[infoflow] unsupported contentType: ${contentType}`);
+  getInfoflowParseLog().error(`[infoflow] unsupported contentType: ${contentType}`);
   return { handled: true, statusCode: 400, body: "unsupported content type" };
 }
 
@@ -294,17 +295,19 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
   const { encryptedContent, targets, chatType, verbose, fallbackParser, dispatchFn } = params;
 
   if (targets.length === 0) {
-    console.error(`[infoflow] ${chatType}: no target configured`);
+    getInfoflowParseLog().error(`[infoflow] ${chatType}: no target configured`);
     return { handled: true, statusCode: 500, body: "no target configured" };
   }
 
   if (!encryptedContent.trim()) {
-    console.error(`[infoflow] ${chatType}: empty encrypted content`);
+    getInfoflowParseLog().error(`[infoflow] ${chatType}: empty encrypted content`);
     return { handled: true, statusCode: 400, body: "empty content" };
   }
 
   if (verbose) {
-    console.log(`[infoflow] ${chatType}: trying ${targets.length} account(s) for decryption`);
+    getInfoflowParseLog().debug?.(
+      `[infoflow] ${chatType}: trying ${targets.length} account(s) for decryption`,
+    );
   }
 
   for (const target of targets) {
@@ -331,7 +334,7 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
     if (msgData && Object.keys(msgData).length > 0) {
       if (isDuplicateMessage(msgData)) {
         if (verbose) {
-          console.log(`[infoflow] ${chatType}: duplicate message, skipping`);
+          getInfoflowParseLog().debug?.(`[infoflow] ${chatType}: duplicate message, skipping`);
         }
         return { handled: true, statusCode: 200, body: "success" };
       }
@@ -340,17 +343,19 @@ function tryDecryptAndDispatch(params: DecryptDispatchParams): ParseResult {
 
       // Fire-and-forget with centralized error handling
       void dispatchFn(target, msgData).catch((err) => {
-        console.error(`[infoflow] ${chatType} handler error:`, err);
+        getInfoflowParseLog().error(
+          `[infoflow] ${chatType} handler error: ${err instanceof Error ? err.message : String(err)}`,
+        );
       });
 
       if (verbose) {
-        console.log(`[infoflow] ${chatType}: message dispatched successfully`);
+        getInfoflowParseLog().debug?.(`[infoflow] ${chatType}: message dispatched successfully`);
       }
       return { handled: true, statusCode: 200, body: "success" };
     }
   }
 
-  console.error(`[infoflow] ${chatType}: decryption failed for all accounts`);
+  getInfoflowParseLog().error(`[infoflow] ${chatType}: decryption failed for all accounts`);
   return { handled: true, statusCode: 500, body: "decryption failed for all accounts" };
 }
 
@@ -372,13 +377,13 @@ function handlePrivateMessage(
   try {
     messageJson = JSON.parse(messageJsonStr) as Record<string, unknown>;
   } catch {
-    console.error(`[infoflow] private: invalid messageJson`);
+    getInfoflowParseLog().error(`[infoflow] private: invalid messageJson`);
     return { handled: true, statusCode: 400, body: "invalid messageJson" };
   }
 
   const encrypt = typeof messageJson.Encrypt === "string" ? messageJson.Encrypt : "";
   if (!encrypt) {
-    console.error(`[infoflow] private: missing Encrypt field`);
+    getInfoflowParseLog().error(`[infoflow] private: missing Encrypt field`);
     return { handled: true, statusCode: 400, body: "missing Encrypt field in messageJson" };
   }
 

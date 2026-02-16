@@ -16,6 +16,7 @@ import {
   resolveDefaultInfoflowAccountId,
   resolveInfoflowAccount,
 } from "./accounts.js";
+import { getInfoflowSendLog } from "./logging.js";
 import { startInfoflowMonitor } from "./monitor.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowMessage } from "./send.js";
@@ -201,7 +202,7 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
     sendText: async ({ cfg, to, text, accountId }) => {
       const verbose = getInfoflowRuntime().logging.shouldLogVerbose();
       if (verbose) {
-        console.log(`[infoflow:sendText] to=${to}, accountId=${accountId}`);
+        getInfoflowSendLog().debug?.(`[infoflow:sendText] to=${to}, accountId=${accountId}`);
       }
       // Use "markdown" type even though param is named `text`: LLM outputs are often markdown,
       // and Infoflow's markdown type handles both plain text and markdown seamlessly.
@@ -219,7 +220,9 @@ export const infoflowPlugin: ChannelPlugin<ResolvedInfoflowAccount> = {
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
       const verbose = getInfoflowRuntime().logging.shouldLogVerbose();
       if (verbose) {
-        console.log(`[infoflow:sendMedia] to=${to}, accountId=${accountId}, mediaUrl=${mediaUrl}`);
+        getInfoflowSendLog().debug?.(
+          `[infoflow:sendMedia] to=${to}, accountId=${accountId}, mediaUrl=${mediaUrl}`,
+        );
       }
 
       // Build contents array: text (if provided) + link for media URL
