@@ -111,19 +111,10 @@ describe("exec approval forwarder", () => {
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
   });
 
-  it("skips discord forwarding when discord exec approvals target channel", async () => {
+  it("skips discord forwarding targets", async () => {
     vi.useFakeTimers();
     const cfg = {
       approvals: { exec: { enabled: true, mode: "session" } },
-      channels: {
-        discord: {
-          execApprovals: {
-            enabled: true,
-            target: "channel",
-            approvers: ["123"],
-          },
-        },
-      },
     } as OpenClawConfig;
 
     const { deliver, forwarder } = createForwarder({
