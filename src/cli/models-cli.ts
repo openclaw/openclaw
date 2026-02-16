@@ -29,6 +29,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
+import { addJsonOption } from "./option-builders.js";
 
 function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
@@ -50,69 +51,69 @@ export function registerModelsCli(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
     );
 
-  models
-    .command("list")
-    .description("List models (configured by default)")
-    .option("--all", "Show full model catalog", false)
-    .option("--local", "Filter to local models", false)
-    .option("--provider <name>", "Filter by provider")
-    .option("--json", "Output JSON", false)
-    .option("--plain", "Plain line output", false)
-    .action(async (opts) => {
-      await runModelsCommand(async () => {
-        await modelsListCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    models
+      .command("list")
+      .description("List models (configured by default)")
+      .option("--all", "Show full model catalog", false)
+      .option("--local", "Filter to local models", false)
+      .option("--provider <name>", "Filter by provider")
+      .option("--plain", "Plain line output", false),
+  ).action(async (opts) => {
+    await runModelsCommand(async () => {
+      await modelsListCommand(opts, defaultRuntime);
     });
+  });
 
-  models
-    .command("status")
-    .description("Show configured model state")
-    .option("--json", "Output JSON", false)
-    .option("--plain", "Plain output", false)
-    .option(
-      "--check",
-      "Exit non-zero if auth is expiring/expired (1=expired/missing, 2=expiring)",
-      false,
-    )
-    .option("--probe", "Probe configured provider auth (live)", false)
-    .option("--probe-provider <name>", "Only probe a single provider")
-    .option(
-      "--probe-profile <id>",
-      "Only probe specific auth profile ids (repeat or comma-separated)",
-      (value, previous) => {
-        const next = Array.isArray(previous) ? previous : previous ? [previous] : [];
-        next.push(value);
-        return next;
-      },
-    )
-    .option("--probe-timeout <ms>", "Per-probe timeout in ms")
-    .option("--probe-concurrency <n>", "Concurrent probes")
-    .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
-    .option(
-      "--agent <id>",
-      "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
-    )
-    .action(async (opts, command) => {
-      const agent =
-        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
-      await runModelsCommand(async () => {
-        await modelsStatusCommand(
-          {
-            json: Boolean(opts.json),
-            plain: Boolean(opts.plain),
-            check: Boolean(opts.check),
-            probe: Boolean(opts.probe),
-            probeProvider: opts.probeProvider as string | undefined,
-            probeProfile: opts.probeProfile as string | string[] | undefined,
-            probeTimeout: opts.probeTimeout as string | undefined,
-            probeConcurrency: opts.probeConcurrency as string | undefined,
-            probeMaxTokens: opts.probeMaxTokens as string | undefined,
-            agent,
-          },
-          defaultRuntime,
-        );
-      });
+  addJsonOption(
+    models
+      .command("status")
+      .description("Show configured model state")
+      .option("--plain", "Plain output", false)
+      .option(
+        "--check",
+        "Exit non-zero if auth is expiring/expired (1=expired/missing, 2=expiring)",
+        false,
+      )
+      .option("--probe", "Probe configured provider auth (live)", false)
+      .option("--probe-provider <name>", "Only probe a single provider")
+      .option(
+        "--probe-profile <id>",
+        "Only probe specific auth profile ids (repeat or comma-separated)",
+        (value, previous) => {
+          const next = Array.isArray(previous) ? previous : previous ? [previous] : [];
+          next.push(value);
+          return next;
+        },
+      )
+      .option("--probe-timeout <ms>", "Per-probe timeout in ms")
+      .option("--probe-concurrency <n>", "Concurrent probes")
+      .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
+      .option(
+        "--agent <id>",
+        "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
+      ),
+  ).action(async (opts, command) => {
+    const agent =
+      resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+    await runModelsCommand(async () => {
+      await modelsStatusCommand(
+        {
+          json: Boolean(opts.json),
+          plain: Boolean(opts.plain),
+          check: Boolean(opts.check),
+          probe: Boolean(opts.probe),
+          probeProvider: opts.probeProvider as string | undefined,
+          probeProfile: opts.probeProfile as string | string[] | undefined,
+          probeTimeout: opts.probeTimeout as string | undefined,
+          probeConcurrency: opts.probeConcurrency as string | undefined,
+          probeMaxTokens: opts.probeMaxTokens as string | undefined,
+          agent,
+        },
+        defaultRuntime,
+      );
     });
+  });
 
   models
     .command("set")
@@ -136,16 +137,16 @@ export function registerModelsCli(program: Command) {
 
   const aliases = models.command("aliases").description("Manage model aliases");
 
-  aliases
-    .command("list")
-    .description("List model aliases")
-    .option("--json", "Output JSON", false)
-    .option("--plain", "Plain output", false)
-    .action(async (opts) => {
-      await runModelsCommand(async () => {
-        await modelsAliasesListCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    aliases
+      .command("list")
+      .description("List model aliases")
+      .option("--plain", "Plain output", false),
+  ).action(async (opts) => {
+    await runModelsCommand(async () => {
+      await modelsAliasesListCommand(opts, defaultRuntime);
     });
+  });
 
   aliases
     .command("add")
@@ -170,16 +171,16 @@ export function registerModelsCli(program: Command) {
 
   const fallbacks = models.command("fallbacks").description("Manage model fallback list");
 
-  fallbacks
-    .command("list")
-    .description("List fallback models")
-    .option("--json", "Output JSON", false)
-    .option("--plain", "Plain output", false)
-    .action(async (opts) => {
-      await runModelsCommand(async () => {
-        await modelsFallbacksListCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    fallbacks
+      .command("list")
+      .description("List fallback models")
+      .option("--plain", "Plain output", false),
+  ).action(async (opts) => {
+    await runModelsCommand(async () => {
+      await modelsFallbacksListCommand(opts, defaultRuntime);
     });
+  });
 
   fallbacks
     .command("add")
@@ -214,16 +215,16 @@ export function registerModelsCli(program: Command) {
     .command("image-fallbacks")
     .description("Manage image model fallback list");
 
-  imageFallbacks
-    .command("list")
-    .description("List image fallback models")
-    .option("--json", "Output JSON", false)
-    .option("--plain", "Plain output", false)
-    .action(async (opts) => {
-      await runModelsCommand(async () => {
-        await modelsImageFallbacksListCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    imageFallbacks
+      .command("list")
+      .description("List image fallback models")
+      .option("--plain", "Plain output", false),
+  ).action(async (opts) => {
+    await runModelsCommand(async () => {
+      await modelsImageFallbacksListCommand(opts, defaultRuntime);
     });
+  });
 
   imageFallbacks
     .command("add")
@@ -254,26 +255,26 @@ export function registerModelsCli(program: Command) {
       });
     });
 
-  models
-    .command("scan")
-    .description("Scan OpenRouter free models for tools + images")
-    .option("--min-params <b>", "Minimum parameter size (billions)")
-    .option("--max-age-days <days>", "Skip models older than N days")
-    .option("--provider <name>", "Filter by provider prefix")
-    .option("--max-candidates <n>", "Max fallback candidates", "6")
-    .option("--timeout <ms>", "Per-probe timeout in ms")
-    .option("--concurrency <n>", "Probe concurrency")
-    .option("--no-probe", "Skip live probes; list free candidates only")
-    .option("--yes", "Accept defaults without prompting", false)
-    .option("--no-input", "Disable prompts (use defaults)")
-    .option("--set-default", "Set agents.defaults.model to the first selection", false)
-    .option("--set-image", "Set agents.defaults.imageModel to the first image selection", false)
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runModelsCommand(async () => {
-        await modelsScanCommand(opts, defaultRuntime);
-      });
+  addJsonOption(
+    models
+      .command("scan")
+      .description("Scan OpenRouter free models for tools + images")
+      .option("--min-params <b>", "Minimum parameter size (billions)")
+      .option("--max-age-days <days>", "Skip models older than N days")
+      .option("--provider <name>", "Filter by provider prefix")
+      .option("--max-candidates <n>", "Max fallback candidates", "6")
+      .option("--timeout <ms>", "Per-probe timeout in ms")
+      .option("--concurrency <n>", "Probe concurrency")
+      .option("--no-probe", "Skip live probes; list free candidates only")
+      .option("--yes", "Accept defaults without prompting", false)
+      .option("--no-input", "Disable prompts (use defaults)")
+      .option("--set-default", "Set agents.defaults.model to the first selection", false)
+      .option("--set-image", "Set agents.defaults.imageModel to the first image selection", false),
+  ).action(async (opts) => {
+    await runModelsCommand(async () => {
+      await modelsScanCommand(opts, defaultRuntime);
     });
+  });
 
   models.action(async (opts) => {
     await runModelsCommand(async () => {
@@ -380,26 +381,26 @@ export function registerModelsCli(program: Command) {
 
   const order = auth.command("order").description("Manage per-agent auth profile order overrides");
 
-  order
-    .command("get")
-    .description("Show per-agent auth order override (from auth-profiles.json)")
-    .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      const agent =
-        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
-      await runModelsCommand(async () => {
-        await modelsAuthOrderGetCommand(
-          {
-            provider: opts.provider as string,
-            agent,
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        );
-      });
+  addJsonOption(
+    order
+      .command("get")
+      .description("Show per-agent auth order override (from auth-profiles.json)")
+      .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
+      .option("--agent <id>", "Agent id (default: configured default agent)"),
+  ).action(async (opts, command) => {
+    const agent =
+      resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+    await runModelsCommand(async () => {
+      await modelsAuthOrderGetCommand(
+        {
+          provider: opts.provider as string,
+          agent,
+          json: Boolean(opts.json),
+        },
+        defaultRuntime,
+      );
     });
+  });
 
   order
     .command("set")

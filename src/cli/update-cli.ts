@@ -4,6 +4,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { addJsonOption, addTimeoutOption } from "./option-builders.js";
 import {
   type UpdateCommandOptions,
   type UpdateStatusOptions,
@@ -32,15 +33,24 @@ function inheritedUpdateTimeout(
 }
 
 export function registerUpdateCli(program: Command) {
-  const update = program
-    .command("update")
-    .description("Update OpenClaw and inspect update channel status")
-    .option("--json", "Output result as JSON", false)
-    .option("--no-restart", "Skip restarting the gateway service after a successful update")
-    .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
-    .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
-    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+  const update = addTimeoutOption(
+    addJsonOption(
+      program
+        .command("update")
+        .description("Update OpenClaw and inspect update channel status")
+        .option("--no-restart", "Skip restarting the gateway service after a successful update")
+        .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
+        .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
+        .option("--yes", "Skip confirmation prompts (non-interactive)", false),
+      "Output result as JSON",
+    ),
+    {
+      flag: "--timeout <seconds>",
+      description: "Timeout for each update step in seconds (default: 1200)",
+    },
+  );
+
+  update
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
@@ -97,10 +107,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       }
     });
 
-  update
-    .command("wizard")
-    .description("Interactive update wizard")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+  addTimeoutOption(update.command("wizard").description("Interactive update wizard"), {
+    flag: "--timeout <seconds>",
+    description: "Timeout for each update step in seconds (default: 1200)",
+  })
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,
@@ -116,11 +126,16 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       }
     });
 
-  update
-    .command("status")
-    .description("Show update channel and version status")
-    .option("--json", "Output result as JSON", false)
-    .option("--timeout <seconds>", "Timeout for update checks in seconds (default: 3)")
+  addTimeoutOption(
+    addJsonOption(
+      update.command("status").description("Show update channel and version status"),
+      "Output result as JSON",
+    ),
+    {
+      flag: "--timeout <seconds>",
+      description: "Timeout for update checks in seconds (default: 3)",
+    },
+  )
     .addHelpText(
       "after",
       () =>
