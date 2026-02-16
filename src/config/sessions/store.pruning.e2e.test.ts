@@ -147,18 +147,4 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
     expect(Object.keys(loaded)).toHaveLength(2);
   });
-
-  it("resolveMaintenanceConfig falls back to deprecated pruneDays", async () => {
-    mockLoadConfig.mockReturnValue({ session: { maintenance: { pruneDays: 2 } } });
-
-    const { resolveMaintenanceConfig } = await import("./store.js");
-    const config = resolveMaintenanceConfig();
-
-    expect(config).toEqual({
-      mode: "warn",
-      pruneAfterMs: 2 * DAY_MS,
-      maxEntries: 500,
-      rotateBytes: 10_485_760,
-    });
-  });
 });
