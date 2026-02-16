@@ -373,7 +373,10 @@ export async function listChannelPairingRequests(
       const normalizedAccountId = accountId?.trim().toLowerCase() || "";
       const filtered = normalizedAccountId
         ? pruned.filter(
-            (entry) => String(entry.meta?.accountId ?? "").trim().toLowerCase() === normalizedAccountId,
+            (entry) =>
+              String(entry.meta?.accountId ?? "")
+                .trim()
+                .toLowerCase() === normalizedAccountId,
           )
         : pruned;
       return filtered
@@ -421,9 +424,7 @@ export async function upsertChannelPairingRequest(params: {
                 .filter(([_, v]) => Boolean(v)),
             )
           : undefined;
-      const meta = normalizedAccountId
-        ? { ...baseMeta, accountId: normalizedAccountId }
-        : baseMeta;
+      const meta = normalizedAccountId ? { ...baseMeta, accountId: normalizedAccountId } : baseMeta;
 
       let reqs = Array.isArray(value.requests) ? value.requests : [];
       const { requests: prunedExpired, removed: expiredRemoved } = pruneExpiredRequests(
@@ -524,7 +525,11 @@ export async function approveChannelPairingCode(params: {
         if (!normalizedAccountId) {
           return true;
         }
-        return String(r.meta?.accountId ?? "").trim().toLowerCase() === normalizedAccountId;
+        return (
+          String(r.meta?.accountId ?? "")
+            .trim()
+            .toLowerCase() === normalizedAccountId
+        );
       });
       if (idx < 0) {
         if (removed) {
