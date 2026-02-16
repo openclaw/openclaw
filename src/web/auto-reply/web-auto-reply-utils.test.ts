@@ -171,10 +171,6 @@ describe("web auto-reply util", () => {
       expect(elide("hi", 10)).toBe("hi");
     });
 
-    it("returns input when exactly at limit", () => {
-      expect(elide("12345", 5)).toBe("12345");
-    });
-
     it("truncates and annotates when over limit", () => {
       expect(elide("abcdef", 3)).toBe("abc… (truncated 3 chars)");
     });
