@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -12,6 +11,7 @@ import {
   optimizeImageToPng,
   resizeToJpeg,
 } from "../media/image-ops.js";
+import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -26,23 +26,20 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
-  /** Allowed root directories for local path reads. "any" skips the check (caller already validated). */
-  localRoots?: string[] | "any";
+  /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
+  localRoots?: readonly string[] | "any";
+  /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
+  sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
 };
 
-function getDefaultLocalRoots(): string[] {
-  const home = os.homedir();
-  return [
-    os.tmpdir(),
-    path.join(home, ".openclaw", "media"),
-    path.join(home, ".openclaw", "agents"),
-  ];
+export function getDefaultLocalRoots(): readonly string[] {
+  return getDefaultMediaLocalRoots();
 }
 
 async function assertLocalMediaAllowed(
   mediaPath: string,
-  localRoots: string[] | "any" | undefined,
+  localRoots: readonly string[] | "any" | undefined,
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -55,12 +52,35 @@ async function assertLocalMediaAllowed(
   } catch {
     resolved = path.resolve(mediaPath);
   }
+
+  // Hardening: the default allowlist includes `os.tmpdir()`, and tests/CI may
+  // override the state dir into tmp. Avoid accidentally allowing per-agent
+  // `workspace-*` state roots via the tmpdir prefix match; require explicit
+  // localRoots for those.
+  if (localRoots === undefined) {
+    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
+    if (workspaceRoot) {
+      const stateDir = path.dirname(workspaceRoot);
+      const rel = path.relative(stateDir, resolved);
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+        const firstSegment = rel.split(path.sep)[0] ?? "";
+        if (firstSegment.startsWith("workspace-")) {
+          throw new Error(`Local media path is not under an allowed directory: ${mediaPath}`);
+        }
+      }
+    }
+  }
   for (const root of roots) {
     let resolvedRoot: string;
     try {
       resolvedRoot = await fs.realpath(root);
     } catch {
       resolvedRoot = path.resolve(root);
+    }
+    if (resolvedRoot === path.parse(resolvedRoot).root) {
+      throw new Error(
+        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
+      );
     }
     if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
       return;
@@ -171,8 +191,12 @@ async function loadWebMediaInternal(
     optimizeImages = true,
     ssrfPolicy,
     localRoots,
+    sandboxValidated = false,
     readFile: readFileOverride,
   } = options;
+  // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
+  // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
+  mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -270,8 +294,16 @@ async function loadWebMediaInternal(
     mediaUrl = resolveUserPath(mediaUrl);
   }
 
+  if ((sandboxValidated || localRoots === "any") && !readFileOverride) {
+    throw new Error(
+      "Refusing localRoots bypass without readFile override. Use sandboxValidated with readFile, or pass explicit localRoots.",
+    );
+  }
+
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  await assertLocalMediaAllowed(mediaUrl, localRoots);
+  if (!(sandboxValidated || localRoots === "any")) {
+    await assertLocalMediaAllowed(mediaUrl, localRoots);
+  }
 
   // Local path
   const data = readFileOverride ? await readFileOverride(mediaUrl) : await fs.readFile(mediaUrl);
@@ -295,7 +327,7 @@ async function loadWebMediaInternal(
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
   if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
     return await loadWebMediaInternal(mediaUrl, {
@@ -314,7 +346,7 @@ export async function loadWebMedia(
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
-  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: string[] | "any" },
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
   if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
     return await loadWebMediaInternal(mediaUrl, {

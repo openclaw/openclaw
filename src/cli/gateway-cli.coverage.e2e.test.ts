@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { withEnvOverride } from "../config/test-helpers.js";
 
 const callGateway = vi.fn(async () => ({ ok: true }));
 const startGatewayServer = vi.fn(async () => ({
@@ -24,32 +25,6 @@ const defaultRuntime = {
     throw new Error(`__exit__:${code}`);
   },
 };
-
-async function withEnvOverride<T>(
-  overrides: Record<string, string | undefined>,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const saved: Record<string, string | undefined> = {};
-  for (const key of Object.keys(overrides)) {
-    saved[key] = process.env[key];
-    if (overrides[key] === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = overrides[key];
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const key of Object.keys(saved)) {
-      if (saved[key] === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = saved[key];
-      }
-    }
-  }
-}
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
@@ -204,7 +179,7 @@ describe("gateway-cli coverage", () => {
     expect(out).toContain("- Studio openclaw.internal.");
     expect(out).toContain("  tailnet: studio.tailnet.ts.net");
     expect(out).toContain("  host: studio.openclaw.internal");
-    expect(out).toContain("  ws: ws://studio.tailnet.ts.net:18789");
+    expect(out).toContain("  ws: ws://studio.openclaw.internal:18789");
   });
 
   it("validates gateway discover timeout", async () => {

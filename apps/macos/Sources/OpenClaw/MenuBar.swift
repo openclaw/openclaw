@@ -345,7 +345,7 @@ protocol UpdaterProviding: AnyObject {
     func checkForUpdates(_ sender: Any?)
 }
 
-// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
+/// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
 final class DisabledUpdaterController: UpdaterProviding {
     var automaticallyChecksForUpdates: Bool = false
     var automaticallyDownloadsUpdates: Bool = false
@@ -394,7 +394,9 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         set { self.controller.updater.automaticallyDownloadsUpdates = newValue }
     }
 
-    var isAvailable: Bool { true }
+    var isAvailable: Bool {
+        true
+    }
 
     func checkForUpdates(_ sender: Any?) {
         self.controller.checkForUpdates(sender)

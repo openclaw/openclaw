@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
@@ -10,6 +11,17 @@ const mockTheme: SearchableSelectListTheme = {
   searchPrompt: (t) => `>${t}<`,
   searchInput: (t) => `|${t}|`,
   matchHighlight: (t) => `*${t}*`,
+};
+
+const ansiHighlightTheme: SearchableSelectListTheme = {
+  selectedPrefix: (t) => t,
+  selectedText: (t) => t,
+  description: (t) => t,
+  scrollInfo: (t) => t,
+  noMatch: (t) => t,
+  searchPrompt: (t) => t,
+  searchInput: (t) => t,
+  matchHighlight: (t) => `\u001b[31m${t}\u001b[0m`,
 };
 
 const testItems = [
@@ -36,6 +48,89 @@ describe("SearchableSelectList", () => {
     // Should have search prompt line, spacer, and items
     expect(output.length).toBeGreaterThanOrEqual(3);
     expect(output[0]).toContain("search");
+  });
+
+  it("does not truncate long labels on wide terminals when description is present", () => {
+    const tail = "__TAIL__";
+    const longLabel = `session-${"x".repeat(40)}${tail}`; // > 30 chars; tail would be lost before PR
+    const items = [{ value: longLabel, label: longLabel, description: "desc" }];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    const output = list.render(120).join("\n");
+    expect(output).toContain(tail);
+  });
+
+  it("does not show description layout at width 40 (boundary)", () => {
+    const items = [
+      { value: "one", label: "one", description: "desc" },
+      { value: "two", label: "two", description: "desc" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+    list.setSelectedIndex(1); // ensure first row is not selected so description styling is applied
+
+    const output = list.render(40).join("\n");
+    expect(output).not.toContain("(desc)");
+  });
+
+  it("shows description layout at width 41 (boundary)", () => {
+    const items = [
+      { value: "one", label: "one", description: "desc" },
+      { value: "two", label: "two", description: "desc" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+    list.setSelectedIndex(1); // ensure first row is not selected so description styling is applied
+
+    const output = list.render(41).join("\n");
+    expect(output).toContain("(desc)");
+  });
+
+  it("keeps ANSI-highlighted description rows within terminal width", () => {
+    const label = `provider/${"x".repeat(80)}`;
+    const items = [
+      { value: label, label, description: "Some description text that should not overflow" },
+      { value: "other", label: "other", description: "Other description" },
+    ];
+    const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
+    list.setSelectedIndex(1); // make first row non-selected so description styling is applied
+
+    for (const ch of "provider") {
+      list.handleInput(ch);
+    }
+
+    const width = 80;
+    const output = list.render(width);
+    for (const line of output) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it("ignores ANSI escape codes in search matching", () => {
+    const items = [
+      { value: "styled", label: "\u001b[32mopenai/gpt-4\u001b[0m", description: "Styled label" },
+      { value: "plain", label: "plain-item", description: "Plain label" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    for (const ch of "32m") {
+      list.handleInput(ch);
+    }
+
+    const output = list.render(80);
+    expect(output.some((line) => line.includes("No matches"))).toBe(true);
+  });
+
+  it("does not corrupt ANSI sequences when highlighting multiple tokens", () => {
+    const items = [{ value: "gpt-model", label: "gpt-model" }];
+    const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
+
+    for (const ch of "gpt m") {
+      list.handleInput(ch);
+    }
+
+    const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
+    expect(renderedLine).toBeDefined();
+    const highlightOpens = renderedLine ? renderedLine.split("\u001b[31m").length - 1 : 0;
+    expect(highlightOpens).toBe(2);
   });
 
   it("filters items when typing", () => {

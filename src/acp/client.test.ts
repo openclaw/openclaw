@@ -1,6 +1,7 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePermissionRequest } from "./client.js";
+import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 
 function makePermissionRequest(
   overrides: Partial<RequestPermissionRequest> = {},
@@ -48,6 +49,55 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
   });
 
+  it("prompts for non-read/search tools (write)", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: { toolCallId: "tool-w", title: "write: /tmp/pwn", status: "pending" },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("write", "write: /tmp/pwn");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
+
+  it("auto-approves search without prompting", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: { toolCallId: "tool-s", title: "search: foo", status: "pending" },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("prompts for fetch even when tool name is known", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: { toolCallId: "tool-f", title: "fetch: https://example.com", status: "pending" },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
+  it("prompts when tool name contains read/search substrings but isn't a safe kind", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: { toolCallId: "tool-t", title: "thread: reply", status: "pending" },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
   it("uses allow_always and reject_always when once options are absent", async () => {
     const options: RequestPermissionRequest["options"] = [
       { kind: "allow_always", name: "Always allow", optionId: "allow-always" },
@@ -88,5 +138,34 @@ describe("resolvePermissionRequest", () => {
     });
     expect(prompt).not.toHaveBeenCalled();
     expect(res).toEqual({ outcome: { outcome: "cancelled" } });
+  });
+});
+
+describe("acp event mapper", () => {
+  it("extracts text and resource blocks into prompt text", () => {
+    const text = extractTextFromPrompt([
+      { type: "text", text: "Hello" },
+      { type: "resource", resource: { text: "File contents" } },
+      { type: "resource_link", uri: "https://example.com", title: "Spec" },
+      { type: "image", data: "abc", mimeType: "image/png" },
+    ]);
+
+    expect(text).toBe("Hello\nFile contents\n[Resource link (Spec)] https://example.com");
+  });
+
+  it("extracts image blocks into gateway attachments", () => {
+    const attachments = extractAttachmentsFromPrompt([
+      { type: "image", data: "abc", mimeType: "image/png" },
+      { type: "image", data: "", mimeType: "image/png" },
+      { type: "text", text: "ignored" },
+    ]);
+
+    expect(attachments).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        content: "abc",
+      },
+    ]);
   });
 });

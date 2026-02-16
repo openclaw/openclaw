@@ -10,13 +10,13 @@ import {
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
   ErrorCodes,
   errorShape,
   validateNodeDescribeParams,
   validateNodeEventParams,
   validateNodeInvokeParams,
-  validateNodeInvokeResultParams,
   validateNodeListParams,
   validateNodePairApproveParams,
   validateNodePairListParams,
@@ -25,8 +25,10 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
+  respondUnavailableOnNodeInvokeError,
   respondUnavailableOnThrow,
   safeParseJson,
   uniqueSortedStrings,
@@ -40,26 +42,6 @@ function isNodeEntry(entry: { role?: string; roles?: string[] }) {
     return true;
   }
   return false;
-}
-
-function normalizeNodeInvokeResultParams(params: unknown): unknown {
-  if (!params || typeof params !== "object") {
-    return params;
-  }
-  const raw = params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = { ...raw };
-  if (normalized.payloadJSON === null) {
-    delete normalized.payloadJSON;
-  } else if (normalized.payloadJSON !== undefined && typeof normalized.payloadJSON !== "string") {
-    if (normalized.payload === undefined) {
-      normalized.payload = normalized.payloadJSON;
-    }
-    delete normalized.payloadJSON;
-  }
-  if (normalized.error === null) {
-    delete normalized.error;
-  }
-  return normalized;
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
@@ -361,7 +343,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.invoke": async ({ params, respond, context }) => {
+  "node.invoke": async ({ params, respond, context, client }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
         respond,
@@ -384,6 +366,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "nodeId and command required"),
+      );
+      return;
+    }
+    if (command === "system.execApprovals.get" || command === "system.execApprovals.set") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+          { details: { command } },
+        ),
       );
       return;
     }
@@ -417,21 +411,30 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const res = await context.nodeRegistry.invoke({
-        nodeId,
+      const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
         command,
-        params: p.params,
-        timeoutMs: p.timeoutMs,
-        idempotencyKey: p.idempotencyKey,
+        rawParams: p.params,
+        client,
+        execApprovalManager: context.execApprovalManager,
       });
-      if (!res.ok) {
+      if (!forwardedParams.ok) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
+          errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
+            details: forwardedParams.details ?? null,
           }),
         );
+        return;
+      }
+      const res = await context.nodeRegistry.invoke({
+        nodeId,
+        command,
+        params: forwardedParams.params,
+        timeoutMs: p.timeoutMs,
+        idempotencyKey: p.idempotencyKey,
+      });
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
@@ -448,46 +451,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.invoke.result": async ({ params, respond, context, client }) => {
-    const normalizedParams = normalizeNodeInvokeResultParams(params);
-    if (!validateNodeInvokeResultParams(normalizedParams)) {
-      respondInvalidParams({
-        respond,
-        method: "node.invoke.result",
-        validator: validateNodeInvokeResultParams,
-      });
-      return;
-    }
-    const p = normalizedParams as {
-      id: string;
-      nodeId: string;
-      ok: boolean;
-      payload?: unknown;
-      payloadJSON?: string | null;
-      error?: { code?: string; message?: string } | null;
-    };
-    const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    if (callerNodeId && callerNodeId !== p.nodeId) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
-      return;
-    }
-    const ok = context.nodeRegistry.handleInvokeResult({
-      id: p.id,
-      nodeId: p.nodeId,
-      ok: p.ok,
-      payload: p.payload,
-      payloadJSON: p.payloadJSON ?? null,
-      error: p.error ?? null,
-    });
-    if (!ok) {
-      // Late-arriving results (after invoke timeout) are expected and harmless.
-      // Return success instead of error to reduce log noise; client can discard.
-      context.logGateway.debug(`late invoke result ignored: id=${p.id} node=${p.nodeId}`);
-      respond(true, { ok: true, ignored: true }, undefined);
-      return;
-    }
-    respond(true, { ok: true }, undefined);
-  },
+  "node.invoke.result": handleNodeInvokeResult,
   "node.event": async ({ params, respond, context, client }) => {
     if (!validateNodeEventParams(params)) {
       respondInvalidParams({

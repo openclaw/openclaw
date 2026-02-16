@@ -70,8 +70,9 @@ export type TelegramAccountConfig = {
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
   groups?: Record<string, TelegramGroupConfig>;
+  /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
-  /** Optional allowlist for Telegram group senders (user ids or usernames). */
+  /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
@@ -92,11 +93,11 @@ export type TelegramAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /** Chunking config for draft streaming in `streamMode: "block"`. */
+  /** Chunking config for Telegram stream previews in `streamMode: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
+  /** Telegram stream preview mode (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
@@ -140,6 +141,11 @@ export type TelegramAccountConfig = {
    * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
    */
   responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
+   */
+  ackReaction?: string;
 };
 
 export type TelegramTopicConfig = {
@@ -150,7 +156,7 @@ export type TelegramTopicConfig = {
   skills?: string[];
   /** If false, disable the bot for this topic. */
   enabled?: boolean;
-  /** Optional allowlist for topic senders (ids or usernames). */
+  /** Optional allowlist for topic senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
@@ -169,7 +175,7 @@ export type TelegramGroupConfig = {
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this group (and its topics). */
   enabled?: boolean;
-  /** Optional allowlist for group senders (ids or usernames). */
+  /** Optional allowlist for group senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;

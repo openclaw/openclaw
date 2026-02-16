@@ -3,6 +3,11 @@ import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
 import {
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
+  registerWebhookTarget,
+  rejectNonPostWebhookRequest,
+  resolveSenderCommandAuthorization,
+  resolveWebhookPath,
+  resolveWebhookTargets,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk";
 import type { ResolvedZaloAccount } from "./accounts.js";
@@ -80,75 +85,37 @@ type WebhookTarget = {
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 
-function normalizeWebhookPath(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (withSlash.length > 1 && withSlash.endsWith("/")) {
-    return withSlash.slice(0, -1);
-  }
-  return withSlash;
-}
-
-function resolveWebhookPath(webhookPath?: string, webhookUrl?: string): string | null {
-  const trimmedPath = webhookPath?.trim();
-  if (trimmedPath) {
-    return normalizeWebhookPath(trimmedPath);
-  }
-  if (webhookUrl?.trim()) {
-    try {
-      const parsed = new URL(webhookUrl);
-      return normalizeWebhookPath(parsed.pathname || "/");
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 export function registerZaloWebhookTarget(target: WebhookTarget): () => void {
-  const key = normalizeWebhookPath(target.path);
-  const normalizedTarget = { ...target, path: key };
-  const existing = webhookTargets.get(key) ?? [];
-  const next = [...existing, normalizedTarget];
-  webhookTargets.set(key, next);
-  return () => {
-    const updated = (webhookTargets.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
-    if (updated.length > 0) {
-      webhookTargets.set(key, updated);
-    } else {
-      webhookTargets.delete(key);
-    }
-  };
+  return registerWebhookTarget(webhookTargets, target).unregister;
 }
 
 export async function handleZaloWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const path = normalizeWebhookPath(url.pathname);
-  const targets = webhookTargets.get(path);
-  if (!targets || targets.length === 0) {
+  const resolved = resolveWebhookTargets(req, webhookTargets);
+  if (!resolved) {
     return false;
   }
+  const { targets } = resolved;
 
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "POST");
-    res.end("Method Not Allowed");
+  if (rejectNonPostWebhookRequest(req, res)) {
     return true;
   }
 
   const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const target = targets.find((entry) => entry.secret === headerToken);
-  if (!target) {
+  const matching = targets.filter((entry) => entry.secret === headerToken);
+  if (matching.length === 0) {
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
+  if (matching.length > 1) {
+    res.statusCode = 401;
+    res.end("ambiguous webhook target");
+    return true;
+  }
+  const target = matching[0];
 
   const body = await readJsonBodyWithLimit(req, {
     maxBytes: 1024 * 1024,
@@ -422,22 +389,20 @@ async function processMessageWithPipeline(params: {
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
-  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
-  const storeAllowFrom =
-    !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
-      ? await core.channel.pairing.readAllowFromStore("zalo").catch(() => [])
-      : [];
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
-  const useAccessGroups = config.commands?.useAccessGroups !== false;
-  const senderAllowedForCommands = isSenderAllowed(senderId, effectiveAllowFrom);
-  const commandAuthorized = shouldComputeAuth
-    ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups,
-        authorizers: [
-          { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
-        ],
-      })
-    : undefined;
+  const { senderAllowedForCommands, commandAuthorized } = await resolveSenderCommandAuthorization({
+    cfg: config,
+    rawBody,
+    isGroup,
+    dmPolicy,
+    configuredAllowFrom: configAllowFrom,
+    senderId,
+    isSenderAllowed,
+    readAllowFromStore: () => core.channel.pairing.readAllowFromStore("zalo"),
+    shouldComputeCommandAuthorized: (body, cfg) =>
+      core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
+    resolveCommandAuthorizedFromAuthorizers: (params) =>
+      core.channel.commands.resolveCommandAuthorizedFromAuthorizers(params),
+  });
 
   if (!isGroup) {
     if (dmPolicy === "disabled") {
@@ -694,7 +659,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       throw new Error("Zalo webhook secret must be 8-256 characters");
     }
 
-    const path = resolveWebhookPath(webhookPath, webhookUrl);
+    const path = resolveWebhookPath({ webhookPath, webhookUrl, defaultPath: null });
     if (!path) {
       throw new Error("Zalo webhookPath could not be derived");
     }

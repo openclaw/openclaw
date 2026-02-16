@@ -2,23 +2,39 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
-import { listChannelPairingRequests, upsertChannelPairingRequest } from "./pairing-store.js";
+import { captureEnv } from "../test-utils/env.js";
+import {
+  addChannelAllowFromStoreEntry,
+  approveChannelPairingCode,
+  listChannelPairingRequests,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "./pairing-store.js";
+
+let fixtureRoot = "";
+let caseId = 0;
+
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pairing-"));
+});
+
+afterAll(async () => {
+  if (fixtureRoot) {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pairing-"));
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const dir = path.join(fixtureRoot, `case-${caseId++}`);
+  await fs.mkdir(dir, { recursive: true });
   process.env.OPENCLAW_STATE_DIR = dir;
   try {
     return await fn(dir);
   } finally {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
-    await fs.rm(dir, { recursive: true, force: true });
+    envSnapshot.restore();
   }
 }
 
@@ -129,6 +145,77 @@ describe("pairing store", () => {
       expect(listIds).toContain("+15550000002");
       expect(listIds).toContain("+15550000003");
       expect(listIds).not.toContain("+15550000004");
+    });
+  });
+
+  it("stores allowFrom entries per account when accountId is provided", async () => {
+    await withTempStateDir(async () => {
+      await addChannelAllowFromStoreEntry({
+        channel: "telegram",
+        accountId: "yy",
+        entry: "12345",
+      });
+
+      const accountScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const channelScoped = await readChannelAllowFromStore("telegram");
+      expect(accountScoped).toContain("12345");
+      expect(channelScoped).not.toContain("12345");
+    });
+  });
+
+  it("approves pairing codes into account-scoped allowFrom via pairing metadata", async () => {
+    await withTempStateDir(async () => {
+      const created = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "yy",
+        id: "12345",
+      });
+      expect(created.created).toBe(true);
+
+      const approved = await approveChannelPairingCode({
+        channel: "telegram",
+        code: created.code,
+      });
+      expect(approved?.id).toBe("12345");
+
+      const accountScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const channelScoped = await readChannelAllowFromStore("telegram");
+      expect(accountScoped).toContain("12345");
+      expect(channelScoped).not.toContain("12345");
+    });
+  });
+
+  it("reads legacy channel-scoped allowFrom for default account", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const oauthDir = resolveOAuthDir(process.env, stateDir);
+      await fs.mkdir(oauthDir, { recursive: true });
+      await fs.writeFile(
+        path.join(oauthDir, "telegram-allowFrom.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            allowFrom: ["1001"],
+          },
+          null,
+          2,
+        ) + "\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(oauthDir, "telegram-default-allowFrom.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            allowFrom: ["1002"],
+          },
+          null,
+          2,
+        ) + "\n",
+        "utf8",
+      );
+
+      const scoped = await readChannelAllowFromStore("telegram", process.env, "default");
+      expect(scoped).toEqual(["1002", "1001"]);
     });
   });
 });

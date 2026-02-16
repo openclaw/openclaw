@@ -12,7 +12,7 @@ import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/para
 import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -36,16 +36,14 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
-  readJsonBodyOrError,
-  sendGatewayAuthFailure,
-  sendJson,
-  sendMethodNotAllowed,
-  setSseHeaders,
-  writeDone,
-} from "./http-common.js";
-import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+  buildAgentMessageFromConversationEntries,
+  type ConversationEntry,
+} from "./agent-prompt.js";
+import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
   type ContentPart,
@@ -196,8 +194,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   }
 
   const systemParts: string[] = [];
-  const conversationEntries: Array<{ role: "user" | "assistant" | "tool"; entry: HistoryEntry }> =
-    [];
+  const conversationEntries: ConversationEntry[] = [];
 
   for (const item of input) {
     if (item.type === "message") {
@@ -227,36 +224,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
     // Skip reasoning and item_reference for prompt building (Phase 1)
   }
 
-  let message = "";
-  if (conversationEntries.length > 0) {
-    // Find the last user or tool message as the current message
-    let currentIndex = -1;
-    for (let i = conversationEntries.length - 1; i >= 0; i -= 1) {
-      const entryRole = conversationEntries[i]?.role;
-      if (entryRole === "user" || entryRole === "tool") {
-        currentIndex = i;
-        break;
-      }
-    }
-    if (currentIndex < 0) {
-      currentIndex = conversationEntries.length - 1;
-    }
-
-    const currentEntry = conversationEntries[currentIndex]?.entry;
-    if (currentEntry) {
-      const historyEntries = conversationEntries.slice(0, currentIndex).map((entry) => entry.entry);
-      if (historyEntries.length === 0) {
-        message = currentEntry.body;
-      } else {
-        const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${entry.body}`;
-        message = buildHistoryContextFromEntries({
-          entries: [...historyEntries, currentEntry],
-          currentMessage: formatEntry(currentEntry),
-          formatEntry,
-        });
-      }
-    }
-  }
+  const message = buildAgentMessageFromConversationEntries(conversationEntries);
 
   return {
     message,
@@ -346,47 +314,61 @@ function createAssistantOutputItem(params: {
   };
 }
 
+async function runResponsesAgentCommand(params: {
+  message: string;
+  images: ImageContent[];
+  clientTools: ClientToolDefinition[];
+  extraSystemPrompt: string;
+  streamParams: { maxTokens: number } | undefined;
+  sessionKey: string;
+  runId: string;
+  deps: ReturnType<typeof createDefaultDeps>;
+}) {
+  return agentCommand(
+    {
+      message: params.message,
+      images: params.images.length > 0 ? params.images : undefined,
+      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
+      extraSystemPrompt: params.extraSystemPrompt || undefined,
+      streamParams: params.streamParams ?? undefined,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      deliver: false,
+      messageChannel: "webchat",
+      bestEffortDeliver: false,
+    },
+    defaultRuntime,
+    params.deps,
+  );
+}
+
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname !== "/v1/responses") {
-    return false;
-  }
-
-  if (req.method !== "POST") {
-    sendMethodNotAllowed(res);
-    return true;
-  }
-
-  const token = getBearerToken(req);
-  const authResult = await authorizeGatewayConnect({
-    auth: opts.auth,
-    connectAuth: { token, password: token },
-    req,
-    trustedProxies: opts.trustedProxies,
-    rateLimiter: opts.rateLimiter,
-  });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
-    return true;
-  }
-
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
     (opts.config?.maxBodyBytes
       ? limits.maxBodyBytes
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
-  const body = await readJsonBodyOrError(req, res, maxBodyBytes);
-  if (body === undefined) {
+  const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    pathname: "/v1/responses",
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    rateLimiter: opts.rateLimiter,
+    maxBodyBytes,
+  });
+  if (handled === false) {
+    return false;
+  }
+  if (!handled) {
     return true;
   }
 
   // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(body);
+  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
     const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
@@ -549,22 +531,16 @@ export async function handleOpenResponsesHttpRequest(
 
   if (!stream) {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          images: images.length > 0 ? images : undefined,
-          clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
-          extraSystemPrompt: extraSystemPrompt || undefined,
-          streamParams: streamParams ?? undefined,
-          sessionKey,
-          runId: responseId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
+      const result = await runResponsesAgentCommand({
+        message: prompt.message,
+        images,
+        clientTools: resolvedClientTools,
+        extraSystemPrompt,
+        streamParams,
+        sessionKey,
+        runId: responseId,
         deps,
-      );
+      });
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
@@ -752,9 +728,7 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const delta = evt.data?.delta;
-      const text = evt.data?.text;
-      const content = typeof delta === "string" ? delta : typeof text === "string" ? text : "";
+      const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
@@ -789,22 +763,16 @@ export async function handleOpenResponsesHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          images: images.length > 0 ? images : undefined,
-          clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
-          extraSystemPrompt: extraSystemPrompt || undefined,
-          streamParams: streamParams ?? undefined,
-          sessionKey,
-          runId: responseId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
+      const result = await runResponsesAgentCommand({
+        message: prompt.message,
+        images,
+        clientTools: resolvedClientTools,
+        extraSystemPrompt,
+        streamParams,
+        sessionKey,
+        runId: responseId,
         deps,
-      );
+      });
 
       finalUsage = extractUsageFromResult(result);
       maybeFinalize();

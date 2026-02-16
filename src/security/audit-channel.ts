@@ -3,6 +3,10 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import {
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "../channels/telegram/allow-from.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -225,7 +229,7 @@ export async function collectChannelSecurityFindings(params: {
             detail:
               "Discord slash commands are enabled, but neither an owner allowFrom list nor any per-guild/channel users allowlist is configured; /… commands will be rejected for everyone.",
             remediation:
-              "Add your user id to channels.discord.dm.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.",
+              "Add your user id to channels.discord.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.",
           });
         }
       }
@@ -265,12 +269,23 @@ export async function collectChannelSecurityFindings(params: {
             remediation: "Set commands.useAccessGroups=true (recommended).",
           });
         } else {
-          const dmAllowFromRaw = (account as { dm?: { allowFrom?: unknown } } | null)?.dm
-            ?.allowFrom;
-          const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
+          const allowFromRaw = (
+            account as
+              | { config?: { allowFrom?: unknown }; dm?: { allowFrom?: unknown } }
+              | null
+              | undefined
+          )?.config?.allowFrom;
+          const legacyAllowFromRaw = (
+            account as { dm?: { allowFrom?: unknown } } | null | undefined
+          )?.dm?.allowFrom;
+          const allowFrom = Array.isArray(allowFromRaw)
+            ? allowFromRaw
+            : Array.isArray(legacyAllowFromRaw)
+              ? legacyAllowFromRaw
+              : [];
           const storeAllowFrom = await readChannelAllowFromStore("slack").catch(() => []);
           const ownerAllowFromConfigured =
-            normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
+            normalizeAllowFromList([...allowFrom, ...storeAllowFrom]).length > 0;
           const channels = (slackCfg.channels as Record<string, unknown> | undefined) ?? {};
           const hasAnyChannelUsersAllowlist = Object.values(channels).some((value) => {
             if (!value || typeof value !== "object") {
@@ -287,7 +302,7 @@ export async function collectChannelSecurityFindings(params: {
               detail:
                 "Slack slash/native commands are enabled, but neither an owner allowFrom list nor any channels.<id>.users allowlist is configured; /… commands will be rejected for everyone.",
               remediation:
-                "Approve yourself via pairing (recommended), or set channels.slack.dm.allowFrom and/or channels.slack.channels.<id>.users.",
+                "Approve yourself via pairing (recommended), or set channels.slack.allowFrom and/or channels.slack.channels.<id>.users.",
             });
           }
         }
@@ -353,10 +368,39 @@ export async function collectChannelSecurityFindings(params: {
 
       const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
       const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
+      const invalidTelegramAllowFromEntries = new Set<string>();
+      for (const entry of storeAllowFrom) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*") {
+          continue;
+        }
+        if (!isNumericTelegramUserId(normalized)) {
+          invalidTelegramAllowFromEntries.add(normalized);
+        }
+      }
       const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
         ? telegramCfg.groupAllowFrom
         : [];
       const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
+      for (const entry of groupAllowFrom) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*") {
+          continue;
+        }
+        if (!isNumericTelegramUserId(normalized)) {
+          invalidTelegramAllowFromEntries.add(normalized);
+        }
+      }
+      const dmAllowFrom = Array.isArray(telegramCfg.allowFrom) ? telegramCfg.allowFrom : [];
+      for (const entry of dmAllowFrom) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*") {
+          continue;
+        }
+        if (!isNumericTelegramUserId(normalized)) {
+          invalidTelegramAllowFromEntries.add(normalized);
+        }
+      }
       const anyGroupOverride = Boolean(
         groups &&
         Object.values(groups).some((value) => {
@@ -366,6 +410,15 @@ export async function collectChannelSecurityFindings(params: {
           const group = value as Record<string, unknown>;
           const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
           if (allowFrom.length > 0) {
+            for (const entry of allowFrom) {
+              const normalized = normalizeTelegramAllowFromEntry(entry);
+              if (!normalized || normalized === "*") {
+                continue;
+              }
+              if (!isNumericTelegramUserId(normalized)) {
+                invalidTelegramAllowFromEntries.add(normalized);
+              }
+            }
             return true;
           }
           const topics = group.topics;
@@ -378,6 +431,15 @@ export async function collectChannelSecurityFindings(params: {
             }
             const topic = topicValue as Record<string, unknown>;
             const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
+            for (const entry of topicAllow) {
+              const normalized = normalizeTelegramAllowFromEntry(entry);
+              if (!normalized || normalized === "*") {
+                continue;
+              }
+              if (!isNumericTelegramUserId(normalized)) {
+                invalidTelegramAllowFromEntries.add(normalized);
+              }
+            }
             return topicAllow.length > 0;
           });
         }),
@@ -385,6 +447,24 @@ export async function collectChannelSecurityFindings(params: {
 
       const hasAnySenderAllowlist =
         storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+
+      if (invalidTelegramAllowFromEntries.size > 0) {
+        const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
+        const more =
+          invalidTelegramAllowFromEntries.size > examples.length
+            ? ` (+${invalidTelegramAllowFromEntries.size - examples.length} more)`
+            : "";
+        findings.push({
+          checkId: "channels.telegram.allowFrom.invalid_entries",
+          severity: "warn",
+          title: "Telegram allowlist contains non-numeric entries",
+          detail:
+            "Telegram sender authorization requires numeric Telegram user IDs. " +
+            `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
+          remediation:
+            "Replace @username entries with numeric Telegram user IDs (use onboarding to resolve), then re-run the audit.",
+        });
+      }
 
       if (storeHasWildcard || groupAllowFromHasWildcard) {
         findings.push({
@@ -394,7 +474,7 @@ export async function collectChannelSecurityFindings(params: {
           detail:
             'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
           remediation:
-            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit user ids/usernames.',
+            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit numeric Telegram user IDs.',
         });
         continue;
       }

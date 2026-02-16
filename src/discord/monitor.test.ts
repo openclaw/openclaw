@@ -38,6 +38,22 @@ const makeEntries = (
   return out;
 };
 
+function createAutoThreadMentionContext() {
+  const guildInfo: DiscordGuildEntryResolved = {
+    requireMention: true,
+    channels: {
+      general: { allow: true, autoThread: true },
+    },
+  };
+  const channelConfig = resolveDiscordChannelConfig({
+    guildInfo,
+    channelId: "1",
+    channelName: "General",
+    channelSlug: "general",
+  });
+  return { guildInfo, channelConfig };
+}
+
 describe("registerDiscordListener", () => {
   class FakeListener {}
 
@@ -253,6 +269,19 @@ describe("discord guild/channel resolution", () => {
     expect(channel?.allowed).toBe(false);
   });
 
+  it("treats empty channel config map as no channel allowlist", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {},
+    };
+    const channel = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "999",
+      channelName: "random",
+      channelSlug: "random",
+    });
+    expect(channel).toBeNull();
+  });
+
   it("inherits parent config for thread channels", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
@@ -345,6 +374,23 @@ describe("discord guild/channel resolution", () => {
     expect(thread?.matchKey).toBe("*");
     expect(thread?.matchSource).toBe("wildcard");
   });
+
+  it("treats empty channel config map as no thread allowlist", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {},
+    };
+    const thread = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-123",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-999",
+      parentName: "general",
+      parentSlug: "general",
+      scope: "thread",
+    });
+    expect(thread).toBeNull();
+  });
 });
 
 describe("discord mention gating", () => {
@@ -372,18 +418,7 @@ describe("discord mention gating", () => {
   });
 
   it("does not require mention inside autoThread threads", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { allow: true, autoThread: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
+    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,
@@ -397,18 +432,7 @@ describe("discord mention gating", () => {
   });
 
   it("requires mention inside user-created threads with autoThread enabled", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { allow: true, autoThread: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
+    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,
@@ -422,18 +446,7 @@ describe("discord mention gating", () => {
   });
 
   it("requires mention when thread owner is unknown", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { allow: true, autoThread: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
+    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,

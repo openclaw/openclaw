@@ -2,17 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.js";
 import * as cdpModule from "./cdp.js";
 import * as pwAiModule from "./pw-ai-module.js";
+import "./server-context.chrome-test-harness.js";
 import { createBrowserRouteContext } from "./server-context.js";
-
-vi.mock("./chrome.js", () => ({
-  isChromeCdpReady: vi.fn(async () => true),
-  isChromeReachable: vi.fn(async () => true),
-  launchOpenClawChrome: vi.fn(async () => {
-    throw new Error("unexpected launch");
-  }),
-  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw"),
-  stopOpenClawChrome: vi.fn(async () => {}),
-}));
 
 const originalFetch = globalThis.fetch;
 

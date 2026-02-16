@@ -1,6 +1,7 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
+import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
   isRequestBodyLimitError,
@@ -13,11 +14,26 @@ function createMockRequest(params: {
   headers?: Record<string, string>;
   emitEnd?: boolean;
 }): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & { destroyed?: boolean; destroy: () => void };
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed?: boolean;
+    destroy: (error?: Error) => void;
+    __unhandledDestroyError?: unknown;
+  };
   req.destroyed = false;
   req.headers = params.headers ?? {};
-  req.destroy = () => {
+  req.destroy = (error?: Error) => {
     req.destroyed = true;
+    if (error) {
+      // Simulate Node's async 'error' emission on destroy(err). If no listener is
+      // present at that time, EventEmitter throws; capture that as "unhandled".
+      queueMicrotask(() => {
+        try {
+          req.emit("error", error);
+        } catch (err) {
+          req.__unhandledDestroyError = err;
+        }
+      });
+    }
   };
 
   if (params.chunks) {
@@ -37,24 +53,6 @@ function createMockRequest(params: {
   return req;
 }
 
-function createMockResponse(): ServerResponse & { body?: string } {
-  const headers: Record<string, string> = {};
-  const res = {
-    headersSent: false,
-    statusCode: 200,
-    setHeader: (key: string, value: string) => {
-      headers[key.toLowerCase()] = value;
-      return res;
-    },
-    end: (body?: string) => {
-      res.headersSent = true;
-      res.body = body;
-      return res;
-    },
-  } as unknown as ServerResponse & { body?: string };
-  return res;
-}
-
 describe("http body limits", () => {
   it("reads body within max bytes", async () => {
     const req = createMockRequest({ chunks: ['{"ok":true}'] });
@@ -66,6 +64,7 @@ describe("http body limits", () => {
     await expect(readRequestBodyWithLimit(req, { maxBytes: 64 })).rejects.toMatchObject({
       message: "PayloadTooLarge",
     });
+    expect(req.__unhandledDestroyError).toBeUndefined();
   });
 
   it("returns json parse error when body is invalid", async () => {
@@ -88,7 +87,7 @@ describe("http body limits", () => {
       headers: { "content-length": "9999" },
       emitEnd: false,
     });
-    const res = createMockResponse();
+    const res = createMockServerResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128 });
     expect(guard.isTripped()).toBe(true);
     expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
@@ -97,13 +96,14 @@ describe("http body limits", () => {
 
   it("guard rejects streamed oversized body", async () => {
     const req = createMockRequest({ chunks: ["small", "x".repeat(256)], emitEnd: false });
-    const res = createMockResponse();
+    const res = createMockServerResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128, responseFormat: "text" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(guard.isTripped()).toBe(true);
     expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
     expect(res.statusCode).toBe(413);
     expect(res.body).toBe("Payload too large");
+    expect(req.__unhandledDestroyError).toBeUndefined();
   });
 
   it("timeout surfaces typed error", async () => {
@@ -112,5 +112,19 @@ describe("http body limits", () => {
     await expect(promise).rejects.toSatisfy((error: unknown) =>
       isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT"),
     );
+    expect(req.__unhandledDestroyError).toBeUndefined();
+  });
+
+  it("declared oversized content-length does not emit unhandled error", async () => {
+    const req = createMockRequest({
+      headers: { "content-length": "9999" },
+      emitEnd: false,
+    });
+    await expect(readRequestBodyWithLimit(req, { maxBytes: 128 })).rejects.toMatchObject({
+      message: "PayloadTooLarge",
+    });
+    // Wait a tick for any async destroy(err) emission.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(req.__unhandledDestroyError).toBeUndefined();
   });
 });
