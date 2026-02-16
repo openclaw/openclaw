@@ -50,6 +50,7 @@ import {
   parseModelCallbackData,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { getSentPoll } from "./poll-vote-cache.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -746,6 +747,65 @@ export const registerTelegramHandlers = ({
       });
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
+    }
+  });
+
+  bot.on("poll_answer", async (ctx) => {
+    try {
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+      const pollAnswer = (ctx.update as { poll_answer?: unknown })?.poll_answer as
+        | {
+            poll_id?: string;
+            user?: { id?: number; username?: string; first_name?: string };
+            option_ids?: number[];
+          }
+        | undefined;
+      if (!pollAnswer) {
+        return;
+      }
+      const pollId = pollAnswer?.poll_id?.trim();
+      if (!pollId) {
+        return;
+      }
+      const pollMeta = getSentPoll(pollId);
+      if (!pollMeta) {
+        return;
+      }
+      if (pollMeta.accountId && pollMeta.accountId !== accountId) {
+        return;
+      }
+      const userId = pollAnswer.user?.id;
+      if (typeof userId !== "number") {
+        return;
+      }
+      const optionIds = Array.isArray(pollAnswer.option_ids) ? pollAnswer.option_ids : [];
+      const selected = optionIds.map((id) => pollMeta.options[id] ?? `option#${id + 1}`);
+      const selectedText = selected.length > 0 ? selected.join(", ") : "(cleared vote)";
+      const syntheticText = `Poll vote update: "${pollMeta.question}" -> ${selectedText}`;
+      const syntheticMessage = {
+        message_id: Date.now(),
+        date: Math.floor(Date.now() / 1000),
+        chat: {
+          id: Number(pollMeta.chatId),
+          type: String(pollMeta.chatId).startsWith("-") ? "supergroup" : "private",
+        },
+        from: {
+          id: userId,
+          is_bot: false,
+          first_name: pollAnswer.user?.first_name ?? "User",
+          username: pollAnswer.user?.username,
+        },
+        text: syntheticText,
+      } as unknown as Message;
+      const storeAllowFrom = await loadStoreAllowFrom();
+      await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
+        forceWasMentioned: true,
+        messageIdOverride: `poll:${pollId}:${userId}:${Date.now()}`,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`poll_answer handler failed: ${String(err)}`));
     }
   });
 

@@ -70,6 +70,7 @@ Mattermost responds to DMs automatically. Channel behavior is controlled by `cha
 
 - `oncall` (default): respond only when @mentioned in channels.
 - `onmessage`: respond to every channel message.
+- `always`: respond to every message in channels (same channel behavior as `onmessage`).
 - `onchar`: respond when a message starts with a trigger prefix.
 
 Config example:
@@ -89,6 +90,25 @@ Notes:
 
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
+- Current limitation: due to Mattermost plugin event behavior (`#11797`), `chatmode: "onmessage"` and
+  `chatmode: "always"` may still require explicit group mention override to respond without @mentions.
+  Use:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      groupPolicy: "open",
+      groups: {
+        "*": { requireMention: false },
+      },
+    },
+  },
+}
+```
+
+Reference: [Bug: Mattermost plugin does not receive channel message events via WebSocket #11797](https://github.com/open-webui/open-webui/issues/11797).
+Related fix scope: [fix(mattermost): honor chatmode mention fallback in group mention gating #14995](https://github.com/open-webui/open-webui/pull/14995).
 
 ## Access control (DMs)
 
@@ -133,6 +153,7 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 
 ## Troubleshooting
 
-- No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
+- No replies in channels: ensure the bot is in the channel and use the mode behavior correctly: mention it (`oncall`), use a trigger prefix (`onchar`), or use `onmessage`/`always` with:
+  `channels.mattermost.groups["*"].requireMention = false` (and typically `groupPolicy: "open"`).
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
