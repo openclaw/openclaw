@@ -125,11 +125,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
 
     // Stagger account startup to avoid Discord rate limits
+    let lastAbort: AbortController | undefined;
     for (let accountIndex = 0; accountIndex < accountIds.length; accountIndex++) {
       const id = accountIds[accountIndex];
       // Add 2-second delay between accounts (except the first)
       if (accountIndex > 0) {
         await new Promise((r) => setTimeout(r, 2000));
+        // Break if stopChannel() was called during the delay
+        if (lastAbort?.signal.aborted) {
+          break;
+        }
       }
 
       if (store.tasks.has(id)) {
@@ -165,6 +170,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       manuallyStopped.delete(rKey);
 
       const abort = new AbortController();
+      lastAbort = abort;
       store.aborts.set(id, abort);
       restartAttempts.delete(rKey);
       setRuntime(channelId, id, {
