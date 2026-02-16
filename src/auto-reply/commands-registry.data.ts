@@ -173,6 +173,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "mesh",
+      nativeName: "mesh",
+      description: "Plan and run multi-step workflows.",
+      textAlias: "/mesh",
+      category: "tools",
+      argsParsing: "none",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",

@@ -130,6 +130,8 @@ import {
   LogsTailResultSchema,
   type MeshPlanParams,
   MeshPlanParamsSchema,
+  type MeshPlanAutoParams,
+  MeshPlanAutoParamsSchema,
   type MeshRetryParams,
   MeshRetryParamsSchema,
   type MeshRunParams,
@@ -369,6 +371,7 @@ export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeS
 );
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
 export const validateMeshPlanParams = ajv.compile<MeshPlanParams>(MeshPlanParamsSchema);
+export const validateMeshPlanAutoParams = ajv.compile<MeshPlanAutoParams>(MeshPlanAutoParamsSchema);
 export const validateMeshRunParams = ajv.compile<MeshRunParams>(MeshRunParamsSchema);
 export const validateMeshStatusParams = ajv.compile<MeshStatusParams>(MeshStatusParamsSchema);
 export const validateMeshRetryParams = ajv.compile<MeshRetryParams>(MeshRetryParamsSchema);
@@ -432,6 +435,7 @@ export {
   AgentEventSchema,
   ChatEventSchema,
   MeshPlanParamsSchema,
+  MeshPlanAutoParamsSchema,
   MeshWorkflowPlanSchema,
   MeshRunParamsSchema,
   MeshStatusParamsSchema,
@@ -536,6 +540,7 @@ export type {
   AgentWaitParams,
   ChatEvent,
   MeshPlanParams,
+  MeshPlanAutoParams,
   MeshWorkflowPlan,
   MeshRunParams,
   MeshStatusParams,

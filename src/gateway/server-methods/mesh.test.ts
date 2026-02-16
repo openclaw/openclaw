@@ -5,6 +5,7 @@ import { __resetMeshRunsForTest, meshHandlers } from "./mesh.js";
 const mocks = vi.hoisted(() => ({
   agent: vi.fn(),
   agentWait: vi.fn(),
+  agentCommand: vi.fn(),
 }));
 
 vi.mock("./agent.js", () => ({
@@ -12,6 +13,10 @@ vi.mock("./agent.js", () => ({
     agent: (...args: unknown[]) => mocks.agent(...args),
     "agent.wait": (...args: unknown[]) => mocks.agentWait(...args),
   },
+}));
+
+vi.mock("../../commands/agent.js", () => ({
+  agentCommand: (...args: unknown[]) => mocks.agentCommand(...args),
 }));
 
 const makeContext = (): GatewayRequestContext =>
@@ -38,6 +43,7 @@ afterEach(() => {
   __resetMeshRunsForTest();
   mocks.agent.mockReset();
   mocks.agentWait.mockReset();
+  mocks.agentCommand.mockReset();
 });
 
 describe("mesh handlers", () => {
@@ -134,5 +140,87 @@ describe("mesh handlers", () => {
     expect(statusRes.ok).toBe(true);
     const statusPayload = statusRes.payload as { status: string };
     expect(statusPayload.status).toBe("completed");
+  });
+
+  it("auto planner creates multiple steps from llm json output", async () => {
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [
+        {
+          text: JSON.stringify({
+            steps: [
+              { id: "analyze", prompt: "Analyze requirements" },
+              { id: "build", prompt: "Build implementation", dependsOn: ["analyze"] },
+            ],
+          }),
+        },
+      ],
+      meta: {},
+    });
+
+    const res = await callMesh("mesh.plan.auto", {
+      goal: "Create dashboard with auth",
+      maxSteps: 4,
+    });
+    expect(res.ok).toBe(true);
+    const payload = res.payload as {
+      source: string;
+      plan: { steps: Array<{ id: string }> };
+      order: string[];
+    };
+    expect(payload.source).toBe("llm");
+    expect(payload.plan.steps.map((s) => s.id)).toEqual(["analyze", "build"]);
+    expect(payload.order).toEqual(["analyze", "build"]);
+    expect(mocks.agentCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:mesh-planner",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("auto planner falls back to single-step plan when llm output is invalid", async () => {
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "not valid json" }],
+      meta: {},
+    });
+    const res = await callMesh("mesh.plan.auto", {
+      goal: "Do a thing",
+    });
+    expect(res.ok).toBe(true);
+    const payload = res.payload as {
+      source: string;
+      plan: { steps: Array<{ id: string; prompt: string }> };
+    };
+    expect(payload.source).toBe("fallback");
+    expect(payload.plan.steps).toHaveLength(1);
+    expect(payload.plan.steps[0]?.prompt).toBe("Do a thing");
+  });
+
+  it("auto planner respects caller-provided planner session key", async () => {
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [
+        {
+          text: JSON.stringify({
+            steps: [{ id: "one", prompt: "One" }],
+          }),
+        },
+      ],
+      meta: {},
+    });
+
+    const res = await callMesh("mesh.plan.auto", {
+      goal: "Do a thing",
+      sessionKey: "agent:main:custom-planner",
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.agentCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:custom-planner",
+      }),
+      expect.any(Object),
+      undefined,
+    );
   });
 });
