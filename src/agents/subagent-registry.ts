@@ -1,7 +1,14 @@
 import { loadConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveStorePath,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { abortEmbeddedPiRun } from "./pi-embedded.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -29,6 +36,10 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  /** Number of times waitForSubagentCompletion has been retried after failure. */
+  waitRetryCount?: number;
+  /** Timestamp of the last wait retry attempt. */
+  lastWaitRetryAt?: number;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -176,23 +187,49 @@ function stopSweeper() {
   sweeper = null;
 }
 
+/** Maximum age in ms for a run with no endedAt before it is considered stale. */
+const STALE_RUN_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+
 async function sweepSubagentRuns() {
   const now = Date.now();
   let mutated = false;
   for (const [runId, entry] of subagentRuns.entries()) {
-    if (!entry.archiveAtMs || entry.archiveAtMs > now) {
+    // Archive expired completed runs.
+    if (entry.archiveAtMs && entry.archiveAtMs <= now) {
+      subagentRuns.delete(runId);
+      mutated = true;
+      try {
+        await callGateway({
+          method: "sessions.delete",
+          params: { key: entry.childSessionKey, deleteTranscript: true },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // ignore
+      }
       continue;
     }
-    subagentRuns.delete(runId);
-    mutated = true;
-    try {
-      await callGateway({
-        method: "sessions.delete",
-        params: { key: entry.childSessionKey, deleteTranscript: true },
-        timeoutMs: 10_000,
-      });
-    } catch {
-      // ignore
+    // Detect stale runs that never completed — likely orphaned by gateway
+    // failures where the wait RPC was lost and retries were exhausted.
+    if (
+      typeof entry.endedAt !== "number" &&
+      typeof entry.startedAt === "number" &&
+      now - entry.startedAt > STALE_RUN_THRESHOLD_MS &&
+      !entry.cleanupHandled
+    ) {
+      defaultRuntime.error?.(
+        `Subagent run ${runId} appears stale (started ${Math.round((now - entry.startedAt) / 60_000)}m ago, no completion). Marking as failed.`,
+      );
+      entry.endedAt = now;
+      entry.outcome = {
+        status: "error",
+        error: "subagent run stale — no completion received within expected window",
+      };
+      mutated = true;
+      abortChildRun(entry);
+      if (!suppressAnnounceForSteerRestart(entry)) {
+        startSubagentAnnounceCleanupFlow(runId, entry);
+      }
     }
   }
   if (mutated) {
@@ -401,6 +438,73 @@ export function replaceSubagentRunAfterSteer(params: {
   return true;
 }
 
+/**
+ * Best-effort abort of the embedded child run.
+ * Resolves the child's sessionId from the session store and sends an abort signal.
+ */
+function abortChildRun(entry: SubagentRunRecord): boolean {
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdFromSessionKey(entry.childSessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const sessionEntry = store[entry.childSessionKey];
+    const sessionId =
+      typeof sessionEntry?.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
+    if (sessionId) {
+      return abortEmbeddedPiRun(sessionId);
+    }
+  } catch {
+    // Best-effort; ignore failures.
+  }
+  return false;
+}
+
+/** Maximum number of wait retry attempts before marking a run as failed. */
+const MAX_WAIT_RETRIES = 3;
+
+/** Base delay in ms for exponential backoff between wait retries. */
+const WAIT_RETRY_BASE_DELAY_MS = 5_000;
+
+function scheduleWaitRetry(runId: string, entry: SubagentRunRecord) {
+  const retryCount = (entry.waitRetryCount ?? 0) + 1;
+  if (retryCount > MAX_WAIT_RETRIES) {
+    // Exhausted retries — mark as failed so the requester is notified.
+    defaultRuntime.error?.(
+      `Subagent wait for ${runId} failed after ${MAX_WAIT_RETRIES} retries, marking as failed`,
+    );
+    entry.endedAt = Date.now();
+    entry.outcome = {
+      status: "error",
+      error: `wait failed after ${MAX_WAIT_RETRIES} retries (gateway unreachable)`,
+    };
+    persistSubagentRuns();
+    if (!suppressAnnounceForSteerRestart(entry)) {
+      startSubagentAnnounceCleanupFlow(runId, entry);
+    }
+    return;
+  }
+  entry.waitRetryCount = retryCount;
+  entry.lastWaitRetryAt = Date.now();
+  persistSubagentRuns();
+  const delayMs = WAIT_RETRY_BASE_DELAY_MS * 2 ** (retryCount - 1);
+  defaultRuntime.error?.(
+    `Subagent wait for ${runId} failed, scheduling retry ${retryCount}/${MAX_WAIT_RETRIES} in ${Math.round(delayMs / 1000)}s`,
+  );
+  const timer = setTimeout(() => {
+    const current = subagentRuns.get(runId);
+    if (!current || typeof current.endedAt === "number") {
+      return;
+    }
+    const cfg = loadConfig();
+    const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, current.runTimeoutSeconds);
+    void waitForSubagentCompletion(runId, waitTimeoutMs);
+  }, delayMs);
+  timer.unref?.();
+}
+
 export function registerSubagentRun(params: {
   runId: string;
   childSessionKey: string;
@@ -438,9 +542,8 @@ export function registerSubagentRun(params: {
   });
   ensureListener();
   persistSubagentRuns();
-  if (archiveAfterMs) {
-    startSweeper();
-  }
+  // Always start sweeper — it handles both archive expiry and stale run detection.
+  startSweeper();
   // Wait for subagent completion via gateway RPC (cross-process).
   // The in-process lifecycle listener is a fallback for embedded runs.
   void waitForSubagentCompletion(params.runId, waitTimeoutMs);
@@ -469,6 +572,11 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     if (!entry) {
       return;
     }
+    // Clear retry tracking on successful wait.
+    if (entry.waitRetryCount) {
+      entry.waitRetryCount = undefined;
+      entry.lastWaitRetryAt = undefined;
+    }
     let mutated = false;
     if (typeof wait.startedAt === "number") {
       entry.startedAt = wait.startedAt;
@@ -490,6 +598,11 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
           ? { status: "timeout" }
           : { status: "ok" };
     mutated = true;
+    // When the wait times out, actively abort the child run so it stops
+    // consuming resources instead of running indefinitely in the background.
+    if (wait.status === "timeout") {
+      abortChildRun(entry);
+    }
     if (mutated) {
       persistSubagentRuns();
     }
@@ -499,8 +612,15 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     if (!startSubagentAnnounceCleanupFlow(runId, entry)) {
       return;
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    const entry = subagentRuns.get(runId);
+    if (!entry || typeof entry.endedAt === "number") {
+      return;
+    }
+    defaultRuntime.error?.(
+      `Subagent wait RPC failed for ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    scheduleWaitRetry(runId, entry);
   }
 }
 
