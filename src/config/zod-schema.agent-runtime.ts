@@ -126,6 +126,30 @@ export const SandboxDockerSchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
+    if (data.binds) {
+      for (let i = 0; i < data.binds.length; i += 1) {
+        const bind = data.binds[i]?.trim() ?? "";
+        if (!bind) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["binds", i],
+            message: "Sandbox security: bind mount entry must be a non-empty string.",
+          });
+          continue;
+        }
+        const firstColon = bind.indexOf(":");
+        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
+        if (!source.startsWith("/")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["binds", i],
+            message:
+              `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
+              "Only absolute POSIX paths are supported for sandbox binds.",
+          });
+        }
+      }
+    }
     if (data.network?.trim().toLowerCase() === "host") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

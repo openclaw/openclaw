@@ -11,7 +11,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
-import { getBlockedBindReasonStringOnly } from "../agents/sandbox/validate-sandbox-security.js";
+import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -616,7 +616,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
       if (typeof bind !== "string") {
         continue;
       }
-      const blocked = getBlockedBindReasonStringOnly(bind);
+      const blocked = getBlockedBindReason(bind);
       if (!blocked) {
         continue;
       }

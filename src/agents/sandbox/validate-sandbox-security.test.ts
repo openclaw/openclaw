@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  getBlockedBindReasonStringOnly,
+  getBlockedBindReason,
   validateBindMounts,
   validateNetworkMode,
   validateSeccompProfile,
@@ -11,17 +11,16 @@ import {
   validateSandboxSecurity,
 } from "./validate-sandbox-security.js";
 
-describe("getBlockedBindReasonStringOnly", () => {
-  it("blocks ancestor mounts that would expose the Docker socket", () => {
-    expect(getBlockedBindReasonStringOnly("/run:/run")).toEqual(
-      expect.objectContaining({ kind: "covers" }),
+describe("getBlockedBindReason", () => {
+  it("blocks common Docker socket directories", () => {
+    expect(getBlockedBindReason("/run:/run")).toEqual(expect.objectContaining({ kind: "targets" }));
+    expect(getBlockedBindReason("/var/run:/var/run:ro")).toEqual(
+      expect.objectContaining({ kind: "targets" }),
     );
-    expect(getBlockedBindReasonStringOnly("/var/run:/var/run:ro")).toEqual(
-      expect.objectContaining({ kind: "covers" }),
-    );
-    expect(getBlockedBindReasonStringOnly("/var:/var")).toEqual(
-      expect.objectContaining({ kind: "covers" }),
-    );
+  });
+
+  it("does not block /var by default", () => {
+    expect(getBlockedBindReason("/var:/var")).toBeNull();
   });
 });
 
@@ -62,7 +61,7 @@ describe("validateBindMounts", () => {
   it("blocks parent mounts that would expose the Docker socket", () => {
     expect(() => validateBindMounts(["/run:/run"])).toThrow(/blocked path/);
     expect(() => validateBindMounts(["/var/run:/var/run"])).toThrow(/blocked path/);
-    expect(() => validateBindMounts(["/var:/var"])).toThrow(/blocked path/);
+    expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
   });
 
   it("blocks paths with .. traversal to dangerous directories", () => {
