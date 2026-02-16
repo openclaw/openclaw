@@ -26,6 +26,15 @@ type SlackListResponse = {
   response_metadata?: { next_cursor?: string };
 };
 
+type SlackConversationInfoResponse = {
+  channel?: {
+    id?: string;
+    name?: string;
+    is_archived?: boolean;
+    is_private?: boolean;
+  };
+};
+
 function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -90,12 +99,96 @@ function resolveByName(
   return active ?? matches[0];
 }
 
+/** Resolve a single channel by ID via conversations.info (Tier 3). */
+async function lookupChannelById(
+  client: WebClient,
+  channelId: string,
+): Promise<SlackChannelLookup | null> {
+  try {
+    const res = (await client.conversations.info({
+      channel: channelId,
+    })) as SlackConversationInfoResponse;
+    const channel = res.channel;
+    if (!channel?.id || !channel.name) {
+      return null;
+    }
+    return {
+      id: channel.id,
+      name: channel.name,
+      archived: Boolean(channel.is_archived),
+      isPrivate: Boolean(channel.is_private),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve channel entries using targeted APIs (conversations.info for IDs)
+ * and only falling back to conversations.list for name entries.
+ */
+async function resolveViaTargetedApis(
+  client: WebClient,
+  entries: string[],
+): Promise<SlackChannelResolution[]> {
+  const parsed = entries.map((input) => ({ input, ...parseSlackChannelMention(input) }));
+  const idEntries = parsed.filter((entry) => entry.id);
+  const nameEntries = parsed.filter((entry) => entry.name && !entry.id);
+  const emptyEntries = parsed.filter((entry) => !entry.id && !entry.name);
+
+  const results: SlackChannelResolution[] = [];
+
+  // Resolve IDs via conversations.info (Tier 3).
+  for (const entry of idEntries) {
+    const lookup = await lookupChannelById(client, entry.id!);
+    results.push({
+      input: entry.input,
+      resolved: true,
+      id: entry.id,
+      name: lookup?.name ?? entry.name,
+      archived: lookup?.archived,
+    });
+  }
+
+  // Only paginate through the full channel list when there are name entries.
+  if (nameEntries.length > 0) {
+    const channels = await listSlackChannels(client);
+    for (const entry of nameEntries) {
+      const match = resolveByName(entry.name!, channels);
+      if (match) {
+        results.push({
+          input: entry.input,
+          resolved: true,
+          id: match.id,
+          name: match.name,
+          archived: match.archived,
+        });
+      } else {
+        results.push({ input: entry.input, resolved: false });
+      }
+    }
+  }
+
+  for (const entry of emptyEntries) {
+    results.push({ input: entry.input, resolved: false });
+  }
+
+  return results;
+}
+
 export async function resolveSlackChannelAllowlist(params: {
   token: string;
   entries: string[];
   client?: WebClient;
+  rateLimitPolicy?: "retry" | "fail-fast";
 }): Promise<SlackChannelResolution[]> {
   const client = params.client ?? createSlackWebClient(params.token);
+
+  if (params.rateLimitPolicy === "fail-fast") {
+    return resolveViaTargetedApis(client, params.entries);
+  }
+
+  // Default ("retry" or undefined): always use conversations.list — original behavior.
   const channels = await listSlackChannels(client);
   const results: SlackChannelResolution[] = [];
 
