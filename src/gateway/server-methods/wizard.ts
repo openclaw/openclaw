@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
