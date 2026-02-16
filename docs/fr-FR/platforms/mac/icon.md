@@ -26,7 +26,7 @@ title: "Icône Menu Bar"
 ## Notes Comportementales
 
 - Pas toggle CLI/broker externe pour ears/working ; gardez-le interne aux signaux propres app pour éviter flapping accidentel.
-- Gardez TTLs courts (<10s) donc icône retourne vers baseline rapidement si job hang.
+- Gardez TTLs courts (moins de 10s) donc icône retourne vers baseline rapidement si job hang.
 
 Voir aussi :
 

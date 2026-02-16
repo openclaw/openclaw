@@ -195,6 +195,6 @@ rm $(which openclaw)
 
 ## Pourquoi désinstallez-vous ?
 
-Si quelque chose ne fonctionne pas, essayez d'abord `openclaw doctor` + `openclaw update`. Postez sur Discord si bloqué : <https://discord.gg/clawd>
+Si quelque chose ne fonctionne pas, essayez d'abord `openclaw doctor` + `openclaw update`. Postez sur Discord si bloqué : [https://discord.gg/clawd](https://discord.gg/clawd)
 
 Sinon : **bon vent, ami !** 👋
