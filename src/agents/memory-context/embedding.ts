@@ -130,12 +130,24 @@ export async function createEmbeddingProvider(
     // If unified system exhausted all providers → noop, use hash instead.
     // Hash provides n-gram vector similarity which is better than noop (BM25-only).
     if (result.provider.id === "none") {
-      logger?.info?.("[memory-context] embedding: using hash (keyword overlap, no semantic search)");
+      logger?.info?.(
+        "[memory-context] embedding: using hash (keyword overlap, no semantic search)",
+      );
       return createHashEmbedding(384);
     }
 
     const adapter = wrapUnifiedProvider(result.provider, logger);
     await adapter.init?.();
+
+    // If probe failed (e.g. Gemini region restriction), dim stays 0.
+    // Fall back to hash embedding to avoid VectorIndex: invalid dim 0.
+    if (adapter.dim <= 0) {
+      logger?.warn?.(
+        `[memory-context] embedding dim=0 after probe (provider=${adapter.name}), falling back to hash`,
+      );
+      return createHashEmbedding(384);
+    }
+
     return adapter;
   } catch (err) {
     logger?.warn?.(
@@ -181,10 +193,14 @@ function createHashEmbedding(dim: number): EmbeddingProvider {
 
       // Normalize to unit length
       let norm = 0;
-      for (const v of vec) {norm += v * v;}
+      for (const v of vec) {
+        norm += v * v;
+      }
       norm = Math.sqrt(norm);
       if (norm > 0) {
-        for (let i = 0; i < vec.length; i++) {vec[i] /= norm;}
+        for (let i = 0; i < vec.length; i++) {
+          vec[i] /= norm;
+        }
       }
       return vec;
     },
