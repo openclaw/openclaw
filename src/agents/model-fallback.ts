@@ -218,6 +218,15 @@ function resolveFallbackCandidates(params: {
   return candidates;
 }
 
+const lastProbeAttempt = new Map<string, number>();
+const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per provider
+
+/** @internal – exposed for unit tests only */
+export const _probeThrottleInternals = {
+  lastProbeAttempt,
+  MIN_PROBE_INTERVAL_MS,
+} as const;
+
 export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -263,8 +272,12 @@ export async function runWithModelFallback<T>(params: {
           isPrimary &&
           hasFallbackCandidates &&
           (() => {
+            const lastProbe = lastProbeAttempt.get(candidate.provider) ?? 0;
+            if (Date.now() - lastProbe < MIN_PROBE_INTERVAL_MS) {
+              return false; // throttled
+            }
             const soonest = getSoonestCooldownExpiry(authStore, profileIds);
-            if (soonest === null) {
+            if (soonest === null || !Number.isFinite(soonest)) {
               return true;
             }
             const now = Date.now();
@@ -285,6 +298,7 @@ export async function runWithModelFallback<T>(params: {
         // Primary model probe: attempt it despite cooldown to detect recovery.
         // If it fails, the error is caught below and we fall through to the
         // next candidate as usual.
+        lastProbeAttempt.set(candidate.provider, Date.now());
       }
     }
     try {

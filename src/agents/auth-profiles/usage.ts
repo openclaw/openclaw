@@ -40,7 +40,7 @@ export function getSoonestCooldownExpiry(
       continue;
     }
     const until = resolveProfileUnusableUntil(stats);
-    if (typeof until !== "number" || until <= 0) {
+    if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
       continue;
     }
     if (soonest === null || until < soonest) {
