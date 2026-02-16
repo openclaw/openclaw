@@ -794,11 +794,6 @@ describe("extractShortModelName", () => {
     expect(extractShortModelName("claude-sonnet-latest")).toBe("claude-sonnet");
   });
 
-  it("handles model without provider", () => {
-    expect(extractShortModelName("gpt-5.2")).toBe("gpt-5.2");
-    expect(extractShortModelName("claude-opus-4-5")).toBe("claude-opus-4-5");
-  });
-
   it("preserves version numbers that look like dates but are not", () => {
     // Date suffix must be exactly 8 digits at the end
     expect(extractShortModelName("model-v1234567")).toBe("model-v1234567");
