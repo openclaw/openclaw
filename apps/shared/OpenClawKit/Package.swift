@@ -6,7 +6,7 @@ let package = Package(
     name: "OpenClawKit",
     platforms: [
         .iOS(.v18),
-        .macOS(.v15),
+        .macOS(.v14),
     ],
     products: [
         .library(name: "OpenClawProtocol", targets: ["OpenClawProtocol"]),

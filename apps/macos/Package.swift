@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "OpenClaw",
     platforms: [
-        .macOS(.v15),
+        .macOS(.v14),
     ],
     products: [
         .library(name: "OpenClawIPC", targets: ["OpenClawIPC"]),
