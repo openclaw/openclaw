@@ -4,6 +4,7 @@ import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
+  type HistoryEntry,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
@@ -271,7 +272,13 @@ function createDiscordStatusReactionController(params: {
   };
 }
 
-export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
+export async function processDiscordMessage(
+  ctx: DiscordMessagePreflightContext,
+  opts?: {
+    guildHistory?: HistoryEntry[];
+    suppressGuildHistoryClear?: boolean;
+  },
+) {
   const {
     cfg,
     discordConfig,
@@ -416,9 +423,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   const shouldIncludeChannelHistory =
     !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+  const guildHistoryEntries = opts?.guildHistory ?? (guildHistories.get(messageChannelId) ?? []);
   if (shouldIncludeChannelHistory) {
     combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: guildHistories,
+      historyMap: new Map([[messageChannelId, guildHistoryEntries]]),
       historyKey: messageChannelId,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -506,7 +514,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0
-      ? (guildHistories.get(messageChannelId) ?? []).map((entry) => ({
+      ? guildHistoryEntries.map((entry) => ({
           sender: entry.sender,
           body: entry.body,
           timestamp: entry.timestamp,
@@ -679,7 +687,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   if (!dispatchResult?.queuedFinal) {
-    if (isGuildMessage) {
+    if (isGuildMessage && !(opts?.suppressGuildHistoryClear ?? false)) {
       clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,
         historyKey: messageChannelId,
@@ -694,7 +702,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );
   }
-  if (isGuildMessage) {
+  if (isGuildMessage && !(opts?.suppressGuildHistoryClear ?? false)) {
     clearHistoryEntriesIfEnabled({
       historyMap: guildHistories,
       historyKey: messageChannelId,

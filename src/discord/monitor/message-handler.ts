@@ -5,6 +5,7 @@ import {
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
 import { danger } from "../../globals.js";
+import { maybeBroadcastDiscordMessage } from "./broadcast.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
@@ -70,6 +71,13 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
+        const didBroadcast = await maybeBroadcastDiscordMessage({
+          ctx,
+          processMessage: processDiscordMessage,
+        });
+        if (didBroadcast) {
+          return;
+        }
         await processDiscordMessage(ctx);
         return;
       }
@@ -113,6 +121,13 @@ export function createDiscordMessageHandler(
           ctxBatch.MessageSidFirst = ids[0];
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
+      }
+      const didBroadcast = await maybeBroadcastDiscordMessage({
+        ctx,
+        processMessage: processDiscordMessage,
+      });
+      if (didBroadcast) {
+        return;
       }
       await processDiscordMessage(ctx);
     },
