@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { AuthChoice } from "./onboard-types.js";
@@ -11,9 +10,11 @@ import {
   ZAI_CODING_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
 import {
+  authProfilePathForAgent,
   createExitThrowingRuntime,
   createWizardPrompter,
   readAuthProfilesForAgent,
+  requireOpenClawAgentDir,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
@@ -31,13 +32,14 @@ vi.mock("../plugins/providers.js", () => ({
   resolvePluginProviders,
 }));
 
-const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
-const requireAgentDir = () => {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
+type StoredAuthProfile = {
+  key?: string;
+  access?: string;
+  refresh?: string;
+  provider?: string;
+  type?: string;
+  email?: string;
+  metadata?: Record<string, string>;
 };
 
 describe("applyAuthChoice", () => {
@@ -65,11 +67,11 @@ describe("applyAuthChoice", () => {
   }
   async function readAuthProfiles() {
     return await readAuthProfilesForAgent<{
-      profiles?: Record<
-        string,
-        { key?: string; access?: string; refresh?: string; provider?: string }
-      >;
-    }>(requireAgentDir());
+      profiles?: Record<string, StoredAuthProfile>;
+    }>(requireOpenClawAgentDir());
+  }
+  async function readAuthProfile(profileId: string) {
+    return (await readAuthProfiles()).profiles?.[profileId];
   }
 
   afterEach(async () => {
@@ -130,10 +132,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
+    expect((await readAuthProfile("minimax:default"))?.key).toBe("sk-minimax-test");
   });
 
   it("prompts and writes MiniMax API key when selecting minimax-api-key-cn", async () => {
@@ -164,10 +163,7 @@ describe("applyAuthChoice", () => {
     });
     expect(result.config.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["minimax-cn:default"]?.key).toBe("sk-minimax-test");
+    expect((await readAuthProfile("minimax-cn:default"))?.key).toBe("sk-minimax-test");
   });
 
   it("prompts and writes Synthetic API key when selecting synthetic-api-key", async () => {
@@ -197,10 +193,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["synthetic:default"]?.key).toBe("sk-synthetic-test");
+    expect((await readAuthProfile("synthetic:default"))?.key).toBe("sk-synthetic-test");
   });
 
   it("prompts and writes Hugging Face API key when selecting huggingface-api-key", async () => {
@@ -231,10 +224,7 @@ describe("applyAuthChoice", () => {
     });
     expect(result.config.agents?.defaults?.model?.primary).toMatch(/^huggingface\/.+/);
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-test-token");
+    expect((await readAuthProfile("huggingface:default"))?.key).toBe("hf-test-token");
   });
 
   it("prompts for Z.AI endpoint when selecting zai-api-key", async () => {
@@ -269,10 +259,7 @@ describe("applyAuthChoice", () => {
     expect(result.config.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
     expect(result.config.agents?.defaults?.model?.primary).toBe("zai/glm-5");
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["zai:default"]?.key).toBe("zai-test-key");
+    expect((await readAuthProfile("zai:default"))?.key).toBe("zai-test-key");
   });
 
   it("uses endpoint-specific auth choice without prompting for Z.AI endpoint", async () => {
@@ -335,10 +322,7 @@ describe("applyAuthChoice", () => {
     expect(result.config.agents?.defaults?.model?.primary).toMatch(/^huggingface\/.+/);
     expect(text).not.toHaveBeenCalled();
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-token-provider-test");
+    expect((await readAuthProfile("huggingface:default"))?.key).toBe("hf-token-provider-test");
   });
   it("does not override the global default model when selecting xai-api-key without setDefaultModel", async () => {
     await setupTempState();
@@ -368,10 +352,7 @@ describe("applyAuthChoice", () => {
     expect(result.config.agents?.defaults?.model?.primary).toBe("openai/gpt-4o-mini");
     expect(result.agentModelOverride).toBe("xai/grok-4");
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["xai:default"]?.key).toBe("sk-xai-test");
+    expect((await readAuthProfile("xai:default"))?.key).toBe("sk-xai-test");
   });
 
   it("sets default model when selecting github-copilot", async () => {
@@ -462,11 +443,8 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["anthropic:default"]?.key).toBe("");
-    expect(parsed.profiles?.["anthropic:default"]?.key).not.toBe("undefined");
+    expect((await readAuthProfile("anthropic:default"))?.key).toBe("");
+    expect((await readAuthProfile("anthropic:default"))?.key).not.toBe("undefined");
   });
 
   it("does not persist literal 'undefined' when OpenRouter API key prompt returns undefined", async () => {
@@ -490,11 +468,8 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["openrouter:default"]?.key).toBe("");
-    expect(parsed.profiles?.["openrouter:default"]?.key).not.toBe("undefined");
+    expect((await readAuthProfile("openrouter:default"))?.key).toBe("");
+    expect((await readAuthProfile("openrouter:default"))?.key).not.toBe("undefined");
   });
 
   it("uses existing OPENROUTER_API_KEY when selecting openrouter-api-key", async () => {
@@ -530,10 +505,7 @@ describe("applyAuthChoice", () => {
     });
     expect(result.config.agents?.defaults?.model?.primary).toBe("openrouter/auto");
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["openrouter:default"]?.key).toBe("sk-openrouter-test");
+    expect((await readAuthProfile("openrouter:default"))?.key).toBe("sk-openrouter-test");
 
     delete process.env.OPENROUTER_API_KEY;
   });
@@ -542,8 +514,7 @@ describe("applyAuthChoice", () => {
     await setupTempState();
     process.env.LITELLM_API_KEY = "sk-litellm-test";
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    await fs.mkdir(path.dirname(authProfilePath), { recursive: true });
+    const authProfilePath = authProfilePathForAgent(requireOpenClawAgentDir());
     await fs.writeFile(
       authProfilePath,
       JSON.stringify(
@@ -600,10 +571,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { type?: string; key?: string }>;
-    };
-    expect(parsed.profiles?.["litellm:default"]).toMatchObject({
+    expect(await readAuthProfile("litellm:default")).toMatchObject({
       type: "api_key",
       key: "sk-litellm-test",
     });
@@ -644,10 +612,7 @@ describe("applyAuthChoice", () => {
       "vercel-ai-gateway/anthropic/claude-opus-4.6",
     );
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string }>;
-    };
-    expect(parsed.profiles?.["vercel-ai-gateway:default"]?.key).toBe("gateway-test-key");
+    expect((await readAuthProfile("vercel-ai-gateway:default"))?.key).toBe("gateway-test-key");
 
     delete process.env.AI_GATEWAY_API_KEY;
   });
@@ -690,11 +655,10 @@ describe("applyAuthChoice", () => {
       "cloudflare-ai-gateway/claude-sonnet-4-5",
     );
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { key?: string; metadata?: Record<string, string> }>;
-    };
-    expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.key).toBe("cf-gateway-test-key");
-    expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.metadata).toEqual({
+    expect((await readAuthProfile("cloudflare-ai-gateway:default"))?.key).toBe(
+      "cf-gateway-test-key",
+    );
+    expect((await readAuthProfile("cloudflare-ai-gateway:default"))?.metadata).toEqual({
       accountId: "cf-account-id",
       gatewayId: "cf-gateway-id",
     });
@@ -767,13 +731,7 @@ describe("applyAuthChoice", () => {
       mode: "oauth",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<
-        string,
-        { provider?: string; access?: string; refresh?: string; email?: string }
-      >;
-    };
-    expect(parsed.profiles?.["chutes:remote-user"]).toMatchObject({
+    expect(await readAuthProfile("chutes:remote-user")).toMatchObject({
       provider: "chutes",
       access: "at_test",
       refresh: "rt_test",
@@ -846,10 +804,7 @@ describe("applyAuthChoice", () => {
       apiKey: "qwen-oauth",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
-    };
-    expect(parsed.profiles?.["qwen-portal:default"]).toMatchObject({
+    expect(await readAuthProfile("qwen-portal:default")).toMatchObject({
       provider: "qwen-portal",
       access: "access",
       refresh: "refresh",
@@ -923,10 +878,7 @@ describe("applyAuthChoice", () => {
       apiKey: "minimax-oauth",
     });
 
-    const parsed = (await readAuthProfiles()) as {
-      profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
-    };
-    expect(parsed.profiles?.["minimax-portal:default"]).toMatchObject({
+    expect(await readAuthProfile("minimax-portal:default")).toMatchObject({
       provider: "minimax-portal",
       access: "access",
       refresh: "refresh",

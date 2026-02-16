@@ -51,7 +51,19 @@ export async function setupAuthTestEnv(
   return { stateDir, agentDir };
 }
 
+export function requireOpenClawAgentDir(): string {
+  const agentDir = process.env.OPENCLAW_AGENT_DIR;
+  if (!agentDir) {
+    throw new Error("OPENCLAW_AGENT_DIR not set");
+  }
+  return agentDir;
+}
+
+export function authProfilePathForAgent(agentDir: string): string {
+  return path.join(agentDir, "auth-profiles.json");
+}
+
 export async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
-  const raw = await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8");
+  const raw = await fs.readFile(authProfilePathForAgent(agentDir), "utf8");
   return JSON.parse(raw) as T;
 }
