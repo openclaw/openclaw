@@ -1,10 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { TextContent } from "@mariozechner/pi-ai";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
-import type { TextContent } from "@mariozechner/pi-ai";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
@@ -132,10 +132,16 @@ export function installSessionToolResultGuard(
    * or null if the message should be blocked.
    */
   const applyBeforeWriteHook = (msg: AgentMessage): AgentMessage | null => {
-    if (!beforeWrite) return msg;
+    if (!beforeWrite) {
+      return msg;
+    }
     const result = beforeWrite({ message: msg });
-    if (result?.block) return null;
-    if (result?.message) return result.message;
+    if (result?.block) {
+      return null;
+    }
+    if (result?.message) {
+      return result.message;
+    }
     return msg;
   };
 
@@ -192,7 +198,9 @@ export function installSessionToolResultGuard(
           isSynthetic: false,
         }),
       );
-      if (!persisted) return undefined;
+      if (!persisted) {
+        return undefined;
+      }
       return originalAppend(persisted as never);
     }
 
@@ -213,7 +221,9 @@ export function installSessionToolResultGuard(
     }
 
     const finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
-    if (!finalMessage) return undefined;
+    if (!finalMessage) {
+      return undefined;
+    }
     const result = originalAppend(finalMessage as never);
 
     const sessionFile = (

@@ -19,9 +19,7 @@ beforeEach(() => {
   const runtime = createPluginRuntime();
   setTelegramRuntime(runtime);
   setActivePluginRegistry(
-    createTestRegistry([
-      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-    ]),
+    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
   );
 });
 
@@ -99,7 +97,7 @@ describe("heartbeat transcript pruning", () => {
       const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
 
       // Create a transcript with some existing content
-      const originalContent = await createTranscriptWithContent(transcriptPath, sessionId);
+      await createTranscriptWithContent(transcriptPath, sessionId);
       const originalSize = (await fs.stat(transcriptPath)).size;
 
       // Seed session store
@@ -147,7 +145,7 @@ describe("heartbeat transcript pruning", () => {
       const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
 
       // Create a transcript with some existing content
-      const originalContent = await createTranscriptWithContent(transcriptPath, sessionId);
+      await createTranscriptWithContent(transcriptPath, sessionId);
       const originalSize = (await fs.stat(transcriptPath)).size;
 
       // Seed session store

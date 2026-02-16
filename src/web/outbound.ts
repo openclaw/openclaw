@@ -83,9 +83,7 @@ export async function sendMessageWhatsApp(
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
-            ...(options.linkPreview !== undefined
-              ? { linkPreview: options.linkPreview }
-              : {}),
+            ...(options.linkPreview !== undefined ? { linkPreview: options.linkPreview } : {}),
             accountId,
           }
         : undefined;

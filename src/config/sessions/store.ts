@@ -171,10 +171,7 @@ export function loadSessionStore(
   let store: Record<string, SessionEntry> = {};
   let mtimeMs = getFileMtimeMs(storePath);
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
-  const retryBuf =
-    maxReadAttempts > 1
-      ? new Int32Array(new SharedArrayBuffer(4))
-      : undefined;
+  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
     try {
       const raw = fs.readFileSync(storePath, "utf-8");
@@ -587,9 +584,7 @@ async function saveSessionStoreUnlocked(
           // Final attempt failed — skip this save.  The write lock ensures
           // the next save will retry with fresh data.  Log for diagnostics.
           if (i === 4) {
-            console.warn(
-              `[session-store] rename failed after 5 attempts: ${storePath}`,
-            );
+            console.warn(`[session-store] rename failed after 5 attempts: ${storePath}`);
           }
         }
       }
