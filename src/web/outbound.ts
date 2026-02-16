@@ -21,6 +21,7 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     gifPlayback?: boolean;
     accountId?: string;
+    linkPreview?: boolean;
   },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body;
@@ -75,10 +76,16 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName
+      options.gifPlayback ||
+      options.accountId ||
+      options.linkPreview !== undefined ||
+      documentFileName
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(options.linkPreview !== undefined
+              ? { linkPreview: options.linkPreview }
+              : {}),
             accountId,
           }
         : undefined;
