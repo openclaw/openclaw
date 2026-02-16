@@ -13,7 +13,7 @@ use the `aimlapi/<provider>/<model>` format.
 
 ## Get an API key
 
-Create a key at https://aimlapi.com/app/keys/. Keep the key handy for the CLI or config.
+Create a key at [aimlapi.com/app/keys](https://aimlapi.com/app/keys/). Keep the key handy for the CLI or config.
 
 ## CLI setup
 
