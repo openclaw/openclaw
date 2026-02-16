@@ -589,11 +589,11 @@ Max characters per workspace bootstrap file before truncation. Default: `20000`.
 
 ### `agents.defaults.bootstrapTotalMaxChars`
 
-Max total characters injected across all workspace bootstrap files. Default: `24000`.
+Max total characters injected across all workspace bootstrap files. Default: `150000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapTotalMaxChars: 24000 } },
+  agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
 }
 ```
 

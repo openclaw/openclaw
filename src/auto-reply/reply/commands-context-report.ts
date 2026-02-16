@@ -4,7 +4,10 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { resolveBootstrapMaxChars } from "../../agents/pi-embedded-helpers.js";
+import {
+  resolveBootstrapMaxChars,
+  resolveBootstrapTotalMaxChars,
+} from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
@@ -59,6 +62,7 @@ async function resolveContextReport(
 
   const workspaceDir = params.workspaceDir;
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
@@ -169,6 +173,7 @@ async function resolveContextReport(
     model: params.model,
     workspaceDir,
     bootstrapMaxChars,
+    bootstrapTotalMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
     bootstrapFiles,
@@ -250,6 +255,37 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     typeof report.bootstrapMaxChars === "number"
       ? `${formatInt(report.bootstrapMaxChars)} chars`
       : "? chars";
+  const bootstrapTotalLabel =
+    typeof report.bootstrapTotalMaxChars === "number"
+      ? `${formatInt(report.bootstrapTotalMaxChars)} chars`
+      : "? chars";
+  const bootstrapMaxChars = report.bootstrapMaxChars;
+  const bootstrapTotalMaxChars = report.bootstrapTotalMaxChars;
+  const nonMissingBootstrapFiles = report.injectedWorkspaceFiles.filter((f) => !f.missing);
+  const truncatedBootstrapFiles = nonMissingBootstrapFiles.filter((f) => f.truncated);
+  const rawBootstrapChars = nonMissingBootstrapFiles.reduce((sum, file) => sum + file.rawChars, 0);
+  const injectedBootstrapChars = nonMissingBootstrapFiles.reduce(
+    (sum, file) => sum + file.injectedChars,
+    0,
+  );
+  const perFileOverLimitCount =
+    typeof bootstrapMaxChars === "number"
+      ? nonMissingBootstrapFiles.filter((f) => f.rawChars > bootstrapMaxChars).length
+      : 0;
+  const totalOverLimit =
+    typeof bootstrapTotalMaxChars === "number" && rawBootstrapChars > bootstrapTotalMaxChars;
+  const truncationCauseParts = [
+    perFileOverLimitCount > 0 ? `${perFileOverLimitCount} file(s) exceeded max/file` : null,
+    totalOverLimit ? "raw total exceeded max/total" : null,
+  ].filter(Boolean);
+  const bootstrapWarningLines =
+    truncatedBootstrapFiles.length > 0
+      ? [
+          `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(rawBootstrapChars)} raw chars -> ${formatInt(injectedBootstrapChars)} injected chars).`,
+          ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
+          "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
+        ]
+      : [];
 
   const totalsLine =
     session.totalTokens != null
@@ -280,8 +316,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "🧠 Context breakdown (detailed)",
         `Workspace: ${workspaceLabel}`,
         `Bootstrap max/file: ${bootstrapMaxLabel}`,
+        `Bootstrap max/total: ${bootstrapTotalLabel}`,
         sandboxLine,
         systemPromptLine,
+        ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
         "",
         "Injected workspace files:",
         ...fileLines,
@@ -317,8 +355,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       "🧠 Context breakdown",
       `Workspace: ${workspaceLabel}`,
       `Bootstrap max/file: ${bootstrapMaxLabel}`,
+      `Bootstrap max/total: ${bootstrapTotalLabel}`,
       sandboxLine,
       systemPromptLine,
+      ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
       "",
       "Injected workspace files:",
       ...fileLines,
