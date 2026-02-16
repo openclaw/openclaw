@@ -149,7 +149,10 @@ export class VoiceCallWebhookServer {
         const call = this.manager.getCallByProviderCallId(callId);
         if (cachedAudio && call?.metadata?.initialMessage && call.direction === "inbound") {
           console.log(`[voice-call] Playing cached greeting (${cachedAudio.length} bytes)`);
-          delete call.metadata.initialMessage; // prevent re-speaking via fallback
+          // Clear initialMessage to prevent re-speaking via the fallback path.
+          // Note: this in-memory mutation is not persisted to disk, which is acceptable
+          // because a gateway restart would also sever the media stream, making replay moot.
+          delete call.metadata.initialMessage;
           const handler = this.mediaStreamHandler!;
           const CHUNK_SIZE = 160;
           const CHUNK_DELAY_MS = 20;
