@@ -335,8 +335,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
         } else if ("sessionKey" in route) {
           if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
-            requestedSessionKey = route.sessionKey;
-            effectiveAgentId = resolveAgentIdFromSessionKey(route.sessionKey);
+            const routedAgentId = resolveAgentIdFromSessionKey(route.sessionKey);
+            if (knownAgents.includes(routedAgentId)) {
+              requestedSessionKey = route.sessionKey;
+              effectiveAgentId = routedAgentId;
+            } else {
+              context.logGateway.warn(
+                `voicewake routing ignored unknown session agent="${routedAgentId}" sessionKey="${route.sessionKey}" trigger="${voiceWakeTrigger}"`,
+              );
+            }
           } else {
             context.logGateway.warn(
               `voicewake routing ignored malformed sessionKey="${route.sessionKey}" trigger="${voiceWakeTrigger}"`,
