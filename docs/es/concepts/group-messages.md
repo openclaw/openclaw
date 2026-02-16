@@ -9,7 +9,7 @@ title: "Group Messages"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/concepts/group-messages)
+- Ver la versión en inglés: [Open English doc](/channels/group-messages)
 - Volver al inicio en español: [OpenClaw ES](/es)
 
 > Estado: traducción en progreso.
