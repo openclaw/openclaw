@@ -5,6 +5,7 @@ import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { listPendingRequestsForChild } from "../orchestrator-request-registry.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
@@ -240,6 +241,14 @@ export function createSessionsListTool(opts?: {
           const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
           const filtered = stripToolMessages(rawMessages);
           row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+        }
+
+        // Check for pending orchestrator requests
+        const pendingRequests = listPendingRequestsForChild(key);
+        if (pendingRequests.length > 0) {
+          row.runStatus = "blocked";
+          row.blockedReason = "awaiting_orchestrator";
+          row.pendingRequestCount = pendingRequests.length;
         }
 
         rows.push(row);

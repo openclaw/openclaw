@@ -38,6 +38,9 @@ export type SessionListRow = {
   lastAccountId?: string;
   transcriptPath?: string;
   messages?: unknown[];
+  runStatus?: string;
+  blockedReason?: string;
+  pendingRequestCount?: number;
 };
 
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";

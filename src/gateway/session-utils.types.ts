@@ -42,6 +42,9 @@ export type GatewaySessionRow = {
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
+  runStatus?: "running" | "blocked" | "input_required" | "idle" | "completed" | "error" | "timeout";
+  blockedReason?: "awaiting_orchestrator" | "compaction" | "unknown";
+  pendingRequestCount?: number;
 };
 
 export type GatewayAgentRow = {

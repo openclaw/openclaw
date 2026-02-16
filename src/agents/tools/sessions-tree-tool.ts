@@ -1,11 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { listPendingRequestsForChild } from "../orchestrator-request-registry.js";
 import { listAllSubagentRuns, type SubagentRunRecord } from "../subagent-registry.js";
-import { getDescendants } from "./sessions-lineage.js";
+import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+import { getDescendants } from "./sessions-lineage.js";
 
 const SessionsTreeToolSchema = Type.Object({
   depth: Type.Optional(Type.Number({ minimum: 0 })),
@@ -16,12 +17,14 @@ type SessionsTreeNode = {
   label: string;
   depth: number;
   status: "running" | "completed" | "error" | "timeout";
+  runStatus?: "running" | "blocked" | "input_required" | "idle" | "completed" | "error" | "timeout";
+  pendingRequestCount?: number;
   runtimeMs: number;
   children: SessionsTreeNode[];
 };
 
 function sortRuns(runs: SubagentRunRecord[]): SubagentRunRecord[] {
-  return [...runs].sort((a, b) => {
+  return [...runs].toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
     }
@@ -104,6 +107,14 @@ export function createSessionsTreeTool(opts?: { agentSessionKey?: string }): Any
         const nodeDepth = typeof run.depth === "number" ? run.depth : fallbackDepth;
         const status = resolveStatus(run);
         const runtimeMs = resolveRuntimeMs(run);
+        const pendingRequests = listPendingRequestsForChild(key);
+        const runStatus =
+          pendingRequests.length > 0
+            ? ("blocked" as const)
+            : status === "running"
+              ? ("running" as const)
+              : undefined;
+        const pendingRequestCount = pendingRequests.length > 0 ? pendingRequests.length : undefined;
         const nextPath = new Set(path);
         nextPath.add(key);
 
@@ -120,6 +131,8 @@ export function createSessionsTreeTool(opts?: { agentSessionKey?: string }): Any
           label: run.label?.trim() || run.task,
           depth: nodeDepth,
           status,
+          ...(runStatus && { runStatus }),
+          ...(pendingRequestCount && { pendingRequestCount }),
           runtimeMs,
           children,
         };
