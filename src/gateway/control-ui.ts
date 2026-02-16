@@ -352,6 +352,19 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
+  // Astro static site: each route generates a `route/index.html` directory.
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+    const dirIndex = path.join(filePath, "index.html");
+    if (fs.existsSync(dirIndex)) {
+      serveIndexHtml(res, dirIndex, {
+        basePath,
+        config: opts?.config,
+        agentId: opts?.agentId,
+      });
+      return true;
+    }
+  }
+
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {

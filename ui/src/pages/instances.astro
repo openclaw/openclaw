@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { InstancesIsland } from '../ui/components/instances-island.ts';
 ---
 
 <AppLayout title="Instances" tab="instances">
-  <InstancesIsland client:only="lit" />
+  <instances-island></instances-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/instances-island.ts';
+</script>

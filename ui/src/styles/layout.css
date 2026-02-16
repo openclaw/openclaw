@@ -7,15 +7,17 @@
   --shell-gap: 16px;
   --shell-nav-width: 220px;
   --shell-topbar-height: 56px;
+  --shell-statusbar-height: 32px;
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
   height: 100vh;
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
-  grid-template-rows: var(--shell-topbar-height) 1fr;
+  grid-template-rows: var(--shell-topbar-height) 1fr var(--shell-statusbar-height);
   grid-template-areas:
     "topbar topbar"
-    "nav content";
+    "nav content"
+    "statusbar statusbar";
   gap: 0;
   animation: dashboard-enter 0.4s var(--ease-out);
   transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
@@ -49,7 +51,11 @@
 }
 
 .shell--onboarding {
-  grid-template-rows: 0 1fr;
+  grid-template-rows: 0 1fr 0;
+}
+
+.shell--onboarding .statusbar {
+  display: none;
 }
 
 .shell--onboarding .topbar {
@@ -514,6 +520,84 @@
 }
 
 /* ===========================================
+   Status Bar
+   =========================================== */
+
+.statusbar {
+  grid-area: statusbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--shell-statusbar-height);
+  padding: 0 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  z-index: 30;
+  overflow: hidden;
+  user-select: none;
+}
+
+.statusbar-left,
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+}
+
+.statusbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.statusbar-sep {
+  color: var(--border-strong);
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+}
+
+.statusbar-conn {
+  font-weight: 600;
+}
+
+.statusbar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.statusbar-dot--ok {
+  background: var(--ok);
+  box-shadow: 0 0 4px var(--ok-muted);
+}
+
+.statusbar-dot--err {
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent-glow);
+}
+
+.statusbar-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* ===========================================
    Grid Utilities
    =========================================== */
 
@@ -570,11 +654,12 @@
     --shell-pad: 12px;
     --shell-gap: 12px;
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr;
+    grid-template-rows: auto auto 1fr var(--shell-statusbar-height);
     grid-template-areas:
       "topbar"
       "nav"
-      "content";
+      "content"
+      "statusbar";
   }
 
   .nav {

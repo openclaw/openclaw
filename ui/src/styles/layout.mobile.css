@@ -42,6 +42,15 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+
+  /* Statusbar: hide low-priority details on tablet */
+  .statusbar {
+    padding: 0 12px;
+  }
+
+  .statusbar-detail--low {
+    display: none;
+  }
 }
 
 /* Mobile-specific styles */
@@ -299,6 +308,20 @@
     width: 12px;
     height: 12px;
   }
+
+  /* Statusbar: hide medium-priority details on mobile */
+  .statusbar {
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .statusbar-detail--med {
+    display: none;
+  }
+
+  .statusbar-item {
+    padding: 0 5px;
+  }
 }
 
 /* Small mobile */
@@ -370,5 +393,14 @@
   .theme-icon {
     width: 11px;
     height: 11px;
+  }
+
+  /* Statusbar: minimal on small mobile */
+  .statusbar-detail {
+    display: none;
+  }
+
+  .statusbar-right {
+    display: none;
   }
 }

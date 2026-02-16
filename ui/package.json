@@ -3,17 +3,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite",
-    "preview": "vite preview",
+    "build": "astro build",
+    "dev": "astro dev",
+    "preview": "astro preview",
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@nanostores/lit": "^0.2.3",
     "@noble/ed25519": "3.0.0",
+    "astro": "^5.17.2",
     "dompurify": "^3.3.1",
+    "echarts": "^6.0.0",
     "lit": "^3.3.2",
     "marked": "^17.0.2",
-    "vite": "7.3.1"
+    "nanostores": "^1.1.0"
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.0.18",

@@ -1,4 +1,3 @@
-import lit from "@astrojs/lit";
 import { defineConfig } from "astro/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,10 +21,8 @@ function normalizeBase(input) {
 const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
 const base = envBase ? normalizeBase(envBase) : "./";
 
-// https://astro.build/config
+// https://docs.astro.build/en/reference/configuration-reference/
 export default defineConfig({
-  integrations: [lit()],
-
   base,
   publicDir: path.resolve(here, "public"),
 
@@ -41,9 +38,7 @@ export default defineConfig({
     },
   },
 
-  build: {
-    outDir: path.resolve(here, "../dist/control-ui"),
-  },
+  outDir: path.resolve(here, "../dist/control-ui"),
 
   server: {
     host: true,

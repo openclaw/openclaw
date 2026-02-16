@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { AgentsIsland } from '../ui/components/agents-island.ts';
 ---
 
 <AppLayout title="Agents" tab="agents">
-  <AgentsIsland client:only="lit" />
+  <agents-island></agents-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/agents-island.ts';
+</script>

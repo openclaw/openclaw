@@ -29,14 +29,21 @@ describe("iconForTab", () => {
     expect(iconForTab("chat")).toBe("messageSquare");
     expect(iconForTab("overview")).toBe("barChart");
     expect(iconForTab("channels")).toBe("link");
+    expect(iconForTab("providers")).toBe("plug");
     expect(iconForTab("instances")).toBe("radio");
     expect(iconForTab("sessions")).toBe("fileText");
+    expect(iconForTab("health")).toBe("activity");
     expect(iconForTab("cron")).toBe("loader");
+    expect(iconForTab("hierarchy")).toBe("gitBranch");
     expect(iconForTab("skills")).toBe("zap");
     expect(iconForTab("nodes")).toBe("monitor");
+    expect(iconForTab("voice")).toBe("smartphone");
     expect(iconForTab("config")).toBe("settings");
+    expect(iconForTab("security")).toBe("shield");
     expect(iconForTab("debug")).toBe("bug");
     expect(iconForTab("logs")).toBe("scrollText");
+    expect(iconForTab("twitter")).toBe("twitter");
+    expect(iconForTab("resources")).toBe("puzzle");
   });
 
   it("returns a fallback icon for unknown tab", () => {
@@ -179,6 +186,7 @@ describe("TAB_GROUPS", () => {
     expect(labels).toContain("Control");
     expect(labels).toContain("Agent");
     expect(labels).toContain("Settings");
+    expect(labels).toContain("Integrations");
   });
 
   it("all tabs are unique", () => {

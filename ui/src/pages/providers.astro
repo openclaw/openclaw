@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { ProvidersIsland } from '../ui/components/providers-island.ts';
 ---
 
 <AppLayout title="Providers" tab="providers">
-  <ProvidersIsland client:only="lit" />
+  <providers-island></providers-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/providers-island.ts';
+</script>

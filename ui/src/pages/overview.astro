@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { OverviewIsland } from '../ui/components/overview-island.ts';
 ---
 
 <AppLayout title="Overview" tab="overview">
-  <OverviewIsland client:only="lit" />
+  <overview-island></overview-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/overview-island.ts';
+</script>

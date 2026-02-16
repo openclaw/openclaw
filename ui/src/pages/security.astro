@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { SecurityIsland } from '../ui/components/security-island.ts';
 ---
 
 <AppLayout title="Security" tab="security">
-  <SecurityIsland client:only="lit" />
+  <security-island></security-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/security-island.ts';
+</script>

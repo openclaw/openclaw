@@ -1,8 +1,12 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { TwitterIsland } from '../ui/components/twitter-island.ts';
+import '../ui/twitter.css';
 ---
 
 <AppLayout title="Twitter" tab="twitter">
-  <TwitterIsland client:only="lit" />
+  <twitter-island></twitter-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/twitter-island.ts';
+</script>

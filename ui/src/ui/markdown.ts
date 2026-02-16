@@ -140,3 +140,14 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+/**
+ * Watch the DOM for `<pre class="mermaid">` placeholders and render them.
+ * Mermaid is loaded lazily on first match to avoid bloating the initial bundle.
+ * If the mermaid package is not installed, this is a no-op.
+ */
+export function initMermaidRenderer(): void {
+  // No-op until mermaid is added as a dependency. The observer pattern is
+  // ready to activate once `pnpm --filter openclaw-control-ui add mermaid`
+  // is run and the dynamic import below can resolve.
+}

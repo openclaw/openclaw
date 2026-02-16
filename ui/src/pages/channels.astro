@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { ChannelsIsland } from '../ui/components/channels-island.ts';
 ---
 
 <AppLayout title="Channels" tab="channels">
-  <ChannelsIsland client:only="lit" />
+  <channels-island></channels-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/channels-island.ts';
+</script>

@@ -46,7 +46,7 @@ export function resolveControlUiRepoRoot(
   const srcIndex = parts.lastIndexOf("src");
   if (srcIndex !== -1) {
     const root = parts.slice(0, srcIndex).join(path.sep);
-    if (fs.existsSync(path.join(root, "ui", "vite.config.ts"))) {
+    if (fs.existsSync(path.join(root, "ui", "astro.config.mjs"))) {
       return root;
     }
   }
@@ -55,7 +55,7 @@ export function resolveControlUiRepoRoot(
   for (let i = 0; i < 8; i++) {
     if (
       fs.existsSync(path.join(dir, "package.json")) &&
-      fs.existsSync(path.join(dir, "ui", "vite.config.ts"))
+      fs.existsSync(path.join(dir, "ui", "astro.config.mjs"))
     ) {
       return dir;
     }

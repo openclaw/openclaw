@@ -19,6 +19,25 @@ export type UsageState = {
   usageSessionLogsLoading: boolean;
 };
 
+export type UsagePollHost = UsageState;
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startUsagePolling(host: UsagePollHost): void {
+  stopUsagePolling();
+  void loadUsage(host);
+  pollTimer = setInterval(() => {
+    void loadUsage(host);
+  }, 30_000);
+}
+
+export function stopUsagePolling(): void {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
 export async function loadUsage(
   state: UsageState,
   overrides?: {

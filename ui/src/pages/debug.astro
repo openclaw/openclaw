@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { DebugIsland } from '../ui/components/debug-island.ts';
 ---
 
 <AppLayout title="Debug" tab="debug">
-  <DebugIsland client:only="lit" />
+  <debug-island></debug-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/debug-island.ts';
+</script>

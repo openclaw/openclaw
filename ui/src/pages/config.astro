@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { ConfigIsland } from '../ui/components/config-island.ts';
 ---
 
 <AppLayout title="Config" tab="config">
-  <ConfigIsland client:only="lit" />
+  <config-island></config-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/config-island.ts';
+</script>

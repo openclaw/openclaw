@@ -401,6 +401,14 @@ function serveSpaRequest(
     return serveStaticFile(filePath);
   }
 
+  // Astro static site: each route generates a `route/index.html` directory.
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+    const dirIndex = path.join(filePath, "index.html");
+    if (fs.existsSync(dirIndex)) {
+      return serveIndexHtml(request, dirIndex, basePath);
+    }
+  }
+
   // SPA fallback: serve index.html for unknown paths (client-side router)
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {

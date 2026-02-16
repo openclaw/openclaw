@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { HierarchyIsland } from '../ui/components/hierarchy-island.ts';
 ---
 
 <AppLayout title="Hierarchy" tab="hierarchy">
-  <HierarchyIsland client:only="lit" />
+  <hierarchy-island></hierarchy-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/hierarchy-island.ts';
+</script>

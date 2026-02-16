@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { NodesIsland } from '../ui/components/nodes-island.ts';
 ---
 
 <AppLayout title="Nodes" tab="nodes">
-  <NodesIsland client:only="lit" />
+  <nodes-island></nodes-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/nodes-island.ts';
+</script>

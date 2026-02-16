@@ -1,8 +1,11 @@
 ---
 import AppLayout from '../layouts/AppLayout.astro';
-import { VoiceIsland } from '../ui/components/voice-island.ts';
 ---
 
 <AppLayout title="Voice" tab="voice">
-  <VoiceIsland client:only="lit" />
+  <voice-island></voice-island>
 </AppLayout>
+
+<script>
+  import '../ui/components/voice-island.ts';
+</script>

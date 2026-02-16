@@ -46,6 +46,29 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   });
 }
 
+export function renderEmptyState(opts: {
+  icon: ReturnType<typeof html>;
+  title: string;
+  subtitle: string;
+}) {
+  return html`
+    <div class="empty-state" style="text-align:center;padding:2rem 1rem;opacity:0.7;">
+      <div style="margin-bottom:0.5rem;">${opts.icon}</div>
+      <div style="font-weight:600;margin-bottom:0.25rem;">${opts.title}</div>
+      <div style="font-size:0.85rem;">${opts.subtitle}</div>
+    </div>
+  `;
+}
+
+export function renderSpinner(message = "Loading...") {
+  return html`
+    <div class="spinner-container" style="text-align:center;padding:2rem 1rem;">
+      <div class="spinner" style="display:inline-block;width:24px;height:24px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;opacity:0.6;"></div>
+      <div style="margin-top:0.5rem;font-size:0.85rem;opacity:0.7;">${message}</div>
+    </div>
+  `;
+}
+
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
   return html`
