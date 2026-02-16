@@ -164,7 +164,6 @@
     "long": "^5.3.2",
     "markdown-it": "^14.1.1",
     "node-edge-tts": "^1.2.10",
-    "openclaw": "link:../../Library/pnpm/global/5/node_modules/openclaw",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.4.624",
     "playwright-core": "1.58.2",
