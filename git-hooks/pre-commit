@@ -1,9 +1,33 @@
-#!/bin/sh
-FILES=$(git diff --cached --name-only --diff-filter=ACMR | sed 's| |\\ |g')
-[ -z "$FILES" ] && exit 0
+#!/usr/bin/env bash
 
-echo "$FILES" | xargs pnpm lint --fix
-echo "$FILES" | xargs pnpm format --no-error-on-unmatched-pattern
-echo "$FILES" | xargs git add
+set -euo pipefail
 
-exit 0
+# Security: avoid option-injection from malicious file names (e.g. "--force").
+# Robustness: NUL-delimited file list handles spaces/newlines safely.
+mapfile -d '' -t files < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if [ "${#files[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+lint_files=()
+format_files=()
+for file in "${files[@]}"; do
+  case "$file" in
+    *.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs) lint_files+=("$file") ;;
+  esac
+
+  case "$file" in
+    *.ts | *.tsx | *.js | *.jsx | *.mjs | *.cjs | *.json | *.md | *.mdx) format_files+=("$file") ;;
+  esac
+done
+
+if [ "${#lint_files[@]}" -gt 0 ]; then
+  pnpm lint --fix -- "${lint_files[@]}"
+fi
+
+if [ "${#format_files[@]}" -gt 0 ]; then
+  pnpm format -- "${format_files[@]}"
+fi
+
+git add -- "${files[@]}"
