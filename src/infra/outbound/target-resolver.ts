@@ -228,20 +228,14 @@ async function listDirectoryEntries(params: {
   }
   const runtime = params.runtime ?? defaultRuntime;
   const useLive = params.source === "live";
-  if (params.kind === "user") {
-    const fn = useLive ? (directory.listPeersLive ?? directory.listPeers) : directory.listPeers;
-    if (!fn) {
-      return [];
-    }
-    return await fn({
-      cfg: params.cfg,
-      accountId: params.accountId ?? undefined,
-      query: params.query ?? undefined,
-      limit: undefined,
-      runtime,
-    });
-  }
-  const fn = useLive ? (directory.listGroupsLive ?? directory.listGroups) : directory.listGroups;
+  const fn =
+    params.kind === "user"
+      ? useLive
+        ? (directory.listPeersLive ?? directory.listPeers)
+        : directory.listPeers
+      : useLive
+        ? (directory.listGroupsLive ?? directory.listGroups)
+        : directory.listGroups;
   if (!fn) {
     return [];
   }
