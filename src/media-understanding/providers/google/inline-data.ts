@@ -1,5 +1,5 @@
 import { normalizeGoogleModelId } from "../../../agents/models-config.providers.js";
-import { fetchWithTimeoutGuarded, normalizeBaseUrl, readErrorResponse } from "../shared.js";
+import { assertOkOrThrowHttpError, fetchWithTimeoutGuarded, normalizeBaseUrl } from "../shared.js";
 
 export async function generateGeminiInlineDataText(params: {
   buffer: Buffer;
@@ -73,11 +73,7 @@ export async function generateGeminiInlineDataText(params: {
   );
 
   try {
-    if (!res.ok) {
-      const detail = await readErrorResponse(res);
-      const suffix = detail ? `: ${detail}` : "";
-      throw new Error(`${params.httpErrorLabel} (HTTP ${res.status})${suffix}`);
-    }
+    await assertOkOrThrowHttpError(res, params.httpErrorLabel);
 
     const payload = (await res.json()) as {
       candidates?: Array<{
