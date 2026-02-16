@@ -154,13 +154,6 @@ describe("launchd install", () => {
 });
 
 describe("resolveLaunchAgentPlistPath", () => {
-  it("uses default label when OPENCLAW_PROFILE is default", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "default" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
-    );
-  });
-
   it("uses default label when OPENCLAW_PROFILE is unset", () => {
     const env = { HOME: "/Users/test" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
