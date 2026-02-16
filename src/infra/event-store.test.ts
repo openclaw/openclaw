@@ -49,7 +49,6 @@ describe("Event Store", () => {
     resetForTest();
   });
 
-
   describe("initEventStore", () => {
     it("should not connect when disabled", async () => {
       const { connect } = await import("nats");
@@ -155,14 +154,15 @@ describe("Event Store", () => {
 
     it("should propagate non-404 errors from stream info", async () => {
       mockStreamInfo.mockRejectedValue(new Error("authorization violation"));
-      (((await import("nats")).connect) as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockConnection);
+      ((await import("nats")).connect as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        mockConnection,
+      );
       const { initEventStore, isEventStoreConnected } = await import("./event-store.js");
       await initEventStore(DEFAULT_CONFIG);
       expect(isEventStoreConnected()).toBe(false);
       expect(mockStreamAdd).not.toHaveBeenCalled();
     });
   });
-
 
   describe("event publishing", () => {
     it("should publish user messages as msg.in", async () => {
@@ -280,7 +280,6 @@ describe("Event Store", () => {
     });
   });
 
-
   describe("toEventType", () => {
     it("should map tool stream correctly", async () => {
       const { toEventType } = await import("./event-store.js");
@@ -317,7 +316,6 @@ describe("Event Store", () => {
     });
   });
 
-
   describe("shutdownEventStore", () => {
     it("should drain connection and clear state", async () => {
       const { initEventStore, shutdownEventStore, isEventStoreConnected } =
@@ -342,7 +340,6 @@ describe("Event Store", () => {
       expect(mockClose).toHaveBeenCalled();
     }, 10_000);
   });
-
 
   describe("getEventStoreStatus", () => {
     it("should report connected status with counters", async () => {
@@ -377,7 +374,6 @@ describe("Event Store", () => {
       expect(status.connected).toBe(false);
     });
   });
-
 
   describe("resetForTest", () => {
     it("should clear state and allow re-initialization", async () => {
