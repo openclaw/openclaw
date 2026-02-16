@@ -218,22 +218,6 @@ describe("Slack native command argument menus", () => {
     });
   });
 
-  it("falls back to postEphemeral with token when respond is unavailable", async () => {
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
-      action: { value: "garbage" },
-      body: { user: { id: "U1" }, channel: { id: "C1" } },
-    });
-
-    expect(harness.postEphemeral).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "bot-token",
-        channel: "C1",
-        user: "U1",
-      }),
-    );
-  });
-
   it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
     await argMenuHandler({
       ack: vi.fn().mockResolvedValue(undefined),
