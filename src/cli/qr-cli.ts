@@ -95,6 +95,17 @@ export function registerQrCli(program: Command) {
             cfg.gateway.auth.token = undefined;
           }
         }
+        if (wantsRemote && !opts.url && !opts.publicUrl) {
+          const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+          const remoteUrl = cfg.gateway?.remote?.url;
+          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
+          const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
+          if (!hasRemoteUrl && !hasTailscaleServe) {
+            throw new Error(
+              "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
+            );
+          }
+        }
 
         const explicitUrl =
           typeof opts.url === "string" && opts.url.trim()
