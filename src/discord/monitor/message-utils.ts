@@ -131,28 +131,12 @@ export async function resolveMediaList(
     return [];
   }
   const out: DiscordMediaInfo[] = [];
-  for (const attachment of attachments) {
-    try {
-      const fetched = await fetchRemoteMedia({
-        url: attachment.url,
-        filePathHint: attachment.filename ?? attachment.url,
-      });
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType ?? attachment.content_type,
-        "inbound",
-        maxBytes,
-      );
-      out.push({
-        path: saved.path,
-        contentType: saved.contentType,
-        placeholder: inferPlaceholder(attachment),
-      });
-    } catch (err) {
-      const id = attachment.id ?? attachment.url;
-      logVerbose(`discord: failed to download attachment ${id}: ${String(err)}`);
-    }
-  }
+  await appendResolvedMediaFromAttachments({
+    attachments,
+    maxBytes,
+    out,
+    errorPrefix: "discord: failed to download attachment",
+  });
   return out;
 }
 
@@ -166,34 +150,48 @@ export async function resolveForwardedMediaList(
   }
   const out: DiscordMediaInfo[] = [];
   for (const snapshot of snapshots) {
-    const attachments = snapshot.message?.attachments;
-    if (!attachments || attachments.length === 0) {
-      continue;
-    }
-    for (const attachment of attachments) {
-      try {
-        const fetched = await fetchRemoteMedia({
-          url: attachment.url,
-          filePathHint: attachment.filename ?? attachment.url,
-        });
-        const saved = await saveMediaBuffer(
-          fetched.buffer,
-          fetched.contentType ?? attachment.content_type,
-          "inbound",
-          maxBytes,
-        );
-        out.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          placeholder: inferPlaceholder(attachment),
-        });
-      } catch (err) {
-        const id = attachment.id ?? attachment.url;
-        logVerbose(`discord: failed to download forwarded attachment ${id}: ${String(err)}`);
-      }
-    }
+    await appendResolvedMediaFromAttachments({
+      attachments: snapshot.message?.attachments,
+      maxBytes,
+      out,
+      errorPrefix: "discord: failed to download forwarded attachment",
+    });
   }
   return out;
+}
+
+async function appendResolvedMediaFromAttachments(params: {
+  attachments?: APIAttachment[] | null;
+  maxBytes: number;
+  out: DiscordMediaInfo[];
+  errorPrefix: string;
+}) {
+  const attachments = params.attachments;
+  if (!attachments || attachments.length === 0) {
+    return;
+  }
+  for (const attachment of attachments) {
+    try {
+      const fetched = await fetchRemoteMedia({
+        url: attachment.url,
+        filePathHint: attachment.filename ?? attachment.url,
+      });
+      const saved = await saveMediaBuffer(
+        fetched.buffer,
+        fetched.contentType ?? attachment.content_type,
+        "inbound",
+        params.maxBytes,
+      );
+      params.out.push({
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: inferPlaceholder(attachment),
+      });
+    } catch (err) {
+      const id = attachment.id ?? attachment.url;
+      logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
+    }
+  }
 }
 
 function inferPlaceholder(attachment: APIAttachment): string {
