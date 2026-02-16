@@ -1,26 +1,26 @@
 # Current Work Item
 
-**Canonical planning source:** `real-dispatch-agile-package/README.md`  
+**Canonical planning source:** `real-dispatch-agile-package/03-Delivery/Current-Sprint.md`  
 Backlog: `real-dispatch-agile-package/02-Backlog/02-Stories.md`  
-Current sprint source: `real-dispatch-agile-package/03-Delivery/Current-Sprint.md`  
+Story set source: `real-dispatch-agile-package/03-Delivery/01-Sprint-Plan.md`  
 PR plan: `real-dispatch-agile-package/03-Delivery/03-PR-Plan.md`
 
-## Story ID
+## Active Sprint
 
-`E12-F1-S1`
+`Sprint 1 (2026-02-16 → 2026-03-01): Foundations`
 
-## Last Completed Story
+## Focus Story
 
-`E11-F1-S1`
+`E1-F1-S1`
+
+## Planned Sprint 1 story sequence
+
+- `E1-F1-S1` — Add `packages/dispatch-contracts` scaffold.
+- `E1-F2-S1` — Standardize trace propagation for command chain.
+- `E6-F1-S1` — Add Temporal dev compose + worker skeleton.
 
 ## Completion Status
 
-`E11-F1-S1` is complete in historical log. `E12-F1-S1` is now the active readiness item before closeout controls and onboarding runbooks are finalized.
-
-## Suggested Focus Area
-
-Follow the execution order in `real-dispatch-agile-package/03-Delivery/Current-Sprint.md` and confirm the active story in `real-dispatch-agile-package/02-Backlog/02-Stories.md` (Feature `E12`, Story `S1`).
-
-- `E12-F1-S1`: Publish runbooks and dashboard evidence paths.
-- `E7-F2-S1`: Enforce autonomy pause (data + control planes).
-- `E6-F2-S1`: Add ticket workflow proposal controls and reviewability.
+- `E11`+ legacy readiness stories are historical and no longer represent the current run.
+- `E12+` stories remain deferred until later sprints.
+- Sprint 1 foundation stories above are active for this execution loop.

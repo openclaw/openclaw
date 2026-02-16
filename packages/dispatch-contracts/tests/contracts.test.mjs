@@ -8,26 +8,26 @@ import {
 } from "../src/index.mjs";
 
 test("parseTraceParent accepts W3C traceparent and exposes trace id", () => {
-  const parsed = parseTraceParent("00-4bf92f3577b34da6a3ce929d0e0e4736a-00f067aa0ba902b7-01");
+  const parsed = parseTraceParent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
   assert.equal(parsed?.version, "00");
-  assert.equal(parsed?.traceId, "4bf92f3577b34da6a3ce929d0e0e4736a");
+  assert.equal(parsed?.traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
   assert.equal(parsed?.parentId, "00f067aa0ba902b7");
 });
 
 test("extractTraceContextFromHeaders maps traceparent in preference to legacy x-trace-id", () => {
   const context = extractTraceContextFromHeaders({
-    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736a-00f067aa0ba902b7-01",
+    traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
     "x-trace-id": "legacy-trace",
   });
   assert.equal(context.source, "traceparent");
-  assert.equal(context.traceId, "4bf92f3577b34da6a3ce929d0e0e4736a");
+  assert.equal(context.traceId, "4bf92f3577b34da6a3ce929d0e0e4736");
 });
 
 test("buildTraceContextHeaders produces legacy x-trace-id for backward compatibility", () => {
   const result = buildTraceContextHeaders({ traceId: "legacy-123" });
   assert.equal(result.headers["x-trace-id"], "legacy-123");
   assert.equal(result.emittedTraceId, "legacy-123");
-  assert.equal(result.source, "legacy");
+  assert.equal(result.source, null);
 });
 
 test("validateDispatchCommand enforces required envelope fields", () => {

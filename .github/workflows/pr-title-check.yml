@@ -21,10 +21,10 @@ jobs:
             exit 1
           fi
 
-          if echo "$PR_TITLE" | grep -Eq '^E[0-9]+-F[0-9]+-S[0-9]+:'; then
+          if echo "$PR_TITLE" | grep -Eq '^E[0-9]+-F[0-9]+-S[0-9]+[[:space:]]+[^[:space:]]+'; then
             echo "PR title pattern validated: $PR_TITLE"
             exit 0
           fi
 
-          echo "::error::PR title must start with E#-F#-S# (for example: E1-F1-S1: add contracts package)"
+          echo "::error::PR title must start with E#-F#-S# <short verb phrase> (for example: E1-F1-S1 add contracts package)"
           exit 1

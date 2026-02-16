@@ -1459,3 +1459,42 @@ Changes:
 Validation:
 
 - Cross-referenced completion evidence in `dispatch/tests/mvp_08_pilot_readiness.node.test.mjs` and runbook publication in `dispatch/ops/runbooks/mvp_08_pilot_cutover_readiness.md`.
+
+## Sprint 1 Backlog Snapshot (2026-02-16)
+
+- Selected stories: `E1-F1-S1`, `E1-F2-S1`, `E6-F1-S1`
+- Definition of Done: `real-dispatch-agile-package/02-Backlog/00-Definition-of-Done.md`
+- Acceptance evidence requirements:
+  - `E1-F1-S1` — `packages/dispatch-contracts` exports and validators exist.
+    - Required evidence: `node --test packages/dispatch-contracts/tests/contracts.test.mjs` passes.
+  - `E1-F2-S1` — trace propagation standardization across command chain.
+    - Required evidence: end-to-end path demonstrates `traceparent`/legacy compatibility in contracts + read/write API headers.
+    - Required evidence: `node --test packages/dispatch-contracts/tests/contracts.test.mjs` plus existing trace audit coverage in `dispatch/tests/story_09_observability.node.test.mjs`.
+  - `E6-F1-S1` — Temporal dev + worker scaffold/hello workflow.
+    - Required evidence: control-plane worker starts in skeleton mode and emits startup logs.
+    - Required evidence: `node --input-type=module -e "import('./packages/control-plane-temporal/src/worker.mjs'); setTimeout(() => process.exit(0), 1800);"`
+
+### 2026-02-16 working session
+
+- What changed:
+  - `dispatch/logs/current_work_item.md` now reflects active Sprint 1 foundations and source-of-truth files.
+  - `.github/workflows/pr-title-check.yml` now enforces `E#-F#-S# <short verb phrase>`.
+  - `.github/pull_request_template.md` updated to require story ID, acceptance evidence, and rollback notes.
+  - `packages/dispatch-contracts/tests/contracts.test.mjs` updated to current contract semantics and trace ID format.
+- Why:
+  - To align repo execution to the agile package and remove remaining S2/S3-era focus signals.
+- How to test:
+  - `node --test packages/dispatch-contracts/tests/contracts.test.mjs` (PASS: 4 tests)
+  - `node --input-type=module -e "import('./packages/control-plane-temporal/src/worker.mjs'); setTimeout(() => process.exit(0), 1800);"`
+- What’s next:
+  - Add trace propagation assertion that follows an actual API-to-activity vertical path and capture one PR-ready evidence package for `E1-F2-S1`.
+  - Extend Temporal scaffold with a dedicated dispatch compose file when needed.
+
+### Sprint 1 Demo
+
+- Contracts test demo:
+  - Run: `node --test packages/dispatch-contracts/tests/contracts.test.mjs`
+  - Output: `pass 4` (no failures)
+- Temporal skeleton demo:
+  - Run: `node --input-type=module -e "import('./packages/control-plane-temporal/src/worker.mjs'); setTimeout(() => process.exit(0), 1800);"`
+  - Output snippet: `{"level":"info","service":"control-plane-temporal","event":"worker.skeleton.start",...}`
