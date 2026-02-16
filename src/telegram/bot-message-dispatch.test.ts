@@ -114,13 +114,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     context: TelegramMessageContext;
     telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
+    replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
   }) {
     await dispatchTelegramMessage({
       context: params.context,
       bot: createBot(),
       cfg: {},
       runtime: createRuntime(),
-      replyToMode: "first",
+      replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
@@ -151,6 +152,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         chatId: 123,
         thread: { id: 777, scope: "dm" },
+        replyToMessageId: 456,
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
@@ -256,6 +258,28 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replyOptions: expect.objectContaining({
           disableBlockStreaming: true,
         }),
+      }),
+    );
+  });
+
+  it("omits replyToMessageId from draft stream when replyToMode is off", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      replyToMode: "off",
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: 123,
+        replyToMessageId: undefined,
       }),
     );
   });
