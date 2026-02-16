@@ -2,6 +2,7 @@ import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import type { SlackMonitorContext } from "../context.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 
 // Prefix for OpenClaw-generated action IDs to scope our handler
 const OPENCLAW_ACTION_PREFIX = "openclaw:";
@@ -45,12 +46,6 @@ type ModalInputSummary = {
   selectedTime?: string;
   selectedDateTime?: number;
   inputValue?: string;
-};
-
-type ModalPrivateMetadata = {
-  sessionKey?: string;
-  channelId?: string;
-  channelType?: string;
 };
 
 function readOptionValues(options: unknown): string[] | undefined {
@@ -152,35 +147,11 @@ function summarizeViewState(values: unknown): ModalInputSummary[] {
   return entries;
 }
 
-function parseModalPrivateMetadata(raw: unknown): ModalPrivateMetadata {
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const sessionKey =
-      typeof parsed.sessionKey === "string" && parsed.sessionKey.trim().length > 0
-        ? parsed.sessionKey
-        : undefined;
-    const channelId =
-      typeof parsed.channelId === "string" && parsed.channelId.trim().length > 0
-        ? parsed.channelId
-        : undefined;
-    const channelType =
-      typeof parsed.channelType === "string" && parsed.channelType.trim().length > 0
-        ? parsed.channelType
-        : undefined;
-    return { sessionKey, channelId, channelType };
-  } catch {
-    return {};
-  }
-}
-
 function resolveModalSessionRouting(params: {
   ctx: SlackMonitorContext;
   privateMetadata: unknown;
 }): { sessionKey: string; channelId?: string; channelType?: string } {
-  const metadata = parseModalPrivateMetadata(params.privateMetadata);
+  const metadata = parseSlackModalPrivateMetadata(params.privateMetadata);
   if (metadata.sessionKey) {
     return { sessionKey: metadata.sessionKey };
   }
