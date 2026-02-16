@@ -28,7 +28,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import { normalizeGroupActivation } from "../group-activation.js";
-import { buildStatusMessage } from "../status.js";
+import { buildStatusMessage, getTranscriptInfo } from "../status.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
@@ -247,6 +247,13 @@ export async function buildStatusReply(params: {
     subagentsLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
+    transcriptInfo: getTranscriptInfo({
+      sessionId: sessionEntry?.sessionId,
+      sessionEntry,
+      agentId: statusAgentId,
+      sessionKey,
+      storePath,
+    }),
   });
 
   return { text: statusText };

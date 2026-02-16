@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
-import { buildStatusMessage } from "../../auto-reply/status.js";
+import { buildStatusMessage, getTranscriptInfo } from "../../auto-reply/status.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -458,6 +458,13 @@ export function createSessionStatusTool(opts?: {
           showDetails: queueOverrides,
         },
         includeTranscriptUsage: false,
+        transcriptInfo: getTranscriptInfo({
+          sessionId: resolved.entry?.sessionId,
+          sessionEntry: resolved.entry,
+          agentId,
+          sessionKey: resolved.key,
+          storePath,
+        }),
       });
 
       return {
