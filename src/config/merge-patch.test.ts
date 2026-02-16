@@ -70,10 +70,7 @@ describe("applyMergePatch", () => {
     };
     const patch = {
       agents: {
-        list: [
-          { id: "primary", model: "new-model" },
-          { workspace: "/tmp/orphan" },
-        ],
+        list: [{ id: "primary", model: "new-model" }, { workspace: "/tmp/orphan" }],
       },
     };
 
