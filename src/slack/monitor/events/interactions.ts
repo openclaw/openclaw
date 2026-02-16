@@ -43,6 +43,8 @@ type InteractionSummary = {
   teamId?: string;
   triggerId?: string;
   responseUrl?: string;
+  workflowTriggerUrl?: string;
+  workflowId?: string;
   channelId?: string;
   messageTs?: string;
   threadTs?: string;
@@ -165,6 +167,10 @@ function summarizeAction(
     selected_date_time?: number;
     value?: string;
     rich_text_value?: unknown;
+    workflow?: {
+      trigger_url?: string;
+      workflow_id?: string;
+    };
   };
   const actionType = typed.type;
   const selectedUsers = uniqueNonEmptyStrings([
@@ -239,6 +245,8 @@ function summarizeAction(
     inputUrl,
     richTextValue,
     richTextPreview,
+    workflowTriggerUrl: typed.workflow?.trigger_url,
+    workflowId: typed.workflow?.workflow_id,
   };
 }
 
