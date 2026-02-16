@@ -99,7 +99,7 @@ export const memoryConfigSchema = {
             ? milvus.collectionName
             : DEFAULT_COLLECTION_NAME,
       },
-      autoCapture: cfg.autoCapture !== false,
+      autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
     };
   },
