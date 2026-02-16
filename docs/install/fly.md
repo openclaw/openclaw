@@ -1,6 +1,6 @@
 ---
 title: Fly.io
-description: Deploy OpenClaw on Fly.io
+description: Deploy OpenClaw on Fly.io.
 ---
 
 # Fly.io Deployment
