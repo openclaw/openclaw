@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
-import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import { readDiscordComponentSpec } from "../../discord/components.js";
 import {
   createThreadDiscord,
@@ -239,12 +238,8 @@ export async function handleDiscordMessagingAction(
         rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
           ? readDiscordComponentSpec(rawComponents)
           : null;
-      const components: DiscordSendComponents | undefined =
-        Array.isArray(rawComponents) || typeof rawComponents === "function"
-          ? (rawComponents as DiscordSendComponents)
-          : undefined;
       const content = readStringParam(params, "content", {
-        required: !asVoice && !componentSpec && !components,
+        required: !asVoice && !componentSpec,
         allowEmpty: true,
       });
       const mediaUrl =
@@ -254,9 +249,7 @@ export async function handleDiscordMessagingAction(
       const filename = readStringParam(params, "filename");
       const replyTo = readStringParam(params, "replyTo");
       const rawEmbeds = params.embeds;
-      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
-        ? (rawEmbeds as DiscordSendEmbeds)
-        : undefined;
+      const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
       const sessionKey = readStringParam(params, "__sessionKey");
       const agentId = readStringParam(params, "__agentId");
 
@@ -312,7 +305,6 @@ export async function handleDiscordMessagingAction(
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         replyTo,
-        components,
         embeds,
         silent,
       });
