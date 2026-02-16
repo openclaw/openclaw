@@ -339,6 +339,42 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   }
 }
 
+async function resolveSystemPath(): Promise<string | undefined> {
+  if (process.platform !== "darwin") {
+    return undefined;
+  }
+  try {
+    const dirs: string[] = [];
+    const etcPaths = await fs.readFile("/etc/paths", "utf-8").catch(() => "");
+    for (const line of etcPaths.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        dirs.push(trimmed);
+      }
+    }
+    const entries = await fs.readdir("/etc/paths.d").catch(() => [] as string[]);
+    for (const entry of entries) {
+      const content = await fs.readFile(path.join("/etc/paths.d", entry), "utf-8").catch(() => "");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          dirs.push(trimmed);
+        }
+      }
+    }
+    // Homebrew on Apple Silicon installs to /opt/homebrew/bin which is not
+    // listed in /etc/paths. Add common Homebrew prefixes as fallback.
+    for (const brewDir of ["/opt/homebrew/bin", "/usr/local/bin"]) {
+      if (!dirs.includes(brewDir)) {
+        dirs.push(brewDir);
+      }
+    }
+    return dirs.length > 0 ? dirs.join(":") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function detectBinary(name: string): Promise<boolean> {
   if (!name?.trim()) {
     return false;
@@ -362,8 +398,18 @@ export async function detectBinary(name: string): Promise<boolean> {
   }
 
   const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
+  const env: Record<string, string> = {};
+  const systemPath = await resolveSystemPath();
+  if (systemPath) {
+    const currentPath = process.env.PATH ?? "";
+    const merged = currentPath ? `${currentPath}:${systemPath}` : systemPath;
+    env.PATH = merged;
+  }
   try {
-    const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
+    const result = await runCommandWithTimeout(command, {
+      timeoutMs: 2000,
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    });
     return result.code === 0 && result.stdout.trim().length > 0;
   } catch {
     return false;
