@@ -115,6 +115,15 @@ describe("openai-responses reasoning replay", () => {
     expect(types).toContain("reasoning");
     expect(types).toContain("function_call");
     expect(types.indexOf("reasoning")).toBeLessThan(types.indexOf("function_call"));
+
+    const functionCall = input.find(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "function_call",
+    ) as Record<string, unknown> | undefined;
+    expect(functionCall?.call_id).toBe("call_123");
+    expect(functionCall?.id).toBe("fc_123");
   });
 
   it("still replays reasoning when paired with an assistant message", async () => {
