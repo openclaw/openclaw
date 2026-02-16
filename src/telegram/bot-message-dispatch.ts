@@ -112,6 +112,7 @@ export const dispatchTelegramMessage = async ({
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   let lastPartialText = "";
   let draftText = "";
+  let hasStreamedMessage = false;
   const updateDraftFromPartial = (text?: string) => {
     if (!draftStream || !text) {
       return;
@@ -119,6 +120,8 @@ export const dispatchTelegramMessage = async ({
     if (text === lastPartialText) {
       return;
     }
+    // Mark that we've received streaming content (for forceNewMessage decision).
+    hasStreamedMessage = true;
     if (streamMode === "partial") {
       // Some providers briefly emit a shorter prefix snapshot (for example
       // "Sure." -> "Sure" -> "Sure."). Keep the longer preview to avoid
@@ -295,15 +298,25 @@ export const dispatchTelegramMessage = async ({
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             const previewMessageId = draftStream?.messageId();
             const finalText = payload.text;
+            const currentPreviewText = streamMode === "block" ? draftText : lastPartialText;
+            const previewButtons = (
+              payload.channelData?.telegram as
+                | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+                | undefined
+            )?.buttons;
+            let draftStoppedForPreviewEdit = false;
+            // Skip preview edit for error payloads to avoid overwriting previous content
             const canFinalizeViaPreviewEdit =
+              !finalizedViaPreviewMessage &&
               !hasMedia &&
               typeof finalText === "string" &&
               finalText.length > 0 &&
               typeof previewMessageId === "number" &&
-              finalText.length <= draftMaxChars;
+              finalText.length <= draftMaxChars &&
+              !payload.isError;
             if (canFinalizeViaPreviewEdit) {
               draftStream?.stop();
-              const currentPreviewText = streamMode === "block" ? draftText : lastPartialText;
+              draftStoppedForPreviewEdit = true;
               if (
                 currentPreviewText &&
                 currentPreviewText.startsWith(finalText) &&
@@ -313,11 +326,6 @@ export const dispatchTelegramMessage = async ({
                 // can appear transiently in some provider streams.
                 return;
               }
-              const previewButtons = (
-                payload.channelData?.telegram as
-                  | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
-                  | undefined
-              )?.buttons;
               try {
                 await editMessageTelegram(chatId, previewMessageId, finalText, {
                   api: bot.api,
@@ -335,12 +343,19 @@ export const dispatchTelegramMessage = async ({
                 );
               }
             }
-            if (payload.text && payload.text.length > draftMaxChars) {
+            if (
+              !hasMedia &&
+              !payload.isError &&
+              typeof finalText === "string" &&
+              finalText.length > draftMaxChars
+            ) {
               logVerbose(
-                `telegram: preview final too long for edit (${payload.text.length} > ${draftMaxChars}); falling back to standard send`,
+                `telegram: preview final too long for edit (${finalText.length} > ${draftMaxChars}); falling back to standard send`,
               );
             }
-            draftStream?.stop();
+            if (!draftStoppedForPreviewEdit) {
+              draftStream?.stop();
+            }
           }
           const result = await deliverReplies({
             ...deliveryBaseOptions,
@@ -375,6 +390,34 @@ export const dispatchTelegramMessage = async ({
         skillFilter,
         disableBlockStreaming,
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
+        onAssistantMessageStart: draftStream
+          ? () => {
+              // When a new assistant message starts (e.g., after tool call),
+              // force a new Telegram message if we have previous content.
+              // Only force once per response to avoid excessive splitting.
+              logVerbose(
+                `telegram: onAssistantMessageStart called, hasStreamedMessage=${hasStreamedMessage}`,
+              );
+              if (hasStreamedMessage) {
+                logVerbose(`telegram: calling forceNewMessage()`);
+                draftStream.forceNewMessage();
+              }
+              lastPartialText = "";
+              draftText = "";
+              draftChunker?.reset();
+            }
+          : undefined,
+        onReasoningEnd: draftStream
+          ? () => {
+              // When a thinking block ends, force a new Telegram message for the next text output.
+              if (hasStreamedMessage) {
+                draftStream.forceNewMessage();
+                lastPartialText = "";
+                draftText = "";
+                draftChunker?.reset();
+              }
+            }
+          : undefined,
         onModelSelected,
       },
     }));
