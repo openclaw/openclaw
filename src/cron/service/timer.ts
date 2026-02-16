@@ -144,12 +144,13 @@ export function armTimer(state: CronServiceState) {
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
-  state.timer = setTimeout(async () => {
-    try {
-      await onTimer(state);
-    } catch (err) {
+  // Intentionally avoid an `async` timer callback:
+  // Vitest's fake-timer helpers can await async callbacks, which would block
+  // tests that simulate long-running jobs. Runtime behavior is unchanged.
+  state.timer = setTimeout(() => {
+    void onTimer(state).catch((err) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-    }
+    });
   }, clampedDelay);
   state.deps.log.debug(
     { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
@@ -172,12 +173,10 @@ export async function onTimer(state: CronServiceState) {
     if (state.timer) {
       clearTimeout(state.timer);
     }
-    state.timer = setTimeout(async () => {
-      try {
-        await onTimer(state);
-      } catch (err) {
+    state.timer = setTimeout(() => {
+      void onTimer(state).catch((err) => {
         state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-      }
+      });
     }, MAX_TIMER_DELAY_MS);
     return;
   }
