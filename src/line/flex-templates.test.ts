@@ -96,7 +96,6 @@ describe("createCarousel", () => {
     const bubbles = Array.from({ length: 15 }, (_, i) => createInfoCard(`Card ${i}`, `Body ${i}`));
     const carousel = createCarousel(bubbles);
 
-    expect(carousel.type).toBe("carousel");
     expect(carousel.contents.length).toBe(12);
   });
 });

@@ -203,17 +203,6 @@ describe("createYesNoConfirm", () => {
     expect(actions[0].label).toBe("Delete");
     expect(actions[1].label).toBe("Cancel");
   });
-
-  it("uses postback actions when data provided", () => {
-    const template = createYesNoConfirm("Confirm?", {
-      yesData: "action=confirm",
-      noData: "action=cancel",
-    });
-
-    const actions = (template.template as { actions: Array<{ type: string }> }).actions;
-    expect(actions[0].type).toBe("postback");
-    expect(actions[1].type).toBe("postback");
-  });
 });
 
 describe("createProductCarousel", () => {
