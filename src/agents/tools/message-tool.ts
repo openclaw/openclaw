@@ -1,8 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
-// Stub: bluebubbles-actions module was removed with channel cleanup.
-const BLUEBUBBLES_GROUP_ACTIONS = new Set<string>();
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,
@@ -15,10 +13,8 @@ import {
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
@@ -324,33 +320,6 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
-function filterActionsForContext(params: {
-  actions: ChannelMessageActionName[];
-  channel?: string;
-  currentChannelId?: string;
-}): ChannelMessageActionName[] {
-  const channel = normalizeMessageChannel(params.channel);
-  if (!channel || channel !== "bluebubbles") {
-    return params.actions;
-  }
-  const currentChannelId = params.currentChannelId?.trim();
-  if (!currentChannelId) {
-    return params.actions;
-  }
-  const normalizedTarget =
-    normalizeTargetForProvider(channel, currentChannelId) ?? currentChannelId;
-  const lowered = normalizedTarget.trim().toLowerCase();
-  const isGroupTarget =
-    lowered.startsWith("chat_guid:") ||
-    lowered.startsWith("chat_id:") ||
-    lowered.startsWith("chat_identifier:") ||
-    lowered.startsWith("group:");
-  if (isGroupTarget) {
-    return params.actions;
-  }
-  return params.actions.filter((action) => !BLUEBUBBLES_GROUP_ACTIONS.has(action));
-}
-
 function buildMessageToolDescription(options?: {
   config?: OpenClawConfig;
   currentChannel?: string;
@@ -360,13 +329,9 @@ function buildMessageToolDescription(options?: {
 
   // If we have a current channel, show only its supported actions
   if (options?.currentChannel) {
-    const channelActions = filterActionsForContext({
-      actions: listChannelSupportedActions({
-        cfg: options.config,
-        channel: options.currentChannel,
-      }),
+    const channelActions = listChannelSupportedActions({
+      cfg: options.config,
       channel: options.currentChannel,
-      currentChannelId: options.currentChannelId,
     });
     if (channelActions.length > 0) {
       // Always include "send" as a base action

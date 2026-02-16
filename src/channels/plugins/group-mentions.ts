@@ -248,15 +248,6 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
   return true;
 }
 
-export function resolveBlueBubblesGroupRequireMention(params: GroupMentionParams): boolean {
-  return resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "bluebubbles",
-    groupId: params.groupId,
-    accountId: params.accountId,
-  });
-}
-
 export function resolveTelegramGroupToolPolicy(
   params: GroupMentionParams,
 ): GroupToolPolicyConfig | undefined {
@@ -396,19 +387,4 @@ export function resolveSlackGroupToolPolicy(
     return resolved.tools;
   }
   return undefined;
-}
-
-export function resolveBlueBubblesGroupToolPolicy(
-  params: GroupMentionParams,
-): GroupToolPolicyConfig | undefined {
-  return resolveChannelGroupToolsPolicy({
-    cfg: params.cfg,
-    channel: "bluebubbles",
-    groupId: params.groupId,
-    accountId: params.accountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
 }

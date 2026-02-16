@@ -248,23 +248,6 @@ export type NostrStatus = {
   profile?: NostrProfile | null;
 };
 
-export type MSTeamsProbe = {
-  ok: boolean;
-  error?: string | null;
-  appId?: string | null;
-};
-
-export type MSTeamsStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  port?: number | null;
-  probe?: MSTeamsProbe | null;
-  lastProbeAt?: number | null;
-};
-
 export type ConfigSnapshotIssue = {
   path: string;
   message: string;
