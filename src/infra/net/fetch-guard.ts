@@ -4,6 +4,8 @@ import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
+  createPinnedProxyDispatcher,
+  createProxyDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   SsrFBlockedError,
@@ -23,6 +25,8 @@ export type GuardedFetchOptions = {
   lookupFn?: LookupFn;
   pinDns?: boolean;
   auditContext?: string;
+  /** HTTP/HTTPS proxy URL (e.g., http://proxy.example:8080) */
+  proxy?: string;
 };
 
 export type GuardedFetchResult = {
@@ -120,7 +124,14 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         lookupFn: params.lookupFn,
         policy: params.policy,
       });
-      if (params.pinDns !== false) {
+      if (params.proxy) {
+        // Use proxy dispatcher when proxy is configured
+        if (params.pinDns !== false) {
+          dispatcher = createPinnedProxyDispatcher(pinned, params.proxy);
+        } else {
+          dispatcher = createProxyDispatcher(params.proxy);
+        }
+      } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned);
       }
 

@@ -108,6 +108,22 @@ function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
   return Math.max(100, Math.floor(raw));
 }
 
+function resolveFetchProxy(fetch?: WebFetchConfig): string | undefined {
+  // Priority: config > HTTPS_PROXY > https_proxy > HTTP_PROXY > http_proxy
+  const fromConfig =
+    fetch && "proxy" in fetch && typeof fetch.proxy === "string" ? fetch.proxy : "";
+  if (fromConfig) {
+    return fromConfig;
+  }
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    undefined
+  );
+}
+
 function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
   if (!fetch || typeof fetch !== "object") {
     return undefined;
@@ -389,6 +405,7 @@ async function runWebFetch(params: {
   firecrawlProxy: "auto" | "basic" | "stealth";
   firecrawlStoreInCache: boolean;
   firecrawlTimeoutSeconds: number;
+  proxy?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
@@ -417,6 +434,7 @@ async function runWebFetch(params: {
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutMs: params.timeoutSeconds * 1000,
+      proxy: params.proxy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -688,6 +706,7 @@ export function createWebFetchTool(options?: {
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
+  const proxy = resolveFetchProxy(fetch);
   return {
     label: "Web Fetch",
     name: "web_fetch",
@@ -721,6 +740,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        proxy,
       });
       return jsonResult(result);
     },

@@ -400,6 +400,8 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /** HTTP/HTTPS proxy URL for fetch requests (e.g., http://proxy.example:8080). Falls back to HTTPS_PROXY/HTTP_PROXY env vars. */
+      proxy?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {
