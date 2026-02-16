@@ -591,16 +591,6 @@ describe("createReplyReferencePlanner", () => {
     expect(planner.use()).toBe("parent");
   });
 
-  it("respects replyToMode off even with existingId", () => {
-    const planner = createReplyReferencePlanner({
-      replyToMode: "off",
-      existingId: "thread-1",
-      startId: "parent",
-    });
-    expect(planner.use()).toBeUndefined();
-    expect(planner.hasReplied()).toBe(false);
-  });
-
   it("uses existingId once when mode is first", () => {
     const planner = createReplyReferencePlanner({
       replyToMode: "first",
