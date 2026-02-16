@@ -33,10 +33,14 @@ export function renderOverview(props: OverviewProps) {
     : t("common.na");
 
   const authHint = (() => {
-    if (props.connected || !props.lastError) return null;
+    if (props.connected || !props.lastError) {
+      return null;
+    }
     const lower = props.lastError.toLowerCase();
     const authFailed = lower.includes("unauthorized") || lower.includes("connect failed");
-    if (!authFailed) return null;
+    if (!authFailed) {
+      return null;
+    }
     const hasToken = Boolean(props.settings.token.trim());
     const hasPassword = Boolean(props.password.trim());
     if (!hasToken && !hasPassword) {
@@ -78,9 +82,13 @@ export function renderOverview(props: OverviewProps) {
   })();
 
   const insecureContextHint = (() => {
-    if (props.connected || !props.lastError) return null;
+    if (props.connected || !props.lastError) {
+      return null;
+    }
     const isSecureContext = typeof window !== "undefined" ? window.isSecureContext : true;
-    if (isSecureContext !== false) return null;
+    if (isSecureContext !== false) {
+      return null;
+    }
     const lower = props.lastError.toLowerCase();
     if (!lower.includes("secure context") && !lower.includes("device identity required")) {
       return null;

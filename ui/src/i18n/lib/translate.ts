@@ -33,7 +33,9 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
-    if (this.locale === locale) return;
+    if (this.locale === locale) {
+      return;
+    }
 
     // Lazy load translations if needed
     if (!this.translations[locale]) {
@@ -75,7 +77,7 @@ class I18nManager {
 
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value: any = this.translations[this.locale] || this.translations["en"];
+    let value: unknown = this.translations[this.locale] || this.translations["en"];
 
     for (const k of keys) {
       if (value && typeof value === "object") {
