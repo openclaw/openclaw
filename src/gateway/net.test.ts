@@ -22,6 +22,10 @@ describe("isTrustedProxyAddress", () => {
         true,
       );
     });
+
+    it("ignores surrounding whitespace in exact IP entries", () => {
+      expect(isTrustedProxyAddress("10.0.0.5", [" 10.0.0.5 "])).toBe(true);
+    });
   });
 
   describe("CIDR subnet matching", () => {
@@ -100,6 +104,10 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.42.0.59", ["10.42.0.0/33"])).toBe(false); // invalid prefix
       expect(isTrustedProxyAddress("10.42.0.59", ["10.42.0.0/-1"])).toBe(false); // negative prefix
       expect(isTrustedProxyAddress("10.42.0.59", ["invalid/24"])).toBe(false); // invalid IP
+    });
+
+    it("ignores surrounding whitespace in CIDR entries", () => {
+      expect(isTrustedProxyAddress("10.42.0.59", [" 10.42.0.0/24 "])).toBe(true);
     });
   });
 });
