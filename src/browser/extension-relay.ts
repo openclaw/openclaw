@@ -6,6 +6,9 @@ import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const logService = createSubsystemLogger("browser").child("relay");
 
 type CdpCommand = {
   id: number;
@@ -703,10 +706,37 @@ export async function ensureChromeExtensionRelayServer(opts: {
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.listen(info.port, info.host, () => resolve());
-    server.once("error", reject);
-  });
+  // Try to bind to the requested port, with automatic fallback on EADDRINUSE.
+  let boundPort = info.port;
+  const maxRetries = 10;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: Error) => {
+          server.removeListener("listening", resolve);
+          reject(err);
+        };
+        const onListening = () => {
+          server.removeListener("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(boundPort, info.host);
+      });
+      // Successfully bound
+      break;
+    } catch (err) {
+      const isAddrInUse = (err as { code?: string }).code === "EADDRINUSE";
+      if (isAddrInUse && attempt < maxRetries - 1) {
+        // Try a random port in the dynamic range (49152-65535)
+        boundPort = Math.floor(Math.random() * (65535 - 49152 + 1)) + 49152;
+        logService.warn(`Port ${info.port} is in use, trying alternative port ${boundPort}...`);
+      } else {
+        throw err;
+      }
+    }
+  }
 
   const addr = server.address() as AddressInfo | null;
   const port = addr?.port ?? info.port;
