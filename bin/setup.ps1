@@ -70,7 +70,9 @@ function Install-Pnpm {
     }
     Write-Info "Installing pnpm..."
     try {
-        corepack enable 2>$null
+        $ErrorActionPreference = "Continue"
+        corepack enable 2>&1 | Out-Null
+        $ErrorActionPreference = "Stop"
     } catch {
         npm install -g pnpm
     }

@@ -143,8 +143,10 @@ function Install-Pnpm {
     }
     Write-Info "Installing pnpm..."
     try {
-        corepack enable 2>$null
-        corepack prepare pnpm@latest --activate 2>$null
+        $ErrorActionPreference = "Continue"
+        corepack enable 2>&1 | Out-Null
+        corepack prepare pnpm@latest --activate 2>&1 | Out-Null
+        $ErrorActionPreference = "Stop"
     } catch {
         npm install -g pnpm
     }
@@ -234,9 +236,15 @@ function Clone-Repository {
         Write-Info ("Repository already exists at " + $InstallDir)
         Write-Info ("Pulling latest changes on branch '" + $Branch + "'...")
         Push-Location $InstallDir
-        git fetch origin 2>$null
-        git checkout $Branch 2>$null
-        git pull origin $Branch
+        # Git writes progress/info to stderr which PS 5.1 treats as a
+        # NativeCommandError when $ErrorActionPreference is Stop.
+        # SilentlyContinue fully suppresses stderr ErrorRecords in PS 5.1.
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "SilentlyContinue"
+        $null = (git fetch origin 2>&1)
+        $null = (git checkout $Branch 2>&1)
+        $pullOutput = (git pull origin $Branch 2>&1) | Out-String
+        $ErrorActionPreference = $prevEAP
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "git pull failed; continuing with existing code"
         } else {
@@ -320,8 +328,14 @@ function Install-PythonDeps {
 
 # -- 10. Playwright browsers --------------------------------------------------
 function Install-PlaywrightBrowsers {
+    # Store browsers inside the project (avoids "Access is denied" on global path)
+    $env:PLAYWRIGHT_BROWSERS_PATH = "0"
+
     Write-Info "Installing Playwright Chromium browser..."
-    npx playwright install chromium
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    $null = (npx playwright install chromium --force 2>&1)
+    $ErrorActionPreference = $prevEAP
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "Playwright browser install failed. Browser automation may not work."
     } else {
@@ -329,7 +343,10 @@ function Install-PlaywrightBrowsers {
     }
 
     Write-Info "Installing Playwright system dependencies..."
-    npx playwright install-deps chromium 2>$null
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    $null = (npx playwright install-deps chromium 2>&1)
+    $ErrorActionPreference = $prevEAP
     Write-Ok "Playwright setup complete"
 }
 
