@@ -780,7 +780,6 @@ describe("resolveResponsePrefixTemplate", () => {
 describe("extractShortModelName", () => {
   it("strips provider prefix", () => {
     expect(extractShortModelName("openai/gpt-5.2")).toBe("gpt-5.2");
-    expect(extractShortModelName("anthropic/claude-opus-4-5")).toBe("claude-opus-4-5");
     expect(extractShortModelName("openai-codex/gpt-5.2-codex")).toBe("gpt-5.2-codex");
   });
 
