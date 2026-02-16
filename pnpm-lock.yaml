@@ -136,6 +136,9 @@ importers:
       node-llama-cpp:
         specifier: 3.15.1
         version: 3.15.1(typescript@5.9.3)
+      openclaw:
+        specifier: link:../../Library/pnpm/global/5/node_modules/openclaw
+        version: link:../../Library/pnpm/global/5/node_modules/openclaw
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0

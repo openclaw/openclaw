@@ -76,24 +76,49 @@ function generateHtml(sessionData: SessionData): string {
   const markedJs = loadTemplate(path.join("vendor", "marked.min.js"));
   const hljsJs = loadTemplate(path.join("vendor", "highlight.min.js"));
 
-  // Use default theme colors
+  // Use pi-mono dark theme colors (matching their theme/dark.json)
   const themeVars = `
-    --bg: #1a1a2e;
-    --fg: #eaeaea;
-    --userMessageBg: #2d2d44;
-    --assistantMessageBg: #1e1e30;
-    --toolCallBg: #252538;
-    --toolResultBg: #1c1c2c;
-    --codeBg: #0d0d14;
-    --borderColor: #3a3a5a;
-    --linkColor: #6b9fff;
-    --errorColor: #ff6b6b;
-    --successColor: #6bff6b;
-    --warningColor: #ffcc00;
+    --cyan: #00d7ff;
+    --blue: #5f87ff;
+    --green: #b5bd68;
+    --red: #cc6666;
+    --yellow: #ffff00;
+    --gray: #808080;
+    --dimGray: #666666;
+    --darkGray: #505050;
+    --accent: #8abeb7;
+    --selectedBg: #3a3a4a;
+    --userMsgBg: #343541;
+    --toolPendingBg: #282832;
+    --toolSuccessBg: #283228;
+    --toolErrorBg: #3c2828;
+    --customMsgBg: #2d2838;
+    --text: #e0e0e0;
+    --dim: #666666;
+    --muted: #808080;
+    --border: #5f87ff;
+    --borderAccent: #00d7ff;
+    --borderMuted: #505050;
+    --success: #b5bd68;
+    --error: #cc6666;
+    --warning: #ffff00;
+    --thinkingText: #808080;
+    --userMessageBg: #343541;
+    --userMessageText: #e0e0e0;
+    --customMessageBg: #2d2838;
+    --customMessageText: #e0e0e0;
+    --customMessageLabel: #9575cd;
+    --toolTitle: #e0e0e0;
+    --toolOutput: #808080;
+    --mdHeading: #f0c674;
+    --mdLink: #81a2be;
+    --mdLinkUrl: #666666;
+    --mdCode: #8abeb7;
+    --mdCodeBlock: #b5bd68;
   `;
-  const bodyBg = "#1a1a2e";
-  const containerBg = "#1e1e30";
-  const infoBg = "#2a2a40";
+  const bodyBg = "#1e1e28";
+  const containerBg = "#282832";
+  const infoBg = "#343541";
 
   // Base64 encode session data
   const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
