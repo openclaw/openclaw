@@ -264,6 +264,5 @@ describe("messaging tool media URL tracking", () => {
 
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
->>>>>>> 018297172 (test(media-dedup): add missing coverage for Discord media dedup wiring)
   });
 });

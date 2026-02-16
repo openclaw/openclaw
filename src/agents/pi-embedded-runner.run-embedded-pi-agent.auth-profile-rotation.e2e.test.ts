@@ -57,6 +57,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   lastAssistant: undefined,
   didSendViaMessagingTool: false,
   messagingToolSentTexts: [],
+  messagingToolSentMediaUrls: [],
   messagingToolSentTargets: [],
   cloudCodeAssistFormatError: false,
   ...overrides,
