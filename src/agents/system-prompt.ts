@@ -201,6 +201,7 @@ export function buildAgentSystemPrompt(params: {
     enabled: boolean;
     workspaceDir?: string;
     workspaceAccess?: "none" | "ro" | "rw";
+    containerWorkspaceDir?: string;
     agentWorkspaceMount?: string;
     browserBridgeUrl?: string;
     browserNoVncUrl?: string;
