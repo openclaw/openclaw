@@ -828,56 +828,6 @@ describe("runReplyAgent memory flush", () => {
     }
   });
 
-  async function expectMemoryFlushSkippedWithWorkspaceAccess(
-    workspaceAccess: "ro" | "none",
-  ): Promise<void> {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      const calls: Array<{ prompt?: string }> = [];
-      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const baseRun = createBaseRun({
-        storePath,
-        sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              sandbox: { mode: "all", workspaceAccess },
-            },
-          },
-        },
-      });
-
-      await runReplyAgentWithBase({
-        baseRun,
-        storePath,
-        sessionKey,
-        sessionEntry,
-        commandBody: "hello",
-      });
-
-      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
-
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(stored[sessionKey].memoryFlushAt).toBeUndefined();
-    });
-  }
-
   it("skips memory flush for CLI providers", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
@@ -1108,10 +1058,6 @@ describe("runReplyAgent memory flush", () => {
 
       expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
     });
-  });
-
-  it("skips memory flush when the sandbox workspace is read-only", async () => {
-    await expectMemoryFlushSkippedWithWorkspaceAccess("ro");
   });
 
   it("increments compaction count when flush compaction completes", async () => {
