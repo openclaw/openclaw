@@ -13,6 +13,7 @@ import { loadConfig } from "../../config/config.js";
 import type { SessionScope } from "../../config/sessions.js";
 import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
+import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveSlackAccount } from "../accounts.js";
@@ -26,6 +27,11 @@ import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import {
+  isSlackPlatformError,
+  isSlackUnrecoverableAuthError,
+  getSlackErrorCode,
+} from "./slack-error-detection.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
@@ -335,6 +341,33 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     })();
   }
 
+  // Register handler for Slack socket-mode reconnection errors.
+  // When the socket-mode client's internal reconnection fails with an unrecoverable
+  // auth error (e.g., account_inactive, invalid_auth), the error escapes as an
+  // unhandled promise rejection because @slack/socket-mode's delayReconnectAttempt()
+  // calls `cb.apply(this).then(res)` without a `.catch()`.
+  // Without this handler, the global unhandled rejection handler calls process.exit(1),
+  // crashing the entire gateway (including healthy channels like Telegram).
+  // See: https://github.com/openclaw/openclaw/issues/6867
+  const unregisterRejectionHandler = registerUnhandledRejectionHandler((reason) => {
+    if (isSlackPlatformError(reason)) {
+      const dataError = getSlackErrorCode(reason) ?? "unknown";
+      if (isSlackUnrecoverableAuthError(reason)) {
+        runtime.error?.(
+          `[slack] Unrecoverable auth error during reconnection: ${dataError}. ` +
+            `The Slack channel will stop working until tokens are updated. ` +
+            `Other channels are unaffected.`,
+        );
+      } else {
+        runtime.error?.(
+          `[slack] Suppressed Slack API error (non-fatal): ${dataError}`,
+        );
+      }
+      return true; // handled — don't crash the gateway
+    }
+    return false; // not a Slack error — let other handlers decide
+  });
+
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
       void app.stop();
@@ -358,6 +391,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       });
     });
   } finally {
+    unregisterRejectionHandler();
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await app.stop().catch(() => undefined);
