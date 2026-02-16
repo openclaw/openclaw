@@ -792,6 +792,13 @@ export function registerMemoryRouterCli(program: Command): void {
       await runDelete();
     });
 
+  // Update: openclaw memoryrouter update (re-apply patches after core update)
+  mr.command("update")
+    .description("Re-apply MemoryRouter patches after OpenClaw update")
+    .action(async () => {
+      await runMrUpdate();
+    });
+
   // Setup: clawdbot memoryrouter setup (interactive wizard)
   mr.command("setup")
     .description("Interactive setup wizard for MemoryRouter")
@@ -829,6 +836,139 @@ export function registerMemoryRouterCli(program: Command): void {
         defaultRuntime.log("Setup cancelled.");
       }
     });
+}
+
+/**
+ * MemoryRouter patch update — re-applies patches after OpenClaw core updates.
+ *
+ * Downloads the latest patch for the current OpenClaw version and applies it.
+ * Idempotent: safe to run even if already patched (checks marker file).
+ */
+const PATCH_BASE_URL = "https://raw.githubusercontent.com/John-Rood/MemoryRouter/main/integrations/openclaw";
+const MR_MARKER_FILE = ".memoryrouter-patched";
+
+async function runMrUpdate(): Promise<void> {
+  const { execSync } = await import("node:child_process");
+
+  // Find the OpenClaw install root (where package.json lives)
+  let root: string;
+  try {
+    // Walk up from dist/ to find the repo root
+    const { resolveUpdateRoot } = await import("../cli/update-cli/shared.js");
+    root = await resolveUpdateRoot();
+  } catch {
+    // Fallback: use the directory containing this file's package.json
+    root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+  }
+
+  defaultRuntime.log(theme.heading("MemoryRouter Update"));
+  defaultRuntime.log("───────────────────────────");
+  defaultRuntime.log(`OpenClaw root: ${root}`);
+
+  // Check if we're already patched
+  const markerPath = path.join(root, MR_MARKER_FILE);
+  const integrationFile = path.join(root, "src/agents/memoryrouter-integration.ts");
+
+  try {
+    await fs.access(integrationFile);
+    defaultRuntime.log(`${theme.success("✓")} MemoryRouter integration files present`);
+  } catch {
+    defaultRuntime.log(`${theme.warn("⚠")} Integration files missing — will re-apply patch`);
+  }
+
+  // Download latest patch
+  defaultRuntime.log("Downloading latest patch...");
+  const patchUrl = `${PATCH_BASE_URL}/memoryrouter.patch`;
+
+  let patchContent: string;
+  try {
+    const response = await fetch(patchUrl, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) {
+      defaultRuntime.error(`${theme.error("❌")} Failed to download patch: HTTP ${response.status}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+    patchContent = await response.text();
+  } catch (err) {
+    defaultRuntime.error(`${theme.error("❌")} Could not reach patch server: ${err instanceof Error ? err.message : String(err)}`);
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  defaultRuntime.log(`${theme.success("✓")} Patch downloaded (${Math.round(patchContent.length / 1024)}KB)`);
+
+  // Write patch to temp file and apply
+  const tmpPatch = path.join(root, ".mr-update.patch");
+  await fs.writeFile(tmpPatch, patchContent);
+
+  try {
+    // Try clean apply first
+    try {
+      execSync(`git apply --check "${tmpPatch}"`, { cwd: root, stdio: "pipe" });
+      execSync(`git apply "${tmpPatch}"`, { cwd: root, stdio: "pipe" });
+      defaultRuntime.log(`${theme.success("✓")} Patch applied cleanly`);
+    } catch {
+      // Already partially applied or conflicts — try 3-way merge
+      defaultRuntime.log(theme.muted("Clean apply failed — trying 3-way merge..."));
+      try {
+        execSync(`git apply --3way "${tmpPatch}"`, { cwd: root, stdio: "pipe" });
+        defaultRuntime.log(`${theme.success("✓")} Patch applied with 3-way merge`);
+      } catch {
+        // Check if files already exist (already patched)
+        try {
+          await fs.access(integrationFile);
+          defaultRuntime.log(`${theme.success("✓")} Already patched — no changes needed`);
+        } catch {
+          defaultRuntime.error(`${theme.error("❌")} Patch could not be applied. Your OpenClaw version may need a newer patch.`);
+          defaultRuntime.log(`Check ${PATCH_BASE_URL} for updates.`);
+          await fs.unlink(tmpPatch).catch(() => {});
+          defaultRuntime.exit(1);
+          return;
+        }
+      }
+    }
+  } finally {
+    await fs.unlink(tmpPatch).catch(() => {});
+  }
+
+  // Write marker
+  const timestamp = new Date().toISOString();
+  await fs.writeFile(markerPath, `patched=${timestamp}\n`);
+
+  // Build
+  defaultRuntime.log("Building...");
+  try {
+    execSync("pnpm build", { cwd: root, stdio: "pipe", timeout: 120_000 });
+    defaultRuntime.log(`${theme.success("✓")} Build complete`);
+  } catch {
+    defaultRuntime.log(theme.warn("⚠ Build failed — try running 'pnpm build' manually"));
+  }
+
+  defaultRuntime.log("");
+  defaultRuntime.log(`${theme.success("✅")} MemoryRouter is up to date!`);
+}
+
+/**
+ * Post-update hook — called after `openclaw update` completes.
+ * Re-applies MemoryRouter patches to the freshly updated OpenClaw.
+ */
+export async function memoryRouterPostUpdateHook(): Promise<void> {
+  const cfg = loadConfig();
+  if (!cfg.memoryRouter?.enabled) {
+    return; // MR not enabled — nothing to do
+  }
+
+  defaultRuntime.log("");
+  defaultRuntime.log(theme.muted("Re-applying MemoryRouter integration..."));
+
+  try {
+    await runMrUpdate();
+  } catch (err) {
+    defaultRuntime.log(
+      theme.warn(`⚠ MemoryRouter patch failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+    defaultRuntime.log(theme.muted("Run 'openclaw mr update' to retry manually."));
+  }
 }
 
 /**

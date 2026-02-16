@@ -312,43 +312,6 @@ export async function registerSubCliByName(program: Command, name: string): Prom
 }
 
 function registerLazyCommand(program: Command, entry: SubCliEntry) {
-  const createLazyAction =
-    (placeholderCmd: Command) =>
-    async (...actionArgs: unknown[]) => {
-      // Remove all placeholders (main name + aliases) before registering
-      removeCommand(program, placeholderCmd);
-      for (const alias of entry.aliases ?? []) {
-        const aliasCmd = program.commands.find((cmd) => cmd.name() === alias);
-        if (aliasCmd) {
-          removeCommand(program, aliasCmd);
-        }
-      }
-      // Also remove the main name placeholder if triggered via alias
-      const mainCmd = program.commands.find((cmd) => cmd.name() === entry.name);
-      if (mainCmd) {
-        removeCommand(program, mainCmd);
-      }
-
-      await entry.register(program);
-      const actionCommand = actionArgs.at(-1) as Command | undefined;
-      const root = actionCommand?.parent ?? program;
-      const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
-      const actionArgsList = resolveActionArgs(actionCommand);
-      // Rewrite alias to canonical name so commander finds the real command
-      const cmdName = actionCommand?.name() ?? "";
-      const canonicalName =
-        cmdName === entry.name || entry.aliases?.includes(cmdName) ? entry.name : cmdName;
-      const fallbackArgv = canonicalName ? [canonicalName, ...actionArgsList] : actionArgsList;
-      const parseArgv = buildParseArgv({
-        programName: program.name(),
-        rawArgs: rawArgs
-          ? rawArgs.map((arg) => (entry.aliases?.includes(arg) ? entry.name : arg))
-          : undefined,
-        fallbackArgv,
-      });
-      await program.parseAsync(parseArgv);
-    };
-
   const placeholder = program.command(entry.name).description(entry.description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);

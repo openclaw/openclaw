@@ -640,6 +640,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     opts,
   });
 
+  // Re-apply MemoryRouter patches if enabled
+  try {
+    const { memoryRouterPostUpdateHook } = await import("../memoryrouter-cli.js");
+    await memoryRouterPostUpdateHook();
+  } catch {
+    // MemoryRouter not installed — no-op
+  }
+
   if (!opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));
   }
