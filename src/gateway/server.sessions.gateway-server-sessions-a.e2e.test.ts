@@ -2,16 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   connectOk,
   embeddedRunMock,
-  getFreePort,
   installGatewayTestHooks,
   piSdkMock,
   rpcReq,
-  startGatewayServer,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
@@ -57,32 +55,17 @@ vi.mock("../hooks/internal-hooks.js", async () => {
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
-let port = 0;
-let previousToken: string | undefined;
+let harness: GatewayServerHarness;
 
 beforeAll(async () => {
-  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  port = await getFreePort();
-  server = await startGatewayServer(port);
+  harness = await startGatewayServerHarness();
 });
 
 afterAll(async () => {
-  await server.close();
-  if (previousToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
-  }
+  await harness.close();
 });
 
-const openClient = async (opts?: Parameters<typeof connectOk>[1]) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  const hello = await connectOk(ws, opts);
-  return { ws, hello };
-};
+const openClient = async (opts?: Parameters<typeof connectOk>[1]) => await harness.openClient(opts);
 
 describe("gateway server sessions", () => {
   beforeEach(() => {
@@ -143,7 +126,7 @@ describe("gateway server sessions", () => {
     });
 
     const { ws, hello } = await openClient();
-    expect((hello as unknown as { features?: { methods?: string[] } }).features?.methods).toEqual(
+    expect((hello as { features?: { methods?: string[] } }).features?.methods).toEqual(
       expect.arrayContaining([
         "sessions.list",
         "sessions.preview",

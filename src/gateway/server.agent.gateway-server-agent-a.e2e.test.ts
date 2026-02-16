@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
+import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
@@ -41,19 +41,6 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   const runContext = call.runContext as { messageChannel?: string } | undefined;
   expect(runContext?.messageChannel).toBe(channel);
 }
-
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
 
 const createStubChannelPlugin = (params: {
   id: ChannelPlugin["id"];
@@ -280,6 +267,20 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("does not match session key agent");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("agent rejects malformed agent-prefixed session keys", async () => {
+    setRegistry(defaultRegistry);
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main",
+      idempotencyKey: "idem-agent-malformed-key",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("malformed session key");
 
     const spy = vi.mocked(agentCommand);
     expect(spy).not.toHaveBeenCalled();

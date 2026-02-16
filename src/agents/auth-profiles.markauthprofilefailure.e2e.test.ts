@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { ensureAuthProfileStore, markAuthProfileFailure } from "./auth-profiles.js";
+import {
+  calculateAuthProfileCooldownMs,
+  ensureAuthProfileStore,
+  markAuthProfileFailure,
+} from "./auth-profiles.js";
 
 describe("markAuthProfileFailure", () => {
   it("disables billing failures for ~5 hours by default", async () => {
@@ -127,5 +131,15 @@ describe("markAuthProfileFailure", () => {
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("calculateAuthProfileCooldownMs", () => {
+  it("applies exponential backoff with a 1h cap", () => {
+    expect(calculateAuthProfileCooldownMs(1)).toBe(60_000);
+    expect(calculateAuthProfileCooldownMs(2)).toBe(5 * 60_000);
+    expect(calculateAuthProfileCooldownMs(3)).toBe(25 * 60_000);
+    expect(calculateAuthProfileCooldownMs(4)).toBe(60 * 60_000);
+    expect(calculateAuthProfileCooldownMs(5)).toBe(60 * 60_000);
   });
 });

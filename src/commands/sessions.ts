@@ -9,6 +9,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { classifySessionKey } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { isRich, theme } from "../terminal/theme.js";
@@ -129,29 +130,13 @@ const formatFlagsCell = (row: SessionRow, rich: boolean) => {
   return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 };
 
-function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
-  if (key === "global") {
-    return "global";
-  }
-  if (key === "unknown") {
-    return "unknown";
-  }
-  if (entry?.chatType === "group" || entry?.chatType === "channel") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "direct";
-}
-
 function toRows(store: Record<string, SessionEntry>): SessionRow[] {
   return Object.entries(store)
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
       return {
         key,
-        kind: classifyKey(key, entry),
+        kind: classifySessionKey(key, entry),
         updatedAt,
         ageMs: updatedAt ? Date.now() - updatedAt : null,
         sessionId: entry?.sessionId,
