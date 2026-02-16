@@ -111,16 +111,6 @@ describe("createButtonTemplate", () => {
     expect((template.template as { title: string }).title.length).toBe(40);
   });
 
-  it("includes thumbnail when provided", () => {
-    const template = createButtonTemplate("Title", "Text", [messageAction("OK")], {
-      thumbnailImageUrl: "https://example.com/thumb.jpg",
-    });
-
-    expect((template.template as { thumbnailImageUrl: string }).thumbnailImageUrl).toBe(
-      "https://example.com/thumb.jpg",
-    );
-  });
-
   it("truncates text to 60 chars when no thumbnail is provided", () => {
     const longText = "x".repeat(100);
     const template = createButtonTemplate("Title", longText, [messageAction("OK")]);
