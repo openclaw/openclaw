@@ -6,8 +6,36 @@ import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 
 const CLI_NAME = resolveCliName();
+const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
+  "acp",
+  "agents",
+  "approvals",
+  "browser",
+  "channels",
+  "config",
+  "cron",
+  "daemon",
+  "devices",
+  "directory",
+  "dns",
+  "gateway",
+  "hooks",
+  "memory",
+  "message",
+  "models",
+  "node",
+  "nodes",
+  "pairing",
+  "plugins",
+  "sandbox",
+  "security",
+  "skills",
+  "system",
+  "update",
+  "webhooks",
+]);
 const ROOT_COMMANDS_HINT =
-  "Hint: get help on flags and subcommands by calling --help on each command.";
+  "Hint: commands suffixed with * have subcommands. Run <command> --help for details.";
 
 const EXAMPLES = [
   ["openclaw models --help", "Show detailed help for the models command."],
@@ -54,7 +82,11 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     sortSubcommands: true,
     sortOptions: true,
     optionTerm: (option) => theme.option(option.flags),
-    subcommandTerm: (cmd) => theme.command(cmd.name()),
+    subcommandTerm: (cmd) => {
+      const isRootCommand = cmd.parent === program;
+      const hasSubcommands = isRootCommand && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(cmd.name());
+      return theme.command(hasSubcommands ? `${cmd.name()} *` : cmd.name());
+    },
   });
 
   const formatHelpOutput = (str: string) => {
