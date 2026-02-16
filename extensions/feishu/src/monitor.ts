@@ -9,6 +9,7 @@ import {
 import type { ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
+import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
 
@@ -94,6 +95,31 @@ function registerEventHandlers(
         log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
+      }
+    },
+    "card.action.trigger": async (data) => {
+      try {
+        // Handle card button clicks
+        // Feishu expects a response, but for now we just acknowledge it (handled by SDK if we don't throw)
+        // and treat the action value as an inbound message.
+        const event = data as unknown as FeishuCardActionEvent;
+        const promise = handleFeishuCardAction({
+          cfg,
+          event,
+          botOpenId: botOpenIds.get(accountId),
+          runtime,
+          accountId,
+        });
+        if (fireAndForget) {
+          promise.catch((err) => {
+            error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
+          });
+        } else {
+          // For card actions, we might need to return a toast, but SDK handles basic ack
+          await promise;
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
       }
     },
   });
