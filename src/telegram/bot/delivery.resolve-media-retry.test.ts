@@ -15,6 +15,7 @@ vi.mock("../../media/fetch.js", () => ({
 
 vi.mock("../../globals.js", () => ({
   danger: (s: string) => s,
+  warn: (s: string) => s,
   logVerbose: () => {},
 }));
 
@@ -133,5 +134,69 @@ describe("resolveMedia getFile retry", () => {
 
     expect(getFile).toHaveBeenCalledTimes(3);
     expect(result).toBeNull();
+  });
+
+  it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {
+    // Simulate Telegram Bot API error when file exceeds 20MB limit
+    const fileTooBigError = new Error(
+      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
+    );
+    const getFile = vi.fn().mockRejectedValue(fileTooBigError);
+
+    const result = await resolveMedia(makeCtx("video", getFile), 10_000_000, "tok123");
+
+    // Should NOT retry - "file is too big" is a permanent error, not transient
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it("returns null for audio when file is too big", async () => {
+    const fileTooBigError = new Error(
+      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
+    );
+    const getFile = vi.fn().mockRejectedValue(fileTooBigError);
+
+    const result = await resolveMedia(makeCtx("audio", getFile), 10_000_000, "tok123");
+
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it("returns null for voice when file is too big", async () => {
+    const fileTooBigError = new Error(
+      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
+    );
+    const getFile = vi.fn().mockRejectedValue(fileTooBigError);
+
+    const result = await resolveMedia(makeCtx("voice", getFile), 10_000_000, "tok123");
+
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it("still retries transient errors even after encountering file too big in different call", async () => {
+    // First call with transient error should retry
+    const getFile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'getFile' failed!"))
+      .mockResolvedValueOnce({ file_path: "voice/file_0.oga" });
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/ogg",
+      fileName: "file_0.oga",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
+
+    const promise = resolveMedia(makeCtx("voice", getFile), 10_000_000, "tok123");
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await promise;
+
+    // Should retry transient errors
+    expect(getFile).toHaveBeenCalledTimes(2);
+    expect(result).not.toBeNull();
   });
 });
