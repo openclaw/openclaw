@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionResetConfig } from "../../config/types.base.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -53,6 +54,54 @@ export type SessionInitResult = {
   bodyStripped?: string;
   triggerBodyNormalized: string;
 };
+
+/**
+ * Resolve per-group session reset config from Telegram channel configuration.
+ * Returns the group's session.reset config if defined, otherwise undefined.
+ */
+function resolveGroupResetConfig(params: {
+  cfg: OpenClawConfig;
+  groupResolution?: GroupKeyResolution;
+}): SessionResetConfig | undefined {
+  const { cfg, groupResolution } = params;
+  if (!groupResolution?.id) {
+    return undefined;
+  }
+  const channel = groupResolution.channel?.toLowerCase();
+  if (channel !== "telegram") {
+    // For now, only Telegram supports per-group session config
+    return undefined;
+  }
+  const telegramCfg = cfg.channels?.telegram;
+  if (!telegramCfg) {
+    return undefined;
+  }
+  // Check default account groups
+  const groupCfg = telegramCfg.groups?.[groupResolution.id];
+  if (groupCfg?.session?.reset) {
+    return groupCfg.session.reset;
+  }
+  // Check multi-account groups
+  if (telegramCfg.accounts) {
+    // If we know which account the message came from, use it directly for deterministic lookup
+    if (groupResolution.accountId) {
+      const account = telegramCfg.accounts[groupResolution.accountId];
+      const accountGroupCfg = account?.groups?.[groupResolution.id];
+      if (accountGroupCfg?.session?.reset) {
+        return accountGroupCfg.session.reset;
+      }
+    } else {
+      // Fallback: no account context, scan all accounts (legacy behavior)
+      for (const account of Object.values(telegramCfg.accounts)) {
+        const accountGroupCfg = account.groups?.[groupResolution.id];
+        if (accountGroupCfg?.session?.reset) {
+          return accountGroupCfg.session.reset;
+        }
+      }
+    }
+  }
+  return undefined;
+}
 
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
@@ -218,10 +267,12 @@ export async function initSessionState(params: {
       ctx.Surface ??
       ctx.Provider,
   });
+  // Per-group reset config takes priority over channel-level config
+  const groupReset = resolveGroupResetConfig({ cfg, groupResolution });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,
     resetType,
-    resetOverride: channelReset,
+    resetOverride: groupReset ?? channelReset,
   });
   const freshEntry = entry
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh

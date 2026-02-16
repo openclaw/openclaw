@@ -108,5 +108,6 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     channel: provider,
     id: finalId,
     chatType: kind === "channel" ? "channel" : "group",
+    accountId: ctx.AccountId,
   };
 }
