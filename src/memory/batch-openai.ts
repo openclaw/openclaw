@@ -1,6 +1,7 @@
 import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
+import { buildBatchHeaders, normalizeBatchBaseUrl, splitBatchRequests } from "./batch-utils.js";
 import { hashText, runWithConcurrency } from "./internal.js";
 
 export type OpenAiBatchRequest = {
@@ -36,43 +37,12 @@ export const OPENAI_BATCH_ENDPOINT = "/v1/embeddings";
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_BATCH_MAX_REQUESTS = 50000;
 
-function getOpenAiBaseUrl(openAi: OpenAiEmbeddingClient): string {
-  return openAi.baseUrl?.replace(/\/$/, "") ?? "";
-}
-
-function getOpenAiHeaders(
-  openAi: OpenAiEmbeddingClient,
-  params: { json: boolean },
-): Record<string, string> {
-  const headers = openAi.headers ? { ...openAi.headers } : {};
-  if (params.json) {
-    if (!headers["Content-Type"] && !headers["content-type"]) {
-      headers["Content-Type"] = "application/json";
-    }
-  } else {
-    delete headers["Content-Type"];
-    delete headers["content-type"];
-  }
-  return headers;
-}
-
-function splitOpenAiBatchRequests(requests: OpenAiBatchRequest[]): OpenAiBatchRequest[][] {
-  if (requests.length <= OPENAI_BATCH_MAX_REQUESTS) {
-    return [requests];
-  }
-  const groups: OpenAiBatchRequest[][] = [];
-  for (let i = 0; i < requests.length; i += OPENAI_BATCH_MAX_REQUESTS) {
-    groups.push(requests.slice(i, i + OPENAI_BATCH_MAX_REQUESTS));
-  }
-  return groups;
-}
-
 async function submitOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
   requests: OpenAiBatchRequest[];
   agentId: string;
 }): Promise<OpenAiBatchStatus> {
-  const baseUrl = getOpenAiBaseUrl(params.openAi);
+  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
   const form = new FormData();
   form.append("purpose", "batch");
@@ -84,7 +54,7 @@ async function submitOpenAiBatch(params: {
 
   const fileRes = await fetch(`${baseUrl}/files`, {
     method: "POST",
-    headers: getOpenAiHeaders(params.openAi, { json: false }),
+    headers: buildBatchHeaders(params.openAi, { json: false }),
     body: form,
   });
   if (!fileRes.ok) {
@@ -98,7 +68,7 @@ async function submitOpenAiBatch(params: {
 
   return await postJsonWithRetry<OpenAiBatchStatus>({
     url: `${baseUrl}/batches`,
-    headers: getOpenAiHeaders(params.openAi, { json: true }),
+    headers: buildBatchHeaders(params.openAi, { json: true }),
     body: {
       input_file_id: filePayload.id,
       endpoint: OPENAI_BATCH_ENDPOINT,
@@ -116,9 +86,9 @@ async function fetchOpenAiBatchStatus(params: {
   openAi: OpenAiEmbeddingClient;
   batchId: string;
 }): Promise<OpenAiBatchStatus> {
-  const baseUrl = getOpenAiBaseUrl(params.openAi);
+  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const res = await fetch(`${baseUrl}/batches/${params.batchId}`, {
-    headers: getOpenAiHeaders(params.openAi, { json: true }),
+    headers: buildBatchHeaders(params.openAi, { json: true }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -131,9 +101,9 @@ async function fetchOpenAiFileContent(params: {
   openAi: OpenAiEmbeddingClient;
   fileId: string;
 }): Promise<string> {
-  const baseUrl = getOpenAiBaseUrl(params.openAi);
+  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const res = await fetch(`${baseUrl}/files/${params.fileId}/content`, {
-    headers: getOpenAiHeaders(params.openAi, { json: true }),
+    headers: buildBatchHeaders(params.openAi, { json: true }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -236,7 +206,7 @@ export async function runOpenAiEmbeddingBatches(params: {
   if (params.requests.length === 0) {
     return new Map();
   }
-  const groups = splitOpenAiBatchRequests(params.requests);
+  const groups = splitBatchRequests(params.requests, OPENAI_BATCH_MAX_REQUESTS);
   const byCustomId = new Map<string, number[]>();
 
   const tasks = groups.map((group, groupIndex) => async () => {
