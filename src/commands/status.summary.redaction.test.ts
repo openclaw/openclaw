@@ -6,6 +6,7 @@ function createRecentSessionRow() {
   return {
     key: "main",
     kind: "direct" as const,
+    sessionType: "main" as const,
     sessionId: "sess-1",
     updatedAt: 1,
     age: 2,
