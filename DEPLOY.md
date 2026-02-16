@@ -266,11 +266,12 @@ https://claw.leot.fun?token=<your-gateway-token>
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/anthropic/claude-sonnet-4.5",
+        "primary": "openrouter/anthropic/claude-3.5-haiku",
         "fallbacks": ["openrouter/google/gemini-2.5-flash"]
       },
       "models": {
         "openrouter/auto": { "alias": "OpenRouter Auto" },
+        "openrouter/anthropic/claude-3.5-haiku": { "alias": "Claude 3.5 Haiku" },
         "openrouter/anthropic/claude-sonnet-4.5": { "alias": "Claude Sonnet 4.5" },
         "openrouter/anthropic/claude-opus-4.6": { "alias": "Claude Opus 4.6" },
         "openrouter/google/gemini-2.5-flash": { "alias": "Gemini 2.5 Flash" },
@@ -289,7 +290,7 @@ https://claw.leot.fun?token=<your-gateway-token>
 }
 ```
 
-> **选型说明：** Claude Sonnet 4.5 能力强，适合复杂对话和编码。需要境外代理才能使用（见启动命令中的 `HTTPS_PROXY`）。Gemini 2.5 Flash 作为 fallback。需要省钱时在聊天中 `/model deepseek` 切到 DeepSeek V3.2（$0.25/M tokens，Claude 的 1/12）。
+> **选型说明：** Claude 3.5 Haiku 作为默认模型（$0.80/$4.00 per M tokens），速度快、编码能力强，性价比远优于 Sonnet 4.5（$3/$15）。需要境外代理才能使用（见启动命令中的 `HTTPS_PROXY`）。Gemini 2.5 Flash 作为 fallback。复杂任务用 `/model claude-sonnet` 切到 Sonnet 4.5，省钱用 `/model deepseek` 切到 DeepSeek V3.2（$0.25/$0.38）。
 
 > **注意：** OpenRouter 模型 ID 格式是 `openrouter/vendor/model`（三段式），如 `openrouter/deepseek/deepseek-v3.2`、`openrouter/anthropic/claude-sonnet-4.5`。不要省略 vendor 前缀（如 ~~`openrouter/deepseek-v3.2`~~ 是错的）。
 
@@ -301,7 +302,8 @@ https://claw.leot.fun?token=<your-gateway-token>
 
 | `/model` 命令 | 模型 | 输入价格 | 输出价格 | 适合场景 |
 |---|---|---|---|---|
-| `/model claude-sonnet` | Claude Sonnet 4.5 | $3.00/M | $15.00/M | 编码、复杂推理（默认） |
+| `/model claude-haiku` | Claude 3.5 Haiku | $0.80/M | $4.00/M | 快速编码、日常对话（默认） |
+| `/model claude-sonnet` | Claude Sonnet 4.5 | $3.00/M | $15.00/M | 编码、复杂推理 |
 | `/model claude-opus` | Claude Opus 4.6 | $5.00/M | $25.00/M | 最强，长难任务 |
 | `/model gemini-2.5` | Gemini 2.5 Flash | $0.30/M | $2.50/M | 通用，性价比好 |
 | `/model gemini-3` | Gemini 3 Flash | $0.50/M | $3.00/M | 最新推理模型，1M 上下文 |
@@ -316,6 +318,7 @@ https://claw.leot.fun?token=<your-gateway-token>
 |---|---|
 | `/model` | 查看当前模型 |
 | `/model list` | 列出所有可用模型 |
+| `/model claude-haiku` | 切到 Claude 3.5 Haiku（默认） |
 | `/model claude-sonnet` | 切到 Claude Sonnet 4.5 |
 | `/model deepseek` | 切到 DeepSeek V3.2 |
 | `/model grok` | 切到 Grok 4.1 Fast |
