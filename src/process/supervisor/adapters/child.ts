@@ -46,7 +46,7 @@ export async function createChildAdapter(params: {
     cwd: params.cwd,
     env: params.env ? toStringEnv(params.env) : undefined,
     stdio: ["pipe", "pipe", "pipe"],
-    detached: true,
+    detached: process.platform !== "win32",
     windowsHide: true,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   };
