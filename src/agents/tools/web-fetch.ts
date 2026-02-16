@@ -33,8 +33,12 @@ export { extractReadableContent } from "./web-fetch-utils.js";
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
 const DEFAULT_FETCH_MAX_CHARS = 50_000;
+const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
+const FETCH_MAX_RESPONSE_BYTES_MIN = 32_000;
+const FETCH_MAX_RESPONSE_BYTES_MAX = 10_000_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 3;
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
+const DEFAULT_ERROR_MAX_BYTES = 64_000;
 const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
 const DEFAULT_FETCH_USER_AGENT =
@@ -106,6 +110,18 @@ function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
     return DEFAULT_FETCH_MAX_CHARS;
   }
   return Math.max(100, Math.floor(raw));
+}
+
+function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
+  const raw =
+    fetch && "maxResponseBytes" in fetch && typeof fetch.maxResponseBytes === "number"
+      ? fetch.maxResponseBytes
+      : undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_FETCH_MAX_RESPONSE_BYTES;
+  }
+  const value = Math.floor(raw);
+  return Math.min(FETCH_MAX_RESPONSE_BYTES_MAX, Math.max(FETCH_MAX_RESPONSE_BYTES_MIN, value));
 }
 
 function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
@@ -413,6 +429,7 @@ async function runWebFetch(params: {
   url: string;
   extractMode: ExtractMode;
   maxChars: number;
+  maxResponseBytes: number;
   maxRedirects: number;
   timeoutSeconds: number;
   cacheTtlMs: number;
@@ -530,7 +547,8 @@ async function runWebFetch(params: {
         writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
         return payload;
       }
-      const rawDetail = await readResponseText(res);
+      const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
+      const rawDetail = rawDetailResult.text;
       const detail = formatWebFetchErrorDetail({
         detail: rawDetail,
         contentType: res.headers.get("content-type"),
@@ -542,7 +560,11 @@ async function runWebFetch(params: {
 
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
     const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
-    const body = await readResponseText(res);
+    const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
+    const body = bodyResult.text;
+    const responseTruncatedWarning = bodyResult.truncated
+      ? `Response body truncated after ${params.maxResponseBytes} bytes.`
+      : undefined;
 
     let title: string | undefined;
     let extractor = "raw";
@@ -593,6 +615,7 @@ async function runWebFetch(params: {
 
     const wrapped = wrapWebFetchContent(text, params.maxChars);
     const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
+    const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
     const payload = {
       url: params.url, // Keep raw for tool chaining
       finalUrl, // Keep raw
@@ -613,6 +636,7 @@ async function runWebFetch(params: {
       fetchedAt: new Date().toISOString(),
       tookMs: Date.now() - start,
       text: wrapped.text,
+      warning: wrappedWarning,
     };
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -695,6 +719,7 @@ export function createWebFetchTool(options?: {
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
+  const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
   return {
     label: "Web Fetch",
     name: "web_fetch",
@@ -715,6 +740,7 @@ export function createWebFetchTool(options?: {
           DEFAULT_FETCH_MAX_CHARS,
           maxCharsCap,
         ),
+        maxResponseBytes,
         maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
         timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
