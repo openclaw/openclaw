@@ -720,7 +720,6 @@ function renderContextPanel(
   usage: UsageSessionEntry["usage"],
   expanded: boolean,
   onToggleExpanded: () => void,
-  timeSeriesCursor?: number | null,
 ) {
   if (!contextWeight) {
     return html`
