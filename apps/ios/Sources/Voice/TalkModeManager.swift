@@ -219,8 +219,12 @@ final class TalkModeManager: NSObject {
 
     /// Suspends microphone usage without disabling Talk Mode.
     /// Used when the app backgrounds (or when we need to temporarily release the mic).
-    func suspendForBackground() -> Bool {
+    func suspendForBackground(keepActive: Bool = false) -> Bool {
         guard self.isEnabled else { return false }
+        if keepActive {
+            self.statusText = self.isListening ? "Listening" : self.statusText
+            return false
+        }
         let wasActive = self.isListening || self.isSpeaking || self.isPushToTalkActive
 
         self.isListening = false
@@ -247,7 +251,8 @@ final class TalkModeManager: NSObject {
         return wasActive
     }
 
-    func resumeAfterBackground(wasSuspended: Bool) async {
+    func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
+        if wasKeptActive { return }
         guard wasSuspended else { return }
         guard self.isEnabled else { return }
         await self.start()
@@ -828,7 +833,11 @@ final class TalkModeManager: NSObject {
     private func buildPrompt(transcript: String) -> String {
         let interrupted = self.lastInterruptedAtSeconds
         self.lastInterruptedAtSeconds = nil
-        return TalkPromptBuilder.build(transcript: transcript, interruptedAtSeconds: interrupted)
+        let includeVoiceDirectiveHint = (UserDefaults.standard.object(forKey: "talk.voiceDirectiveHint.enabled") as? Bool) ?? true
+        return TalkPromptBuilder.build(
+            transcript: transcript,
+            interruptedAtSeconds: interrupted,
+            includeVoiceDirectiveHint: includeVoiceDirectiveHint)
     }
 
     private enum ChatCompletionState: CustomStringConvertible {
