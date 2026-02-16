@@ -596,6 +596,53 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.selectedDateTime).toBe(1_771_700_200);
   });
 
+  it("captures workflow button trigger metadata", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U420" },
+        team: { id: "T420" },
+        channel: { id: "C420" },
+        message: { ts: "420.420" },
+      },
+      action: {
+        type: "workflow_button",
+        action_id: "openclaw:workflow",
+        block_id: "workflow_block",
+        text: { type: "plain_text", text: "Launch workflow" },
+        workflow: {
+          trigger_url: "https://slack.com/workflows/triggers/T420/12345",
+          workflow_id: "Wf12345",
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      actionType?: string;
+      workflowTriggerUrl?: string;
+      workflowId?: string;
+      teamId?: string;
+      channelId?: string;
+    };
+    expect(payload).toMatchObject({
+      actionType: "workflow_button",
+      workflowTriggerUrl: "https://slack.com/workflows/triggers/T420/12345",
+      workflowId: "Wf12345",
+      teamId: "T420",
+      channelId: "C420",
+    });
+  });
+
   it("captures modal submissions and enqueues view submission event", async () => {
     enqueueSystemEventMock.mockReset();
     const { ctx, getViewHandler, resolveSessionKey } = createContext();
