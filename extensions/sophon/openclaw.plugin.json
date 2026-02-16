@@ -1,0 +1,11 @@
+{
+  "id": "sophon",
+  "name": "Sophon",
+  "description": "Manage tasks, projects, and notes in a Sophon workspace via Supabase.",
+  "version": "2026.2.16",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

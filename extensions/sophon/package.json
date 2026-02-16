@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/sophon",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "OpenClaw Sophon productivity plugin (tasks, projects, notes)",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.48",
+    "@supabase/supabase-js": "^2.57.4"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

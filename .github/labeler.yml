@@ -248,6 +248,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/phone-control/**"
+"extensions: sophon":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sophon/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:
