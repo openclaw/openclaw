@@ -5,6 +5,7 @@ import {
   normalizeVerb,
   resolveActionSpec,
   resolveDetailFromKeys,
+  resolveExecDetail,
   resolveReadDetail,
   resolveWriteDetail,
   type ToolDisplaySpec as ToolDisplaySpecBase,
@@ -65,21 +66,62 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? name;
+  const label = spec?.label ?? title;
   const actionRaw =
     params.args && typeof params.args === "object"
       ? ((params.args as Record<string, unknown>).action as string | undefined)
       : undefined;
   const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
   const actionSpec = resolveActionSpec(spec, action);
-  const verb = normalizeVerb(actionSpec?.label ?? action);
+  const fallbackVerb =
+    key === "web_search"
+      ? "search"
+      : key === "web_fetch"
+        ? "fetch"
+        : key.replace(/_/g, " ").replace(/\./g, " ");
+  const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (key === "read") {
+  if (key === "exec") {
+    detail = resolveExecDetail(params.args);
+  }
+  if (!detail && key === "read") {
     detail = resolveReadDetail(params.args);
   }
   if (!detail && (key === "write" || key === "edit" || key === "attach")) {
-    detail = resolveWriteDetail(params.args);
+    detail = resolveWriteDetail(key, params.args);
+  }
+
+  if (!detail && key === "web_search" && params.args && typeof params.args === "object") {
+    const record = params.args as Record<string, unknown>;
+    const query = typeof record.query === "string" ? record.query.trim() : undefined;
+    const count =
+      typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
+        ? Math.floor(record.count)
+        : undefined;
+    if (query) {
+      detail = count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+    }
+  }
+
+  if (!detail && key === "web_fetch" && params.args && typeof params.args === "object") {
+    const record = params.args as Record<string, unknown>;
+    const url = typeof record.url === "string" ? record.url.trim() : undefined;
+    const mode =
+      typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+    const maxChars =
+      typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
+        ? Math.floor(record.maxChars)
+        : undefined;
+    if (url) {
+      const suffix = [
+        mode ? `mode ${mode}` : undefined,
+        maxChars !== undefined ? `max ${maxChars} chars` : undefined,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(", ");
+      detail = suffix ? `from ${url} (${suffix})` : `from ${url}`;
+    }
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
@@ -109,17 +151,18 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const parts: string[] = [];
-  if (display.verb) {
-    parts.push(display.verb);
-  }
-  if (display.detail) {
-    parts.push(display.detail);
-  }
-  if (parts.length === 0) {
+  if (!display.detail) {
     return undefined;
   }
-  return parts.join(" · ");
+  if (display.detail.includes(" · ")) {
+    const compact = display.detail
+      .split(" · ")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join(", ");
+    return compact ? `with ${compact}` : undefined;
+  }
+  return display.detail;
 }
 
 export function formatToolSummary(display: ToolDisplay): string {
