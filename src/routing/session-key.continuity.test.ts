@@ -63,7 +63,7 @@ describe("Discord Session Key Continuity", () => {
     });
 
     expect(missingIdKey).toContain("unknown");
-    
+
     // Should still be distinct from main
     expect(missingIdKey).not.toBe("agent:main:main");
   });

@@ -502,7 +502,7 @@ export type PluginHookBeforeMessageWriteEvent = {
 };
 
 export type PluginHookBeforeMessageWriteResult = {
-  block?: boolean;      // If true, message is NOT written to JSONL
+  block?: boolean; // If true, message is NOT written to JSONL
   message?: AgentMessage; // Optional: modified message to write instead
 };
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { auditGatewayServiceConfig, checkTokenDrift, SERVICE_AUDIT_CODES } from "./service-audit.js";
+import {
+  auditGatewayServiceConfig,
+  checkTokenDrift,
+  SERVICE_AUDIT_CODES,
+} from "./service-audit.js";
 import { buildMinimalServicePath } from "./service-env.js";
 
 describe("auditGatewayServiceConfig", () => {

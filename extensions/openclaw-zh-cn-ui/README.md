@@ -3,23 +3,25 @@
 在你的项目中导入：
 
 ```javascript
-const translations = require('./translations/zh-CN.json');
-console.log(translations['Save']); // 输出：保存
+const translations = require("./translations/zh-CN.json");
+console.log(translations["Save"]); // 输出：保存
 ```
 
 ## 继续翻译工作
 
-1. **提取 OpenClaw 界面字符串**  
+1. **提取 OpenClaw 界面字符串**
+
    ```bash
    node scripts/extract-strings.js
    ```
 
-2. **过滤真正的界面文本**  
+2. **过滤真正的界面文本**
+
    ```bash
    node scripts/filter-real-ui.js
    ```
 
-3. **翻译剩余的字符串**  
+3. **翻译剩余的字符串**
    - 编辑 `translations/ui-only.json`
 
 ## 🛠️ 工具说明
@@ -64,10 +66,12 @@ extensions/openclaw-zh-cn-ui/
 ## 📈 路线图
 
 ### 短期目标
+
 - 完成剩余翻译
 - 提交 Pull Request
 
 ### 长期目标
+
 - 支持更多语言
 - 创建翻译平台
 

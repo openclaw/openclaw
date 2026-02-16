@@ -73,10 +73,18 @@ async function listJsonlFiles(dir: string): Promise<string[]> {
 function safeParseLine(line: string): CronRunLogEntry | null {
   try {
     const obj = JSON.parse(line) as Partial<CronRunLogEntry> | null;
-    if (!obj || typeof obj !== "object") return null;
-    if (obj.action !== "finished") return null;
-    if (typeof obj.ts !== "number" || !Number.isFinite(obj.ts)) return null;
-    if (typeof obj.jobId !== "string" || !obj.jobId.trim()) return null;
+    if (!obj || typeof obj !== "object") {
+      return null;
+    }
+    if (obj.action !== "finished") {
+      return null;
+    }
+    if (typeof obj.ts !== "number" || !Number.isFinite(obj.ts)) {
+      return null;
+    }
+    if (typeof obj.jobId !== "string" || !obj.jobId.trim()) {
+      return null;
+    }
     return obj as CronRunLogEntry;
   } catch {
     return null;
@@ -91,7 +99,8 @@ export async function main() {
   const args = parseArgs(process.argv);
   const store = typeof args.store === "string" ? args.store : undefined;
   const runsDirArg = typeof args.runsDir === "string" ? args.runsDir : undefined;
-  const runsDir = runsDirArg ?? (store ? path.join(path.dirname(path.resolve(store)), "runs") : null);
+  const runsDir =
+    runsDirArg ?? (store ? path.join(path.dirname(path.resolve(store)), "runs") : null);
   if (!runsDir) {
     usageAndExit(2);
   }
@@ -138,19 +147,31 @@ export async function main() {
 
   for (const file of files) {
     const raw = await fs.readFile(file, "utf-8").catch(() => "");
-    if (!raw.trim()) continue;
+    if (!raw.trim()) {
+      continue;
+    }
     const lines = raw.split("\n");
     for (const line of lines) {
       const entry = safeParseLine(line.trim());
-      if (!entry) continue;
-      if (entry.ts < fromMs || entry.ts > toMs) continue;
-      if (filterJobId && entry.jobId !== filterJobId) continue;
+      if (!entry) {
+        continue;
+      }
+      if (entry.ts < fromMs || entry.ts > toMs) {
+        continue;
+      }
+      if (filterJobId && entry.jobId !== filterJobId) {
+        continue;
+      }
       const model = (entry.model ?? "<unknown>").trim() || "<unknown>";
-      if (filterModel && model !== filterModel) continue;
+      if (filterModel && model !== filterModel) {
+        continue;
+      }
 
       const jobId = entry.jobId;
       const usage = entry.usage;
-      const hasUsage = Boolean(usage && (usage.total_tokens ?? usage.input_tokens ?? usage.output_tokens) !== undefined);
+      const hasUsage = Boolean(
+        usage && (usage.total_tokens ?? usage.input_tokens ?? usage.output_tokens) !== undefined,
+      );
 
       const jobAgg = (totalsByJob[jobId] ??= {
         jobId,
@@ -219,8 +240,12 @@ export async function main() {
   console.log(`Cron usage report`);
   console.log(`  runsDir: ${runsDir}`);
   console.log(`  window: ${new Date(fromMs).toISOString()} → ${new Date(toMs).toISOString()}`);
-  if (filterJobId) console.log(`  filter jobId: ${filterJobId}`);
-  if (filterModel) console.log(`  filter model: ${filterModel}`);
+  if (filterJobId) {
+    console.log(`  filter jobId: ${filterJobId}`);
+  }
+  if (filterModel) {
+    console.log(`  filter model: ${filterModel}`);
+  }
   console.log("");
 
   if (rows.length === 0) {

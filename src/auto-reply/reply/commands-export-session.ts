@@ -97,10 +97,10 @@ function generateHtml(sessionData: SessionData): string {
 
   // Build CSS with theme variables
   const css = templateCss
-    .replace("{{THEME_VARS}}", themeVars)
-    .replace("{{BODY_BG}}", bodyBg)
-    .replace("{{CONTAINER_BG}}", containerBg)
-    .replace("{{INFO_BG}}", infoBg);
+    .replace("/* {{THEME_VARS}} */", themeVars.trim())
+    .replace("/* {{BODY_BG_DECL}} */", `--body-bg: ${bodyBg};`)
+    .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
+    .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
 
   return template
     .replace("{{CSS}}", css)
@@ -234,7 +234,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const args = parseExportArgs(params.command.commandBodyNormalized);
 
   // 1. Resolve session file
-  const sessionEntry = params.sessionEntry as SessionEntry | undefined;
+  const sessionEntry = params.sessionEntry;
   if (!sessionEntry?.sessionId) {
     return { text: "❌ No active session found." };
   }
