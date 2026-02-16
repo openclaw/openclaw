@@ -8,6 +8,7 @@ export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
+  lastAppliedText: () => string | undefined;
   clear: () => Promise<void>;
   stop: () => void;
   /** Reset internal state so the next update creates a new message instead of editing. */
@@ -37,7 +38,8 @@ export function createTelegramDraftStream(params: {
       : threadParams;
 
   let streamMessageId: number | undefined;
-  let lastSentText = "";
+  let lastAttemptedText = "";
+  let lastAppliedText: string | undefined;
   let lastSentAt = 0;
   let pendingText = "";
   let inFlightPromise: Promise<void> | undefined;
@@ -61,14 +63,15 @@ export function createTelegramDraftStream(params: {
       );
       return;
     }
-    if (trimmed === lastSentText) {
+    if (trimmed === lastAttemptedText) {
       return;
     }
-    lastSentText = trimmed;
+    lastAttemptedText = trimmed;
     lastSentAt = Date.now();
     try {
       if (typeof streamMessageId === "number") {
         await params.api.editMessageText(chatId, streamMessageId, trimmed);
+        lastAppliedText = trimmed;
         return;
       }
       const sent = await params.api.sendMessage(chatId, trimmed, replyParams);
@@ -79,6 +82,7 @@ export function createTelegramDraftStream(params: {
         return;
       }
       streamMessageId = Math.trunc(sentMessageId);
+      lastAppliedText = trimmed;
     } catch (err) {
       stopped = true;
       params.warn?.(
@@ -188,6 +192,7 @@ export function createTelegramDraftStream(params: {
     update,
     flush,
     messageId: () => streamMessageId,
+    lastAppliedText: () => lastAppliedText,
     clear,
     stop,
     forceNewMessage,

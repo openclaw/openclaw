@@ -25,6 +25,7 @@ import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { renderTelegramHtmlText } from "./format.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -315,6 +316,24 @@ export const dispatchTelegramMessage = async ({
               finalText.length <= draftMaxChars &&
               !payload.isError;
             if (canFinalizeViaPreviewEdit) {
+              const previewAppliedText = draftStream?.lastAppliedText();
+              const finalTextTrimmed = finalText.trimEnd();
+              const hasFinalEditMutation =
+                previewButtons !== undefined || telegramCfg.linkPreview === false;
+              const needsFormattingPass =
+                renderTelegramHtmlText(finalText, { tableMode }) !== finalText;
+              // Skip edit if text already matches and no mutations/formatting needed
+              if (
+                previewAppliedText === finalTextTrimmed &&
+                !hasFinalEditMutation &&
+                !needsFormattingPass
+              ) {
+                draftStream?.stop();
+                draftStoppedForPreviewEdit = true;
+                finalizedViaPreviewMessage = true;
+                deliveryState.delivered = true;
+                return;
+              }
               draftStream?.stop();
               draftStoppedForPreviewEdit = true;
               if (
