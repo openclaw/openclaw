@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/control-plane-temporal",
+  "version": "2026.2.6-3",
+  "description": "Control-plane Temporal worker bootstrap for Real Dispatch",
+  "type": "module",
+  "main": "./src/worker.mjs",
+  "scripts": {
+    "start": "node src/worker.mjs"
+  },
+  "dependencies": {}
+}
