@@ -53,9 +53,40 @@ Rules:
 - Good entities: "Tarun", "Abundent Academy", "Tioman Island", "LiveKit", "Neo4j", "Fish Speech S1 Mini"
 - Bad entities: "python", "ai", "automation", "email", "docker", "machine learning", "api"
 - When in doubt, do NOT extract — fewer high-quality entities beat many generic ones
-- Return empty arrays if nothing specific to extract
 - Keep entity descriptions brief (1 sentence max)
-- Category: "preference" for opinions/preferences, "fact" for factual info, "decision" for choices made, "entity" for entity-focused, "other" for miscellaneous`;
+- Category: "preference" for opinions/preferences, "fact" for factual info, "decision" for choices made, "entity" for entity-focused, "other" for miscellaneous
+- ALWAYS generate at least 2 tags. Every memory has a topic — there are no exceptions.
+- Tags describe the TOPIC or DOMAIN of the memory, not the entities themselves.
+- Do NOT use entity names as tags (e.g., don't tag "tarun" if Tarun is already an entity).
+- Good tags: "travel planning", "family", "voice synthesis", "linkedin automation", "expense tracking", "cron scheduling", "api integration"
+- Tag categories: "topic", "domain", "workflow", "technology", "personal", "business"
+- Return empty entity/relationship arrays if nothing specific to extract, but NEVER return empty tags.`;
+
+// ============================================================================
+// Retroactive Tagging Prompt
+// ============================================================================
+
+/**
+ * Lightweight prompt for retroactive tagging of memories that were extracted
+ * without tags. Only asks for tags — no entities or relationships.
+ */
+const RETROACTIVE_TAGGING_SYSTEM = `You are a topic tagging system for a personal memory store.
+Generate 2-4 topic tags that describe what this memory is about.
+
+Return JSON:
+{
+  "tags": [
+    {"name": "tag name", "category": "topic|domain|workflow|technology|personal|business"}
+  ]
+}
+
+Rules:
+- Tags describe the TOPIC or DOMAIN of the memory, not specific people or tools mentioned.
+- Good tags: "travel planning", "family", "voice synthesis", "linkedin automation", "expense tracking", "cron scheduling", "api integration", "system configuration", "memory management"
+- Bad tags: names of people, companies, or specific tools (those are entities, not topics)
+- Tag categories: "topic" (general subject), "domain" (field/area), "workflow" (process/procedure), "technology" (tech area), "personal" (personal life), "business" (work/business)
+- ALWAYS return at least 2 tags. Every memory has a topic.
+- Normalize tag names to lowercase with spaces (no hyphens or underscores).`;
 
 // ============================================================================
 // Entity Extraction
@@ -115,6 +146,57 @@ export async function extractEntities(
   } catch {
     // JSON parse failure is permanent — LLM returned malformed output
     return { result: null, transientFailure: false };
+  }
+}
+
+/**
+ * Extract only tags from a memory text using a lightweight LLM prompt.
+ * Used for retroactive tagging of memories that were extracted without tags.
+ *
+ * Returns an array of tags, or null on failure.
+ */
+export async function extractTagsOnly(
+  text: string,
+  config: ExtractionConfig,
+  abortSignal?: AbortSignal,
+): Promise<Array<{ name: string; category: string }> | null> {
+  if (!config.enabled) {
+    return null;
+  }
+
+  const messages = [
+    { role: "system", content: RETROACTIVE_TAGGING_SYSTEM },
+    { role: "user", content: text },
+  ];
+
+  let content: string | null;
+  try {
+    content = await callOpenRouterStream(config, messages, abortSignal);
+  } catch {
+    return null;
+  }
+
+  if (!content) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(content) as { tags?: unknown };
+    const rawTags = Array.isArray(parsed.tags) ? parsed.tags : [];
+    return rawTags
+      .filter(
+        (t: unknown): t is Record<string, unknown> =>
+          t !== null &&
+          typeof t === "object" &&
+          typeof (t as Record<string, unknown>).name === "string",
+      )
+      .map((t) => ({
+        name: normalizeTagName(String(t.name)),
+        category: typeof t.category === "string" ? t.category : "topic",
+      }))
+      .filter((t) => t.name.length > 0);
+  } catch {
+    return null;
   }
 }
 

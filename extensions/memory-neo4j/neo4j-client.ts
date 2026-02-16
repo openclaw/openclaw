@@ -915,7 +915,7 @@ export class Neo4jMemoryClient {
       const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
       const result = await session.run(
         `MATCH (m:Memory)
-         WHERE m.extractionStatus = 'pending' ${agentFilter}
+         WHERE m.extractionStatus IN ['pending', 'skipped'] ${agentFilter}
          RETURN m.id AS id, m.text AS text, m.agentId AS agentId,
                 coalesce(m.extractionRetries, 0) AS extractionRetries
          ORDER BY m.createdAt ASC
@@ -962,6 +962,36 @@ export class Neo4jMemoryClient {
         }
       }
       return counts as Record<ExtractionStatus, number>;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * List memories with completed extraction but no TAGGED relationships.
+   * Used by the retroactive tagging phase to find memories that need tags.
+   */
+  async listUntaggedMemories(
+    limit: number = 50,
+    agentId?: string,
+  ): Promise<Array<{ id: string; text: string }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.extractionStatus = 'complete' ${agentFilter}
+           AND NOT EXISTS { MATCH (m)-[:TAGGED]->(:Tag) }
+         RETURN m.id AS id, m.text AS text
+         ORDER BY m.createdAt ASC
+         LIMIT $limit`,
+        { limit: neo4j.int(limit), ...(agentId ? { agentId } : {}) },
+      );
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
     } finally {
       await session.close();
     }
