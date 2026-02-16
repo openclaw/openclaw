@@ -13,6 +13,7 @@ import type {
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
+  normalizeOptionalSessionKey,
   normalizeOptionalText,
   normalizePayloadToSystemText,
   normalizeRequiredName,
@@ -298,6 +299,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
+    sessionKey: normalizeOptionalSessionKey((input as { sessionKey?: unknown }).sessionKey),
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled,
@@ -366,6 +368,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
+  }
+  if ("sessionKey" in patch) {
+    job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
   assertDeliverySupport(job);
