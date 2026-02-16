@@ -37,7 +37,6 @@ describe("createTextMessageWithQuickReplies", () => {
 
     expect(message.type).toBe("text");
     expect(message.text).toBe("Choose an option:");
-    expect(message.quickReply).toBeDefined();
     expect(message.quickReply.items).toHaveLength(2);
   });
 
