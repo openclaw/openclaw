@@ -589,3 +589,70 @@ describe("readTelegramButtons", () => {
     ).toThrow(/style must be one of danger, success, primary/i);
   });
 });
+
+describe("handleTelegramAction per-account gating", () => {
+  it("allows sticker when account config enables it", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            media: { botToken: "tok-media", actions: { sticker: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      { action: "sendSticker", to: "123", fileId: "sticker-id", accountId: "media" },
+      cfg,
+    );
+    expect(sendStickerTelegram).toHaveBeenCalledWith(
+      "123",
+      "sticker-id",
+      expect.objectContaining({ token: "tok-media" }),
+    );
+  });
+
+  it("blocks sticker when account omits it", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            chat: { botToken: "tok-chat" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleTelegramAction(
+        { action: "sendSticker", to: "123", fileId: "sticker-id", accountId: "chat" },
+        cfg,
+      ),
+    ).rejects.toThrow(/sticker actions are disabled/i);
+  });
+
+  it("uses account-merged config, not top-level config", async () => {
+    // Top-level has no sticker enabled, but the account does
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok-base",
+          accounts: {
+            media: { botToken: "tok-media", actions: { sticker: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      { action: "sendSticker", to: "123", fileId: "sticker-id", accountId: "media" },
+      cfg,
+    );
+    expect(sendStickerTelegram).toHaveBeenCalledWith(
+      "123",
+      "sticker-id",
+      expect.objectContaining({ token: "tok-media" }),
+    );
+  });
+});
