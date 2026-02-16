@@ -1,29 +1,25 @@
-# Telegram Outbound Sanitizer
+# Telegram Outbound Sanitizer (RFC)
 
-This document describes the Telegram outbound sanitizer behavior for preventing internal diagnostics and wrapper artifacts from reaching end users.
+> **Status**: Proposal / Request for Comments
+>
+> This document proposes a sanitization layer for Telegram outbound messages. The accompanying test corpus (`src/telegram/test-data/telegram-leak-cases.json`) defines the expected behavior for a future implementation.
 
 ## Overview
 
-The sanitizer intercepts Telegram outbound messages and:
+The sanitizer would intercept Telegram outbound messages and:
 
-1. Strips wrapper artifacts (`<reply>`, `<NO_REPLY>`, `<tool_schema>`, etc.)
-2. Drops internal diagnostics (error codes, run IDs, gateway details)
-3. Returns static responses for unknown slash commands
+1. Strip wrapper artifacts (`<reply>`, `<NO_REPLY>`, `<tool_schema>`, etc.)
+2. Drop internal diagnostics (error codes, run IDs, gateway details)
+3. Return static responses for unknown slash commands
 
-## Marker Families
-
-Static checks verify these marker families:
-
-- `OPENCLAW_TELEGRAM_OUTBOUND_SANITIZER`
-- `OPENCLAW_TELEGRAM_INTERNAL_ERROR_SUPPRESSOR`
-
-## Leakage Patterns Blocked
+## Leakage Patterns to Block
 
 ### Tool/Runtime Leakage
 
 - `tool call validation failed`
 - `not in request.tools`
-- `sessions_send` templates / `function_call`
+- `sessions_send` templates
+- `"type": "function_call"` JSON scaffolding
 - `Run ID`, `Status: error`, gateway timeout/connect details
 
 ### Media/Tool Scaffolding
@@ -34,38 +30,52 @@ Static checks verify these marker families:
 ### Sentinel/Garbage Markers
 
 - `NO_CONTEXT`, `NOCONTENT`, `NO_MESSAGE_CONTENT_HERE`
-- `NO_DATA_FOUND`, `NO_API_KEY`
+- `NO_DATA`, `NO_API_KEY`
 
-## Enforced Behavior
+## Proposed Behavior
 
-1. **Unknown slash commands** → static text response
+1. **Unknown slash commands** → static text response (`"Unknown command. Use /help."`)
 2. **Unknown slash commands** → does NOT call LLM
 3. **Telegram output** → never emits tool diagnostics/internal runtime details
-4. **Optional debug override** → owner-only with `TELEGRAM_DEBUG=true`
+4. **Optional debug override** → owner-only (configurable)
 
-## Verification
+## Test Corpus
 
-Run the leak corpus tests:
+The test corpus at `src/telegram/test-data/telegram-leak-cases.json` defines:
+
+- `expect: "allow"` - Messages that should pass through unchanged
+- `expect: "drop"` - Messages that should be blocked entirely
+- `expect: "strip_wrapper"` - Messages that need wrapper tags removed
+
+### Example Test Cases
+
+```json
+{
+  "id": "diag_tool_validation_failed",
+  "text": "tool call validation failed",
+  "expect": "drop",
+  "description": "Tool runtime error should not reach users"
+}
+```
+
+## Implementation Guidance
+
+When implementing the sanitizer:
+
+- Run sanitization after LLM response, before Telegram API send
+- Empty payloads after sanitization should return a safe fallback message
+- Preserve return shape `{ queuedFinal, counts }` for caller compatibility
+- Use specific patterns (e.g., `"type": "function_call"` not just `function_call`) to avoid false positives
+
+## Validation
+
+Once implemented, validate with:
 
 ```bash
-# Run leak case corpus validation
-pnpm test src/telegram/sanitizer.test.ts
+# Run tests against the leak corpus
+pnpm vitest run src/telegram/sanitizer.test.ts
 
 # Manual smoke check
 # In any Telegram chat: /unknown_command
 # Expected: "Unknown command. Use /help."
 ```
-
-## Test Corpus
-
-The test corpus at `tests/data/telegram_leak_cases.json` contains:
-
-- `expect: "allow"` - Messages that should pass through
-- `expect: "drop"` - Messages that should be blocked
-- `expect: "strip_wrapper"` - Messages that need wrapper removal
-
-## Implementation Notes
-
-- Sanitization runs after LLM response, before Telegram API send
-- Empty payloads after sanitization return fallback message
-- Return shape `{ queuedFinal, counts }` is preserved for caller safety
