@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { Block, KnownBlock } from "@slack/web-api";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
@@ -17,6 +16,7 @@ import {
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
+import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
 import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
@@ -86,24 +86,7 @@ function resolveThreadTsFromContext(
 }
 
 function readSlackBlocksParam(params: Record<string, unknown>) {
-  const raw = params.blocks;
-  if (raw == null) {
-    return undefined;
-  }
-  const parsed =
-    typeof raw === "string"
-      ? (() => {
-          try {
-            return JSON.parse(raw);
-          } catch {
-            throw new Error("blocks must be valid JSON");
-          }
-        })()
-      : raw;
-  if (!Array.isArray(parsed)) {
-    throw new Error("blocks must be an array");
-  }
-  return parsed as (Block | KnownBlock)[];
+  return parseSlackBlocksInput(params.blocks);
 }
 
 export async function handleSlackAction(

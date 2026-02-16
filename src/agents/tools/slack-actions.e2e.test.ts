@@ -193,6 +193,20 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/blocks must be valid JSON/i);
   });
 
+  it("rejects empty blocks arrays", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "sendMessage",
+          to: "channel:C123",
+          blocks: "[]",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/at least one block/i);
+  });
+
   it("requires at least one of content, blocks, or mediaUrl", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     await expect(
