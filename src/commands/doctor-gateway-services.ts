@@ -118,6 +118,7 @@ export async function maybeRepairGatewayServiceConfig(
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
+    expectedGatewayToken: cfg.gateway?.auth?.token,
   });
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
   const systemNodeInfo = needsNodeRuntime

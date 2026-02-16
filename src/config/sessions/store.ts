@@ -6,6 +6,7 @@ import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   deliveryContextFromSession,
@@ -161,18 +162,38 @@ export function loadSessionStore(
     }
   }
 
-  // Cache miss or disabled - load from disk
+  // Cache miss or disabled - load from disk.
+  // Retry up to 3 times when the file is empty or unparseable.  On Windows the
+  // temp-file + rename write is not fully atomic: a concurrent reader can briefly
+  // observe a 0-byte file (between truncate and write) or a stale/locked state.
+  // A short synchronous backoff (50 ms via `Atomics.wait`) is enough for the
+  // writer to finish.
   let store: Record<string, SessionEntry> = {};
   let mtimeMs = getFileMtimeMs(storePath);
-  try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (isSessionStoreRecord(parsed)) {
-      store = parsed;
+  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
+  for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
+    try {
+      const raw = fs.readFileSync(storePath, "utf-8");
+      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
+        // File is empty — likely caught mid-write; retry after a brief pause.
+        Atomics.wait(retryBuf!, 0, 0, 50);
+        continue;
+      }
+      const parsed = JSON.parse(raw);
+      if (isSessionStoreRecord(parsed)) {
+        store = parsed;
+      }
+      mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
+      break;
+    } catch {
+      // File missing, locked, or transiently corrupt — retry on Windows.
+      if (attempt < maxReadAttempts - 1) {
+        Atomics.wait(retryBuf!, 0, 0, 50);
+        continue;
+      }
+      // Final attempt failed; proceed with an empty store.
     }
-    mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
-  } catch {
-    // ignore missing/invalid store; we'll recreate it
   }
 
   // Best-effort migration: message provider → channel naming.
@@ -301,13 +322,14 @@ export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
 export function pruneStaleEntries(
   store: Record<string, SessionEntry>,
   overrideMaxAgeMs?: number,
-  opts: { log?: boolean } = {},
+  opts: { log?: boolean; onPruned?: (params: { key: string; entry: SessionEntry }) => void } = {},
 ): number {
   const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfig().pruneAfterMs;
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
+      opts.onPruned?.({ key, entry });
       delete store[key];
       pruned++;
     }
@@ -510,8 +532,23 @@ async function saveSessionStoreUnlocked(
       }
     } else {
       // Prune stale entries and cap total count before serializing.
-      pruneStaleEntries(store, maintenance.pruneAfterMs);
+      const prunedSessionFiles = new Map<string, string | undefined>();
+      pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        onPruned: ({ entry }) => {
+          if (!prunedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
+            prunedSessionFiles.set(entry.sessionId, entry.sessionFile);
+          }
+        },
+      });
       capEntryCount(store, maintenance.maxEntries);
+      for (const [sessionId, sessionFile] of prunedSessionFiles) {
+        archiveSessionTranscripts({
+          sessionId,
+          storePath,
+          sessionFile,
+          reason: "deleted",
+        });
+      }
 
       // Rotate the on-disk file if it exceeds the size threshold.
       await rotateSessionFile(storePath, maintenance.rotateBytes);
@@ -521,11 +558,36 @@ async function saveSessionStoreUnlocked(
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
 
-  // Windows: avoid atomic rename swaps (can be flaky under concurrent access).
-  // We serialize writers via the session-store lock instead.
+  // Windows: use temp-file + rename for atomic writes, same as other platforms.
+  // Direct `writeFile` truncates the target to 0 bytes before writing, which
+  // allows concurrent `readFileSync` calls (from unlocked `loadSessionStore`)
+  // to observe an empty file and lose the session store contents.
   if (process.platform === "win32") {
+    const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
-      await fs.promises.writeFile(storePath, json, "utf-8");
+      await fs.promises.writeFile(tmp, json, "utf-8");
+      // Retry rename up to 5 times with increasing backoff — rename can fail
+      // on Windows when the target is locked by a concurrent reader.  We do
+      // NOT fall back to writeFile or copyFile because both use CREATE_ALWAYS
+      // on Windows, which truncates the target to 0 bytes before writing —
+      // reintroducing the exact race this fix addresses.  If all attempts
+      // fail, the temp file is cleaned up and the next save cycle (which is
+      // serialized by the write lock) will succeed.
+      for (let i = 0; i < 5; i++) {
+        try {
+          await fs.promises.rename(tmp, storePath);
+          break;
+        } catch {
+          if (i < 4) {
+            await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+          }
+          // Final attempt failed — skip this save.  The write lock ensures
+          // the next save will retry with fresh data.  Log for diagnostics.
+          if (i === 4) {
+            console.warn(`[session-store] rename failed after 5 attempts: ${storePath}`);
+          }
+        }
+      }
     } catch (err) {
       const code =
         err && typeof err === "object" && "code" in err
@@ -535,6 +597,8 @@ async function saveSessionStoreUnlocked(
         return;
       }
       throw err;
+    } finally {
+      await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
     return;
   }

@@ -10,7 +10,7 @@ export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
 
-export type CronDeliveryMode = "none" | "announce";
+export type CronDeliveryMode = "none" | "announce" | "webhook";
 
 export type CronDelivery = {
   mode: CronDeliveryMode;
@@ -71,7 +71,6 @@ export type CronJob = {
   name: string;
   description?: string;
   enabled: boolean;
-  notify?: boolean;
   deleteAfterRun?: boolean;
   createdAtMs: number;
   updatedAtMs: number;

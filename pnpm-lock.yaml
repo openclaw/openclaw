@@ -9,7 +9,7 @@ overrides:
   form-data: 2.5.4
   qs: 6.14.2
   '@sinclair/typebox': 0.34.48
-  tar: 7.5.7
+  tar: 7.5.9
   tough-cookie: 4.1.3
 
 importers:
@@ -164,8 +164,8 @@ importers:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
       tar:
-        specifier: 7.5.7
-        version: 7.5.7
+        specifier: 7.5.9
+        version: 7.5.9
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -375,6 +375,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/linq:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/llm-task:
     devDependencies:
       openclaw:
@@ -488,6 +494,12 @@ importers:
         version: link:../..
 
   extensions/open-prose:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/openai-codex-auth:
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -2926,8 +2938,8 @@ packages:
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
 
-  '@types/bun@1.3.6':
-    resolution: {integrity: sha512-uWCv6FO/8LcpREhenN1d1b6fcspAB+cefwD7uti8C8VffIv0Um08TKMn98FynpTiU38+y2dUO55T11NgDt8VAA==}
+  '@types/bun@1.3.9':
+    resolution: {integrity: sha512-KQ571yULOdWJiMH+RIWIOZ7B2RXQGpL1YQrBtLIV3FqDcCu6FsbFUBwhdKUlCKUpS3PJDsHlJ1QKlpxoVR+xtw==}
 
   '@types/caseless@0.12.5':
     resolution: {integrity: sha512-hWtVTC2q7hc7xZ/RLbxapMvDMgUnDvKvMOpKal4DrMyfGBUfB1oKaZlIRr6mJL+If3bAP6sV/QneGzF6tJjZDg==}
@@ -3405,8 +3417,8 @@ packages:
   buffer-from@1.1.2:
     resolution: {integrity: sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==}
 
-  bun-types@1.3.6:
-    resolution: {integrity: sha512-OlFwHcnNV99r//9v5IIOgQ9Uk37gZqrNMCcqEaExdkVq3Avwqok1bJFmvGMCkCE0FqzdY8VMOZpfpR3lwI+CsQ==}
+  bun-types@1.3.9:
+    resolution: {integrity: sha512-+UBWWOakIP4Tswh0Bt0QD0alpTY8cb5hvgiYeWCMet9YukHbzuruIEeXC2D7nMJPB12kbh8C7XJykSexEqGKJg==}
 
   bytes@3.1.2:
     resolution: {integrity: sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg==}
@@ -5442,8 +5454,8 @@ packages:
     resolution: {integrity: sha512-iK5/YhZxq5GO5z8wb0bY1317uDF3Zjpha0QFFLA8/trAoiLbQD0HUbMesEaxyzUgDxi2QlcbM8IvqOlEjgoXBA==}
     engines: {node: '>=12.17'}
 
-  tar@7.5.7:
-    resolution: {integrity: sha512-fov56fJiRuThVFXD6o6/Q354S7pnWMJIVlDBYijsTNx6jKSE4pvrDTs6lUnmGvNyfJwFQQwWy3owKz1ucIhveQ==}
+  tar@7.5.9:
+    resolution: {integrity: sha512-BTLcK0xsDh2+PUe9F6c2TlRp4zOOBMTkoQHQIWSIzI0R7KG46uEwq4OPk2W7bZcprBMsuaeFsqwYr7pjh6CuHg==}
     engines: {node: '>=18'}
 
   thenify-all@1.6.0:
@@ -6423,7 +6435,7 @@ snapshots:
       '@cloudflare/workers-types': 4.20260120.0
       '@discordjs/voice': 0.19.0
       '@hono/node-server': 1.19.9(hono@4.11.9)
-      '@types/bun': 1.3.6
+      '@types/bun': 1.3.9
       '@types/ws': 8.18.1
       ws: 8.19.0
     transitivePeerDependencies:
@@ -8456,9 +8468,9 @@ snapshots:
       '@types/connect': 3.4.38
       '@types/node': 25.2.3
 
-  '@types/bun@1.3.6':
+  '@types/bun@1.3.9':
     dependencies:
-      bun-types: 1.3.6
+      bun-types: 1.3.9
     optional: true
 
   '@types/caseless@0.12.5': {}
@@ -9027,7 +9039,7 @@ snapshots:
 
   buffer-from@1.1.2: {}
 
-  bun-types@1.3.6:
+  bun-types@1.3.9:
     dependencies:
       '@types/node': 25.2.3
     optional: true
@@ -9118,7 +9130,7 @@ snapshots:
       npmlog: 6.0.2
       rc: 1.2.8
       semver: 7.7.4
-      tar: 7.5.7
+      tar: 7.5.9
       url-join: 4.0.1
       which: 2.0.2
       yargs: 17.7.2
@@ -11360,7 +11372,7 @@ snapshots:
       array-back: 6.2.2
       wordwrapjs: 5.1.1
 
-  tar@7.5.7:
+  tar@7.5.9:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0

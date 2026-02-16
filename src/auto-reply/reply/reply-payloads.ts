@@ -95,6 +95,31 @@ export function filterMessagingToolDuplicates(params: {
   return payloads.filter((payload) => !isMessagingToolDuplicate(payload.text ?? "", sentTexts));
 }
 
+export function filterMessagingToolMediaDuplicates(params: {
+  payloads: ReplyPayload[];
+  sentMediaUrls: string[];
+}): ReplyPayload[] {
+  const { payloads, sentMediaUrls } = params;
+  if (sentMediaUrls.length === 0) {
+    return payloads;
+  }
+  const sentSet = new Set(sentMediaUrls);
+  return payloads.map((payload) => {
+    const mediaUrl = payload.mediaUrl;
+    const mediaUrls = payload.mediaUrls;
+    const stripSingle = mediaUrl && sentSet.has(mediaUrl);
+    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(u));
+    if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
+      return payload; // No change
+    }
+    return {
+      ...payload,
+      mediaUrl: stripSingle ? undefined : mediaUrl,
+      mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
+    };
+  });
+}
+
 function normalizeAccountId(value?: string): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed.toLowerCase() : undefined;

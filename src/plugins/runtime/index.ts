@@ -92,6 +92,14 @@ import {
   sendMessageLine,
 } from "../../line/send.js";
 import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
+import {
+  listLinqAccountIds,
+  resolveDefaultLinqAccountId,
+  resolveLinqAccount,
+} from "../../linq/accounts.js";
+import { monitorLinqProvider } from "../../linq/monitor.js";
+import { probeLinq } from "../../linq/probe.js";
+import { sendMessageLinq } from "../../linq/send.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
@@ -377,6 +385,14 @@ export function createPluginRuntime(): PluginRuntime {
         monitorIMessageProvider,
         probeIMessage,
         sendMessageIMessage,
+      },
+      linq: {
+        sendMessageLinq,
+        probeLinq,
+        monitorLinqProvider,
+        listLinqAccountIds,
+        resolveDefaultLinqAccountId,
+        resolveLinqAccount,
       },
       whatsapp: {
         getActiveWebListener,

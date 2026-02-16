@@ -29,6 +29,7 @@ import type {
   NostrProfile,
 } from "./types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import { i18n, I18nController, type Locale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -104,7 +105,17 @@ function resolveOnboardingMode(): boolean {
 
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
+  private i18nController = new I18nController(this);
   @state() settings: UiSettings = loadSettings();
+  constructor() {
+    super();
+    if (this.settings.locale) {
+      const supportedLocales: Locale[] = ["en", "zh-CN", "zh-TW", "pt-BR"];
+      if (supportedLocales.includes(this.settings.locale as Locale)) {
+        void i18n.setLocale(this.settings.locale as Locale);
+      }
+    }
+  }
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
@@ -249,6 +260,8 @@ export class OpenClawApp extends LitElement {
   @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null = null;
   @state() usageTimeSeriesLoading = false;
+  @state() usageTimeSeriesCursorStart: number | null = null;
+  @state() usageTimeSeriesCursorEnd: number | null = null;
   @state() usageSessionLogs: import("./views/usage.js").SessionLogEntry[] | null = null;
   @state() usageSessionLogsLoading = false;
   @state() usageSessionLogsExpanded = false;

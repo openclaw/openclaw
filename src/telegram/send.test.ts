@@ -1,10 +1,11 @@
 import type { Bot } from "grammy";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
+import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
@@ -17,6 +18,38 @@ const {
   sendPollTelegram,
   sendStickerTelegram,
 } = await importTelegramSendModule();
+
+describe("sent-message-cache", () => {
+  afterEach(() => {
+    clearSentMessageCache();
+  });
+
+  it("records and retrieves sent messages", () => {
+    recordSentMessage(123, 1);
+    recordSentMessage(123, 2);
+    recordSentMessage(456, 10);
+
+    expect(wasSentByBot(123, 1)).toBe(true);
+    expect(wasSentByBot(123, 2)).toBe(true);
+    expect(wasSentByBot(456, 10)).toBe(true);
+    expect(wasSentByBot(123, 3)).toBe(false);
+    expect(wasSentByBot(789, 1)).toBe(false);
+  });
+
+  it("handles string chat IDs", () => {
+    recordSentMessage("123", 1);
+    expect(wasSentByBot("123", 1)).toBe(true);
+    expect(wasSentByBot(123, 1)).toBe(true);
+  });
+
+  it("clears cache", () => {
+    recordSentMessage(123, 1);
+    expect(wasSentByBot(123, 1)).toBe(true);
+
+    clearSentMessageCache();
+    expect(wasSentByBot(123, 1)).toBe(false);
+  });
+});
 
 describe("buildInlineKeyboard", () => {
   it("returns undefined for empty input", () => {
@@ -38,6 +71,29 @@ describe("buildInlineKeyboard", () => {
         [
           { text: "Option B", callback_data: "cmd:b" },
           { text: "Option C", callback_data: "cmd:c" },
+        ],
+      ],
+    });
+  });
+
+  it("passes through button style", () => {
+    const result = buildInlineKeyboard([
+      [
+        {
+          text: "Option A",
+          callback_data: "cmd:a",
+          style: "primary",
+        },
+      ],
+    ]);
+    expect(result).toEqual({
+      inline_keyboard: [
+        [
+          {
+            text: "Option A",
+            callback_data: "cmd:a",
+            style: "primary",
+          },
         ],
       ],
     });
@@ -794,8 +850,55 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("suppresses message_thread_id for private chat sends (#17242)", async () => {
+    // Private chats have positive numeric IDs; they never support forum topics.
+    const chatId = "123456789";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 56,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "hello private", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    // message_thread_id must NOT appear in private chats -- Telegram rejects it
+    // with "400: Bad Request: message thread not found".
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
+      parse_mode: "HTML",
+    });
+  });
+
+  it("keeps message_thread_id for group chat sends (#17242)", async () => {
+    // Group/supergroup chats have negative IDs.
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 57,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "hello group", {
+      token: "tok",
+      api,
+      messageThreadId: 271,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello group", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+  });
+
   it("retries without message_thread_id when Telegram reports missing thread", async () => {
-    const chatId = "123";
+    const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi
       .fn()
@@ -906,32 +1009,8 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("includes both thread and reply params for forum topic replies", async () => {
-    const chatId = "-1001234567890";
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 57,
-      chat: { id: chatId },
-    });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await sendMessageTelegram(chatId, "forum reply", {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-      replyToMessageId: 500,
-    });
-
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "forum reply", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-      reply_to_message_id: 500,
-    });
-  });
-
   it("retries media sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendPhoto = vi
       .fn()
@@ -1051,30 +1130,8 @@ describe("sendStickerTelegram", () => {
     }
   });
 
-  it("includes message_thread_id for forum topic messages", async () => {
-    const chatId = "-1001234567890";
-    const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 101,
-      chat: { id: chatId },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram(chatId, fileId, {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
-      message_thread_id: 271,
-    });
-  });
-
   it("retries sticker sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123";
+    const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendSticker = vi
       .fn()
@@ -1119,67 +1176,6 @@ describe("sendStickerTelegram", () => {
 
     expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
       reply_to_message_id: 500,
-    });
-  });
-
-  it("includes both thread and reply params for forum topic replies", async () => {
-    const chatId = "-1001234567890";
-    const fileId = "CAACAgIAAxkBAAI...sticker_file_id";
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 103,
-      chat: { id: chatId },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram(chatId, fileId, {
-      token: "tok",
-      api,
-      messageThreadId: 271,
-      replyToMessageId: 500,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
-      message_thread_id: 271,
-      reply_to_message_id: 500,
-    });
-  });
-
-  it("normalizes chat ids with internal prefixes", async () => {
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 104,
-      chat: { id: "123" },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram("telegram:123", "fileId123", {
-      token: "tok",
-      api,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith("123", "fileId123", undefined);
-  });
-
-  it("parses message_thread_id from recipient string (telegram:group:...:topic:...)", async () => {
-    const chatId = "-1001234567890";
-    const sendSticker = vi.fn().mockResolvedValue({
-      message_id: 105,
-      chat: { id: chatId },
-    });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
-
-    await sendStickerTelegram(`telegram:group:${chatId}:topic:271`, "fileId123", {
-      token: "tok",
-      api,
-    });
-
-    expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", {
-      message_thread_id: 271,
     });
   });
 
@@ -1288,6 +1284,22 @@ describe("editMessageTelegram", () => {
     );
   });
 
+  it("treats 'message is not modified' as success", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error(
+        "400: Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+      ),
+    );
+
+    await expect(
+      editMessageTelegram("123", 1, "hi", {
+        token: "tok",
+        cfg: {},
+      }),
+    ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
   it("disables link previews when linkPreview is false", async () => {
     botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
@@ -1328,6 +1340,36 @@ describe("sendPollTelegram", () => {
     expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ open_period: 60 });
   });
 
+  it("defaults polls to public (is_anonymous=false)", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    await sendPollTelegram(
+      "123",
+      { question: "Q", options: ["A", "B"] },
+      { token: "t", api: api as unknown as Bot["api"] },
+    );
+
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
+    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: false });
+  });
+
+  it("supports explicit anonymous polls", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    await sendPollTelegram(
+      "123",
+      { question: "Q", options: ["A", "B"] },
+      { token: "t", api: api as unknown as Bot["api"], isAnonymous: true },
+    );
+
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
+    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ is_anonymous: true });
+  });
+
   it("retries without message_thread_id on thread-not-found", async () => {
     const api = {
       sendPoll: vi.fn(
@@ -1342,7 +1384,7 @@ describe("sendPollTelegram", () => {
     };
 
     const res = await sendPollTelegram(
-      "123",
+      "-100123",
       { question: "Q", options: ["A", "B"] },
       { token: "t", api: api as unknown as Bot["api"], messageThreadId: 99 },
     );

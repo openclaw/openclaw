@@ -17,6 +17,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.defaults.heartbeat.suppressToolErrorWarnings":
+    "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.list[].heartbeat.suppressToolErrorWarnings":
+    "Suppress tool error warning payloads during heartbeat runs.",
   "discovery.mdns.mode":
     'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
   "gateway.auth.token":
@@ -62,6 +66,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
+  "tools.loopDetection.enabled":
+    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+  "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
+  "tools.loopDetection.warningThreshold":
+    "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
+  "tools.loopDetection.criticalThreshold":
+    "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
+  "tools.loopDetection.globalCircuitBreakerThreshold":
+    "Global no-progress breaker threshold (default: 30).",
+  "tools.loopDetection.detectors.genericRepeat":
+    "Enable generic repeated same-tool/same-params loop detection (default: true).",
+  "tools.loopDetection.detectors.knownPollNoProgress":
+    "Enable known poll tool no-progress loop detection (default: true).",
+  "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
   "tools.exec.notifyOnExitEmptySuccess":
@@ -71,6 +89,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+  "tools.sessions.visibility":
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":
@@ -96,6 +116,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
+  "tools.web.urlAllowlist":
+    "Optional URL/domain allowlist shared by web_search and web_fetch. Accepts domain patterns like 'example.com', '*.github.com'. When configured, only matching URLs are allowed.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
@@ -143,7 +165,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
-    "Max total characters across all injected workspace bootstrap files (default: 24000).",
+    "Max total characters across all injected workspace bootstrap files (default: 150000).",
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.envelopeTimezone":
@@ -195,6 +217,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Weight for BM25 text relevance when merging results (0-1).",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Multiplier for candidate pool size (default: 4).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
+    "Enable MMR re-ranking to reduce near-duplicate memory hits (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
+    "MMR relevance/diversity balance (0 = max diversity, 1 = max relevance, default: 0.7).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
+    "Enable exponential recency decay for hybrid scoring (default: false).",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
+    "Half-life in days for temporal decay (default: 30).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   memory: "Memory backend configuration (global).",
@@ -302,7 +332,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.configWrites":
     "Allow Discord to write config in response to channel events/commands (default: true).",
   "channels.discord.proxy":
-    "Proxy URL for Discord gateway WebSocket connections. Set per account via channels.discord.accounts.<id>.proxy.",
+    "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
   "channels.whatsapp.configWrites":
     "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   "channels.signal.configWrites":
@@ -321,6 +351,8 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',
+  "channels.slack.streamMode":
+    "Live stream preview mode for Slack replies (replace | status_final | append).",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":

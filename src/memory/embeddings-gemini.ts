@@ -1,6 +1,7 @@
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type GeminiEmbeddingClient = {
@@ -150,9 +151,9 @@ export async function resolveGeminiEmbeddingClient(
   const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  const authHeaders = parseGeminiAuth(apiKey);
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "x-goog-api-key": apiKey,
+    ...authHeaders.headers,
     ...headerOverrides,
   };
   const model = normalizeGeminiModel(options.model);

@@ -7,7 +7,6 @@ import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
-  recomputeNextRuns,
   recomputeNextRunsForMaintenance,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
@@ -15,6 +14,15 @@ import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
+
+/**
+ * Minimum gap between consecutive fires of the same cron job.  This is a
+ * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
+ * a value within the same second as the just-completed run.  The guard
+ * is intentionally generous (2 s) so it never masks a legitimate schedule
+ * but always breaks an infinite re-trigger cycle.  (See #17821)
+ */
+const MIN_REFIRE_GAP_MS = 2_000;
 
 /**
  * Maximum wall-clock time for a single job execution. Acts as a safety net
@@ -108,7 +116,18 @@ function applyJobResult(
         "cron: applying error backoff",
       );
     } else if (job.enabled) {
-      job.state.nextRunAtMs = computeJobNextRunAtMs(job, result.endedAt);
+      const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+      if (job.schedule.kind === "cron") {
+        // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
+        // after the current run ended.  Prevents spin-loops when the
+        // schedule computation lands in the same second due to
+        // timezone/croner edge cases (see #17821).
+        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+        job.state.nextRunAtMs =
+          naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
+      } else {
+        job.state.nextRunAtMs = naturalNext;
+      }
     } else {
       job.state.nextRunAtMs = undefined;
     }
@@ -144,12 +163,13 @@ export function armTimer(state: CronServiceState) {
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
-  state.timer = setTimeout(async () => {
-    try {
-      await onTimer(state);
-    } catch (err) {
+  // Intentionally avoid an `async` timer callback:
+  // Vitest's fake-timer helpers can await async callbacks, which would block
+  // tests that simulate long-running jobs. Runtime behavior is unchanged.
+  state.timer = setTimeout(() => {
+    void onTimer(state).catch((err) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-    }
+    });
   }, clampedDelay);
   state.deps.log.debug(
     { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
@@ -172,12 +192,10 @@ export async function onTimer(state: CronServiceState) {
     if (state.timer) {
       clearTimeout(state.timer);
     }
-    state.timer = setTimeout(async () => {
-      try {
-        await onTimer(state);
-      } catch (err) {
+    state.timer = setTimeout(() => {
+      void onTimer(state).catch((err) => {
         state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-      }
+      });
     }, MAX_TIMER_DELAY_MS);
     return;
   }
@@ -218,6 +236,15 @@ export async function onTimer(state: CronServiceState) {
       summary?: string;
       sessionId?: string;
       sessionKey?: string;
+      model?: string;
+      provider?: string;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        total_tokens?: number;
+        cache_read_tokens?: number;
+        cache_write_tokens?: number;
+      };
       startedAt: number;
       endedAt: number;
     }> = [];
@@ -284,7 +311,12 @@ export async function onTimer(state: CronServiceState) {
           }
         }
 
-        recomputeNextRuns(state);
+        // Use maintenance-only recompute to avoid advancing past-due
+        // nextRunAtMs values that became due between findDueJobs and this
+        // locked block.  The full recomputeNextRuns would silently skip
+        // those jobs (advancing nextRunAtMs without execution), causing
+        // daily cron schedules to jump 48 h instead of 24 h (#17852).
+        recomputeNextRunsForMaintenance(state);
         await persist(state);
       });
     }
@@ -423,6 +455,15 @@ async function executeJobCore(
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
 }> {
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
@@ -512,6 +553,9 @@ async function executeJobCore(
     summary: res.summary,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
+    model: res.model,
+    provider: res.provider,
+    usage: res.usage,
   };
 }
 
@@ -539,6 +583,15 @@ export async function executeJob(
     summary?: string;
     sessionId?: string;
     sessionKey?: string;
+    model?: string;
+    provider?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      cache_read_tokens?: number;
+      cache_write_tokens?: number;
+    };
   };
   try {
     coreResult = await executeJobCore(state, job);
@@ -571,6 +624,15 @@ function emitJobFinished(
     summary?: string;
     sessionId?: string;
     sessionKey?: string;
+    model?: string;
+    provider?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      cache_read_tokens?: number;
+      cache_write_tokens?: number;
+    };
   },
   runAtMs: number,
 ) {
@@ -585,6 +647,9 @@ function emitJobFinished(
     runAtMs,
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,
+    model: result.model,
+    provider: result.provider,
+    usage: result.usage,
   });
 }
 

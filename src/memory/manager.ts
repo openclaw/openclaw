@@ -28,6 +28,7 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { memoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { memoryManagerSyncOps } from "./manager-sync-ops.js";
+import { extractKeywords } from "./query-expansion.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -46,10 +47,11 @@ export class MemoryIndexManager implements MemorySearchManager {
   private readonly agentId: string;
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
-  private provider: EmbeddingProvider;
+  private provider: EmbeddingProvider | null;
   private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
   private fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
   private fallbackReason?: string;
+  private readonly providerUnavailableReason?: string;
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
   private voyage?: VoyageEmbeddingClient;
@@ -154,6 +156,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.requestedProvider = params.providerResult.requestedProvider;
     this.fallbackFrom = params.providerResult.fallbackFrom;
     this.fallbackReason = params.providerResult.fallbackReason;
+    this.providerUnavailableReason = params.providerResult.providerUnavailableReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
@@ -225,6 +228,42 @@ export class MemoryIndexManager implements MemorySearchManager {
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
 
+    // FTS-only mode: no embedding provider available
+    if (!this.provider) {
+      if (!this.fts.enabled || !this.fts.available) {
+        log.warn("memory search: no provider and FTS unavailable");
+        return [];
+      }
+
+      // Extract keywords for better FTS matching on conversational queries
+      // e.g., "that thing we discussed about the API" → ["discussed", "API"]
+      const keywords = extractKeywords(cleaned);
+      const searchTerms = keywords.length > 0 ? keywords : [cleaned];
+
+      // Search with each keyword and merge results
+      const resultSets = await Promise.all(
+        searchTerms.map((term) => this.searchKeyword(term, candidates).catch(() => [])),
+      );
+
+      // Merge and deduplicate results, keeping highest score for each chunk
+      const seenIds = new Map<string, (typeof resultSets)[0][0]>();
+      for (const results of resultSets) {
+        for (const result of results) {
+          const existing = seenIds.get(result.id);
+          if (!existing || result.score > existing.score) {
+            seenIds.set(result.id, result);
+          }
+        }
+      }
+
+      const merged = [...seenIds.values()]
+        .toSorted((a, b) => b.score - a.score)
+        .filter((entry) => entry.score >= minScore)
+        .slice(0, maxResults);
+
+      return merged;
+    }
+
     const keywordResults = hybrid.enabled
       ? await this.searchKeyword(cleaned, candidates).catch(() => [])
       : [];
@@ -239,11 +278,13 @@ export class MemoryIndexManager implements MemorySearchManager {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
-    const merged = this.mergeHybridResults({
+    const merged = await this.mergeHybridResults({
       vector: vectorResults,
       keyword: keywordResults,
       vectorWeight: hybrid.vectorWeight,
       textWeight: hybrid.textWeight,
+      mmr: hybrid.mmr,
+      temporalDecay: hybrid.temporalDecay,
     });
 
     return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
@@ -253,6 +294,10 @@ export class MemoryIndexManager implements MemorySearchManager {
     queryVec: number[],
     limit: number,
   ): Promise<Array<MemorySearchResult & { id: string }>> {
+    // This method should never be called without a provider
+    if (!this.provider) {
+      return [];
+    }
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
@@ -279,10 +324,12 @@ export class MemoryIndexManager implements MemorySearchManager {
       return [];
     }
     const sourceFilter = this.buildSourceFilter();
+    // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
+    const providerModel = this.provider?.model;
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
-      providerModel: this.provider.model,
+      providerModel,
       query,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
@@ -298,8 +345,10 @@ export class MemoryIndexManager implements MemorySearchManager {
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
     vectorWeight: number;
     textWeight: number;
-  }): MemorySearchResult[] {
-    const merged = mergeHybridResults({
+    mmr?: { enabled: boolean; lambda: number };
+    temporalDecay?: { enabled: boolean; halfLifeDays: number };
+  }): Promise<MemorySearchResult[]> {
+    return mergeHybridResults({
       vector: params.vector.map((r) => ({
         id: r.id,
         path: r.path,
@@ -320,8 +369,10 @@ export class MemoryIndexManager implements MemorySearchManager {
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
-    });
-    return merged.map((entry) => entry as MemorySearchResult);
+      mmr: params.mmr,
+      temporalDecay: params.temporalDecay,
+      workspaceDir: this.workspaceDir,
+    }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
   }
 
   async sync(params?: {
@@ -446,6 +497,13 @@ export class MemoryIndexManager implements MemorySearchManager {
       }
       return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
     })();
+
+    // Determine search mode: "fts-only" if no provider, "hybrid" otherwise
+    const searchMode = this.provider ? "hybrid" : "fts-only";
+    const providerInfo = this.provider
+      ? { provider: this.provider.id, model: this.provider.model }
+      : { provider: "none", model: undefined };
+
     return {
       backend: "builtin",
       files: files?.c ?? 0,
@@ -453,8 +511,8 @@ export class MemoryIndexManager implements MemorySearchManager {
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
-      provider: this.provider.id,
-      model: this.provider.model,
+      provider: providerInfo.provider,
+      model: providerInfo.model,
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
@@ -497,10 +555,18 @@ export class MemoryIndexManager implements MemorySearchManager {
         lastError: this.batchFailureLastError,
         lastProvider: this.batchFailureLastProvider,
       },
+      custom: {
+        searchMode,
+        providerUnavailableReason: this.providerUnavailableReason,
+      },
     };
   }
 
   async probeVectorAvailability(): Promise<boolean> {
+    // FTS-only mode: vector search not available
+    if (!this.provider) {
+      return false;
+    }
     if (!this.vector.enabled) {
       return false;
     }
@@ -508,6 +574,13 @@ export class MemoryIndexManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    // FTS-only mode: embeddings not available but search still works
+    if (!this.provider) {
+      return {
+        ok: false,
+        error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
+      };
+    }
     try {
       await this.embedBatchWithRetry(["ping"]);
       return { ok: true };

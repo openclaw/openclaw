@@ -366,7 +366,7 @@ export async function monitorWebInbox(options: {
 
   const sendApi = createWebSendApi({
     sock: {
-      sendMessage: (jid: string, content: AnyMessageContent) => sock.sendMessage(jid, content),
+      sendMessage: (jid, content, options) => sock.sendMessage(jid, content, options),
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,

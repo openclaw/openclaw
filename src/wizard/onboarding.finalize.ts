@@ -18,12 +18,15 @@ import {
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
+  buildWebchatUrl,
   detectBrowserOpenSupport,
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
+  resolveCanonicalMainSessionKey,
   waitForGatewayReachable,
   resolveControlUiLinks,
+  resolveLocalBrowserControlUiLinks,
 } from "../commands/onboard-helpers.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
@@ -250,10 +253,22 @@ export async function finalizeOnboardingWizard(
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
   });
+  const localBrowserLinks = resolveLocalBrowserControlUiLinks({
+    bind: settings.bind,
+    port: settings.port,
+    customBindHost: settings.customBindHost,
+    basePath: controlUiBasePath,
+  });
+  const canonicalSessionKey = resolveCanonicalMainSessionKey(nextConfig);
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
-      ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-      : links.httpUrl;
+      ? `${localBrowserLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
+      : localBrowserLinks.httpUrl;
+  const webchatUrl = buildWebchatUrl({
+    httpUrl: localBrowserLinks.httpUrl,
+    sessionKey: canonicalSessionKey,
+    token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+  });
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -273,10 +288,11 @@ export async function finalizeOnboardingWizard(
 
   await prompter.note(
     [
-      `Web UI: ${links.httpUrl}`,
+      `Web UI: ${localBrowserLinks.httpUrl}`,
       settings.authMode === "token" && settings.gatewayToken
         ? `Web UI (with token): ${authedUrl}`
         : undefined,
+      `WebChat: ${webchatUrl}`,
       `Gateway WS: ${links.wsUrl}`,
       gatewayStatusLine,
       "Docs: https://docs.openclaw.ai/web/control-ui",
@@ -342,7 +358,7 @@ export async function finalizeOnboardingWizard(
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
-        controlUiOpened = await openUrl(authedUrl);
+        controlUiOpened = await openUrl(webchatUrl);
         if (!controlUiOpened) {
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
@@ -359,7 +375,7 @@ export async function finalizeOnboardingWizard(
       }
       await prompter.note(
         [
-          `Dashboard link (with token): ${authedUrl}`,
+          `WebChat link: ${webchatUrl}`,
           controlUiOpened
             ? "Opened in your browser. Keep that tab to control OpenClaw."
             : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
@@ -402,7 +418,7 @@ export async function finalizeOnboardingWizard(
   if (shouldOpenControlUi) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      controlUiOpened = await openUrl(authedUrl);
+      controlUiOpened = await openUrl(webchatUrl);
       if (!controlUiOpened) {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
@@ -420,7 +436,7 @@ export async function finalizeOnboardingWizard(
 
     await prompter.note(
       [
-        `Dashboard link (with token): ${authedUrl}`,
+        `WebChat link: ${webchatUrl}`,
         controlUiOpened
           ? "Opened in your browser. Keep that tab to control OpenClaw."
           : "Copy/paste this URL in a browser on this machine to control OpenClaw.",

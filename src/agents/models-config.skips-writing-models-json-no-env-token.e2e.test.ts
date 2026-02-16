@@ -14,6 +14,44 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 
 installModelsConfigTestHooks();
 
+type ProviderConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+  models?: Array<{ id: string }>;
+};
+
+async function runEnvProviderCase(params: {
+  envVar: "MINIMAX_API_KEY" | "SYNTHETIC_API_KEY";
+  envValue: string;
+  providerKey: "minimax" | "synthetic";
+  expectedBaseUrl: string;
+  expectedApiKeyRef: string;
+  expectedModelIds: string[];
+}) {
+  const previousValue = process.env[params.envVar];
+  process.env[params.envVar] = params.envValue;
+  try {
+    await ensureOpenClawModelsJson({});
+
+    const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+    const raw = await fs.readFile(modelPath, "utf8");
+    const parsed = JSON.parse(raw) as { providers: Record<string, ProviderConfig> };
+    const provider = parsed.providers[params.providerKey];
+    expect(provider?.baseUrl).toBe(params.expectedBaseUrl);
+    expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
+    const ids = provider?.models?.map((model) => model.id) ?? [];
+    for (const expectedId of params.expectedModelIds) {
+      expect(ids).toContain(expectedId);
+    }
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env[params.envVar];
+    } else {
+      process.env[params.envVar] = previousValue;
+    }
+  }
+}
+
 describe("models-config", () => {
   it("skips writing models.json when no env token or profile exists", async () => {
     await withTempHome(async (home) => {
@@ -54,68 +92,27 @@ describe("models-config", () => {
 
   it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
     await withTempHome(async () => {
-      const prevKey = process.env.MINIMAX_API_KEY;
-      process.env.MINIMAX_API_KEY = "sk-minimax-test";
-      try {
-        await ensureOpenClawModelsJson({});
-
-        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
-        const raw = await fs.readFile(modelPath, "utf8");
-        const parsed = JSON.parse(raw) as {
-          providers: Record<
-            string,
-            {
-              baseUrl?: string;
-              apiKey?: string;
-              models?: Array<{ id: string }>;
-            }
-          >;
-        };
-        expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
-        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
-        const ids = parsed.providers.minimax?.models?.map((model) => model.id);
-        expect(ids).toContain("MiniMax-M2.1");
-        expect(ids).toContain("MiniMax-VL-01");
-      } finally {
-        if (prevKey === undefined) {
-          delete process.env.MINIMAX_API_KEY;
-        } else {
-          process.env.MINIMAX_API_KEY = prevKey;
-        }
-      }
+      await runEnvProviderCase({
+        envVar: "MINIMAX_API_KEY",
+        envValue: "sk-minimax-test",
+        providerKey: "minimax",
+        expectedBaseUrl: "https://api.minimax.io/anthropic",
+        expectedApiKeyRef: "MINIMAX_API_KEY",
+        expectedModelIds: ["MiniMax-M2.1", "MiniMax-VL-01"],
+      });
     });
   });
 
   it("adds synthetic provider when SYNTHETIC_API_KEY is set", async () => {
     await withTempHome(async () => {
-      const prevKey = process.env.SYNTHETIC_API_KEY;
-      process.env.SYNTHETIC_API_KEY = "sk-synthetic-test";
-      try {
-        await ensureOpenClawModelsJson({});
-
-        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
-        const raw = await fs.readFile(modelPath, "utf8");
-        const parsed = JSON.parse(raw) as {
-          providers: Record<
-            string,
-            {
-              baseUrl?: string;
-              apiKey?: string;
-              models?: Array<{ id: string }>;
-            }
-          >;
-        };
-        expect(parsed.providers.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-        expect(parsed.providers.synthetic?.apiKey).toBe("SYNTHETIC_API_KEY");
-        const ids = parsed.providers.synthetic?.models?.map((model) => model.id);
-        expect(ids).toContain("hf:MiniMaxAI/MiniMax-M2.1");
-      } finally {
-        if (prevKey === undefined) {
-          delete process.env.SYNTHETIC_API_KEY;
-        } else {
-          process.env.SYNTHETIC_API_KEY = prevKey;
-        }
-      }
+      await runEnvProviderCase({
+        envVar: "SYNTHETIC_API_KEY",
+        envValue: "sk-synthetic-test",
+        providerKey: "synthetic",
+        expectedBaseUrl: "https://api.synthetic.new/anthropic",
+        expectedApiKeyRef: "SYNTHETIC_API_KEY",
+        expectedModelIds: ["hf:MiniMaxAI/MiniMax-M2.1"],
+      });
     });
   });
 });

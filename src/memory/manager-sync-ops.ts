@@ -544,6 +544,12 @@ class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
+    // FTS-only mode: skip embedding sync (no provider)
+    if (!this.provider) {
+      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
+      return;
+    }
+
     const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
     const fileEntries = await Promise.all(
       files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
@@ -619,6 +625,12 @@ class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
+    // FTS-only mode: skip embedding sync (no provider)
+    if (!this.provider) {
+      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
+      return;
+    }
+
     const files = await listSessionFilesForAgent(this.agentId);
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
@@ -759,8 +771,8 @@ class MemoryManagerSyncOps {
     const needsFullReindex =
       params?.force ||
       !meta ||
-      meta.model !== this.provider.model ||
-      meta.provider !== this.provider.id ||
+      (this.provider && meta.model !== this.provider.model) ||
+      (this.provider && meta.provider !== this.provider.id) ||
       meta.providerKey !== this.providerKey ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
@@ -834,6 +846,7 @@ class MemoryManagerSyncOps {
     const batch = this.settings.remote?.batch;
     const enabled = Boolean(
       batch?.enabled &&
+      this.provider &&
       ((this.openAi && this.provider.id === "openai") ||
         (this.gemini && this.provider.id === "gemini") ||
         (this.voyage && this.provider.id === "voyage")),
@@ -849,7 +862,7 @@ class MemoryManagerSyncOps {
 
   private async activateFallbackProvider(reason: string): Promise<boolean> {
     const fallback = this.settings.fallback;
-    if (!fallback || fallback === "none" || fallback === this.provider.id) {
+    if (!fallback || fallback === "none" || !this.provider || fallback === this.provider.id) {
       return false;
     }
     if (this.fallbackFrom) {
@@ -957,8 +970,8 @@ class MemoryManagerSyncOps {
       }
 
       nextMeta = {
-        model: this.provider.model,
-        provider: this.provider.id,
+        model: this.provider?.model ?? "fts-only",
+        provider: this.provider?.id ?? "none",
         providerKey: this.providerKey,
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
@@ -1023,8 +1036,8 @@ class MemoryManagerSyncOps {
     }
 
     const nextMeta: MemoryIndexMeta = {
-      model: this.provider.model,
-      provider: this.provider.id,
+      model: this.provider?.model ?? "fts-only",
+      provider: this.provider?.id ?? "none",
       providerKey: this.providerKey,
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,

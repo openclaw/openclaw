@@ -34,6 +34,18 @@ describe("diagnostic session state pruning", () => {
 
     expect(getDiagnosticSessionStateCountForTest()).toBe(2000);
   });
+
+  it("reuses keyed session state when later looked up by sessionId", () => {
+    const keyed = getDiagnosticSessionState({
+      sessionId: "s1",
+      sessionKey: "agent:main:discord:channel:c1",
+    });
+    const bySessionId = getDiagnosticSessionState({ sessionId: "s1" });
+
+    expect(bySessionId).toBe(keyed);
+    expect(bySessionId.sessionKey).toBe("agent:main:discord:channel:c1");
+    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+  });
 });
 
 describe("logger import side effects", () => {

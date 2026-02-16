@@ -88,18 +88,27 @@ function createSandbox(params: {
   };
 }
 
+async function withUnsafeMountedSandboxHarness(
+  run: (ctx: { sandboxRoot: string; agentRoot: string; sandbox: SandboxContext }) => Promise<void>,
+) {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-mounts-"));
+  const sandboxRoot = path.join(stateDir, "sandbox");
+  const agentRoot = path.join(stateDir, "agent");
+  await fs.mkdir(sandboxRoot, { recursive: true });
+  await fs.mkdir(agentRoot, { recursive: true });
+  const bridge = createUnsafeMountedBridge({ root: sandboxRoot, agentHostRoot: agentRoot });
+  const sandbox = createSandbox({ sandboxRoot, agentRoot, fsBridge: bridge });
+  try {
+    await run({ sandboxRoot, agentRoot, sandbox });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 describe("tools.fs.workspaceOnly", () => {
   it("defaults to allowing sandbox mounts outside the workspace root", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-mounts-"));
-    const sandboxRoot = path.join(stateDir, "sandbox");
-    const agentRoot = path.join(stateDir, "agent");
-    await fs.mkdir(sandboxRoot, { recursive: true });
-    await fs.mkdir(agentRoot, { recursive: true });
-    try {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
-
-      const bridge = createUnsafeMountedBridge({ root: sandboxRoot, agentHostRoot: agentRoot });
-      const sandbox = createSandbox({ sandboxRoot, agentRoot, fsBridge: bridge });
 
       const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot });
       const readTool = tools.find((tool) => tool.name === "read");
@@ -112,22 +121,12 @@ describe("tools.fs.workspaceOnly", () => {
 
       await writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" });
       expect(await fs.readFile(path.join(agentRoot, "owned.txt"), "utf8")).toBe("x");
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("rejects sandbox mounts outside the workspace root when enabled", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-mounts-"));
-    const sandboxRoot = path.join(stateDir, "sandbox");
-    const agentRoot = path.join(stateDir, "agent");
-    await fs.mkdir(sandboxRoot, { recursive: true });
-    await fs.mkdir(agentRoot, { recursive: true });
-    try {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
-
-      const bridge = createUnsafeMountedBridge({ root: sandboxRoot, agentHostRoot: agentRoot });
-      const sandbox = createSandbox({ sandboxRoot, agentRoot, fsBridge: bridge });
 
       const cfg = { tools: { fs: { workspaceOnly: true } } } as unknown as OpenClawConfig;
       const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
@@ -153,8 +152,6 @@ describe("tools.fs.workspaceOnly", () => {
         editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
       expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    });
   });
 });

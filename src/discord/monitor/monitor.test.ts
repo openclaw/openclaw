@@ -1,11 +1,29 @@
-import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
+import type {
+  ButtonInteraction,
+  ComponentData,
+  ModalInteraction,
+  StringSelectMenuInteraction,
+} from "@buape/carbon";
 import type { Client } from "@buape/carbon";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { DiscordAccountConfig } from "../../config/types.discord.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
-import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
+import {
+  clearDiscordComponentEntries,
+  registerDiscordComponentEntries,
+  resolveDiscordComponentEntry,
+  resolveDiscordModalEntry,
+} from "../components-registry.js";
+import {
+  createAgentComponentButton,
+  createAgentSelectMenu,
+  createDiscordComponentButton,
+  createDiscordComponentModal,
+} from "./agent-components.js";
 import {
   resolveDiscordMemberAllowed,
   resolveDiscordOwnerAllowFrom,
@@ -29,6 +47,12 @@ import {
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const upsertPairingRequestMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const dispatchReplyMock = vi.hoisted(() => vi.fn());
+const deliverDiscordReplyMock = vi.hoisted(() => vi.fn());
+const recordInboundSessionMock = vi.hoisted(() => vi.fn());
+const readSessionUpdatedAtMock = vi.hoisted(() => vi.fn());
+const resolveStorePathMock = vi.hoisted(() => vi.fn());
+let lastDispatchCtx: Record<string, unknown> | undefined;
 
 vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
@@ -40,6 +64,27 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => {
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
+
+vi.mock("../../auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
+}));
+
+vi.mock("./reply-delivery.js", () => ({
+  deliverDiscordReply: (...args: unknown[]) => deliverDiscordReplyMock(...args),
+}));
+
+vi.mock("../../channels/session.js", () => ({
+  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+}));
+
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  return {
+    ...actual,
+    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };
 });
 
@@ -125,6 +170,225 @@ describe("agent components", () => {
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
+  });
+});
+
+describe("discord component interactions", () => {
+  const createCfg = (): OpenClawConfig =>
+    ({
+      channels: {
+        discord: {
+          replyToMode: "first",
+        },
+      },
+    }) as OpenClawConfig;
+
+  const createDiscordConfig = (overrides?: Partial<DiscordAccountConfig>): DiscordAccountConfig =>
+    ({
+      replyToMode: "first",
+      ...overrides,
+    }) as DiscordAccountConfig;
+
+  type DispatchParams = {
+    ctx: Record<string, unknown>;
+    dispatcherOptions: {
+      deliver: (payload: { text?: string }) => Promise<void> | void;
+    };
+  };
+
+  const createComponentContext = (
+    overrides?: Partial<Parameters<typeof createDiscordComponentButton>[0]>,
+  ) =>
+    ({
+      cfg: createCfg(),
+      accountId: "default",
+      dmPolicy: "allowlist",
+      allowFrom: ["123456789"],
+      discordConfig: createDiscordConfig(),
+      token: "token",
+      ...overrides,
+    }) as Parameters<typeof createDiscordComponentButton>[0];
+
+  const createComponentButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const defer = vi.fn().mockResolvedValue(undefined);
+    const interaction = {
+      rawData: { channel_id: "dm-channel", id: "interaction-1" },
+      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
+      customId: "occomp:cid=btn_1",
+      message: { id: "msg-1" },
+      client: { rest: {} },
+      defer,
+      reply,
+      ...overrides,
+    } as unknown as ButtonInteraction;
+    return { interaction, defer, reply };
+  };
+
+  const createModalInteraction = (overrides: Partial<ModalInteraction> = {}) => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const fields = {
+      getText: (key: string) => (key === "fld_1" ? "Casey" : undefined),
+      getStringSelect: (_key: string) => undefined,
+      getRoleSelect: (_key: string) => [],
+      getUserSelect: (_key: string) => [],
+    };
+    const interaction = {
+      rawData: { channel_id: "dm-channel", id: "interaction-2" },
+      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
+      customId: "ocmodal:mid=mdl_1",
+      fields,
+      acknowledge,
+      reply,
+      client: { rest: {} },
+      ...overrides,
+    } as unknown as ModalInteraction;
+    return { interaction, acknowledge, reply };
+  };
+
+  const createButtonEntry = (
+    overrides: Partial<DiscordComponentEntry> = {},
+  ): DiscordComponentEntry => ({
+    id: "btn_1",
+    kind: "button",
+    label: "Approve",
+    messageId: "msg-1",
+    sessionKey: "session-1",
+    agentId: "agent-1",
+    accountId: "default",
+    ...overrides,
+  });
+
+  const createModalEntry = (overrides: Partial<DiscordModalEntry> = {}): DiscordModalEntry => ({
+    id: "mdl_1",
+    title: "Details",
+    messageId: "msg-2",
+    sessionKey: "session-2",
+    agentId: "agent-2",
+    accountId: "default",
+    fields: [
+      {
+        id: "fld_1",
+        name: "name",
+        label: "Name",
+        type: "text",
+      },
+    ],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    clearDiscordComponentEntries();
+    lastDispatchCtx = undefined;
+    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+    enqueueSystemEventMock.mockReset();
+    dispatchReplyMock.mockReset().mockImplementation(async (params: DispatchParams) => {
+      lastDispatchCtx = params.ctx;
+      await params.dispatcherOptions.deliver({ text: "ok" });
+    });
+    deliverDiscordReplyMock.mockReset();
+    recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
+    readSessionUpdatedAtMock.mockReset().mockReturnValue(undefined);
+    resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions-test.json");
+  });
+
+  it("routes button clicks with reply references", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry()],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReplyMock.mock.calls[0]?.[0]?.replyToId).toBe("msg-1");
+    expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+  });
+
+  it("keeps reusable buttons active after use", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ reusable: true })],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction } = createComponentButtonInteraction();
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    const { interaction: secondInteraction } = createComponentButtonInteraction({
+      rawData: { channel_id: "dm-channel", id: "interaction-2" },
+    });
+    await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
+
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(2);
+    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+  });
+
+  it("blocks buttons when allowedUsers does not match", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ allowedUsers: ["999"] })],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+  });
+
+  it("routes modal submissions with field values", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [createModalEntry()],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        discordConfig: createDiscordConfig({ replyToMode: "all" }),
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction();
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx?.BodyForAgent).toContain('Form "Details" submitted.');
+    expect(lastDispatchCtx?.BodyForAgent).toContain("- Name: Casey");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReplyMock.mock.calls[0]?.[0]?.replyToId).toBe("msg-2");
+    expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
+  });
+
+  it("keeps reusable modal entries active after submission", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [createModalEntry({ reusable: true })],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        discordConfig: createDiscordConfig({ replyToMode: "all" }),
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction();
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
   });
 });
 
@@ -474,17 +738,8 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
 });
 
 describe("maybeCreateDiscordAutoThread", () => {
-  it("returns existing thread ID when creation fails due to race condition", async () => {
-    const client = {
-      rest: {
-        post: async () => {
-          throw new Error("A thread has already been created on this message");
-        },
-        get: async () => ({ thread: { id: "existing-thread" } }),
-      },
-    } as unknown as Client;
-
-    const result = await maybeCreateDiscordAutoThread({
+  function createAutoThreadParams(client: Client) {
+    return {
       client,
       message: {
         id: "m1",
@@ -497,7 +752,20 @@ describe("maybeCreateDiscordAutoThread", () => {
       threadChannel: null,
       baseText: "hello",
       combinedBody: "hello",
-    });
+    };
+  }
+
+  it("returns existing thread ID when creation fails due to race condition", async () => {
+    const client = {
+      rest: {
+        post: async () => {
+          throw new Error("A thread has already been created on this message");
+        },
+        get: async () => ({ thread: { id: "existing-thread" } }),
+      },
+    } as unknown as Client;
+
+    const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
 
     expect(result).toBe("existing-thread");
   });
@@ -512,20 +780,7 @@ describe("maybeCreateDiscordAutoThread", () => {
       },
     } as unknown as Client;
 
-    const result = await maybeCreateDiscordAutoThread({
-      client,
-      message: {
-        id: "m1",
-        channelId: "parent",
-      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
-      isGuildMessage: true,
-      channelConfig: {
-        autoThread: true,
-      } as unknown as DiscordChannelConfigResolved,
-      threadChannel: null,
-      baseText: "hello",
-      combinedBody: "hello",
-    });
+    const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
 
     expect(result).toBeUndefined();
   });

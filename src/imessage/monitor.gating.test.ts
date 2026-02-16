@@ -48,6 +48,37 @@ function resolve(params: {
   });
 }
 
+function buildDispatchContextPayload(params: { cfg: OpenClawConfig; message: IMessagePayload }) {
+  const { cfg, message } = params;
+  const groupHistories = new Map();
+  const decision = resolveIMessageInboundDecision({
+    cfg,
+    accountId: "default",
+    message,
+    opts: {},
+    messageText: message.text,
+    bodyText: message.text,
+    allowFrom: ["*"],
+    groupAllowFrom: [],
+    groupPolicy: "open",
+    dmPolicy: "open",
+    storeAllowFrom: [],
+    historyLimit: 0,
+    groupHistories,
+  });
+  expect(decision.kind).toBe("dispatch");
+
+  const { ctxPayload } = buildIMessageInboundContext({
+    cfg,
+    decision,
+    message,
+    historyLimit: 0,
+    groupHistories,
+  });
+
+  return ctxPayload;
+}
+
 describe("imessage monitor gating + envelope builders", () => {
   it("parseIMessageNotification rejects malformed payloads", () => {
     expect(
@@ -77,7 +108,6 @@ describe("imessage monitor gating + envelope builders", () => {
 
   it("dispatches group messages with mention and builds a group envelope", () => {
     const cfg = baseCfg();
-    const groupHistories = new Map();
     const message: IMessagePayload = {
       id: 3,
       chat_id: 42,
@@ -88,30 +118,7 @@ describe("imessage monitor gating + envelope builders", () => {
       chat_name: "Lobster Squad",
       participants: ["+1555", "+1556"],
     };
-    const decision = resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
-      message,
-      opts: {},
-      messageText: message.text,
-      bodyText: message.text,
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories,
-    });
-    expect(decision.kind).toBe("dispatch");
-
-    const { ctxPayload } = buildIMessageInboundContext({
-      cfg,
-      decision,
-      message,
-      historyLimit: 0,
-      groupHistories,
-    });
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
 
     expect(ctxPayload.ChatType).toBe("group");
     expect(ctxPayload.SessionKey).toBe("agent:main:imessage:group:42");
@@ -122,7 +129,6 @@ describe("imessage monitor gating + envelope builders", () => {
 
   it("includes reply-to context fields + suffix", () => {
     const cfg = baseCfg();
-    const groupHistories = new Map();
     const message: IMessagePayload = {
       id: 5,
       chat_id: 55,
@@ -134,30 +140,7 @@ describe("imessage monitor gating + envelope builders", () => {
       reply_to_text: "original message",
       reply_to_sender: "+15559998888",
     };
-    const decision = resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
-      message,
-      opts: {},
-      messageText: message.text,
-      bodyText: message.text,
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories,
-    });
-    expect(decision.kind).toBe("dispatch");
-
-    const { ctxPayload } = buildIMessageInboundContext({
-      cfg,
-      decision,
-      message,
-      historyLimit: 0,
-      groupHistories,
-    });
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
 
     expect(ctxPayload.ReplyToId).toBe("9001");
     expect(ctxPayload.ReplyToBody).toBe("original message");

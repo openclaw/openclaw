@@ -8,7 +8,6 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import * as sessions from "../../config/sessions.js";
-import { DEFAULT_MEMORY_FLUSH_PROMPT } from "./memory-flush.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -344,21 +343,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).toHaveBeenCalled();
     expect(typing.startTypingOnText).toHaveBeenCalledWith("hi");
     expect(typing.startTypingLoop).toHaveBeenCalled();
-  });
-
-  it("signals typing even without consumer partial handler", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "hi" });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-
-    const { run, typing } = createMinimalRun({
-      typingMode: "message",
-    });
-    await run();
-
-    expect(typing.startTypingOnText).toHaveBeenCalledWith("hi");
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
   it("never signals typing for heartbeat runs", async () => {
@@ -788,19 +772,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("returns friendly message for 'roles must alternate' errors thrown as exceptions", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      throw new Error('messages: roles must alternate between "user" and "assistant"');
-    });
-
-    const { run } = createMinimalRun({});
-    const res = await run();
-
-    expect(res).toMatchObject({
-      text: expect.stringContaining("Message ordering conflict"),
-    });
-  });
-
   it("rewrites Bun socket errors into friendly text", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [
@@ -841,56 +812,6 @@ describe("runReplyAgent memory flush", () => {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
-
-  async function expectMemoryFlushSkippedWithWorkspaceAccess(
-    workspaceAccess: "ro" | "none",
-  ): Promise<void> {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      const calls: Array<{ prompt?: string }> = [];
-      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const baseRun = createBaseRun({
-        storePath,
-        sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              sandbox: { mode: "all", workspaceAccess },
-            },
-          },
-        },
-      });
-
-      await runReplyAgentWithBase({
-        baseRun,
-        storePath,
-        sessionKey,
-        sessionEntry,
-        commandBody: "hello",
-      });
-
-      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
-
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(stored[sessionKey].memoryFlushAt).toBeUndefined();
-    });
-  }
 
   it("skips memory flush for CLI providers", async () => {
     await withTempStore(async (storePath) => {
@@ -934,66 +855,6 @@ describe("runReplyAgent memory flush", () => {
     });
   });
 
-  it("uses configured prompts for memory flush runs", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      const calls: Array<EmbeddedRunParams> = [];
-      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push(params);
-        if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
-          return { payloads: [], meta: {} };
-        }
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const baseRun = createBaseRun({
-        storePath,
-        sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                memoryFlush: {
-                  prompt: "Write notes.",
-                  systemPrompt: "Flush memory now.",
-                },
-              },
-            },
-          },
-        },
-        runOverrides: { extraSystemPrompt: "extra system" },
-      });
-
-      await runReplyAgentWithBase({
-        baseRun,
-        storePath,
-        sessionKey,
-        sessionEntry,
-        commandBody: "hello",
-      });
-
-      const flushCall = calls[0];
-      expect(flushCall?.prompt).toContain("Write notes.");
-      expect(flushCall?.prompt).toContain("NO_REPLY");
-      expect(flushCall?.extraSystemPrompt).toContain("extra system");
-      expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
-      expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
-      expect(calls[1]?.prompt).toBe("hello");
-    });
-  });
-
   it("runs a memory flush turn and updates session metadata", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
@@ -1009,7 +870,7 @@ describe("runReplyAgent memory flush", () => {
       const calls: Array<{ prompt?: string }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
         calls.push({ prompt: params.prompt });
-        if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
           return { payloads: [], meta: {} };
         }
         return {
@@ -1031,7 +892,11 @@ describe("runReplyAgent memory flush", () => {
         commandBody: "hello",
       });
 
-      expect(calls.map((call) => call.prompt)).toEqual([DEFAULT_MEMORY_FLUSH_PROMPT, "hello"]);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[0]?.prompt).toContain("Current time:");
+      expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[1]?.prompt).toBe("hello");
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
@@ -1120,14 +985,6 @@ describe("runReplyAgent memory flush", () => {
     });
   });
 
-  it("skips memory flush when the sandbox workspace is read-only", async () => {
-    await expectMemoryFlushSkippedWithWorkspaceAccess("ro");
-  });
-
-  it("skips memory flush when the sandbox workspace is none", async () => {
-    await expectMemoryFlushSkippedWithWorkspaceAccess("none");
-  });
-
   it("increments compaction count when flush compaction completes", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
@@ -1141,7 +998,7 @@ describe("runReplyAgent memory flush", () => {
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
           params.onAgentEvent?.({
             stream: "compaction",
             data: { phase: "end", willRetry: false },

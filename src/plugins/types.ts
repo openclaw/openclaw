@@ -309,6 +309,7 @@ export type PluginHookName =
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "before_message_write"
   | "session_start"
   | "session_end"
   | "gateway_start"
@@ -332,6 +333,10 @@ export type PluginHookBeforeAgentStartEvent = {
 export type PluginHookBeforeAgentStartResult = {
   systemPrompt?: string;
   prependContext?: string;
+  /** Override the model for this agent run. E.g. "llama3.3:8b" */
+  modelOverride?: string;
+  /** Override the provider for this agent run. E.g. "ollama" */
+  providerOverride?: string;
 };
 
 // llm_input hook
@@ -489,6 +494,18 @@ export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
 };
 
+// before_message_write hook
+export type PluginHookBeforeMessageWriteEvent = {
+  message: AgentMessage;
+  sessionKey?: string;
+  agentId?: string;
+};
+
+export type PluginHookBeforeMessageWriteResult = {
+  block?: boolean; // If true, message is NOT written to JSONL
+  message?: AgentMessage; // Optional: modified message to write instead
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -571,6 +588,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ) => PluginHookToolResultPersistResult | void;
+  before_message_write: (
+    event: PluginHookBeforeMessageWriteEvent,
+    ctx: { agentId?: string; sessionKey?: string },
+  ) => PluginHookBeforeMessageWriteResult | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

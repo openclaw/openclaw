@@ -12,7 +12,7 @@ import { resolveSlackChannelAllowlist } from "../../../slack/resolve-channels.js
 import { resolveSlackUserAllowlist } from "../../../slack/resolve-users.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { promptChannelAccessConfig } from "./channel-access.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
 
 const channel = "slack" as const;
 
@@ -280,9 +280,7 @@ async function promptSlackAllowFrom(params: {
         );
         continue;
       }
-      const unique = [...new Set([...existing.map((v) => String(v).trim()), ...ids])].filter(
-        Boolean,
-      );
+      const unique = mergeAllowFromEntries(existing, ids);
       return setSlackAllowFrom(params.cfg, unique);
     }
 
@@ -303,7 +301,7 @@ async function promptSlackAllowFrom(params: {
       continue;
     }
     const ids = results.map((res) => res.id as string);
-    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
+    const unique = mergeAllowFromEntries(existing, ids);
     return setSlackAllowFrom(params.cfg, unique);
   }
 }

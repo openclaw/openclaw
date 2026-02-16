@@ -68,6 +68,46 @@ async function getRecentSessionContent(
 }
 
 /**
+ * Try the active transcript first; if /new already rotated it,
+ * fallback to the latest .jsonl.reset.* sibling.
+ */
+async function getRecentSessionContentWithResetFallback(
+  sessionFilePath: string,
+  messageCount: number = 15,
+): Promise<string | null> {
+  const primary = await getRecentSessionContent(sessionFilePath, messageCount);
+  if (primary) {
+    return primary;
+  }
+
+  try {
+    const dir = path.dirname(sessionFilePath);
+    const base = path.basename(sessionFilePath);
+    const resetPrefix = `${base}.reset.`;
+    const files = await fs.readdir(dir);
+    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
+
+    if (resetCandidates.length === 0) {
+      return primary;
+    }
+
+    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
+    const fallback = await getRecentSessionContent(latestResetPath, messageCount);
+
+    if (fallback) {
+      log.debug("Loaded session content from reset fallback", {
+        sessionFilePath,
+        latestResetPath,
+      });
+    }
+
+    return fallback || primary;
+  } catch {
+    return primary;
+  }
+}
+
+/**
  * Save session context to memory when /new command is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
@@ -93,12 +133,35 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
 
     // Generate descriptive slug from session using LLM
+    // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
       string,
       unknown
     >;
+    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
+
+    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file
+    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
+      // Look for previous session file in the sessions directory
+      const sessionsDir = path.dirname(currentSessionFile || "");
+      if (sessionsDir) {
+        try {
+          const files = await fs.readdir(sessionsDir);
+          const sessionFiles = files
+            .filter((f) => f.endsWith(".jsonl") && !f.includes(".reset."))
+            .toSorted()
+            .toReversed();
+          if (sessionFiles.length > 0) {
+            currentSessionFile = path.join(sessionsDir, sessionFiles[0]);
+            log.debug("Found previous session file", { file: currentSessionFile });
+          }
+        } catch {
+          // Ignore errors reading directory
+        }
+      }
+    }
+
     const currentSessionId = sessionEntry.sessionId as string;
-    const currentSessionFile = sessionEntry.sessionFile as string;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
@@ -119,8 +182,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
     let sessionContent: string | null = null;
 
     if (sessionFile) {
-      // Get recent conversation content
-      sessionContent = await getRecentSessionContent(sessionFile, messageCount);
+      // Get recent conversation content, with fallback to rotated reset transcript.
+      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

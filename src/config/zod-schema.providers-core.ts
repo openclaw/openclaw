@@ -25,6 +25,13 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
+const DiscordIdSchema = z
+  .union([z.string(), z.number()])
+  .refine((value) => typeof value === "string", {
+    message: "Discord IDs must be strings (wrap numeric IDs in quotes).",
+  });
+const DiscordIdListSchema = z.array(DiscordIdSchema);
+
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 
 const TelegramCapabilitiesSchema = z.union([
@@ -214,9 +221,9 @@ export const DiscordDmSchema = z
   .object({
     enabled: z.boolean().optional(),
     policy: DmPolicySchema.optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: DiscordIdListSchema.optional(),
     groupEnabled: z.boolean().optional(),
-    groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+    groupChannels: DiscordIdListSchema.optional(),
   })
   .strict();
 
@@ -228,8 +235,8 @@ export const DiscordGuildChannelSchema = z
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
-    users: z.array(z.union([z.string(), z.number()])).optional(),
-    roles: z.array(z.union([z.string(), z.number()])).optional(),
+    users: DiscordIdListSchema.optional(),
+    roles: DiscordIdListSchema.optional(),
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
@@ -243,8 +250,8 @@ export const DiscordGuildSchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-    users: z.array(z.union([z.string(), z.number()])).optional(),
-    roles: z.array(z.union([z.string(), z.number()])).optional(),
+    users: DiscordIdListSchema.optional(),
+    roles: DiscordIdListSchema.optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();
@@ -311,14 +318,14 @@ export const DiscordAccountSchema = z
     // Aliases for channels.discord.dm.policy / channels.discord.dm.allowFrom. Prefer these for
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: DiscordIdListSchema.optional(),
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     execApprovals: z
       .object({
         enabled: z.boolean().optional(),
-        approvers: z.array(z.union([z.string(), z.number()])).optional(),
+        approvers: DiscordIdListSchema.optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
         cleanupAfterResolve: z.boolean().optional(),
@@ -453,6 +460,7 @@ export const GoogleChatAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streamMode: z.enum(["replace", "status_final", "append"]).optional().default("replace"),
     mediaMaxMb: z.number().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     actions: z
@@ -1002,3 +1010,65 @@ export const MSTeamsConfigSchema = z
         'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
     });
   });
+
+// ── Linq ─────────────────────────────────────────────────────────────────────
+
+const LinqAllowFromEntry = z.union([z.string(), z.number()]);
+
+const LinqAccountSchemaBase = z
+  .object({
+    name: z.string().optional(),
+    enabled: z.boolean().optional(),
+    apiToken: z.string().optional().register(sensitive),
+    tokenFile: z.string().optional(),
+    fromPhone: z.string().optional(),
+    dmPolicy: DmPolicySchema.optional(),
+    allowFrom: z.array(LinqAllowFromEntry).optional(),
+    groupPolicy: GroupPolicySchema.optional(),
+    groupAllowFrom: z.array(LinqAllowFromEntry).optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    textChunkLimit: z.number().positive().optional(),
+    webhookUrl: z.string().optional(),
+    webhookSecret: z.string().optional().register(sensitive),
+    webhookPath: z.string().optional(),
+    webhookHost: z.string().optional(),
+    historyLimit: z.number().nonnegative().optional(),
+    blockStreaming: z.boolean().optional(),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+            tools: ToolPolicySchema,
+            toolsBySender: ToolPolicyBySenderSchema,
+          })
+          .strict()
+          .optional(),
+      )
+      .optional(),
+    responsePrefix: z.string().optional(),
+  })
+  .strict();
+
+const LinqAccountSchema = LinqAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.linq.dmPolicy="open" requires channels.linq.allowFrom to include "*"',
+  });
+});
+
+export const LinqConfigSchema = LinqAccountSchemaBase.extend({
+  accounts: z.record(z.string(), LinqAccountSchema.optional()).optional(),
+}).superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.linq.dmPolicy="open" requires channels.linq.allowFrom to include "*"',
+  });
+});

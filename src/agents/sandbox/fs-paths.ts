@@ -23,21 +23,29 @@ type ParsedBindMount = {
   writable: boolean;
 };
 
+type SplitBindSpec = {
+  host: string;
+  container: string;
+  options: string;
+};
+
 export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
   const trimmed = spec.trim();
   if (!trimmed) {
     return null;
   }
-  const parts = trimmed.split(":");
-  if (parts.length < 2) {
+
+  const parsed = splitBindSpec(trimmed);
+  if (!parsed) {
     return null;
   }
-  const hostToken = (parts[0] ?? "").trim();
-  const containerToken = (parts[1] ?? "").trim();
+
+  const hostToken = parsed.host.trim();
+  const containerToken = parsed.container.trim();
   if (!hostToken || !containerToken || !path.posix.isAbsolute(containerToken)) {
     return null;
   }
-  const optionsToken = parts.slice(2).join(":").trim().toLowerCase();
+  const optionsToken = parsed.options.trim().toLowerCase();
   const optionParts = optionsToken
     ? optionsToken
         .split(",")
@@ -49,6 +57,37 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
     hostRoot: path.resolve(hostToken),
     containerRoot: normalizeContainerPath(containerToken),
     writable,
+  };
+}
+
+function splitBindSpec(spec: string): SplitBindSpec | null {
+  // Windows drive-letter host path: C:\\path:/container[:opts] or C:/path:/container[:opts]
+  if (/^[A-Za-z]:[\\/]/.test(spec)) {
+    const hostEnd = spec.indexOf(":", 2);
+    if (hostEnd === -1) {
+      return null;
+    }
+    const host = spec.slice(0, hostEnd);
+    const rest = spec.slice(hostEnd + 1);
+    const optionsStart = rest.indexOf(":");
+    if (optionsStart === -1) {
+      return { host, container: rest, options: "" };
+    }
+    return {
+      host,
+      container: rest.slice(0, optionsStart),
+      options: rest.slice(optionsStart + 1),
+    };
+  }
+
+  const parts = spec.split(":");
+  if (parts.length < 2) {
+    return null;
+  }
+  return {
+    host: parts[0] ?? "",
+    container: parts[1] ?? "",
+    options: parts.slice(2).join(":"),
   };
 }
 
