@@ -70,7 +70,7 @@ export async function captureScreenshot(opts: {
       format,
       ...(quality !== undefined ? { quality } : {}),
       fromSurface: true,
-      captureBeyondViewport: true,
+      captureBeyondViewport: Boolean(opts.fullPage),
       ...(clip ? { clip } : {}),
     })) as { data?: string };
 

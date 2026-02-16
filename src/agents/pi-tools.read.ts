@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { detectMime } from "../media/mime.js";
@@ -357,8 +359,27 @@ export function createOpenClawReadTool(base: AnyAgentTool): AnyAgentTool {
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
-      const result = await base.execute(toolCallId, normalized ?? params, signal);
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
+
+      // Check if path is a directory before attempting to read
+      if (filePath !== "<unknown>") {
+        try {
+          const stat = await fs.stat(filePath);
+          if (stat.isDirectory()) {
+            throw new Error(
+              `Cannot read '${filePath}': path is a directory, not a file. Use a specific file path (e.g., ${filePath}/filename.md)`,
+            );
+          }
+        } catch (err) {
+          // Re-throw our directory error, let other errors (like ENOENT) fall through to base
+          if (err instanceof Error && err.message.includes("path is a directory")) {
+            throw err;
+          }
+          // For other errors (like file not found), let the base tool handle it
+        }
+      }
+
+      const result = await base.execute(toolCallId, normalized ?? params, signal);
       const normalizedResult = await normalizeReadImageResult(result, filePath);
       return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
     },
