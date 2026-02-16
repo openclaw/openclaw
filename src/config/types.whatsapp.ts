@@ -129,6 +129,8 @@ export type WhatsAppAccountConfig = {
   /** Same-phone setup for this account (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   allowFrom?: string[];
+  /** Optional blocklist for WhatsApp senders (E.164). Blocked senders are rejected before any other access check. */
+  blockFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
