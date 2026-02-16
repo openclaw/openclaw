@@ -5,17 +5,15 @@ import type { AnyAgentTool } from "./common.js";
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
-import { registerSubagentRun } from "../subagent-registry.js";
+import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
+import { countActiveRunsForSession, registerSubagentRun } from "../subagent-registry.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   resolveDisplaySessionKey,
@@ -30,7 +28,7 @@ const SessionsSpawnToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  // Back-compat alias. Prefer runTimeoutSeconds.
+  // Back-compat: older callers used timeoutSeconds for this tool.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
 });
@@ -99,32 +97,24 @@ export function createSessionsSpawnTool(opts?: {
         to: opts?.agentTo,
         threadId: opts?.agentThreadId,
       });
-      const runTimeoutSeconds = (() => {
-        const explicit =
-          typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
-            ? Math.max(0, Math.floor(params.runTimeoutSeconds))
+      // Default to 0 (no timeout) when omitted. Sub-agent runs are long-lived
+      // by default and should not inherit the main agent 600s timeout.
+      const timeoutSecondsCandidate =
+        typeof params.runTimeoutSeconds === "number"
+          ? params.runTimeoutSeconds
+          : typeof params.timeoutSeconds === "number"
+            ? params.timeoutSeconds
             : undefined;
-        if (explicit !== undefined) {
-          return explicit;
-        }
-        const legacy =
-          typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-            ? Math.max(0, Math.floor(params.timeoutSeconds))
-            : undefined;
-        return legacy ?? 0;
-      })();
+      const runTimeoutSeconds =
+        typeof timeoutSecondsCandidate === "number" && Number.isFinite(timeoutSecondsCandidate)
+          ? Math.max(0, Math.floor(timeoutSecondsCandidate))
+          : 0;
       let modelWarning: string | undefined;
       let modelApplied = false;
 
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
-      if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
-        return jsonResult({
-          status: "forbidden",
-          error: "sessions_spawn is not allowed from sub-agent sessions",
-        });
-      }
       const requesterInternalKey = requesterSessionKey
         ? resolveInternalSessionKey({
             key: requesterSessionKey,
@@ -137,6 +127,24 @@ export function createSessionsSpawnTool(opts?: {
         alias,
         mainKey,
       });
+
+      const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
+      const maxSpawnDepth = cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+      if (callerDepth >= maxSpawnDepth) {
+        return jsonResult({
+          status: "forbidden",
+          error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxSpawnDepth})`,
+        });
+      }
+
+      const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+      const activeChildren = countActiveRunsForSession(requesterInternalKey);
+      if (activeChildren >= maxChildren) {
+        return jsonResult({
+          status: "forbidden",
+          error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
+        });
+      }
 
       const requesterAgentId = normalizeAgentId(
         opts?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
@@ -166,12 +174,19 @@ export function createSessionsSpawnTool(opts?: {
         }
       }
       const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+      const childDepth = callerDepth + 1;
       const spawnedByKey = requesterInternalKey;
       const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+      const runtimeDefaultModel = resolveDefaultModelForAgent({
+        cfg,
+        agentId: targetAgentId,
+      });
       const resolvedModel =
         normalizeModelSelection(modelOverride) ??
         normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
-        normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
+        normalizeModelSelection(cfg.agents?.defaults?.subagents?.model) ??
+        normalizeModelSelection(cfg.agents?.defaults?.model?.primary) ??
+        normalizeModelSelection(`${runtimeDefaultModel.provider}/${runtimeDefaultModel.model}`);
 
       const resolvedThinkingDefaultRaw =
         readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
@@ -191,6 +206,22 @@ export function createSessionsSpawnTool(opts?: {
         }
         thinkingOverride = normalized;
       }
+      try {
+        await callGateway({
+          method: "sessions.patch",
+          params: { key: childSessionKey, spawnDepth: childDepth },
+          timeoutMs: 10_000,
+        });
+      } catch (err) {
+        const messageText =
+          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        return jsonResult({
+          status: "error",
+          error: messageText,
+          childSessionKey,
+        });
+      }
+
       if (resolvedModel) {
         try {
           await callGateway({
@@ -240,6 +271,8 @@ export function createSessionsSpawnTool(opts?: {
         childSessionKey,
         label: label || undefined,
         task,
+        childDepth,
+        maxSpawnDepth,
       });
 
       const childIdem = crypto.randomUUID();
@@ -260,7 +293,7 @@ export function createSessionsSpawnTool(opts?: {
             lane: AGENT_LANE_SUBAGENT,
             extraSystemPrompt: childSystemPrompt,
             thinking: thinkingOverride,
-            timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
+            timeout: runTimeoutSeconds,
             label: label || undefined,
             spawnedBy: spawnedByKey,
             groupId: opts?.agentGroupId ?? undefined,
@@ -292,6 +325,7 @@ export function createSessionsSpawnTool(opts?: {
         task,
         cleanup,
         label: label || undefined,
+        model: resolvedModel,
         runTimeoutSeconds,
       });
 

@@ -5,6 +5,10 @@ import { EventEmitter } from "node:events";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  hasInterSessionUserProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
+import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
@@ -14,6 +18,7 @@ import {
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
   sanitizeToolCallInputs,
+  stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
@@ -44,6 +49,7 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "maxProperties",
 ]);
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 
 function isValidAntigravitySignature(value: unknown): value is string {
   if (typeof value !== "string") {
@@ -59,7 +65,7 @@ function isValidAntigravitySignature(value: unknown): value is string {
   return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
 }
 
-function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {
@@ -115,6 +121,85 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
       continue;
     }
     out.push(contentChanged ? { ...assistant, content: nextContent } : msg);
+  }
+  return touched ? out : messages;
+}
+
+function buildInterSessionPrefix(message: AgentMessage): string {
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  if (!provenance) {
+    return INTER_SESSION_PREFIX_BASE;
+  }
+  const details = [
+    provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
+    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
+    provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
+  ].filter(Boolean);
+  if (details.length === 0) {
+    return INTER_SESSION_PREFIX_BASE;
+  }
+  return `${INTER_SESSION_PREFIX_BASE} ${details.join(" ")}`;
+}
+
+function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!hasInterSessionUserProvenance(msg as { role?: unknown; provenance?: unknown })) {
+      out.push(msg);
+      continue;
+    }
+    const prefix = buildInterSessionPrefix(msg);
+    const user = msg as Extract<AgentMessage, { role: "user" }>;
+    if (typeof user.content === "string") {
+      if (user.content.startsWith(prefix)) {
+        out.push(msg);
+        continue;
+      }
+      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: `${prefix}\n${user.content}`,
+      } as AgentMessage);
+      continue;
+    }
+    if (!Array.isArray(user.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const textIndex = user.content.findIndex(
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    );
+
+    if (textIndex >= 0) {
+      const existing = user.content[textIndex] as { type: "text"; text: string };
+      if (existing.text.startsWith(prefix)) {
+        out.push(msg);
+        continue;
+      }
+      const nextContent = [...user.content];
+      nextContent[textIndex] = {
+        ...existing,
+        text: `${prefix}\n${existing.text}`,
+      };
+      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: nextContent,
+      } as AgentMessage);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...(msg as unknown as Record<string, unknown>),
+      content: [{ type: "text", text: prefix }, ...user.content],
+    } as AgentMessage);
   }
   return touched ? out : messages;
 }
@@ -339,13 +424,18 @@ export async function sanitizeSessionHistory(params: {
       provider: params.provider,
       modelId: params.modelId,
     });
-  const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
-    sanitizeMode: policy.sanitizeMode,
-    sanitizeToolCallIds: policy.sanitizeToolCallIds,
-    toolCallIdMode: policy.toolCallIdMode,
-    preserveSignatures: policy.preserveSignatures,
-    sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-  });
+  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const sanitizedImages = await sanitizeSessionMessagesImages(
+    withInterSessionMarkers,
+    "session:history",
+    {
+      sanitizeMode: policy.sanitizeMode,
+      sanitizeToolCallIds: policy.sanitizeToolCallIds,
+      toolCallIdMode: policy.toolCallIdMode,
+      preserveSignatures: policy.preserveSignatures,
+      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+    },
+  );
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
@@ -353,6 +443,7 @@ export async function sanitizeSessionHistory(params: {
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
+  const sanitizedToolResults = stripToolResultDetails(repairedTools);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
@@ -368,8 +459,8 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+      : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

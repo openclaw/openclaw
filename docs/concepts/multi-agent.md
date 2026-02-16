@@ -82,7 +82,7 @@ This lets **multiple people** share one Gateway server while keeping their AI �
 
 ## One WhatsApp number, multiple people (DM split)
 
-You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "dm"`. Replies still come from the same WhatsApp number (no per‑agent sender identity).
+You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "direct"`. Replies still come from the same WhatsApp number (no per‑agent sender identity).
 
 Important detail: direct chats collapse to the agent’s **main session key**, so true isolation requires **one agent per person**.
 
@@ -97,8 +97,14 @@ Example:
     ],
   },
   bindings: [
-    { agentId: "alex", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230001" } } },
-    { agentId: "mia", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230002" } } },
+    {
+      agentId: "alex",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230001" } },
+    },
+    {
+      agentId: "mia",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230002" } },
+    },
   ],
   channels: {
     whatsapp: {
@@ -119,11 +125,15 @@ Notes:
 Bindings are **deterministic** and **most-specific wins**:
 
 1. `peer` match (exact DM/group/channel id)
-2. `guildId` (Discord)
-3. `teamId` (Slack)
-4. `accountId` match for a channel
-5. channel-level match (`accountId: "*"`)
-6. fallback to default agent (`agents.list[].default`, else first list entry, default: `main`)
+2. `parentPeer` match (thread inheritance)
+3. `guildId + roles` (Discord role routing)
+4. `guildId` (Discord)
+5. `teamId` (Slack)
+6. `accountId` match for a channel
+7. channel-level match (`accountId: "*"`)
+8. fallback to default agent (`agents.list[].default`, else first list entry, default: `main`)
+
+If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
 
 ## Multiple accounts / phone numbers
 
@@ -260,7 +270,10 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
     ],
   },
   bindings: [
-    { agentId: "opus", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551234567" } } },
+    {
+      agentId: "opus",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+    },
     { agentId: "chat", match: { channel: "whatsapp" } },
   ],
 }

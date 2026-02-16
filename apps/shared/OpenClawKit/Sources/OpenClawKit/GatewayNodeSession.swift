@@ -21,6 +21,7 @@ public actor GatewayNodeSession {
     private var activeURL: URL?
     private var activeToken: String?
     private var activePassword: String?
+    private var activeConnectOptionsKey: String?
     private var connectOptions: GatewayConnectOptions?
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
@@ -103,6 +104,42 @@ public actor GatewayNodeSession {
 
     public init() {}
 
+    private func connectOptionsKey(_ options: GatewayConnectOptions) -> String {
+        func sorted(_ values: [String]) -> String {
+            values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .sorted()
+                .joined(separator: ",")
+        }
+        let role = options.role.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scopes = sorted(options.scopes)
+        let caps = sorted(options.caps)
+        let commands = sorted(options.commands)
+        let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
+        let permissions = options.permissions
+            .map { key, value in
+                let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+                return "\(trimmed)=\(value ? "1" : "0")"
+            }
+            .sorted()
+            .joined(separator: ",")
+
+        return [
+            role,
+            scopes,
+            caps,
+            commands,
+            clientId,
+            clientMode,
+            clientDisplayName,
+            includeDeviceIdentity,
+            permissions,
+        ].joined(separator: "|")
+    }
+
     public func connect(
         url: URL,
         token: String?,
@@ -113,9 +150,11 @@ public actor GatewayNodeSession {
         onDisconnected: @escaping @Sendable (String) async -> Void,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse
     ) async throws {
+        let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let shouldReconnect = self.activeURL != url ||
             self.activeToken != token ||
             self.activePassword != password ||
+            self.activeConnectOptionsKey != nextOptionsKey ||
             self.channel == nil
 
         self.connectOptions = connectOptions
@@ -138,12 +177,13 @@ public actor GatewayNodeSession {
                 },
                 connectOptions: connectOptions,
                 disconnectHandler: { [weak self] reason in
-                    await self?.onDisconnected?(reason)
+                    await self?.handleChannelDisconnected(reason)
                 })
             self.channel = channel
             self.activeURL = url
             self.activeToken = token
             self.activePassword = password
+            self.activeConnectOptionsKey = nextOptionsKey
         }
 
         guard let channel = self.channel else {
@@ -157,7 +197,6 @@ public actor GatewayNodeSession {
             _ = await self.waitForSnapshot(timeoutMs: 500)
             await self.notifyConnectedIfNeeded()
         } catch {
-            await onDisconnected(error.localizedDescription)
             throw error
         }
     }
@@ -168,6 +207,7 @@ public actor GatewayNodeSession {
         self.activeURL = nil
         self.activeToken = nil
         self.activePassword = nil
+        self.activeConnectOptionsKey = nil
         self.resetConnectionState()
     }
 
@@ -247,6 +287,13 @@ public actor GatewayNodeSession {
                 waiter.resume(returning: false)
             }
         }
+    }
+
+    private func handleChannelDisconnected(_ reason: String) async {
+        // The underlying channel can auto-reconnect; resetting state here ensures we surface a fresh
+        // onConnected callback once a new snapshot arrives after reconnect.
+        self.resetConnectionState()
+        await self.onDisconnected?(reason)
     }
 
     private func markSnapshotReceived() {

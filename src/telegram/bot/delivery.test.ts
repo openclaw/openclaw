@@ -110,6 +110,37 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("passes mediaLocalRoots to media loading", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendPhoto } } as unknown as Bot;
+    const mediaLocalRoots = ["/tmp/workspace-work"];
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await deliverReplies({
+      replies: [{ mediaUrl: "/tmp/workspace-work/photo.jpg" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      mediaLocalRoots,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith("/tmp/workspace-work/photo.jpg", {
+      localRoots: mediaLocalRoots,
+    });
+  });
+
   it("includes link_preview_options when linkPreview is false", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
@@ -138,7 +169,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("keeps message_thread_id=1 when allowed", async () => {
+  it("does not include message_thread_id for DMs (threads don't exist in private chats)", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 4,
@@ -160,7 +191,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
-      expect.objectContaining({
+      expect.not.objectContaining({
         message_thread_id: 1,
       }),
     );
@@ -194,7 +225,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("uses reply_parameters when quote text is provided", async () => {
+  it("uses reply_to_message_id when quote text is provided", async () => {
     const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 10,
@@ -217,10 +248,14 @@ describe("deliverReplies", () => {
       "123",
       expect.any(String),
       expect.objectContaining({
-        reply_parameters: {
-          message_id: 500,
-          quote: "quoted text",
-        },
+        reply_to_message_id: 500,
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.not.objectContaining({
+        reply_parameters: expect.anything(),
       }),
     );
   });
