@@ -122,11 +122,7 @@ async function promptZalouserAllowFrom(params: {
       );
       continue;
     }
-    const merged = [
-      ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-      ...(results.filter(Boolean) as string[]),
-    ];
-    const unique = mergeAllowFromEntries(undefined, merged);
+    const unique = mergeAllowFromEntries(existingAllowFrom, results.filter(Boolean) as string[]);
     if (accountId === DEFAULT_ACCOUNT_ID) {
       return {
         ...cfg,
