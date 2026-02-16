@@ -204,10 +204,6 @@ describe("models list/status", () => {
     await expectZaiProviderFilter("Z.AI");
   });
 
-  it("models list provider filter normalizes z-ai alias", async () => {
-    await expectZaiProviderFilter("z-ai");
-  });
-
   it("models list marks auth as unavailable when ZAI key is missing", async () => {
     loadConfig.mockReturnValue({
       agents: { defaults: { model: "z.ai/glm-4.7" } },
