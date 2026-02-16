@@ -5,6 +5,9 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
+// Keep in sync with src/auto-reply/tokens.ts.
+const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+
 /**
  * Normalize a raw message object into a consistent structure.
  */
@@ -104,7 +107,10 @@ export function isToolResultMessage(message: unknown): boolean {
  * Pattern matching the HEARTBEAT_OK token with optional surrounding
  * whitespace and short emoji/punctuation (up to 8 extra characters).
  */
-const HEARTBEAT_PATTERN = /^\s*HEARTBEAT_OK[\s\p{Emoji}]{0,8}$/u;
+const HEARTBEAT_PATTERN = new RegExp(
+  `^\\s*${HEARTBEAT_TOKEN}[\\s\\p{Extended_Pictographic}\\uFE0F]{0,8}$`,
+  "u",
+);
 
 /**
  * Check if a message contains only heartbeat acknowledgment content.
@@ -127,10 +133,13 @@ export function isHeartbeatMessage(message: unknown): boolean {
 
   // Check content array — all text items must be heartbeat-only
   if (Array.isArray(m.content)) {
-    const textItems = m.content.filter(
-      (item: Record<string, unknown>) =>
-        (item.type === "text" || item.type === undefined) && typeof item.text === "string",
-    );
+    const textItems = m.content.filter((item: unknown) => {
+      if (item == null || typeof item !== "object") {
+        return false;
+      }
+      const o = item as Record<string, unknown>;
+      return (o.type === "text" || o.type === undefined) && typeof o.text === "string";
+    });
     if (
       textItems.length > 0 &&
       textItems.every((item: Record<string, unknown>) =>

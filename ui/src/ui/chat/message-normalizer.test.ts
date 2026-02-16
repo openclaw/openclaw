@@ -3,6 +3,7 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
   isToolResultMessage,
+  isHeartbeatMessage,
 } from "./message-normalizer.ts";
 
 describe("message-normalizer", () => {
@@ -174,6 +175,106 @@ describe("message-normalizer", () => {
     it("returns false for non-string role", () => {
       expect(isToolResultMessage({ role: 123 })).toBe(false);
       expect(isToolResultMessage({ role: null })).toBe(false);
+    });
+  });
+
+  describe("isHeartbeatMessage", () => {
+    it("detects heartbeat in text field", () => {
+      expect(isHeartbeatMessage({ text: "HEARTBEAT_OK" })).toBe(true);
+    });
+
+    it("detects heartbeat in string content", () => {
+      expect(isHeartbeatMessage({ content: "HEARTBEAT_OK" })).toBe(true);
+    });
+
+    it("detects heartbeat with leading/trailing whitespace", () => {
+      expect(isHeartbeatMessage({ text: "  HEARTBEAT_OK  " })).toBe(true);
+      expect(isHeartbeatMessage({ content: "\nHEARTBEAT_OK\n" })).toBe(true);
+    });
+
+    it("detects heartbeat with trailing emoji", () => {
+      expect(isHeartbeatMessage({ text: "HEARTBEAT_OK \u{1F49A}" })).toBe(true);
+    });
+
+    it("detects heartbeat in content array with single text item", () => {
+      expect(
+        isHeartbeatMessage({
+          content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        }),
+      ).toBe(true);
+    });
+
+    it("detects heartbeat in content array with undefined type", () => {
+      expect(
+        isHeartbeatMessage({
+          content: [{ text: "HEARTBEAT_OK" }],
+        }),
+      ).toBe(true);
+    });
+
+    it("detects heartbeat across multiple text items in content array", () => {
+      expect(
+        isHeartbeatMessage({
+          content: [
+            { type: "text", text: "HEARTBEAT_OK" },
+            { type: "text", text: "HEARTBEAT_OK \u{2764}\u{FE0F}" },
+          ],
+        }),
+      ).toBe(true);
+    });
+
+    it("returns false for non-heartbeat text", () => {
+      expect(isHeartbeatMessage({ text: "Hello world" })).toBe(false);
+      expect(isHeartbeatMessage({ content: "Normal message" })).toBe(false);
+    });
+
+    it("returns false when heartbeat is embedded in longer text", () => {
+      expect(isHeartbeatMessage({ text: "prefix HEARTBEAT_OK suffix that is long" })).toBe(false);
+    });
+
+    it("returns false for empty message", () => {
+      expect(isHeartbeatMessage({})).toBe(false);
+    });
+
+    it("returns false for null/undefined fields", () => {
+      expect(isHeartbeatMessage({ text: null })).toBe(false);
+      expect(isHeartbeatMessage({ content: undefined })).toBe(false);
+    });
+
+    it("returns false when content array has non-heartbeat text items", () => {
+      expect(
+        isHeartbeatMessage({
+          content: [
+            { type: "text", text: "HEARTBEAT_OK" },
+            { type: "text", text: "Some other text" },
+          ],
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for empty content array", () => {
+      expect(isHeartbeatMessage({ content: [] })).toBe(false);
+    });
+
+    it("returns false when content array has only non-text items", () => {
+      expect(
+        isHeartbeatMessage({
+          content: [{ type: "image", url: "https://example.com/img.png" }],
+        }),
+      ).toBe(false);
+    });
+
+    it("handles null items in content array safely", () => {
+      expect(
+        isHeartbeatMessage({
+          content: [null, { type: "text", text: "HEARTBEAT_OK" }],
+        }),
+      ).toBe(true);
+    });
+
+    it("does not match digits as emoji", () => {
+      // \p{Emoji} matches digits; \p{Extended_Pictographic} does not
+      expect(isHeartbeatMessage({ text: "HEARTBEAT_OK12345678" })).toBe(false);
     });
   });
 });
