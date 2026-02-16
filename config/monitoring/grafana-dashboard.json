@@ -1,0 +1,157 @@
+{
+  "dashboard": {
+    "title": "OpenClaw Security Dashboard",
+    "tags": ["openclaw", "security"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "type": "graph",
+        "title": "Sandbox Violations Over Time",
+        "targets": [
+          {
+            "expr": "rate(openclaw_sandbox_violations_total[5m])",
+            "legendFormat": "Violations per minute"
+          }
+        ],
+        "alert": {
+          "name": "Sandbox Violations Alert",
+          "conditions": [
+            {
+              "evaluator": { "params": [5], "type": "gt" },
+              "query": { "params": ["A", "5m", "now"] }
+            }
+          ]
+        }
+      },
+      {
+        "id": 2,
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "type": "graph",
+        "title": "Rate Limiting Activity",
+        "targets": [
+          {
+            "expr": "rate(openclaw_rate_limit_exceeded_total[5m])",
+            "legendFormat": "Rate limit triggers per minute"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "type": "graph",
+        "title": "Authentication Failures",
+        "targets": [
+          {
+            "expr": "rate(openclaw_auth_failures_total[5m])",
+            "legendFormat": "Auth failures per minute"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "type": "graph",
+        "title": "Signature Verification Failures",
+        "targets": [
+          {
+            "expr": "rate(openclaw_signature_failures_total[5m])",
+            "legendFormat": "Signature failures per minute"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 16 },
+        "type": "singlestat",
+        "title": "Total Sandbox Violations (24h)",
+        "targets": [
+          {
+            "expr": "increase(openclaw_sandbox_violations_total[24h])"
+          }
+        ],
+        "thresholds": "5,20",
+        "colors": ["green", "yellow", "red"]
+      },
+      {
+        "id": 6,
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 16 },
+        "type": "singlestat",
+        "title": "Registry Tampering Attempts",
+        "targets": [
+          {
+            "expr": "openclaw_registry_tampering_total"
+          }
+        ],
+        "thresholds": "0,1",
+        "colors": ["green", "red", "red"]
+      },
+      {
+        "id": 7,
+        "gridPos": { "h": 4, "w": 6, "x": 12, "y": 16 },
+        "type": "singlestat",
+        "title": "Rate Limit Triggers (1h)",
+        "targets": [
+          {
+            "expr": "increase(openclaw_rate_limit_exceeded_total[1h])"
+          }
+        ],
+        "thresholds": "50,200",
+        "colors": ["green", "yellow", "red"]
+      },
+      {
+        "id": 8,
+        "gridPos": { "h": 4, "w": 6, "x": 18, "y": 16 },
+        "type": "singlestat",
+        "title": "CSRF Triggers (1h)",
+        "targets": [
+          {
+            "expr": "increase(openclaw_csrf_triggered_total[1h])"
+          }
+        ],
+        "thresholds": "10,50",
+        "colors": ["green", "yellow", "red"]
+      },
+      {
+        "id": 9,
+        "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+        "type": "table",
+        "title": "Top Security Events (Last Hour)",
+        "targets": [
+          {
+            "expr": "topk(10, rate(openclaw_security_events_total[1h]))",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+        "type": "graph",
+        "title": "Plugin Load Errors",
+        "targets": [
+          {
+            "expr": "rate(openclaw_plugin_load_errors_total[5m])",
+            "legendFormat": "Load errors per minute"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+        "type": "graph",
+        "title": "Memory Usage",
+        "targets": [
+          {
+            "expr": "openclaw_process_resident_memory_bytes / 1024 / 1024",
+            "legendFormat": "Memory (MB)"
+          }
+        ]
+      }
+    ],
+    "refresh": "10s",
+    "schemaVersion": 16,
+    "version": 1
+  }
+}

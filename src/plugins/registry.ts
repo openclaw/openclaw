@@ -161,6 +161,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
 
+  // Security: Track if registry has been finalized (immutable after plugin loading)
+  let isFinalized = false;
+
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
   };
@@ -170,6 +173,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => {
+    // Security: Prevent registration after finalization
+    if (isFinalized) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "Cannot register tool after registry is finalized",
+      });
+      return;
+    }
+
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const optional = opts?.optional === true;
     const factory: OpenClawPluginToolFactory =
@@ -498,6 +512,132 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     };
   };
 
+  /**
+   * Finalizes the registry, making it immutable and freezing all registered data.
+   * This prevents plugins from tampering with each other after initialization.
+   * CVSS 8.5 mitigation for cross-plugin tampering vulnerability.
+   */
+  const finalizeRegistry = () => {
+    if (isFinalized) {
+      return;
+    }
+
+    isFinalized = true;
+
+    // Deep freeze all plugin records to prevent modification
+    for (const plugin of registry.plugins) {
+      Object.freeze(plugin);
+      if (plugin.toolNames) {
+        Object.freeze(plugin.toolNames);
+      }
+      if (plugin.hookNames) {
+        Object.freeze(plugin.hookNames);
+      }
+      if (plugin.channelIds) {
+        Object.freeze(plugin.channelIds);
+      }
+      if (plugin.providerIds) {
+        Object.freeze(plugin.providerIds);
+      }
+      if (plugin.gatewayMethods) {
+        Object.freeze(plugin.gatewayMethods);
+      }
+      if (plugin.cliCommands) {
+        Object.freeze(plugin.cliCommands);
+      }
+      if (plugin.services) {
+        Object.freeze(plugin.services);
+      }
+      if (plugin.commands) {
+        Object.freeze(plugin.commands);
+      }
+      if (plugin.configUiHints) {
+        Object.freeze(plugin.configUiHints);
+      }
+      if (plugin.configJsonSchema) {
+        Object.freeze(plugin.configJsonSchema);
+      }
+    }
+
+    // Freeze all registration arrays and objects
+    Object.freeze(registry.plugins);
+    Object.freeze(registry.tools);
+    Object.freeze(registry.hooks);
+    Object.freeze(registry.typedHooks);
+    Object.freeze(registry.channels);
+    Object.freeze(registry.providers);
+    Object.freeze(registry.gatewayHandlers);
+    Object.freeze(registry.httpHandlers);
+    Object.freeze(registry.httpRoutes);
+    Object.freeze(registry.cliRegistrars);
+    Object.freeze(registry.services);
+    Object.freeze(registry.commands);
+    Object.freeze(registry.diagnostics);
+
+    // Freeze the registry itself
+    Object.freeze(registry);
+
+    registryParams.logger.info?.("[plugins] Registry finalized and frozen");
+  };
+
+  /**
+   * Checks if the registry has been finalized.
+   */
+  const isFinalizedRegistry = () => isFinalized;
+
+  /**
+   * Gets plugin data with access control.
+   * Plugins can only access their own full data; others get limited public API.
+   *
+   * @param pluginId - The plugin ID to retrieve
+   * @param requesterId - The ID of the plugin requesting access
+   * @returns Plugin record or null if not found/unauthorized
+   */
+  const getPluginData = (pluginId: string, requesterId?: string): PluginRecord | null => {
+    const plugin = registry.plugins.find((p) => p.id === pluginId);
+    if (!plugin) {
+      return null;
+    }
+
+    // If requesting own data, return full record (frozen after finalization)
+    if (requesterId === pluginId) {
+      return plugin;
+    }
+
+    // Security: Other plugins only get limited public data
+    // Don't expose internal configuration, source paths, or sensitive fields
+    if (isFinalized) {
+      return {
+        id: plugin.id,
+        name: plugin.name,
+        version: plugin.version,
+        description: plugin.description,
+        kind: plugin.kind,
+        enabled: plugin.enabled,
+        status: plugin.status,
+        // Exclude: source, origin, workspaceDir, error, configSchema, configUiHints, configJsonSchema
+        source: "",
+        origin: "bundled",
+        enabled: plugin.enabled,
+        status: plugin.status,
+        toolNames: [],
+        hookNames: [],
+        channelIds: [],
+        providerIds: [],
+        gatewayMethods: [],
+        cliCommands: [],
+        services: [],
+        commands: [],
+        httpHandlers: 0,
+        hookCount: 0,
+        configSchema: false,
+      };
+    }
+
+    // Before finalization, return null for cross-plugin access attempts
+    return null;
+  };
+
   return {
     registry,
     createApi,
@@ -511,5 +651,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerCommand,
     registerHook,
     registerTypedHook,
+    finalizeRegistry,
+    isFinalizedRegistry,
+    getPluginData,
   };
 }

@@ -216,6 +216,8 @@ export async function monitorMSTeamsProvider(
 
   // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
+  const helmet = await import("helmet");
+  const rateLimit = await import("express-rate-limit");
 
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
@@ -237,8 +239,38 @@ export async function monitorMSTeamsProvider(
     log,
   });
 
-  // Create Express server
+  // Create Express server with security middleware
   const expressApp = express.default();
+
+  // Security headers
+  expressApp.use(
+    helmet.default({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "https:"],
+        },
+      },
+      hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
+      },
+    }),
+  );
+
+  // Rate limiting - 100 requests per 15 minutes per IP
+  const limiter = rateLimit.default({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: "Too many requests from this IP, please try again later.",
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  expressApp.use(limiter);
+
   expressApp.use(express.json());
   expressApp.use(authorizeJWT(authConfig));
 

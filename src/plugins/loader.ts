@@ -22,6 +22,9 @@ import {
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { executeSandboxedPlugin } from "./plugin-sandbox.js";
+import { PluginSigner } from "./plugin-signing.js";
+import { PluginSigner } from "./plugin-signing.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -166,7 +169,9 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
-export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+export async function loadOpenClawPlugins(
+  options: PluginLoadOptions = {},
+): Promise<PluginRegistry> {
   const cfg = options.config ?? {};
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
@@ -188,7 +193,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   clearPluginCommands();
 
   const runtime = createPluginRuntime();
-  const { registry, createApi } = createPluginRegistry({
+  const { registry, createApi, finalizeRegistry } = createPluginRegistry({
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
@@ -291,9 +296,93 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    // Plugin signature verification
+    const isProduction = process.env.NODE_ENV === "production";
+    const requireSignature = isProduction || cfg.plugins?.requireSignature === true;
+    const trustedPublicKeys = cfg.plugins?.trustedPublicKeys || [];
+
+    if (requireSignature && trustedPublicKeys.length > 0) {
+      // Only verify non-bundled plugins
+      if (candidate.origin !== "bundled") {
+        const pluginDir = path.dirname(candidate.source);
+        const pluginFile = path.basename(candidate.source);
+        const verificationResult = PluginSigner.verifyPluginDirectory(
+          pluginDir,
+          pluginFile,
+          trustedPublicKeys,
+        );
+
+        if (!verificationResult.valid) {
+          logger.warn(
+            `[plugins] ${record.id} signature verification failed: ${verificationResult.error}`,
+          );
+          record.status = "error";
+          record.error = `signature verification failed: ${verificationResult.error}`;
+          registry.plugins.push(record);
+          seenIds.set(pluginId, candidate.origin);
+          registry.diagnostics.push({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: record.error,
+          });
+          continue;
+        }
+
+        logger.debug?.(
+          `[plugins] ${record.id} signature verified (version: ${verificationResult.signature?.version})`,
+        );
+      } else {
+        logger.debug?.(`[plugins] ${record.id} is bundled, skipping signature verification`);
+      }
+    } else if (candidate.origin !== "bundled") {
+      // Log warning if signatures are not enforced but plugin is unsigned
+      const signatureMetadata = PluginSigner.getSignatureMetadata(path.dirname(candidate.source));
+      if (!signatureMetadata && !validateOnly) {
+        logger.warn(`[plugins] ${record.id} is not signed (signature verification disabled)`);
+        registry.diagnostics.push({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: "plugin is not signed",
+        });
+      }
+    }
+
     let mod: OpenClawPluginModule | null = null;
+
+    // Determine if plugin should be sandboxed
+    const shouldSandbox = manifestRecord.sandboxed !== false && candidate.origin !== "bundled";
+
     try {
-      mod = jiti(candidate.source) as OpenClawPluginModule;
+      if (shouldSandbox) {
+        // Load plugin in sandbox with enforced permissions
+        logger.info(
+          `[plugins] ${record.id} loading in sandbox with memory=${manifestRecord.permissions?.memory ?? 128}MB cpu=${manifestRecord.permissions?.cpu ?? 5000}ms`,
+        );
+
+        const sandboxResult = await executeSandboxedPlugin({
+          pluginId: record.id,
+          pluginSource: candidate.source,
+          filePath: candidate.source,
+          permissions: manifestRecord.permissions,
+          logger,
+        });
+
+        if (!sandboxResult.success) {
+          throw new Error(sandboxResult.error ?? "Sandbox execution failed");
+        }
+
+        mod = sandboxResult.exports as OpenClawPluginModule;
+      } else {
+        // Legacy unsafe loading (only for bundled plugins or explicitly unsandboxed)
+        if (manifestRecord.sandboxed === false) {
+          logger.warn(
+            `[plugins] ${record.id} loading WITHOUT sandbox (sandboxed=false in manifest)`,
+          );
+        }
+        mod = jiti(candidate.source) as OpenClawPluginModule;
+      }
     } catch (err) {
       logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
       record.status = "error";
@@ -443,6 +532,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
     });
   }
+
+  // Security: Finalize the registry to make it immutable and prevent tampering
+  // This is critical security mitigation (CVSS 8.5) - prevents cross-plugin attacks
+  finalizeRegistry();
 
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);

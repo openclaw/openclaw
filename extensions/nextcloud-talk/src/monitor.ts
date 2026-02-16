@@ -78,7 +78,18 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
 } {
   const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
 
+  // Import security middleware
+  let securityMiddleware: any = null;
+  import("../../../src/plugins/http-security-middleware.js")
+    .then(({ webhookSecurity }) => {
+      securityMiddleware = webhookSecurity({ rateLimit: { max: 50 } });
+    })
+    .catch((err) => {
+      console.warn("[nextcloud-talk] Failed to load security middleware:", err);
+    });
+
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    // Health check endpoint - no security needed
     if (req.url === HEALTH_PATH) {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("ok");
@@ -91,61 +102,71 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       return;
     }
 
-    try {
-      const body = await readBody(req);
+    // Apply security middleware if loaded
+    const handleRequest = async () => {
+      try {
+        const body = await readBody(req);
 
-      const headers = extractNextcloudTalkHeaders(
-        req.headers as Record<string, string | string[] | undefined>,
-      );
-      if (!headers) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Missing signature headers" }));
-        return;
-      }
+        const headers = extractNextcloudTalkHeaders(
+          req.headers as Record<string, string | string[] | undefined>,
+        );
+        if (!headers) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing signature headers" }));
+          return;
+        }
 
-      const isValid = verifyNextcloudTalkSignature({
-        signature: headers.signature,
-        random: headers.random,
-        body,
-        secret,
-      });
+        const isValid = verifyNextcloudTalkSignature({
+          signature: headers.signature,
+          random: headers.random,
+          body,
+          secret,
+        });
 
-      if (!isValid) {
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid signature" }));
-        return;
-      }
+        if (!isValid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid signature" }));
+          return;
+        }
 
-      const payload = parseWebhookPayload(body);
-      if (!payload) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid payload format" }));
-        return;
-      }
+        const payload = parseWebhookPayload(body);
+        if (!payload) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid payload format" }));
+          return;
+        }
 
-      if (payload.type !== "Create") {
+        if (payload.type !== "Create") {
+          res.writeHead(200);
+          res.end();
+          return;
+        }
+
+        const message = payloadToInboundMessage(payload);
+
         res.writeHead(200);
         res.end();
-        return;
-      }
 
-      const message = payloadToInboundMessage(payload);
-
-      res.writeHead(200);
-      res.end();
-
-      try {
-        await onMessage(message);
+        try {
+          await onMessage(message);
+        } catch (err) {
+          onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        }
       } catch (err) {
-        onError?.(err instanceof Error ? err : new Error(formatError(err)));
+        const error = err instanceof Error ? err : new Error(formatError(err));
+        onError?.(error);
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Internal server error" }));
+        }
       }
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(formatError(err));
-      onError?.(error);
-      if (!res.headersSent) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Internal server error" }));
-      }
+    };
+
+    // Apply security middleware if available
+    if (securityMiddleware) {
+      securityMiddleware(req, res, handleRequest);
+    } else {
+      await handleRequest();
     }
   });
 

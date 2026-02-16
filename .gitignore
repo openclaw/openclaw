@@ -82,3 +82,8 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 local/
+
+# Plugin signing keys (NEVER COMMIT PRIVATE KEYS)
+keys/
+*.pem
+!**/test/**/*.pem

@@ -1,0 +1,219 @@
+# Prometheus Alert Rules for OpenClaw Security
+
+groups:
+  - name: security_alerts
+    interval: 30s
+    rules:
+      # Plugin Sandbox Violations
+      - alert: CriticalSandboxViolations
+        expr: rate(openclaw_sandbox_violations_total[1h]) > 20
+        for: 5m
+        labels:
+          severity: critical
+          component: plugin_sandbox
+        annotations:
+          summary: "Critical: High sandbox violation rate"
+          description: "Sandbox violations: {{ $value }} per hour (threshold: 20)"
+          action: "Disable untrusted plugins immediately. Check logs for attacking plugin."
+
+      - alert: WarningSandboxViolations
+        expr: rate(openclaw_sandbox_violations_total[1h]) > 5
+        for: 10m
+        labels:
+          severity: warning
+          component: plugin_sandbox
+        annotations:
+          summary: "Warning: Elevated sandbox violations"
+          description: "Sandbox violations: {{ $value }} per hour (threshold: 5)"
+          action: "Review plugin behavior. May indicate misconfigured plugin."
+
+      # Rate Limiting
+      - alert: PossibleDDoSAttack
+        expr: rate(openclaw_rate_limit_exceeded_total[1h]) > 200
+        for: 2m
+        labels:
+          severity: critical
+          component: http_security
+        annotations:
+          summary: "Critical: Possible DDoS attack"
+          description: "Rate limit triggers: {{ $value }} per hour (threshold: 200)"
+          action: "Check attacking IPs. Enable Cloudflare/WAF. Scale infrastructure."
+
+      - alert: HighRateLimiting
+        expr: rate(openclaw_rate_limit_exceeded_total[1h]) > 50
+        for: 5m
+        labels:
+          severity: warning
+          component: http_security
+        annotations:
+          summary: "Warning: High rate limiting activity"
+          description: "Rate limit triggers: {{ $value }} per hour (threshold: 50)"
+          action: "Monitor for patterns. May be legitimate traffic spike."
+
+      # Authentication Failures
+      - alert: BruteForceAttack
+        expr: rate(openclaw_auth_failures_total[1h]) > 100
+        for: 5m
+        labels:
+          severity: critical
+          component: authentication
+        annotations:
+          summary: "Critical: Possible brute force attack"
+          description: "Auth failures: {{ $value }} per hour (threshold: 100)"
+          action: "Block attacking IPs. Enable CAPTCHA. Alert affected users."
+
+      - alert: ElevatedAuthFailures
+        expr: rate(openclaw_auth_failures_total[1h]) > 20
+        for: 10m
+        labels:
+          severity: warning
+          component: authentication
+        annotations:
+          summary: "Warning: Elevated authentication failures"
+          description: "Auth failures: {{ $value }} per hour (threshold: 20)"
+          action: "Monitor for patterns. Check if specific user accounts."
+
+      # Signature Verification
+      - alert: SignatureVerificationFailures
+        expr: rate(openclaw_signature_failures_total[1h]) > 5
+        for: 10m
+        labels:
+          severity: critical
+          component: plugin_signing
+        annotations:
+          summary: "Critical: Multiple signature verification failures"
+          description: "Signature failures: {{ $value }} per hour"
+          action: "Check for plugin tampering. Investigate distribution channels."
+
+      # Registry Tampering
+      - alert: RegistryTamperingAttempt
+        expr: increase(openclaw_registry_tampering_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: plugin_registry
+        annotations:
+          summary: "CRITICAL: Registry tampering detected!"
+          description: "Registry tampering attempts detected. This should never happen."
+          action: "IMMEDIATE ACTION REQUIRED. Check logs. Disable affected plugins. Escalate to security team."
+
+      # CSRF Triggers
+      - alert: HighCSRFTriggers
+        expr: rate(openclaw_csrf_triggered_total[1h]) > 50
+        for: 5m
+        labels:
+          severity: critical
+          component: http_security
+        annotations:
+          summary: "Critical: High CSRF protection triggers"
+          description: "CSRF triggers: {{ $value }} per hour (threshold: 50)"
+          action: "Check for systematic attack. Review application flow."
+
+      - alert: ElevatedCSRFTriggers
+        expr: rate(openclaw_csrf_triggered_total[1h]) > 10
+        for: 10m
+        labels:
+          severity: warning
+          component: http_security
+        annotations:
+          summary: "Warning: Elevated CSRF triggers"
+          description: "CSRF triggers: {{ $value }} per hour (threshold: 10)"
+          action: "May be user errors with expired tokens. Monitor."
+
+      # Plugin Load Errors
+      - alert: HighPluginLoadFailures
+        expr: rate(openclaw_plugin_load_errors_total[1h]) > 10
+        for: 10m
+        labels:
+          severity: warning
+          component: plugin_system
+        annotations:
+          summary: "Warning: High plugin load failure rate"
+          description: "Plugin load errors: {{ $value }} per hour"
+          action: "Check for corrupt plugins or dependency issues."
+
+      # System Health
+      - alert: HighMemoryUsage
+        expr: (openclaw_process_resident_memory_bytes / openclaw_os_total_memory_bytes) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Warning: High memory usage"
+          description: "Memory usage: {{ $value | humanizePercentage }}"
+          action: "Check for memory leaks. Consider scaling up."
+
+      - alert: CriticalMemoryUsage
+        expr: (openclaw_process_resident_memory_bytes / openclaw_os_total_memory_bytes) > 0.95
+        for: 2m
+        labels:
+          severity: critical
+          component: system
+        annotations:
+          summary: "Critical: Memory exhaustion imminent"
+          description: "Memory usage: {{ $value | humanizePercentage }}"
+          action: "System may crash soon. Restart service or scale up immediately."
+
+      # HTTP Errors
+      - alert: HighHTTPErrorRate
+        expr: rate(openclaw_http_requests_total{status=~"5.."}[5m]) > 10
+        for: 5m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "Critical: High HTTP 5xx error rate"
+          description: "5xx errors: {{ $value }} per second"
+          action: "Check application logs. Service may be degraded."
+
+      # Plugin Execution Time
+      - alert: SlowPluginExecution
+        expr: histogram_quantile(0.95, rate(openclaw_plugin_execution_duration_seconds_bucket[5m])) > 10
+        for: 10m
+        labels:
+          severity: warning
+          component: plugin_system
+        annotations:
+          summary: "Warning: Slow plugin execution times"
+          description: "95th percentile execution time: {{ $value }}s (threshold: 10s)"
+          action: "Identify slow plugins. May need optimization or CPU limit enforcement."
+
+  - name: availability_alerts
+    interval: 30s
+    rules:
+      # Service Down
+      - alert: ServiceDown
+        expr: up{job="openclaw"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: service
+        annotations:
+          summary: "CRITICAL: OpenClaw service is down!"
+          description: "Service has been down for more than 1 minute."
+          action: "Check service status. Review logs. Restart if needed."
+
+      # High Response Time
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(openclaw_http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          component: performance
+        annotations:
+          summary: "Warning: High HTTP response times"
+          description: "95th percentile response time: {{ $value }}s (threshold: 2s)"
+          action: "Check system resources. May need to scale up."
+
+      # Low Success Rate
+      - alert: LowSuccessRate
+        expr: (rate(openclaw_http_requests_total{status=~"2.."}[5m]) / rate(openclaw_http_requests_total[5m])) < 0.95
+        for: 5m
+        labels:
+          severity: critical
+          component: availability
+        annotations:
+          summary: "Critical: Low HTTP success rate"
+          description: "Success rate: {{ $value | humanizePercentage }} (threshold: 95%)"
+          action: "Service degraded. Check logs and error rates."

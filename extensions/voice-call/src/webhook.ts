@@ -163,12 +163,19 @@ export class VoiceCallWebhookServer {
     const { port, bind, path: webhookPath } = this.config.serve;
     const streamPath = this.config.streaming?.streamPath || "/voice/stream";
 
+    // Import security middleware
+    const { webhookSecurity } = await import("../../../src/plugins/http-security-middleware.js");
+    const securityMiddleware = webhookSecurity({ rateLimit: { max: 50 } });
+
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
-        this.handleRequest(req, res, webhookPath).catch((err) => {
-          console.error("[voice-call] Webhook error:", err);
-          res.statusCode = 500;
-          res.end("Internal Server Error");
+        // Apply security middleware first
+        securityMiddleware(req, res, () => {
+          this.handleRequest(req, res, webhookPath).catch((err) => {
+            console.error("[voice-call] Webhook error:", err);
+            res.statusCode = 500;
+            res.end("Internal Server Error");
+          });
         });
       });
 

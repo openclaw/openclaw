@@ -196,8 +196,20 @@ async function monitorWebhook({
 
   log(`feishu[${accountId}]: starting Webhook server on port ${port}, path ${path}...`);
 
+  // Import security middleware
+  const { webhookSecurity } = await import("../../../src/plugins/http-security-middleware.js");
+  const securityMiddleware = webhookSecurity({ rateLimit: { max: 50 } });
+
   const server = http.createServer();
-  server.on("request", Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true }));
+  const larkHandler = Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true });
+
+  // Apply security middleware before Lark handler
+  server.on("request", (req, res) => {
+    securityMiddleware(req, res, () => {
+      larkHandler(req, res);
+    });
+  });
+
   httpServers.set(accountId, server);
 
   return new Promise((resolve, reject) => {

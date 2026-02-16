@@ -1,0 +1,44 @@
+[Unit]
+Description=OpenClaw Security Monitoring Service
+After=network.target openclaw.service
+Requires=openclaw.service
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/openclaw
+Environment="NODE_ENV=production"
+Environment="SECURITY_LOG=/var/log/openclaw/security.log"
+Environment="APP_LOG=/var/log/openclaw/application.log"
+Environment="ACCESS_LOG=/var/log/openclaw/access.log"
+Environment="METRICS_DIR=/var/lib/openclaw/metrics"
+Environment="ALERT_EMAIL=security-team@example.com"
+# Environment="SLACK_WEBHOOK=https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+# Environment="PAGERDUTY_KEY=your-pagerduty-routing-key"
+
+ExecStart=/usr/bin/node --import tsx /opt/openclaw/scripts/security-monitoring.ts
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-security-monitor
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/openclaw/metrics /var/log/openclaw
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

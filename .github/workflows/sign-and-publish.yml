@@ -1,0 +1,139 @@
+name: Sign and Publish Plugin
+
+on:
+  push:
+    tags:
+      - "plugin-*"
+  workflow_dispatch:
+    inputs:
+      plugin_path:
+        description: "Path to plugin directory"
+        required: true
+      version:
+        description: "Plugin version"
+        required: true
+
+jobs:
+  sign-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Extract plugin info from tag
+        if: github.event_name == 'push'
+        id: tag_info
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          # Expected format: plugin-<name>-v<version>
+          # Example: plugin-memory-sqlite-v1.0.0
+          PLUGIN_NAME=$(echo $TAG_NAME | sed 's/plugin-\(.*\)-v.*/\1/')
+          VERSION=$(echo $TAG_NAME | sed 's/.*-v\(.*\)/\1/')
+          echo "plugin_name=$PLUGIN_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set plugin path from manual input
+        if: github.event_name == 'workflow_dispatch'
+        id: manual_info
+        run: |
+          echo "plugin_path=${{ github.event.inputs.plugin_path }}" >> $GITHUB_OUTPUT
+          echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+
+      - name: Setup signing key
+        env:
+          PLUGIN_SIGNING_KEY_BASE64: ${{ secrets.PLUGIN_SIGNING_KEY }}
+        run: |
+          mkdir -p keys
+          echo "$PLUGIN_SIGNING_KEY_BASE64" | base64 -d > keys/plugin-signing-key.pem
+          chmod 600 keys/plugin-signing-key.pem
+
+      - name: Sign plugin (from tag)
+        if: github.event_name == 'push'
+        env:
+          PLUGIN_SIGNING_KEY: ./keys/plugin-signing-key.pem
+        run: |
+          PLUGIN_DIR="./plugins/${{ steps.tag_info.outputs.plugin_name }}"
+          PLUGIN_FILE="$PLUGIN_DIR/index.ts"
+
+          if [ ! -f "$PLUGIN_FILE" ]; then
+            echo "Error: Plugin file not found at $PLUGIN_FILE"
+            exit 1
+          fi
+
+          pnpm tsx scripts/sign-plugin.ts "$PLUGIN_FILE" "${{ steps.tag_info.outputs.version }}"
+
+      - name: Sign plugin (manual)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PLUGIN_SIGNING_KEY: ./keys/plugin-signing-key.pem
+        run: |
+          pnpm tsx scripts/sign-plugin.ts "${{ github.event.inputs.plugin_path }}" "${{ github.event.inputs.version }}"
+
+      - name: Verify signature
+        run: |
+          if [ -f "./plugins/${{ steps.tag_info.outputs.plugin_name }}/plugin.signature.json" ]; then
+            echo "✅ Signature file created successfully"
+            cat "./plugins/${{ steps.tag_info.outputs.plugin_name }}/plugin.signature.json"
+          elif [ -f "$(dirname ${{ github.event.inputs.plugin_path }})/plugin.signature.json" ]; then
+            echo "✅ Signature file created successfully"
+            cat "$(dirname ${{ github.event.inputs.plugin_path }})/plugin.signature.json"
+          else
+            echo "❌ Signature file not found"
+            exit 1
+          fi
+
+      - name: Create release artifact
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            PLUGIN_DIR="./plugins/${{ steps.tag_info.outputs.plugin_name }}"
+            ARTIFACT_NAME="${{ steps.tag_info.outputs.plugin_name }}-${{ steps.tag_info.outputs.version }}.tar.gz"
+          else
+            PLUGIN_DIR="$(dirname ${{ github.event.inputs.plugin_path }})"
+            PLUGIN_NAME=$(basename "$PLUGIN_DIR")
+            ARTIFACT_NAME="${PLUGIN_NAME}-${{ github.event.inputs.version }}.tar.gz"
+          fi
+
+          tar -czf "$ARTIFACT_NAME" -C "$(dirname $PLUGIN_DIR)" "$(basename $PLUGIN_DIR)"
+          echo "ARTIFACT_PATH=$ARTIFACT_NAME" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT_PATH }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-plugin
+          path: ${{ env.ARTIFACT_PATH }}
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f keys/plugin-signing-key.pem
+          echo "✅ Cleanup complete"

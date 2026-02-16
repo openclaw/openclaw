@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { PluginPermissions } from "./plugin-permissions.js";
 import type { PluginConfigUiHint, PluginKind } from "./types.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { isRecord } from "../utils.js";
@@ -18,6 +19,8 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  permissions?: Partial<PluginPermissions>;
+  sandboxed?: boolean;
 };
 
 export type PluginManifestLoadResult =
@@ -75,10 +78,16 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
   const skills = normalizeStringList(raw.skills);
+  const sandboxed = typeof raw.sandboxed === "boolean" ? raw.sandboxed : true; // Default to sandboxed
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
   if (isRecord(raw.uiHints)) {
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
+  }
+
+  let permissions: Partial<PluginPermissions> | undefined;
+  if (isRecord(raw.permissions)) {
+    permissions = raw.permissions as Partial<PluginPermissions>;
   }
 
   return {
@@ -94,6 +103,8 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
       description,
       version,
       uiHints,
+      permissions,
+      sandboxed,
     },
     manifestPath,
   };

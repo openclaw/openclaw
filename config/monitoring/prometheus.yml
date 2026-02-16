@@ -1,0 +1,67 @@
+# Prometheus Configuration for OpenClaw Security Monitoring
+#
+# Install Prometheus: https://prometheus.io/docs/prometheus/latest/installation/
+# Run: prometheus --config.file=config/monitoring/prometheus.yml
+
+global:
+  scrape_interval: 15s # Scrape targets every 15 seconds
+  evaluation_interval: 15s # Evaluate rules every 15 seconds
+  scrape_timeout: 10s
+
+  # Attach these labels to all time series or alerts
+  external_labels:
+    cluster: "openclaw-production"
+    replica: "1"
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "localhost:9093" # Alertmanager instance
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "alert-rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # OpenClaw main application
+  - job_name: "openclaw"
+    static_configs:
+      - targets: ["localhost:3000"]
+    metrics_path: "/metrics"
+    scrape_interval: 10s
+
+  # OpenClaw security metrics (custom exporter)
+  - job_name: "openclaw-security"
+    static_configs:
+      - targets: ["localhost:9091"]
+    metrics_path: "/security-metrics"
+    scrape_interval: 30s
+
+  # Node.js process metrics
+  - job_name: "openclaw-nodejs"
+    static_configs:
+      - targets: ["localhost:3000"]
+    metrics_path: "/metrics/nodejs"
+    scrape_interval: 15s
+
+  # Plugin metrics
+  - job_name: "openclaw-plugins"
+    static_configs:
+      - targets: ["localhost:3000"]
+    metrics_path: "/metrics/plugins"
+    scrape_interval: 60s
+
+  # System metrics (node_exporter)
+  - job_name: "node"
+    static_configs:
+      - targets: ["localhost:9100"]
+
+# Remote write (optional - for long-term storage)
+# remote_write:
+#   - url: 'https://your-prometheus-instance/api/v1/write'
+#     basic_auth:
+#       username: 'your-username'
+#       password: 'your-password'
