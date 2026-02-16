@@ -59,6 +59,7 @@ describe("discord processDiscordMessage inbound contract", () => {
         attachments: [],
         // oxlint-disable-next-line typescript/no-explicit-any
       } as any,
+      messageChannelId: "c1",
       author: {
         id: "U1",
         username: "alice",
@@ -131,6 +132,7 @@ describe("discord processDiscordMessage inbound contract", () => {
         timestamp: new Date().toISOString(),
         attachments: [],
       },
+      messageChannelId: "c1",
       author: {
         id: "U1",
         username: "alice",
