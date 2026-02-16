@@ -298,6 +298,72 @@
     display: flex; align-items: center; justify-content: center;
     font-size: 0.6rem; color: var(--red); min-height: 20px;
   }
+
+  /* Timeline Coverage View */
+  .timeline-container {
+    overflow-x: auto; overflow-y: visible;
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .timeline-grid {
+    display: grid; min-width: max-content;
+  }
+  .timeline-header-cell {
+    background: var(--surface2); color: var(--accent);
+    font-size: 0.7rem; font-weight: 600;
+    padding: 6px 4px; text-align: center;
+    border-bottom: 2px solid var(--border);
+    border-right: 1px solid var(--border); white-space: nowrap;
+  }
+  .timeline-station-label {
+    background: var(--surface2); color: var(--text);
+    font-size: 0.75rem; font-weight: 600;
+    padding: 6px 10px; display: flex; align-items: center;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    position: sticky; left: 0; z-index: 5; min-width: 110px;
+  }
+  .timeline-cell {
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    padding: 2px 3px; min-width: 54px; min-height: 32px;
+    position: relative; vertical-align: top;
+  }
+  .timeline-worker-bar {
+    border-radius: 3px; padding: 1px 4px;
+    font-size: 0.6rem; font-weight: 600;
+    color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-bottom: 1px; line-height: 1.6; cursor: default;
+    transition: filter 0.2s;
+  }
+  .timeline-worker-bar:hover { filter: brightness(1.15); }
+  .timeline-worker-bar.on-break {
+    background-image: repeating-linear-gradient(
+      45deg, transparent, transparent 3px,
+      rgba(0,0,0,0.35) 3px, rgba(0,0,0,0.35) 6px
+    ) !important;
+  }
+  .timeline-worker-bar.partial-participation { opacity: 0.5; }
+  .timeline-total-label {
+    background: var(--surface2); color: var(--accent);
+    font-size: 0.7rem; font-weight: 700;
+    padding: 6px 10px; display: flex; align-items: center;
+    border-right: 1px solid var(--border);
+    position: sticky; left: 0; z-index: 5;
+  }
+  .timeline-total-cell {
+    border-right: 1px solid var(--border);
+    padding: 4px 2px; text-align: center;
+    font-size: 0.7rem; font-weight: 600;
+    min-width: 54px;
+  }
+  .timeline-total-cell.coverage-full  { background: rgba(74,222,128,0.15); color: var(--green); }
+  .timeline-total-cell.coverage-partial { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .timeline-total-cell.coverage-none  { background: rgba(248,113,113,0.15); color: var(--red); }
+  .timeline-header-cell.hour-boundary,
+  .timeline-cell.hour-boundary,
+  .timeline-total-cell.hour-boundary { border-left: 2px solid rgba(56,189,248,0.35); }
+
   .worker-legend-item {
     display: flex; align-items: center; gap: 6px; padding: 4px 10px;
     background: var(--surface); border-radius: 4px; font-size: 0.75rem;
@@ -564,11 +630,18 @@
       <p style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;">
         Compares station requirements (from Line Balancing) with actual worker assignments.
       </p>
-      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <label style="font-size:0.8rem;color:var(--muted);">View:</label>
         <select class="filter-dropdown" id="coverageViewFilter" onchange="renderCoverageTable()">
           <option value="station">By Station</option>
           <option value="worker">By Worker</option>
+          <option value="timeline">Timeline</option>
+        </select>
+        <label id="timelineResolutionLabel" style="display:none;font-size:0.8rem;color:var(--muted);margin-left:4px;">Resolution:</label>
+        <select class="filter-dropdown" id="timelineResolution" style="display:none;" onchange="renderCoverageTable()">
+          <option value="60">1 Hour</option>
+          <option value="30" selected>30 Min</option>
+          <option value="15">15 Min</option>
         </select>
       </div>
       <div class="table-scroll">
@@ -1722,8 +1795,19 @@ function renderCoverageTable() {
   const tbody = document.getElementById('coverageTableBody');
   if (!thead || !tbody) return;
 
+  // Toggle resolution dropdown visibility (only for Timeline view)
+  const resLabel  = document.getElementById('timelineResolutionLabel');
+  const resSelect = document.getElementById('timelineResolution');
+  if (resLabel && resSelect) {
+    const show = viewFilter === 'timeline';
+    resLabel.style.display  = show ? '' : 'none';
+    resSelect.style.display = show ? '' : 'none';
+  }
+
   if (viewFilter === 'station') {
     renderCoverageByStation(thead, tbody);
+  } else if (viewFilter === 'timeline') {
+    renderCoverageTimeline();
   } else {
     renderCoverageByWorker(thead, tbody);
   }
@@ -1861,6 +1945,154 @@ function renderCoverageByWorker(thead, tbody) {
     <td colspan="2"></td>
   </tr>`;
 
+  tbody.innerHTML = html;
+}
+
+// ── Timeline Coverage helpers ──────────────────────────────────────────────
+
+function parseTimeToMinutes(timeStr) {
+  if (!timeStr || !String(timeStr).includes(':')) return 0;
+  const [h, m] = String(timeStr).split(':').map(Number);
+  return (h * 60) + (m || 0);
+}
+
+function minutesToTimeLabel(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+function getTimelineRange() {
+  let minStart = Infinity, maxEnd = 0;
+  workers.forEach(w => {
+    const s = parseTimeToMinutes(w.shiftStart);
+    const e = parseTimeToMinutes(w.shiftEnd);
+    if (s < minStart) minStart = s;
+    if (e > maxEnd)   maxEnd = e;
+  });
+  if (minStart === Infinity) { minStart = 360; maxEnd = 960; } // fallback 06:00-16:00
+  return { minStart: Math.floor(minStart / 60) * 60, maxEnd: Math.ceil(maxEnd / 60) * 60 };
+}
+
+function generateTimeSlots(minStart, maxEnd, resolutionMin) {
+  const slots = [];
+  for (let t = minStart; t < maxEnd; t += resolutionMin) {
+    slots.push({ start: t, end: t + resolutionMin, label: minutesToTimeLabel(t) });
+  }
+  return slots;
+}
+
+// Break period is placed at the midpoint of the shift (only breakMin is known)
+function getWorkerBreakInterval(w) {
+  const s = parseTimeToMinutes(w.shiftStart);
+  const e = parseTimeToMinutes(w.shiftEnd);
+  const mid = Math.floor((s + e) / 2);
+  const half = Math.floor((w.breakMin || 0) / 2);
+  return { breakStart: mid - half, breakEnd: mid - half + (w.breakMin || 0) };
+}
+
+function isWorkerActiveInSlot(w, slotStart, slotEnd) {
+  const s = parseTimeToMinutes(w.shiftStart);
+  const e = parseTimeToMinutes(w.shiftEnd);
+  if (slotStart >= e || slotEnd <= s) return { active: false, onBreak: false };
+  const { breakStart, breakEnd } = getWorkerBreakInterval(w);
+  return { active: true, onBreak: (slotStart < breakEnd && slotEnd > breakStart) };
+}
+
+function renderCoverageTimeline() {
+  const thead = document.getElementById('coverageTableHead');
+  const tbody = document.getElementById('coverageTableBody');
+  if (!thead || !tbody) return;
+
+  thead.innerHTML = '';   // hide normal column headers
+
+  const resolutionMin = parseInt(document.getElementById('timelineResolution')?.value || '30');
+  const { minStart, maxEnd } = getTimelineRange();
+  const slots = generateTimeSlots(minStart, maxEnd, resolutionMin);
+  const numCols = slots.length + 1; // +1 for station label
+
+  // Build CSS grid column definition
+  const gridCols = `110px repeat(${slots.length}, minmax(54px, 1fr))`;
+
+  let html = `<tr><td colspan="${numCols}" style="padding:0;border:0;">`;
+  html += `<div class="timeline-container">`;
+  html += `<div class="timeline-grid" style="grid-template-columns:${gridCols};">`;
+
+  // ── Header row ─────────────────────────────────
+  html += `<div class="timeline-header-cell" style="position:sticky;left:0;z-index:6;background:var(--surface2);">Station</div>`;
+  slots.forEach(slot => {
+    const hourBound = slot.start % 60 === 0 ? ' hour-boundary' : '';
+    html += `<div class="timeline-header-cell${hourBound}">${slot.label}</div>`;
+  });
+
+  // ── Station rows ────────────────────────────────
+  stations.forEach((st, si) => {
+    const { workers: assignedList } = getStationAssignedWorkers(si);
+    const required = stationResources[si]?.workers || 1;
+
+    html += `<div class="timeline-station-label">Stn ${si + 1}<br><span style="font-size:0.65rem;color:var(--muted);font-weight:400;">req ${required.toFixed(1)}</span></div>`;
+
+    slots.forEach(slot => {
+      const hourBound = slot.start % 60 === 0 ? ' hour-boundary' : '';
+      let cellHtml = `<div class="timeline-cell${hourBound}">`;
+
+      assignedList.forEach(({ worker, workerIndex, percent }) => {
+        const { active, onBreak } = isWorkerActiveInSlot(worker, slot.start, slot.end);
+        if (!active) return;
+
+        const color = getWorkerColor(workerIndex);
+        const isPartial = (worker.participationRate || 100) < 100;
+        const classes = ['timeline-worker-bar'];
+        if (onBreak) classes.push('on-break');
+        if (isPartial) classes.push('partial-participation');
+
+        const code = String(worker.code).split(' ')[0];
+        const tipBreak = onBreak ? ' | BREAK' : '';
+        const tipPart  = isPartial ? ` | ${worker.participationRate}% part.` : '';
+        const title    = `${worker.code} (${percent}%${tipBreak}${tipPart})`;
+
+        cellHtml += `<div class="${classes.join(' ')}" style="background-color:${color};" title="${title}">${code} ${percent}%</div>`;
+      });
+
+      cellHtml += `</div>`;
+      html += cellHtml;
+    });
+  });
+
+  // ── Total coverage summary row ──────────────────
+  html += `<div class="timeline-total-label">Total<br><span style="font-size:0.6rem;font-weight:400;">all stations</span></div>`;
+
+  slots.forEach(slot => {
+    const hourBound = slot.start % 60 === 0 ? ' hour-boundary' : '';
+    let totalCoverage = 0, totalRequired = 0;
+
+    stations.forEach((_, si) => {
+      const { workers: assignedList } = getStationAssignedWorkers(si);
+      const required = stationResources[si]?.workers || 1;
+      totalRequired += required;
+
+      let cover = 0;
+      assignedList.forEach(({ worker, percent }) => {
+        const { active, onBreak } = isWorkerActiveInSlot(worker, slot.start, slot.end);
+        if (active && !onBreak) {
+          // weight by assignment% and participation rate
+          cover += (percent / 100) * ((worker.participationRate || 100) / 100);
+        }
+      });
+      totalCoverage += Math.min(cover, required);
+    });
+
+    const ratio = totalRequired > 0 ? totalCoverage / totalRequired : 0;
+    let cls, icon;
+    if (ratio >= 0.99)       { cls = 'coverage-full';    icon = '✓'; }
+    else if (ratio > 0.001)  { cls = 'coverage-partial'; icon = '⚠'; }
+    else                     { cls = 'coverage-none';    icon = '✗'; }
+
+    const pct = (ratio * 100).toFixed(0);
+    html += `<div class="timeline-total-cell ${cls}${hourBound}" title="Coverage: ${pct}% (${totalCoverage.toFixed(1)} / ${totalRequired.toFixed(1)})">${icon} ${totalCoverage.toFixed(1)}</div>`;
+  });
+
+  html += `</div></div></td></tr>`;
   tbody.innerHTML = html;
 }
 
