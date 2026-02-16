@@ -33,6 +33,7 @@ import {
 import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
 import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
+import { resolveHostName } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
@@ -58,11 +59,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
-import {
-  formatGatewayAuthFailureMessage,
-  resolveHostName,
-  type AuthProvidedKind,
-} from "./auth-messages.js";
+import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -298,7 +295,9 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
         // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
-        const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+        // Note: If the client does not present a device identity, we can't bind scopes to a paired
+        // device/token, so we will clear scopes after auth to avoid self-declared permissions.
+        let scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
         connectParams.role = role;
         connectParams.scopes = scopes;
 
@@ -428,6 +427,10 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
+          if (scopes.length > 0 && !allowControlUiBypass) {
+            scopes = [];
+            connectParams.scopes = scopes;
+          }
           const canSkipDevice = sharedAuthOk;
 
           if (isControlUi && !allowControlUiBypass) {
@@ -555,6 +558,21 @@ export function attachGatewayWsMessageHandler(params: {
             nonce: providedNonce || undefined,
             version: providedNonce ? "v2" : "v1",
           });
+          const rejectDeviceSignatureInvalid = () => {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-signature",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
+            });
+            close(1008, "device signature invalid");
+          };
           const signatureOk = verifyDeviceSignature(device.publicKey, payload, device.signature);
           const allowLegacy = !nonceRequired && !providedNonce;
           if (!signatureOk && allowLegacy) {
@@ -571,35 +589,11 @@ export function attachGatewayWsMessageHandler(params: {
             if (verifyDeviceSignature(device.publicKey, legacyPayload, device.signature)) {
               // accepted legacy loopback signature
             } else {
-              setHandshakeState("failed");
-              setCloseCause("device-auth-invalid", {
-                reason: "device-signature",
-                client: connectParams.client.id,
-                deviceId: device.id,
-              });
-              send({
-                type: "res",
-                id: frame.id,
-                ok: false,
-                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-              });
-              close(1008, "device signature invalid");
+              rejectDeviceSignatureInvalid();
               return;
             }
           } else if (!signatureOk) {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-signature",
-              client: connectParams.client.id,
-              deviceId: device.id,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-            });
-            close(1008, "device signature invalid");
+            rejectDeviceSignatureInvalid();
             return;
           }
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);

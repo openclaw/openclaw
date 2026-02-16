@@ -1,130 +1,65 @@
-import "./test-helpers.js";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as ssrf from "../infra/net/ssrf.js";
-
-const TEST_NET_IP = "203.0.113.10";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { resetLogger, setLoggerOverride } from "../logging.js";
+import { describe, expect, it, vi } from "vitest";
 import { monitorWebChannel } from "./auto-reply.js";
-import { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+import {
+  installWebAutoReplyTestHomeHooks,
+  installWebAutoReplyUnitTestHooks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+} from "./auto-reply.test-harness.js";
 
-let previousHome: string | undefined;
-let tempHome: string | undefined;
-
-const rmDirWithRetries = async (dir: string): Promise<void> => {
-  // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  await fs.rm(dir, { recursive: true, force: true });
-};
-
-beforeEach(async () => {
-  resetInboundDedupe();
-  previousHome = process.env.HOME;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
-  process.env.HOME = tempHome;
-});
-
-afterEach(async () => {
-  process.env.HOME = previousHome;
-  if (tempHome) {
-    await rmDirWithRetries(tempHome);
-    tempHome = undefined;
-  }
-});
-
-const _makeSessionStore = async (
-  entries: Record<string, unknown> = {},
-): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries));
-  const cleanup = async () => {
-    // Session store writes can be in-flight when the test finishes (e.g. updateLastRoute
-    // after a message flush). `fs.rm({ recursive })` can race and throw ENOTEMPTY.
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      try {
-        await fs.rm(dir, { recursive: true, force: true });
-        return;
-      } catch (err) {
-        const code =
-          err && typeof err === "object" && "code" in err
-            ? String((err as { code?: unknown }).code)
-            : null;
-        if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          continue;
-        }
-        throw err;
-      }
-    }
-
-    await fs.rm(dir, { recursive: true, force: true });
-  };
-  return {
-    storePath,
-    cleanup,
-  };
-};
+installWebAutoReplyTestHomeHooks();
 
 describe("web auto-reply", () => {
-  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
+  installWebAutoReplyUnitTestHooks({ pinDns: true });
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    resetBaileysMocks();
-    resetLoadConfigMock();
-    resolvePinnedHostnameSpy = vi
-      .spyOn(ssrf, "resolvePinnedHostname")
-      .mockImplementation(async (hostname) => {
-        // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-        const addresses = [TEST_NET_IP];
-        return {
-          hostname: normalized,
-          addresses,
-          lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-        };
-      });
-  });
+  async function setupSingleInboundMessage(params: {
+    resolverValue: { text: string; mediaUrl: string };
+    sendMedia: ReturnType<typeof vi.fn>;
+    reply?: ReturnType<typeof vi.fn>;
+  }) {
+    const reply = params.reply ?? vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
-  afterEach(() => {
-    resolvePinnedHostnameSpy?.mockRestore();
-    resolvePinnedHostnameSpy = undefined;
-    resetLogger();
-    setLoggerOverride(null);
-    vi.useRealTimers();
-  });
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebChannel(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    return {
+      reply,
+      dispatch: async (id = "msg1") => {
+        await capturedOnMessage?.({
+          body: "hello",
+          from: "+1",
+          to: "+2",
+          id,
+          sendComposing,
+          reply,
+          sendMedia: params.sendMedia,
+        });
+      },
+    };
+  }
+
+  function getSingleImagePayload(sendMedia: ReturnType<typeof vi.fn>) {
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    return sendMedia.mock.calls[0][0] as {
+      image: Buffer;
+      caption?: string;
+      mimetype?: string;
+    };
+  }
 
   it("compresses common formats to jpeg under the cap", { timeout: 45_000 }, async () => {
     const formats = [
@@ -160,6 +95,10 @@ describe("web auto-reply", () => {
       },
     ] as const;
 
+    const width = 1200;
+    const height = 1200;
+    const sharedRaw = crypto.randomBytes(width * height * 3);
+
     for (const fmt of formats) {
       // Force a small cap to ensure compression is exercised for every format.
       setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
@@ -181,10 +120,7 @@ describe("web auto-reply", () => {
         return { close: vi.fn() };
       };
 
-      const width = 1200;
-      const height = 1200;
-      const raw = crypto.randomBytes(width * height * 3);
-      const big = await fmt.make(raw, { width, height });
+      const big = await fmt.make(sharedRaw, { width, height });
       expect(big.length).toBeGreaterThan(1 * 1024 * 1024);
 
       const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -244,8 +180,8 @@ describe("web auto-reply", () => {
 
     const bigPng = await sharp({
       create: {
-        width: 2600,
-        height: 2600,
+        width: 1800,
+        height: 1800,
         channels: 3,
         background: { r: 0, g: 0, b: 255 },
       },
@@ -290,22 +226,10 @@ describe("web auto-reply", () => {
   });
   it("falls back to text when media is unsupported", async () => {
     const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
-    const resolver = vi.fn().mockResolvedValue({
-      text: "hi",
-      mediaUrl: "https://example.com/file.pdf",
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: { text: "hi", mediaUrl: "https://example.com/file.pdf" },
+      sendMedia,
     });
-
-    let capturedOnMessage:
-      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-      | undefined;
-    const listenerFactory = async (opts: {
-      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-    }) => {
-      capturedOnMessage = opts.onMessage;
-      return { close: vi.fn() };
-    };
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -315,18 +239,7 @@ describe("web auto-reply", () => {
       status: 200,
     } as Response);
 
-    await monitorWebChannel(false, listenerFactory, false, resolver);
-    expect(capturedOnMessage).toBeDefined();
-
-    await capturedOnMessage?.({
-      body: "hello",
-      from: "+1",
-      to: "+2",
-      id: "msg-pdf",
-      sendComposing,
-      reply,
-      sendMedia,
-    });
+    await dispatch("msg-pdf");
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
     const payload = sendMedia.mock.calls[0][0] as {
@@ -337,6 +250,111 @@ describe("web auto-reply", () => {
     expect(payload.document).toBeInstanceOf(Buffer);
     expect(payload.fileName).toBe("file.pdf");
     expect(payload.caption).toBe("hi");
+    expect(reply).not.toHaveBeenCalled();
+
+    fetchMock.mockRestore();
+  });
+
+  it("falls back to text when media send fails", async () => {
+    const sendMedia = vi.fn().mockRejectedValue(new Error("boom"));
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: {
+        text: "hi",
+        mediaUrl: "https://example.com/img.png",
+      },
+      sendMedia,
+    });
+
+    const smallPng = await sharp({
+      create: {
+        width: 64,
+        height: 64,
+        channels: 3,
+        background: { r: 0, g: 255, b: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      body: true,
+      arrayBuffer: async () =>
+        smallPng.buffer.slice(smallPng.byteOffset, smallPng.byteOffset + smallPng.byteLength),
+      headers: { get: () => "image/png" },
+      status: 200,
+    } as Response);
+
+    await dispatch("msg1");
+
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    const fallback = reply.mock.calls[0]?.[0] as string;
+    expect(fallback).toContain("hi");
+    expect(fallback).toContain("Media failed");
+    fetchMock.mockRestore();
+  });
+  it("returns a warning when remote media fetch 404s", async () => {
+    const sendMedia = vi.fn();
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: {
+        text: "caption",
+        mediaUrl: "https://example.com/missing.jpg",
+      },
+      sendMedia,
+    });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 404,
+      body: null,
+      arrayBuffer: async () => new ArrayBuffer(0),
+      headers: { get: () => "text/plain" },
+    } as unknown as Response);
+
+    await dispatch("msg1");
+
+    expect(sendMedia).not.toHaveBeenCalled();
+    const fallback = reply.mock.calls[0]?.[0] as string;
+    expect(fallback).toContain("caption");
+    expect(fallback).toContain("Media failed");
+    expect(fallback).toContain("404");
+
+    fetchMock.mockRestore();
+  });
+  it("sends media with a caption when delivery succeeds", async () => {
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: {
+        text: "hi",
+        mediaUrl: "https://example.com/img.png",
+      },
+      sendMedia,
+    });
+
+    const png = await sharp({
+      create: {
+        width: 64,
+        height: 64,
+        channels: 3,
+        background: { r: 0, g: 0, b: 255 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      body: true,
+      arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
+      headers: { get: () => "image/png" },
+      status: 200,
+    } as Response);
+
+    await dispatch("msg1");
+
+    const payload = getSingleImagePayload(sendMedia);
+    expect(payload.caption).toBe("hi");
+    expect(payload.image.length).toBeGreaterThan(0);
+    // Should not fall back to separate text reply because caption is used.
     expect(reply).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();

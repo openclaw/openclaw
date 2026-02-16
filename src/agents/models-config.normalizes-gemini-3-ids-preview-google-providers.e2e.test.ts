@@ -1,50 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
-}
-
-const _MODELS_CONFIG: OpenClawConfig = {
-  models: {
-    providers: {
-      "custom-proxy": {
-        baseUrl: "http://localhost:4000/v1",
-        apiKey: "TEST_KEY",
-        api: "openai-completions",
-        models: [
-          {
-            id: "llama-3.1-8b",
-            name: "Llama 3.1 8B (Proxy)",
-            api: "openai-completions",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128000,
-            maxTokens: 32000,
-          },
-        ],
-      },
-    },
-  },
-};
+import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
 
 describe("models-config", () => {
-  let previousHome: string | undefined;
-
-  beforeEach(() => {
-    previousHome = process.env.HOME;
-  });
-
-  afterEach(() => {
-    process.env.HOME = previousHome;
-  });
+  installModelsConfigTestHooks();
 
   it("normalizes gemini 3 ids to preview for google providers", async () => {
-    await withTempHome(async () => {
+    await withModelsTempHome(async () => {
       const { ensureOpenClawModelsJson } = await import("./models-config.js");
       const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
 

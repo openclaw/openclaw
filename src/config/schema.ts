@@ -303,6 +303,12 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   if (!root || !root.properties) {
     return next;
   }
+  // Allow `$schema` in config files for editor tooling, but hide it from the
+  // Control UI form schema so it does not show up as a configurable section.
+  delete root.properties.$schema;
+  if (Array.isArray(root.required)) {
+    root.required = root.required.filter((key) => key !== "$schema");
+  }
   const channelsNode = asSchemaObject(root.properties.channels);
   if (channelsNode) {
     channelsNode.properties = {};

@@ -6,6 +6,26 @@ const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigO
   await vi.importActual<typeof import("./config.js")>("./config.js");
 import { withTempHome } from "./test-helpers.js";
 
+async function expectLoadRejectionPreservesField(params: {
+  config: unknown;
+  readValue: (parsed: unknown) => unknown;
+  expectedValue: unknown;
+}) {
+  await withTempHome(async (home) => {
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify(params.config, null, 2), "utf-8");
+
+    const snap = await readConfigFileSnapshot();
+
+    expect(snap.valid).toBe(false);
+    expect(snap.issues.length).toBeGreaterThan(0);
+
+    const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
+    expect(params.readValue(parsed)).toBe(params.expectedValue);
+  });
+}
+
 describe("legacy config detection", () => {
   it('accepts imessage.dmPolicy="open" with allowFrom "*"', async () => {
     const res = validateConfigObject({
@@ -87,6 +107,21 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.path).toBe("channels.discord.dm.allowFrom");
     }
   });
+  it('rejects discord.dmPolicy="open" without allowFrom "*"', async () => {
+    const res = validateConfigObject({
+      channels: { discord: { dmPolicy: "open", allowFrom: ["123"] } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.discord.allowFrom");
+    }
+  });
+  it('accepts discord dm.allowFrom="*" with top-level allowFrom alias', async () => {
+    const res = validateConfigObject({
+      channels: { discord: { dm: { policy: "open", allowFrom: ["123"] }, allowFrom: ["*"] } },
+    });
+    expect(res.ok).toBe(true);
+  });
   it('rejects slack.dm.policy="open" without allowFrom "*"', async () => {
     const res = validateConfigObject({
       channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] } } },
@@ -95,6 +130,21 @@ describe("legacy config detection", () => {
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("channels.slack.dm.allowFrom");
     }
+  });
+  it('rejects slack.dmPolicy="open" without allowFrom "*"', async () => {
+    const res = validateConfigObject({
+      channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.slack.allowFrom");
+    }
+  });
+  it('accepts slack dm.allowFrom="*" with top-level allowFrom alias', async () => {
+    const res = validateConfigObject({
+      channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] }, allowFrom: ["*"] } },
+    });
+    expect(res.ok).toBe(true);
   });
   it("rejects legacy agent.model string", async () => {
     const res = validateConfigObject({
@@ -266,59 +316,25 @@ describe("legacy config detection", () => {
     });
   });
   it("rejects bindings[].match.provider on load", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            bindings: [{ agentId: "main", match: { provider: "slack" } }],
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.issues.length).toBeGreaterThan(0);
-
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        bindings?: Array<{ match?: { provider?: string } }>;
-      };
-      expect(parsed.bindings?.[0]?.match?.provider).toBe("slack");
+    await expectLoadRejectionPreservesField({
+      config: {
+        bindings: [{ agentId: "main", match: { provider: "slack" } }],
+      },
+      readValue: (parsed) =>
+        (parsed as { bindings?: Array<{ match?: { provider?: string } }> }).bindings?.[0]?.match
+          ?.provider,
+      expectedValue: "slack",
     });
   });
   it("rejects bindings[].match.accountID on load", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "work" } }],
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.issues.length).toBeGreaterThan(0);
-
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        bindings?: Array<{ match?: { accountID?: string } }>;
-      };
-      expect(parsed.bindings?.[0]?.match?.accountID).toBe("work");
+    await expectLoadRejectionPreservesField({
+      config: {
+        bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "work" } }],
+      },
+      readValue: (parsed) =>
+        (parsed as { bindings?: Array<{ match?: { accountID?: string } }> }).bindings?.[0]?.match
+          ?.accountID,
+      expectedValue: "work",
     });
   });
   it("rejects session.sendPolicy.rules[].match.provider on load", async () => {

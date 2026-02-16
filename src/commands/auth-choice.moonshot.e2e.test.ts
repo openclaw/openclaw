@@ -1,84 +1,64 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.js";
+import {
+  createAuthTestLifecycle,
+  createExitThrowingRuntime,
+  createWizardPrompter,
+  readAuthProfilesForAgent,
+  requireOpenClawAgentDir,
+  setupAuthTestEnv,
+} from "./test-wizard-helpers.js";
 
-const noopAsync = async () => {};
-const noop = () => {};
-const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
-const requireAgentDir = () => {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
-};
+function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
+  return createWizardPrompter(overrides, { defaultSelect: "" });
+}
 
 describe("applyAuthChoice (moonshot)", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const previousMoonshotKey = process.env.MOONSHOT_API_KEY;
-  let tempStateDir: string | null = null;
+  const lifecycle = createAuthTestLifecycle([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "MOONSHOT_API_KEY",
+  ]);
+
+  async function setupTempState() {
+    const env = await setupAuthTestEnv("openclaw-auth-");
+    lifecycle.setStateDir(env.stateDir);
+    delete process.env.MOONSHOT_API_KEY;
+  }
+
+  async function readAuthProfiles() {
+    return await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string }>;
+    }>(requireOpenClawAgentDir());
+  }
+
+  async function runMoonshotCnFlow(params: {
+    config: Record<string, unknown>;
+    setDefaultModel: boolean;
+  }) {
+    const text = vi.fn().mockResolvedValue("sk-moonshot-cn-test");
+    const prompter = createPrompter({ text: text as unknown as WizardPrompter["text"] });
+    const runtime = createExitThrowingRuntime();
+    const result = await applyAuthChoice({
+      authChoice: "moonshot-api-key-cn",
+      config: params.config,
+      prompter,
+      runtime,
+      setDefaultModel: params.setDefaultModel,
+    });
+    return { result, text };
+  }
 
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    if (previousMoonshotKey === undefined) {
-      delete process.env.MOONSHOT_API_KEY;
-    } else {
-      process.env.MOONSHOT_API_KEY = previousMoonshotKey;
-    }
+    await lifecycle.cleanup();
   });
 
   it("keeps the .cn baseUrl when setDefaultModel is false", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
-    delete process.env.MOONSHOT_API_KEY;
+    await setupTempState();
 
-    const text = vi.fn().mockResolvedValue("sk-moonshot-cn-test");
-    const prompter: WizardPrompter = {
-      intro: vi.fn(noopAsync),
-      outro: vi.fn(noopAsync),
-      note: vi.fn(noopAsync),
-      select: vi.fn(async () => "" as never),
-      multiselect: vi.fn(async () => []),
-      text,
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: noop, stop: noop })),
-    };
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
-
-    const result = await applyAuthChoice({
-      authChoice: "moonshot-api-key-cn",
+    const { result, text } = await runMoonshotCnFlow({
       config: {
         agents: {
           defaults: {
@@ -86,8 +66,6 @@ describe("applyAuthChoice (moonshot)", () => {
           },
         },
       },
-      prompter,
-      runtime,
       setDefaultModel: false,
     });
 
@@ -98,45 +76,15 @@ describe("applyAuthChoice (moonshot)", () => {
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.agentModelOverride).toBe("moonshot/kimi-k2.5");
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, { key?: string }>;
-    };
+    const parsed = await readAuthProfiles();
     expect(parsed.profiles?.["moonshot:default"]?.key).toBe("sk-moonshot-cn-test");
   });
 
   it("sets the default model when setDefaultModel is true", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
-    delete process.env.MOONSHOT_API_KEY;
+    await setupTempState();
 
-    const text = vi.fn().mockResolvedValue("sk-moonshot-cn-test");
-    const prompter: WizardPrompter = {
-      intro: vi.fn(noopAsync),
-      outro: vi.fn(noopAsync),
-      note: vi.fn(noopAsync),
-      select: vi.fn(async () => "" as never),
-      multiselect: vi.fn(async () => []),
-      text,
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: noop, stop: noop })),
-    };
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
-
-    const result = await applyAuthChoice({
-      authChoice: "moonshot-api-key-cn",
+    const { result } = await runMoonshotCnFlow({
       config: {},
-      prompter,
-      runtime,
       setDefaultModel: true,
     });
 
@@ -144,11 +92,7 @@ describe("applyAuthChoice (moonshot)", () => {
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.agentModelOverride).toBeUndefined();
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, { key?: string }>;
-    };
+    const parsed = await readAuthProfiles();
     expect(parsed.profiles?.["moonshot:default"]?.key).toBe("sk-moonshot-cn-test");
   });
 });

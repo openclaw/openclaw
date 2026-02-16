@@ -12,6 +12,60 @@ import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 
+type SessionTitleFields = {
+  firstUserMessage: string | null;
+  lastMessagePreview: string | null;
+};
+
+type SessionTitleFieldsCacheEntry = SessionTitleFields & {
+  mtimeMs: number;
+  size: number;
+};
+
+const sessionTitleFieldsCache = new Map<string, SessionTitleFieldsCacheEntry>();
+const MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES = 5000;
+
+function readSessionTitleFieldsCacheKey(
+  filePath: string,
+  opts?: { includeInterSession?: boolean },
+) {
+  const includeInterSession = opts?.includeInterSession === true ? "1" : "0";
+  return `${filePath}\t${includeInterSession}`;
+}
+
+function getCachedSessionTitleFields(cacheKey: string, stat: fs.Stats): SessionTitleFields | null {
+  const cached = sessionTitleFieldsCache.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+  if (cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+    sessionTitleFieldsCache.delete(cacheKey);
+    return null;
+  }
+  // LRU bump
+  sessionTitleFieldsCache.delete(cacheKey);
+  sessionTitleFieldsCache.set(cacheKey, cached);
+  return {
+    firstUserMessage: cached.firstUserMessage,
+    lastMessagePreview: cached.lastMessagePreview,
+  };
+}
+
+function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: SessionTitleFields) {
+  sessionTitleFieldsCache.set(cacheKey, {
+    ...value,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+  });
+  while (sessionTitleFieldsCache.size > MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES) {
+    const oldestKey = sessionTitleFieldsCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    sessionTitleFieldsCache.delete(oldestKey);
+  }
+}
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -77,7 +131,9 @@ export function resolveSessionTranscriptCandidates(
   if (storePath) {
     const sessionsDir = path.dirname(storePath);
     if (sessionFile) {
-      pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir }));
+      pushCandidate(() =>
+        resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
+      );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
   } else if (sessionFile) {
@@ -175,6 +231,78 @@ type TranscriptMessage = {
   provenance?: unknown;
 };
 
+export function readSessionTitleFieldsFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+  opts?: { includeInterSession?: boolean },
+): SessionTitleFields {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  }
+
+  const cacheKey = readSessionTitleFieldsCacheKey(filePath, opts);
+  const cached = getCachedSessionTitleFields(cacheKey, stat);
+  if (cached) {
+    return cached;
+  }
+
+  if (stat.size === 0) {
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    setCachedSessionTitleFields(cacheKey, stat, empty);
+    return empty;
+  }
+
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const size = stat.size;
+
+    // Head (first user message)
+    let firstUserMessage: string | null = null;
+    try {
+      const chunk = readTranscriptHeadChunk(fd);
+      if (chunk) {
+        firstUserMessage = extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+      }
+    } catch {
+      // ignore head read errors
+    }
+
+    // Tail (last message preview)
+    let lastMessagePreview: string | null = null;
+    try {
+      lastMessagePreview = readLastMessagePreviewFromOpenTranscript({ fd, size });
+    } catch {
+      // ignore tail read errors
+    }
+
+    const result = { firstUserMessage, lastMessagePreview };
+    setCachedSessionTitleFields(cacheKey, stat, result);
+    return result;
+  } catch {
+    return { firstUserMessage: null, lastMessagePreview: null };
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
   if (typeof content === "string") {
     return content.trim() || null;
@@ -196,6 +324,44 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
   return null;
 }
 
+function readTranscriptHeadChunk(fd: number, maxBytes = 8192): string | null {
+  const buf = Buffer.alloc(maxBytes);
+  const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+  if (bytesRead <= 0) {
+    return null;
+  }
+  return buf.toString("utf-8", 0, bytesRead);
+}
+
+function extractFirstUserMessageFromTranscriptChunk(
+  chunk: string,
+  opts?: { includeInterSession?: boolean },
+): string | null {
+  const lines = chunk.split(/\r?\n/).slice(0, MAX_LINES_TO_SCAN);
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      const msg = parsed?.message as TranscriptMessage | undefined;
+      if (msg?.role !== "user") {
+        continue;
+      }
+      if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
+        continue;
+      }
+      const text = extractTextFromContent(msg.content);
+      if (text) {
+        return text;
+      }
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return null;
+}
+
 export function readFirstUserMessageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -212,34 +378,11 @@ export function readFirstUserMessageFromTranscript(
   let fd: number | null = null;
   try {
     fd = fs.openSync(filePath, "r");
-    const buf = Buffer.alloc(8192);
-    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
-    if (bytesRead === 0) {
+    const chunk = readTranscriptHeadChunk(fd);
+    if (!chunk) {
       return null;
     }
-    const chunk = buf.toString("utf-8", 0, bytesRead);
-    const lines = chunk.split(/\r?\n/).slice(0, MAX_LINES_TO_SCAN);
-
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line);
-        const msg = parsed?.message as TranscriptMessage | undefined;
-        if (msg?.role === "user") {
-          if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
-            continue;
-          }
-          const text = extractTextFromContent(msg.content);
-          if (text) {
-            return text;
-          }
-        }
-      } catch {
-        // skip malformed lines
-      }
-    }
+    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
   } catch {
     // file read error
   } finally {
@@ -252,6 +395,38 @@ export function readFirstUserMessageFromTranscript(
 
 const LAST_MSG_MAX_BYTES = 16384;
 const LAST_MSG_MAX_LINES = 20;
+
+function readLastMessagePreviewFromOpenTranscript(params: {
+  fd: number;
+  size: number;
+}): string | null {
+  const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
+  const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
+  const buf = Buffer.alloc(readLen);
+  fs.readSync(params.fd, buf, 0, readLen, readStart);
+
+  const chunk = buf.toString("utf-8");
+  const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+  const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+  for (let i = tailLines.length - 1; i >= 0; i--) {
+    const line = tailLines[i];
+    try {
+      const parsed = JSON.parse(line);
+      const msg = parsed?.message as TranscriptMessage | undefined;
+      if (msg?.role !== "user" && msg?.role !== "assistant") {
+        continue;
+      }
+      const text = extractTextFromContent(msg.content);
+      if (text) {
+        return text;
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+  return null;
+}
 
 export function readLastMessagePreviewFromTranscript(
   sessionId: string,
@@ -273,31 +448,7 @@ export function readLastMessagePreviewFromTranscript(
     if (size === 0) {
       return null;
     }
-
-    const readStart = Math.max(0, size - LAST_MSG_MAX_BYTES);
-    const readLen = Math.min(size, LAST_MSG_MAX_BYTES);
-    const buf = Buffer.alloc(readLen);
-    fs.readSync(fd, buf, 0, readLen, readStart);
-
-    const chunk = buf.toString("utf-8");
-    const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
-    const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
-
-    for (let i = tailLines.length - 1; i >= 0; i--) {
-      const line = tailLines[i];
-      try {
-        const parsed = JSON.parse(line);
-        const msg = parsed?.message as TranscriptMessage | undefined;
-        if (msg?.role === "user" || msg?.role === "assistant") {
-          const text = extractTextFromContent(msg.content);
-          if (text) {
-            return text;
-          }
-        }
-      } catch {
-        // skip malformed
-      }
-    }
+    return readLastMessagePreviewFromOpenTranscript({ fd, size });
   } catch {
     // file error
   } finally {

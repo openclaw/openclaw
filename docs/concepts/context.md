@@ -112,7 +112,7 @@ By default, OpenClaw injects a fixed set of workspace files (if present):
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (first-run only)
 
-Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
+Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `150000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
 
 ## Skills: what’s injected vs loaded on-demand
 

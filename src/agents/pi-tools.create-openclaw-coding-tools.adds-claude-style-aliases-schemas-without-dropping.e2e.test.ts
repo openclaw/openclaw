@@ -12,6 +12,51 @@ import { createBrowserTool } from "./tools/browser-tool.js";
 
 const defaultTools = createOpenClawCodingTools();
 
+function findUnionKeywordOffenders(
+  tools: Array<{ name: string; parameters: unknown }>,
+  opts?: { onlyNames?: Set<string> },
+) {
+  const offenders: Array<{
+    name: string;
+    keyword: string;
+    path: string;
+  }> = [];
+  const keywords = new Set(["anyOf", "oneOf", "allOf"]);
+
+  const walk = (value: unknown, path: string, name: string): void => {
+    if (!value) {
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const [index, entry] of value.entries()) {
+        walk(entry, `${path}[${index}]`, name);
+      }
+      return;
+    }
+    if (typeof value !== "object") {
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const [key, entry] of Object.entries(record)) {
+      const nextPath = path ? `${path}.${key}` : key;
+      if (keywords.has(key)) {
+        offenders.push({ name, keyword: key, path: nextPath });
+      }
+      walk(entry, nextPath, name);
+    }
+  };
+
+  for (const tool of tools) {
+    if (opts?.onlyNames && !opts.onlyNames.has(tool.name)) {
+      continue;
+    }
+    walk(tool.parameters, "", tool.name);
+  }
+
+  return offenders;
+}
+
 describe("createOpenClawCodingTools", () => {
   describe("Claude/Gemini alias support", () => {
     it("adds Claude-style aliases to schemas without dropping metadata", () => {
@@ -57,7 +102,10 @@ describe("createOpenClawCodingTools", () => {
         execute,
       };
 
-      const wrapped = __testing.wrapToolParamNormalization(tool, [{ keys: ["path", "file_path"] }]);
+      const wrapped = __testing.wrapToolParamNormalization(tool, [
+        { keys: ["path", "file_path"], label: "path (path or file_path)" },
+        { keys: ["content"], label: "content" },
+      ]);
 
       await wrapped.execute("tool-1", { file_path: "foo.txt", content: "x" });
       expect(execute).toHaveBeenCalledWith(
@@ -70,8 +118,20 @@ describe("createOpenClawCodingTools", () => {
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );
+      await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
+      );
       await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
         /Missing required parameter/,
+      );
+      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
+      );
+      await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
+        /Missing required parameters: path \(path or file_path\), content/,
+      );
+      await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
       );
     });
   });
@@ -213,42 +273,7 @@ describe("createOpenClawCodingTools", () => {
     expect(count?.oneOf).toBeDefined();
   });
   it("avoids anyOf/oneOf/allOf in tool schemas", () => {
-    const offenders: Array<{
-      name: string;
-      keyword: string;
-      path: string;
-    }> = [];
-    const keywords = new Set(["anyOf", "oneOf", "allOf"]);
-
-    const walk = (value: unknown, path: string, name: string): void => {
-      if (!value) {
-        return;
-      }
-      if (Array.isArray(value)) {
-        for (const [index, entry] of value.entries()) {
-          walk(entry, `${path}[${index}]`, name);
-        }
-        return;
-      }
-      if (typeof value !== "object") {
-        return;
-      }
-
-      const record = value as Record<string, unknown>;
-      for (const [key, entry] of Object.entries(record)) {
-        const nextPath = path ? `${path}.${key}` : key;
-        if (keywords.has(key)) {
-          offenders.push({ name, keyword: key, path: nextPath });
-        }
-        walk(entry, nextPath, name);
-      }
-    };
-
-    for (const tool of defaultTools) {
-      walk(tool.parameters, "", tool.name);
-    }
-
-    expect(offenders).toEqual([]);
+    expect(findUnionKeywordOffenders(defaultTools)).toEqual([]);
   });
   it("keeps raw core tool schemas union-free", () => {
     const tools = createOpenClawTools();
@@ -264,47 +289,11 @@ describe("createOpenClawCodingTools", () => {
       "sessions_history",
       "sessions_send",
       "sessions_spawn",
+      "subagents",
       "session_status",
       "image",
     ]);
-    const offenders: Array<{
-      name: string;
-      keyword: string;
-      path: string;
-    }> = [];
-    const keywords = new Set(["anyOf", "oneOf", "allOf"]);
-
-    const walk = (value: unknown, path: string, name: string): void => {
-      if (!value) {
-        return;
-      }
-      if (Array.isArray(value)) {
-        for (const [index, entry] of value.entries()) {
-          walk(entry, `${path}[${index}]`, name);
-        }
-        return;
-      }
-      if (typeof value !== "object") {
-        return;
-      }
-      const record = value as Record<string, unknown>;
-      for (const [key, entry] of Object.entries(record)) {
-        const nextPath = path ? `${path}.${key}` : key;
-        if (keywords.has(key)) {
-          offenders.push({ name, keyword: key, path: nextPath });
-        }
-        walk(entry, nextPath, name);
-      }
-    };
-
-    for (const tool of tools) {
-      if (!coreTools.has(tool.name)) {
-        continue;
-      }
-      walk(tool.parameters, "", tool.name);
-    }
-
-    expect(offenders).toEqual([]);
+    expect(findUnionKeywordOffenders(tools, { onlyNames: coreTools })).toEqual([]);
   });
   it("does not expose provider-specific message tools", () => {
     const tools = createOpenClawCodingTools({ messageProvider: "discord" });
@@ -323,11 +312,55 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("sessions_history")).toBe(false);
     expect(names.has("sessions_send")).toBe(false);
     expect(names.has("sessions_spawn")).toBe(false);
+    // Explicit subagent orchestration tool remains available (list/steer/kill with safeguards).
+    expect(names.has("subagents")).toBe(true);
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
     expect(names.has("apply_patch")).toBe(false);
+  });
+
+  it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-depth-policy-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:flat": {
+            sessionId: "session-flat-depth-2",
+            updatedAt: Date.now(),
+            spawnDepth: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const tools = createOpenClawCodingTools({
+      sessionKey: "agent:main:subagent:flat",
+      config: {
+        session: {
+          store: storeTemplate,
+        },
+        agents: {
+          defaults: {
+            subagents: {
+              maxSpawnDepth: 2,
+            },
+          },
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("sessions_spawn")).toBe(false);
+    expect(names.has("sessions_list")).toBe(false);
+    expect(names.has("sessions_history")).toBe(false);
+    expect(names.has("subagents")).toBe(true);
   });
   it("supports allow-only sub-agent tool policy", () => {
     const tools = createOpenClawCodingTools({
