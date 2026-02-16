@@ -1,18 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 
-let previousProfile: string | undefined;
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(() => {
-  previousProfile = process.env.OPENCLAW_PROFILE;
+  envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
   process.env.OPENCLAW_PROFILE = "isolated";
 });
 
 afterAll(() => {
-  if (previousProfile === undefined) {
-    delete process.env.OPENCLAW_PROFILE;
-  } else {
-    process.env.OPENCLAW_PROFILE = previousProfile;
-  }
+  envSnapshot.restore();
 });
 
 const mocks = vi.hoisted(() => ({
