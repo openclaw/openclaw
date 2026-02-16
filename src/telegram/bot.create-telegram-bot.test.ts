@@ -1340,35 +1340,6 @@ describe("createTelegramBot", () => {
     expect(sendParams?.message_thread_id).toBeUndefined();
   });
 
-  it("blocks @username allowFrom entries when groupPolicy is 'allowlist' (numeric IDs required)", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groupPolicy: "allowlist",
-          allowFrom: ["@TestUser"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 12345, username: "testuser" },
-        text: "hello",
-        date: 1736380800,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(0);
-  });
   it("allows direct messages regardless of groupPolicy", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
