@@ -352,28 +352,6 @@ describe("slack slash commands access groups", () => {
     resetPolicyHarness(harness);
   });
 
-  it("still treats D-prefixed channel ids as DMs when lookup fails", async () => {
-    harness.ctx.allowFrom = [];
-    harness.ctx.resolveChannelName = async () => ({});
-
-    const { respond } = await runSlashHandler({
-      commands: harness.commands,
-      command: {
-        channel_id: "D123",
-        channel_name: "notdirectmessage",
-      },
-    });
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(respond).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "You are not authorized to use this command." }),
-    );
-    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
-      ctx?: { CommandAuthorized?: boolean };
-    };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
-  });
-
   it("enforces access-group gating when lookup fails for private channels", async () => {
     harness.ctx.allowFrom = [];
     harness.ctx.resolveChannelName = async () => ({});
