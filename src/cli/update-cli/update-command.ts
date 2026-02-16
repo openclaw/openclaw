@@ -29,6 +29,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
@@ -400,9 +401,9 @@ async function maybeRestartService(params: {
       const result = await runCommandWithTimeout({
         cmd: CLI_NAME,
         args: ["daemon", "restart"],
-        timeoutSeconds: 30,
+        timeoutMs: 30 * 1000,
       });
-      const restarted = result.exitCode === 0;
+      const restarted = result.code === 0;
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
