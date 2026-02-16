@@ -656,6 +656,10 @@
       "destination": "/reference/templates/SOUL"
     },
     {
+      "source": "/templates/SOUL.architect",
+      "destination": "/reference/templates/SOUL.architect"
+    },
+    {
       "source": "/templates/TOOLS",
       "destination": "/reference/templates/TOOLS"
     },
@@ -1233,6 +1237,7 @@
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
+                  "reference/templates/SOUL.architect",
                   "reference/templates/TOOLS",
                   "reference/templates/USER"
                 ]

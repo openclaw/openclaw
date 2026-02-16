@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
+import { createArchitectPipelineTool } from "./tools/architect-pipeline-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
@@ -19,6 +20,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import { createVentureStudioTool } from "./tools/venture-studio-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -110,6 +112,8 @@ export function createOpenClawTools(options?: {
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),
+    createArchitectPipelineTool({ workspaceDir }),
+    createVentureStudioTool({ workspaceDir }),
     ...(messageTool ? [messageTool] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
