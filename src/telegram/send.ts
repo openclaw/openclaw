@@ -6,6 +6,7 @@ import type {
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
 import type { RetryConfig } from "../infra/retry.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -55,7 +56,7 @@ type TelegramSendOpts = {
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: TelegramInlineButtons;
 };
 
 type TelegramSendResult = {
@@ -404,6 +405,7 @@ export function buildInlineKeyboard(
           (button): InlineKeyboardButton => ({
             text: button.text,
             callback_data: button.callback_data,
+            ...(button.style ? { style: button.style } : {}),
           }),
         ),
     )
@@ -778,7 +780,7 @@ type TelegramEditOpts = {
   /** Controls whether link previews are shown in the edited message. */
   linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  buttons?: TelegramInlineButtons;
   /** Optional config injection to avoid global loadConfig() (improves testability). */
   cfg?: ReturnType<typeof loadConfig>;
 };
