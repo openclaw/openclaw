@@ -1,0 +1,53 @@
+name: Build OpenClaw macOS app
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pr-17386-macos14
+
+jobs:
+  build-mac:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6.2+)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "latest-stable"
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Setup Node + pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build/package app (ad-hoc signing)
+        env:
+          ALLOW_ADHOC_SIGNING: "1"
+        run: |
+          scripts/package-mac-app.sh
+          ls -la dist
+
+      - name: Zip app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw.app.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClaw-macOS-app
+          path: dist/OpenClaw.app.zip
