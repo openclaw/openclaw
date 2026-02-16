@@ -329,6 +329,8 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',
+  "channels.slack.streamMode":
+    "Live stream preview mode for Slack replies (replace | status_final | append).",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
