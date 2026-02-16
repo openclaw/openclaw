@@ -548,7 +548,7 @@ struct SettingsTab: View {
 
         let err = await self.gatewayController.connectWithDiagnostics(gateway)
         if let err {
-            self.connectStatus.text = err
+            self.setupStatusText = err
         }
     }
 
@@ -909,7 +909,6 @@ struct SettingsTab: View {
 
         // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
         GatewaySettingsStore.clearLastGatewayConnection()
-        OnboardingStateStore.markIncomplete()
 
         // RootCanvas also short-circuits onboarding when these are true.
         self.onboardingComplete = false
