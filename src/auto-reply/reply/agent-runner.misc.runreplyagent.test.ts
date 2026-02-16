@@ -967,11 +967,10 @@ describe("runReplyAgent fallback reasoning tags", () => {
       },
     });
 
-    const flushCall = runEmbeddedPiAgentMock.mock.calls.find(
-      ([params]) =>
-        (params as EmbeddedPiAgentParams | undefined)?.prompt?.includes(
-          "Pre-compaction memory flush.",
-        ),
+    const flushCall = runEmbeddedPiAgentMock.mock.calls.find(([params]) =>
+      (params as EmbeddedPiAgentParams | undefined)?.prompt?.includes(
+        "Pre-compaction memory flush.",
+      ),
     )?.[0] as EmbeddedPiAgentParams | undefined;
 
     expect(flushCall?.enforceFinalTag).toBe(true);
