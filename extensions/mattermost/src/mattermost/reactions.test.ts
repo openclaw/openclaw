@@ -49,6 +49,36 @@ describe("mattermost reactions", () => {
     expect(fetchImpl).toHaveBeenCalled();
   });
 
+  it("returns a Result error when add reaction API call fails", async () => {
+    const fetchImpl = vi.fn(async (url: any) => {
+      if (String(url).endsWith("/api/v4/users/me")) {
+        return new Response(JSON.stringify({ id: "BOT123" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (String(url).endsWith("/api/v4/reactions")) {
+        return new Response(JSON.stringify({ id: "err", message: "boom" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await addMattermostReaction({
+      cfg: createCfg(),
+      postId: "POST1",
+      emojiName: "thumbsup",
+      fetchImpl,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Mattermost add reaction failed");
+    }
+  });
+
   it("removes reactions by calling /users/me then DELETE /users/:id/posts/:postId/reactions/:emoji", async () => {
     const fetchImpl = vi.fn(async (url: any, init?: any) => {
       if (String(url).endsWith("/api/v4/users/me")) {

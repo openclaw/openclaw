@@ -85,6 +85,56 @@ describe("mattermostPlugin", () => {
       expect(actions).not.toContain("send");
     });
 
+    it("respects per-account actions.reactions in listActions", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { reactions: false },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      };
+
+      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      expect(actions).toContain("react");
+    });
+
+    it("blocks react when default account disables reactions and accountId is omitted", async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { reactions: true },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { reactions: false },
+              },
+            },
+          },
+        },
+      };
+
+      await expect(
+        mattermostPlugin.actions?.handleAction?.({
+          channel: "mattermost",
+          action: "react",
+          params: { messageId: "POST1", emoji: "thumbsup" },
+          cfg,
+        } as any),
+      ).rejects.toThrow("Mattermost reactions are disabled in config");
+    });
+
     it("handles react by calling Mattermost reactions API", async () => {
       const cfg: OpenClawConfig = {
         channels: {

@@ -50,11 +50,15 @@ export async function addMattermostReaction(params: {
     return { ok: false, error: "Mattermost reactions failed: could not resolve bot user id." };
   }
 
-  await createReaction(client, {
-    userId,
-    postId: params.postId,
-    emojiName: params.emojiName,
-  });
+  try {
+    await createReaction(client, {
+      userId,
+      postId: params.postId,
+      emojiName: params.emojiName,
+    });
+  } catch (err) {
+    return { ok: false, error: `Mattermost add reaction failed: ${String(err)}` };
+  }
 
   return { ok: true };
 }
@@ -85,11 +89,15 @@ export async function removeMattermostReaction(params: {
     return { ok: false, error: "Mattermost reactions failed: could not resolve bot user id." };
   }
 
-  await deleteReaction(client, {
-    userId,
-    postId: params.postId,
-    emojiName: params.emojiName,
-  });
+  try {
+    await deleteReaction(client, {
+      userId,
+      postId: params.postId,
+      emojiName: params.emojiName,
+    });
+  } catch (err) {
+    return { ok: false, error: `Mattermost remove reaction failed: ${String(err)}` };
+  }
 
   return { ok: true };
 }
