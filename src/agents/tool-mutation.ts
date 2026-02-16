@@ -1,3 +1,5 @@
+import path from "node:path";
+
 const MUTATING_TOOL_NAMES = new Set([
   "write",
   "edit",
@@ -13,6 +15,131 @@ const MUTATING_TOOL_NAMES = new Set([
   "nodes",
   "session_status",
 ]);
+
+const READ_ONLY_EXEC_COMMANDS = new Set([
+  "find",
+  "locate",
+  "ls",
+  "dir",
+  "tree",
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "tac",
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "ag",
+  "ack",
+  "wc",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+  "fold",
+  "paste",
+  "column",
+  "diff",
+  "comm",
+  "cmp",
+  "which",
+  "whereis",
+  "whence",
+  "type",
+  "command",
+  "hash",
+  "file",
+  "stat",
+  "readlink",
+  "realpath",
+  "du",
+  "df",
+  "free",
+  "lsblk",
+  "date",
+  "cal",
+  "uptime",
+  "w",
+  "who",
+  "whoami",
+  "id",
+  "groups",
+  "logname",
+  "uname",
+  "hostname",
+  "hostnamectl",
+  "arch",
+  "nproc",
+  "lscpu",
+  "env",
+  "printenv",
+  "locale",
+  "echo",
+  "printf",
+  "test",
+  "[",
+  "true",
+  "false",
+  "basename",
+  "dirname",
+  "seq",
+  "yes",
+  "md5sum",
+  "sha256sum",
+  "sha1sum",
+  "shasum",
+  "cksum",
+  "strings",
+  "xxd",
+  "od",
+  "hexdump",
+  "jq",
+  "yq",
+  "xq",
+  "ps",
+  "pgrep",
+  "lsof",
+  "ss",
+  "netstat",
+  "dig",
+  "nslookup",
+  "host",
+  "ping",
+  "curl",
+  "wget",
+]);
+
+const SKIP_PREFIXES = new Set(["sudo", "nice", "time", "env", "ionice", "strace", "ltrace"]);
+
+function isReadOnlyShellCommand(command: string): boolean {
+  if (!command) {
+    return false;
+  }
+  const tokens = command.split(/\s+/);
+  let i = 0;
+  // Skip env-var assignments (FOO=bar) and common prefixes
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      i++;
+      continue;
+    }
+    if (SKIP_PREFIXES.has(token)) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  const firstCmd = tokens[i];
+  if (!firstCmd) {
+    return false;
+  }
+  const baseName = path.basename(firstCmd);
+  return READ_ONLY_EXEC_COMMANDS.has(baseName);
+}
 
 const READ_ONLY_ACTIONS = new Set([
   "get",
@@ -104,10 +231,13 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "write":
     case "edit":
     case "apply_patch":
-    case "exec":
-    case "bash":
     case "sessions_send":
       return true;
+    case "exec":
+    case "bash": {
+      const command = typeof record?.command === "string" ? record.command.trim() : "";
+      return !isReadOnlyShellCommand(command);
+    }
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);
     case "message":

@@ -61,6 +61,35 @@ describe("tool mutation helpers", () => {
     ).toBe(false);
   });
 
+  it("classifies read-only exec/bash commands as non-mutating", () => {
+    expect(isMutatingToolCall("exec", { command: "find ~ -iname '*.pdf' 2>/dev/null" })).toBe(
+      false,
+    );
+    expect(isMutatingToolCall("bash", { command: "ls -la" })).toBe(false);
+    expect(isMutatingToolCall("exec", { command: "grep pattern file.txt" })).toBe(false);
+    expect(isMutatingToolCall("exec", { command: "echo hello" })).toBe(false);
+    expect(isMutatingToolCall("bash", { command: "cat file | grep foo" })).toBe(false);
+    expect(isMutatingToolCall("exec", { command: "FOO=bar find ." })).toBe(false);
+    expect(isMutatingToolCall("bash", { command: "/usr/bin/find . -name '*.ts'" })).toBe(false);
+    expect(isMutatingToolCall("exec", { command: "sudo ls /root" })).toBe(false);
+    expect(isMutatingToolCall("bash", { command: "time grep -r pattern src/" })).toBe(false);
+    expect(isMutatingToolCall("exec", { command: "jq '.name' package.json" })).toBe(false);
+  });
+
+  it("classifies mutating exec/bash commands conservatively", () => {
+    expect(isMutatingToolCall("exec", { command: "rm -rf /tmp/foo" })).toBe(true);
+    expect(isMutatingToolCall("bash", { command: "npm install" })).toBe(true);
+    expect(isMutatingToolCall("exec", { command: "git push origin main" })).toBe(true);
+    expect(isMutatingToolCall("bash", { command: "mv file1.txt file2.txt" })).toBe(true);
+  });
+
+  it("treats empty or missing exec/bash command as mutating (conservative)", () => {
+    expect(isMutatingToolCall("exec", {})).toBe(true);
+    expect(isMutatingToolCall("bash", { command: "" })).toBe(true);
+    expect(isMutatingToolCall("exec", { command: "  " })).toBe(true);
+    expect(isMutatingToolCall("bash", undefined)).toBe(true);
+  });
+
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
