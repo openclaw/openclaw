@@ -115,6 +115,26 @@ export function buildGatewayCronService(params: {
     return canonical;
   };
 
+  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+    const runtimeConfig = loadConfig();
+    const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
+    const derivedAgentId =
+      requestedAgentId ??
+      (opts?.sessionKey
+        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
+        : undefined);
+    const agentId = derivedAgentId || undefined;
+    const sessionKey =
+      opts?.sessionKey && agentId
+        ? resolveCronSessionKey({
+            runtimeConfig,
+            agentId,
+            requestedSessionKey: opts.sessionKey,
+          })
+        : undefined;
+    return { runtimeConfig, agentId, sessionKey };
+  };
+
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveStorePath(params.cfg.session?.store, {
@@ -140,22 +160,7 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
     },
     requestHeartbeatNow: (opts) => {
-      const runtimeConfig = loadConfig();
-      const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
-      const derivedAgentId =
-        requestedAgentId ??
-        (opts?.sessionKey
-          ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
-          : undefined);
-      const agentId = derivedAgentId || undefined;
-      const sessionKey =
-        opts?.sessionKey && agentId
-          ? resolveCronSessionKey({
-              runtimeConfig,
-              agentId,
-              requestedSessionKey: opts.sessionKey,
-            })
-          : undefined;
+      const { agentId, sessionKey } = resolveCronWakeTarget(opts);
       requestHeartbeatNow({
         reason: opts?.reason,
         agentId,
@@ -163,22 +168,7 @@ export function buildGatewayCronService(params: {
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const runtimeConfig = loadConfig();
-      const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
-      const derivedAgentId =
-        requestedAgentId ??
-        (opts?.sessionKey
-          ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
-          : undefined);
-      const agentId = derivedAgentId || undefined;
-      const sessionKey =
-        opts?.sessionKey && agentId
-          ? resolveCronSessionKey({
-              runtimeConfig,
-              agentId,
-              requestedSessionKey: opts.sessionKey,
-            })
-          : undefined;
+      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         reason: opts?.reason,
