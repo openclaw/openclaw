@@ -65,7 +65,7 @@ import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { loadGatewayPlugins } from "./server-plugins.js";
+import { loadGatewayPlugins, autoUpdatePluginsOnStartup } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -226,7 +226,10 @@ export async function startGatewayServer(
     }
   }
 
-  const cfgAtStart = loadConfig();
+  const cfgAtStart = await autoUpdatePluginsOnStartup({
+    cfg: loadConfig(),
+    log,
+  });
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();

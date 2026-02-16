@@ -25,6 +25,8 @@ export type PluginInstallRecord = {
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
   enabled?: boolean;
+  /** Automatically update npm-installed plugins on gateway startup. Defaults to true. */
+  autoUpdate?: boolean;
   /** Optional plugin allowlist (plugin ids). */
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
