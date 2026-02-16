@@ -26,11 +26,7 @@ function createRuntime() {
   return { runtime, probeLineBot, monitorLineProvider };
 }
 
-function createStartAccountCtx(params: {
-  token: string;
-  secret: string;
-  runtime: unknown;
-}) {
+function createStartAccountCtx(params: { token: string; secret: string; runtime: unknown }) {
   return {
     account: {
       accountId: "default",
@@ -58,7 +54,9 @@ describe("linePlugin gateway.startAccount", () => {
           runtime: {},
         }) as never,
       ),
-    ).rejects.toThrow('LINE webhook mode requires a non-empty channel secret for account "default".');
+    ).rejects.toThrow(
+      'LINE webhook mode requires a non-empty channel secret for account "default".',
+    );
     expect(monitorLineProvider).not.toHaveBeenCalled();
   });
 

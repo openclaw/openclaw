@@ -604,7 +604,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim());
+      const configured = Boolean(
+        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+      );
       return {
         accountId: account.accountId,
         name: account.name,
