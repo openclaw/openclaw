@@ -252,6 +252,15 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("connection timeout");
   });
 
+  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command not found" },
+      suppressToolErrorWarnings: true,
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("shows recoverable tool errors for mutating tools", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "message", meta: "reply", error: "text required" },
