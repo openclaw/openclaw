@@ -116,6 +116,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       expect.objectContaining({
         isHeartbeat: true,
         heartbeatModelOverride: "ollama/llama3.2:1b",
+        suppressToolErrorWarnings: false,
       }),
     );
   });
