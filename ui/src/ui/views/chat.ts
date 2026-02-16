@@ -173,7 +173,7 @@ function renderSessionTabs(props: ChatProps) {
     return nothing;
   }
 
-  const getSessionDisplayName = (session: any): string => {
+  const getSessionDisplayName = (session: unknown): string => {
     // Use label or displayName if available
     if (session.label?.trim()) {
       return session.label.trim();
@@ -660,15 +660,15 @@ export function renderChat(props: ChatProps) {
               ${ref((el) => {
                 if (el) {
                   adjustTextareaHeight(el as HTMLTextAreaElement);
-                  (el as any)._textareaRef = el;
+                  (
+                    el as HTMLTextAreaElement & { _textareaRef?: HTMLTextAreaElement }
+                  )._textareaRef = el;
                 }
               })}
               .value=${props.draft}
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
-                const target = e.target as HTMLTextAreaElement;
-
                 // Tab completion for autosuggest
                 if (e.key === "Tab" && (showSlashMenu || showAtMenu)) {
                   e.preventDefault();
