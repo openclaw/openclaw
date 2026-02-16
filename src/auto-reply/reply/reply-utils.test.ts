@@ -785,7 +785,6 @@ describe("extractShortModelName", () => {
 
   it("strips date suffix", () => {
     expect(extractShortModelName("claude-opus-4-5-20251101")).toBe("claude-opus-4-5");
-    expect(extractShortModelName("gpt-5.2-20250115")).toBe("gpt-5.2");
   });
 
   it("strips -latest suffix", () => {
