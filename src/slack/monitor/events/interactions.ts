@@ -23,6 +23,9 @@ function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
 
 export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
+  if (typeof ctx.app.action !== "function") {
+    return;
+  }
 
   // Handle Block Kit button clicks from OpenClaw-generated messages
   // Only matches action_ids that start with our prefix to avoid interfering
