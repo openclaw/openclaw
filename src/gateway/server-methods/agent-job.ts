@@ -1,4 +1,5 @@
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { startResponseRouter } from "../../infra/response-router.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const agentRunCache = new Map<string, AgentRunSnapshot>();
@@ -133,3 +134,4 @@ export async function waitForAgentJob(params: {
 }
 
 ensureAgentRunListener();
+startResponseRouter(); // RFC-A2A-RESPONSE-ROUTING

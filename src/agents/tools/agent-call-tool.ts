@@ -66,6 +66,7 @@ export interface AgentCallResult {
   caveats?: string[];
   artifacts?: Array<{ type: string; path: string }>;
   taskId?: string;
+  correlationId?: string; // For response routing (RFC-A2A-RESPONSE-ROUTING)
   error?: string;
 }
 
@@ -183,8 +184,7 @@ export function createAgentCallTool(opts?: {
       const skillRaw = readStringParam(params, "skill", { required: true });
       const input = params.input as Record<string, unknown>;
       const mode = readStringParam(params, "mode") ?? "execute";
-      const timeoutSeconds = readNumberParam(params, "timeoutSeconds") ?? 60;
-      const timeoutMs = timeoutSeconds * 1000;
+      const timeoutSeconds = readNumberParam(params, "timeoutSeconds");
       const instance = readStringParam(params, "instance"); // Future: federation
 
       // Fix 1: Agent ID validation (must happen early to prevent injection)
@@ -267,13 +267,23 @@ export function createAgentCallTool(opts?: {
       // Fix 7: Security audit logging for invocation
       logAudit("invocation", { requester: requesterAgentId, target: targetAgentId, skill });
 
+      // Generate idempotency key first (used as correlationId)
+      const idempotencyKey = randomUUID();
+
       // Construct skill invocation message
+      // RFC-A2A-RESPONSE-ROUTING: Add correlationId, returnTo, timeout
+      const correlationId = idempotencyKey; // Use idempotencyKey as correlationId
+      const timeoutMs = timeoutSeconds !== undefined ? timeoutSeconds * 1000 : 60000; // Default 60s
+
       const skillInvocation = {
         kind: "skill_invocation",
         skill,
         input,
         mode,
         requester: requesterSessionKey,
+        correlationId, // RFC: Matches request to response
+        returnTo: requesterSessionKey, // RFC: Where to deliver response
+        timeout: timeoutMs, // RFC: Per-call timeout
       };
 
       const agentContext = buildAgentToAgentMessageContext({
@@ -281,8 +291,6 @@ export function createAgentCallTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey,
       });
-
-      const idempotencyKey = randomUUID();
 
       // Fire-and-forget mode (timeout=0)
       if (timeoutSeconds === 0) {
@@ -311,6 +319,7 @@ export function createAgentCallTool(opts?: {
           return jsonResult({
             status: "working",
             taskId: idempotencyKey,
+            correlationId, // RFC: For response routing
           } as AgentCallResult);
         } catch (err) {
           return jsonResult({
@@ -378,6 +387,7 @@ export function createAgentCallTool(opts?: {
           status: "working",
           error: waitError,
           taskId: runId,
+          correlationId, // RFC: For response routing
         } as AgentCallResult);
       }
 
@@ -418,6 +428,7 @@ export function createAgentCallTool(opts?: {
         assumptions,
         caveats,
         taskId: runId,
+        correlationId, // RFC: For response routing
       } as AgentCallResult);
     },
   };

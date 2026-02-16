@@ -11,7 +11,10 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  registerAgentRunContext,
+  extractSkillInvocationRouting,
+} from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -449,7 +452,18 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         bestEffortDeliver = true;
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      // RFC-A2A-RESPONSE-ROUTING: Extract response routing from skill_invocation
+      const routing = extractSkillInvocationRouting(request.message);
+      if (routing) {
+        registerAgentRunContext(idem, {
+          sessionKey: canonicalSessionKey,
+          returnTo: routing.returnTo,
+          correlationId: routing.correlationId,
+          timeout: routing.timeout,
+        });
+      } else {
+        registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      }
     }
 
     const runId = idem;

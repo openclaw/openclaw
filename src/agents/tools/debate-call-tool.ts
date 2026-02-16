@@ -131,6 +131,7 @@ export interface DebateCallResult {
   rounds: DebateRound[];
   dissent?: string;
   assumptions: string[];
+  correlationId?: string; // For response routing (RFC-A2A-RESPONSE-ROUTING)
 }
 
 /**
@@ -152,12 +153,19 @@ async function invokeAgentSkill(params: {
   validateInputSize(params.input, MAX_A2A_INPUT_SIZE);
 
   // Construct the message to send - includes skill invocation context
+  // RFC-A2A-RESPONSE-ROUTING: Add correlationId, returnTo, timeout
+  const correlationId = idempotencyKey;
+  const timeoutMs = params.timeoutMs;
+
   const messageContext = {
     kind: "skill_invocation",
     skill: params.skill,
     input: params.input,
     mode: params.mode ?? "execute",
     requesterSession: params.requesterSessionKey,
+    correlationId, // RFC: Matches request to response
+    returnTo: params.requesterSessionKey, // RFC: Where to deliver response
+    timeout: timeoutMs, // RFC: Per-call timeout
   };
 
   const agentContext = buildAgentToAgentMessageContext({
@@ -304,6 +312,9 @@ export function createDebateCallTool(opts?: {
       const minConfidence = readNumberParam(params, "minConfidence") ?? 0.85;
       const timeoutSeconds = readNumberParam(params, "timeoutSeconds") ?? 60;
       const timeoutMs = timeoutSeconds * 1000;
+
+      // RFC-A2A-RESPONSE-ROUTING: Generate correlation ID for this debate
+      const correlationId = randomUUID();
 
       // Fix 3: Input size validation
       try {
@@ -654,6 +665,7 @@ export function createDebateCallTool(opts?: {
               ? (resolution.output as any).dissent
               : undefined,
           assumptions: Array.from(new Set([...currentAssumptions, ...resolution.assumptions])),
+          correlationId, // RFC: For response routing
         } as DebateCallResult);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -665,6 +677,7 @@ export function createDebateCallTool(opts?: {
           rounds,
           error: errorMsg,
           assumptions: [],
+          correlationId, // RFC: For response routing
         } as DebateCallResult);
       }
     },
