@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -25,6 +26,7 @@ vi.mock("../agents/model-auth.js", () => ({
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
+import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
 
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
@@ -83,5 +85,14 @@ describe("noteMemorySearchHealth", () => {
       agentDir: "/tmp/agent-default",
     });
     expect(note).not.toHaveBeenCalled();
+  });
+});
+
+describe("detectLegacyWorkspaceDirs", () => {
+  it("returns active workspace and no legacy dirs", () => {
+    const workspaceDir = "/home/user/openclaw";
+    const detection = detectLegacyWorkspaceDirs({ workspaceDir });
+    expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
+    expect(detection.legacyDirs).toEqual([]);
   });
 });
