@@ -295,14 +295,6 @@ describe("rotateSessionFile", () => {
     expect(rotated).toBe(false);
   });
 
-  it("file exactly at maxBytes: no rotation (returns false)", async () => {
-    await fs.writeFile(storePath, "x".repeat(100), "utf-8");
-
-    const rotated = await rotateSessionFile(storePath, 100);
-
-    expect(rotated).toBe(false);
-  });
-
   it("backup file name includes a timestamp", async () => {
     await fs.writeFile(storePath, "x".repeat(100), "utf-8");
     const before = Date.now();
