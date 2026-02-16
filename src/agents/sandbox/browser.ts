@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
@@ -22,6 +21,7 @@ import {
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
 import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
+import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 
@@ -70,6 +70,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     noSandbox: false,
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+    extraArgs: [],
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
         cdpPort: params.cdpPort,
