@@ -123,6 +123,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         draftStream?.stop();
         try {
           await ctx.app.client.chat.update({
+            token: ctx.botToken,
             channel: draftChannelId,
             ts: draftMessageId,
             text: finalText.trim(),
