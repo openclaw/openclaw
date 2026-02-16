@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { isUrlAllowedByAllowlist, resolveFetchUrlAllowlist } from "./web-fetch.js";
 import { filterResultsByAllowlist, resolveUrlAllowlist } from "./web-search.js";
 
