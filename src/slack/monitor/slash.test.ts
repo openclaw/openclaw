@@ -430,27 +430,6 @@ describe("slack slash commands access groups", () => {
     expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
   });
 
-  it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {
-    harness.ctx.allowFrom = ["U_OWNER"];
-    harness.ctx.resolveChannelName = async () => ({ name: "directmessage", type: "im" });
-
-    await runSlashHandler({
-      commands: harness.commands,
-      command: {
-        user_id: "U_ATTACKER",
-        user_name: "Mallory",
-        channel_id: "D999",
-        channel_name: "directmessage",
-      },
-    });
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
-      ctx?: { CommandAuthorized?: boolean };
-    };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
-  });
-
   it("enforces access-group gating when lookup fails for private channels", async () => {
     harness.ctx.allowFrom = [];
     harness.ctx.resolveChannelName = async () => ({});

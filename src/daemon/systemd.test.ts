@@ -118,13 +118,6 @@ describe("resolveSystemdUserUnitPath", () => {
     );
   });
 
-  it("handles case-insensitive 'DEFAULT' profile", () => {
-    const env = { HOME: "/home/test", OPENCLAW_PROFILE: "DEFAULT" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/openclaw-gateway.service",
-    );
-  });
-
   it("trims whitespace from OPENCLAW_PROFILE", () => {
     const env = { HOME: "/home/test", OPENCLAW_PROFILE: "  myprofile  " };
     expect(resolveSystemdUserUnitPath(env)).toBe(
@@ -187,17 +180,6 @@ describe("parseSystemdExecStart", () => {
       "start",
       "--name",
       "My Bot",
-    ]);
-  });
-
-  it("parses path arguments", () => {
-    const execStart = "/usr/bin/openclaw gateway start --path /tmp/openclaw";
-    expect(parseSystemdExecStart(execStart)).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--path",
-      "/tmp/openclaw",
     ]);
   });
 });

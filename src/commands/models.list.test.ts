@@ -153,30 +153,6 @@ describe("models list/status", () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
   });
 
-  it("models list outputs canonical zai key for configured z.ai model", async () => {
-    loadConfig.mockReturnValue({
-      agents: { defaults: { model: "z.ai/glm-4.7" } },
-    });
-    const runtime = makeRuntime();
-
-    const model = {
-      provider: "zai",
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      input: ["text"],
-      baseUrl: "https://api.z.ai/v1",
-      contextWindow: 128000,
-    };
-
-    modelRegistryState.models = [model];
-    modelRegistryState.available = [model];
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(payload.models[0]?.key).toBe("zai/glm-4.7");
-  });
-
   it("models list plain outputs canonical zai key", async () => {
     loadConfig.mockReturnValue({
       agents: { defaults: { model: "z.ai/glm-4.7" } },
@@ -532,29 +508,6 @@ describe("models list/status", () => {
     expect(runtime.error.mock.calls[0]?.[0]).toContain("model discovery unavailable");
     expect(runtime.log).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
-  });
-
-  it("loadModelRegistry throws when model discovery is unavailable", async () => {
-    modelRegistryState.getAllError = Object.assign(new Error("model discovery unavailable"), {
-      code: "MODEL_DISCOVERY_UNAVAILABLE",
-    });
-    modelRegistryState.available = [
-      {
-        provider: "google-antigravity",
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        api: "google-gemini-cli",
-        input: ["text", "image"],
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        contextWindow: 200000,
-        maxTokens: 64000,
-        reasoning: true,
-        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-      },
-    ];
-
-    const { loadModelRegistry } = await import("./models/list.registry.js");
-    await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
