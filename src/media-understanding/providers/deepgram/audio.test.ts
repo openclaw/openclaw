@@ -1,15 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { installPinnedHostnameTestHooks, resolveRequestUrl } from "../audio.test-helpers.js";
 import { transcribeDeepgramAudio } from "./audio.js";
 
-const resolveRequestUrl = (input: RequestInfo | URL) => {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-};
+installPinnedHostnameTestHooks();
 
 describe("transcribeDeepgramAudio", () => {
   it("respects lowercase authorization header overrides", async () => {

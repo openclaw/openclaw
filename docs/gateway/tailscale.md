@@ -121,7 +121,7 @@ Avoid Funnel for browser control; treat node pairing like operator access.
 
 ## Learn more
 
-- Tailscale Serve overview: https://tailscale.com/kb/1312/serve
-- `tailscale serve` command: https://tailscale.com/kb/1242/tailscale-serve
-- Tailscale Funnel overview: https://tailscale.com/kb/1223/tailscale-funnel
-- `tailscale funnel` command: https://tailscale.com/kb/1311/tailscale-funnel
+- Tailscale Serve overview: [https://tailscale.com/kb/1312/serve](https://tailscale.com/kb/1312/serve)
+- `tailscale serve` command: [https://tailscale.com/kb/1242/tailscale-serve](https://tailscale.com/kb/1242/tailscale-serve)
+- Tailscale Funnel overview: [https://tailscale.com/kb/1223/tailscale-funnel](https://tailscale.com/kb/1223/tailscale-funnel)
+- `tailscale funnel` command: [https://tailscale.com/kb/1311/tailscale-funnel](https://tailscale.com/kb/1311/tailscale-funnel)

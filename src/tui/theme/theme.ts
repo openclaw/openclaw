@@ -61,6 +61,7 @@ function highlightCode(code: string, lang?: string): string[] {
 
 export const theme = {
   fg: fg(palette.text),
+  assistantText: (text: string) => text,
   dim: fg(palette.dim),
   accent: fg(palette.accent),
   accentSoft: fg(palette.accentSoft),

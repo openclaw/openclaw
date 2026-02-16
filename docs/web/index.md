@@ -99,6 +99,8 @@ Open:
 - Non-loopback binds still **require** a shared token/password (`gateway.auth` or env).
 - The wizard generates a gateway token by default (even on loopback).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
+- The Control UI sends anti-clickjacking headers and only accepts same-origin browser
+  websocket connections unless `gateway.controlUi.allowedOrigins` is set.
 - With Serve, Tailscale identity headers can satisfy auth when
   `gateway.auth.allowTailscale` is `true` (no token/password required). Set
   `gateway.auth.allowTailscale: false` to require explicit credentials. See

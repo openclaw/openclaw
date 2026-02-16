@@ -24,12 +24,15 @@ Notes:
 
 - Add `--no-onboard` if you don’t want the onboarding wizard to run again.
 - For **source installs**, use:
+
   ```bash
   curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
   ```
+
   The installer will `git pull --rebase` **only** if the repo is clean.
+
 - For **global installs**, the script uses `npm install -g openclaw@latest` under the hood.
-- Legacy note: `openclaw` remains available as a compatibility shim.
+- Legacy note: `clawdbot` remains available as a compatibility shim.
 
 ## Before you update
 
@@ -225,4 +228,4 @@ git pull
 
 - Run `openclaw doctor` again and read the output carefully (it often tells you the fix).
 - Check: [Troubleshooting](/gateway/troubleshooting)
-- Ask in Discord: https://discord.gg/clawd
+- Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)

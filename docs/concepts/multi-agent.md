@@ -82,7 +82,7 @@ This lets **multiple people** share one Gateway server while keeping their AI �
 
 ## One WhatsApp number, multiple people (DM split)
 
-You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "dm"`. Replies still come from the same WhatsApp number (no per‑agent sender identity).
+You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "direct"`. Replies still come from the same WhatsApp number (no per‑agent sender identity).
 
 Important detail: direct chats collapse to the agent’s **main session key**, so true isolation requires **one agent per person**.
 
@@ -97,8 +97,14 @@ Example:
     ],
   },
   bindings: [
-    { agentId: "alex", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230001" } } },
-    { agentId: "mia", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551230002" } } },
+    {
+      agentId: "alex",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230001" } },
+    },
+    {
+      agentId: "mia",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551230002" } },
+    },
   ],
   channels: {
     whatsapp: {
@@ -112,18 +118,22 @@ Example:
 Notes:
 
 - DM access control is **global per WhatsApp account** (pairing/allowlist), not per agent.
-- For shared groups, bind the group to one agent or use [Broadcast groups](/broadcast-groups).
+- For shared groups, bind the group to one agent or use [Broadcast groups](/channels/broadcast-groups).
 
 ## Routing rules (how messages pick an agent)
 
 Bindings are **deterministic** and **most-specific wins**:
 
 1. `peer` match (exact DM/group/channel id)
-2. `guildId` (Discord)
-3. `teamId` (Slack)
-4. `accountId` match for a channel
-5. channel-level match (`accountId: "*"`)
-6. fallback to default agent (`agents.list[].default`, else first list entry, default: `main`)
+2. `parentPeer` match (thread inheritance)
+3. `guildId + roles` (Discord role routing)
+4. `guildId` (Discord)
+5. `teamId` (Slack)
+6. `accountId` match for a channel
+7. channel-level match (`accountId: "*"`)
+8. fallback to default agent (`agents.list[].default`, else first list entry, default: `main`)
+
+If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
 
 ## Multiple accounts / phone numbers
 
@@ -221,7 +231,7 @@ Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opu
         id: "opus",
         name: "Deep Work",
         workspace: "~/.openclaw/workspace-opus",
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
       },
     ],
   },
@@ -255,12 +265,15 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
         id: "opus",
         name: "Deep Work",
         workspace: "~/.openclaw/workspace-opus",
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
       },
     ],
   },
   bindings: [
-    { agentId: "opus", match: { channel: "whatsapp", peer: { kind: "dm", id: "+15551234567" } } },
+    {
+      agentId: "opus",
+      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+    },
     { agentId: "chat", match: { channel: "whatsapp" } },
   ],
 }
@@ -373,4 +386,4 @@ Note: `tools.elevated` is **global** and sender-based; it is not configurable pe
 If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for detailed examples.
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.

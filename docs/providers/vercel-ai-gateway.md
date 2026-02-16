@@ -28,7 +28,7 @@ openclaw onboard --auth-choice ai-gateway-api-key
 {
   agents: {
     defaults: {
-      model: { primary: "vercel-ai-gateway/anthropic/claude-opus-4.5" },
+      model: { primary: "vercel-ai-gateway/anthropic/claude-opus-4.6" },
     },
   },
 }

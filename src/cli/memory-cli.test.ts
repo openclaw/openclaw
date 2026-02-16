@@ -1,4 +1,7 @@
 import { Command } from "commander";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const getMemorySearchManager = vi.fn();
@@ -242,7 +245,7 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", "status", "--index"], { from: "user" });
 
     expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", progress: expect.any(Function) }),
+      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
     );
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
@@ -271,6 +274,70 @@ describe("memory cli", () => {
     );
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
+  });
+
+  it("logs qmd index file path and size after index", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
+    const dbPath = path.join(tmpDir, "index.sqlite");
+    await fs.writeFile(dbPath, "sqlite-bytes", "utf-8");
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        sync,
+        status: () => ({ backend: "qmd", dbPath }),
+        close,
+      },
+    });
+
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "index"], { from: "user" });
+
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD index: "));
+    expect(log).toHaveBeenCalledWith("Memory index updated (main).");
+    expect(close).toHaveBeenCalled();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("fails index when qmd db file is empty", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
+    const dbPath = path.join(tmpDir, "index.sqlite");
+    await fs.writeFile(dbPath, "", "utf-8");
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        sync,
+        status: () => ({ backend: "qmd", dbPath }),
+        close,
+      },
+    });
+
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "index"], { from: "user" });
+
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+    );
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("Memory index failed (main): QMD index file is empty"),
+    );
+    expect(close).toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("logs close failures without failing the command", async () => {

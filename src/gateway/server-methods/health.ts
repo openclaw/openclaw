@@ -5,6 +5,8 @@ import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
 
+const ADMIN_SCOPE = "operator.admin";
+
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
@@ -25,8 +27,11 @@ export const healthHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  status: async ({ respond }) => {
-    const status = await getStatusSummary();
+  status: async ({ respond, client }) => {
+    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const status = await getStatusSummary({
+      includeSensitive: scopes.includes(ADMIN_SCOPE),
+    });
     respond(true, status, undefined);
   },
 };

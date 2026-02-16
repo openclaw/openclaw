@@ -10,9 +10,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { resolveUserTimezone } from "../agents/date-time.js";
+import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
+import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   DEFAULT_HEARTBEAT_EVERY,
@@ -34,13 +35,18 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { peekSystemEvents } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { formatErrorMessage } from "./errors.js";
+import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import {
+  buildCronEventPrompt,
+  isCronSystemEvent,
+  isExecCompletionEvent,
+} from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -54,6 +60,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { peekSystemEventEntries } from "./system-events.js";
 
 type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -86,7 +93,6 @@ export type HeartbeatSummary = {
 };
 
 const DEFAULT_HEARTBEAT_TARGET = "last";
-const ACTIVE_HOURS_TIME_PATTERN = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
 
 // Prompt used when an async exec has completed and the result should be relayed to the user.
 // This overrides the standard heartbeat prompt to ensure the model responds with the exec result
@@ -95,98 +101,7 @@ const EXEC_EVENT_PROMPT =
   "An async command you ran earlier has completed. The result is shown in the system messages above. " +
   "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
   "If it failed, explain what went wrong.";
-
-function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "user") {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
-  if (trimmed === "local") {
-    const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return host?.trim() || "UTC";
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-    return trimmed;
-  } catch {
-    return resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
-  }
-}
-
-function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
-  if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) {
-    return null;
-  }
-  const [hourStr, minuteStr] = raw.split(":");
-  const hour = Number(hourStr);
-  const minute = Number(minuteStr);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
-  }
-  if (hour === 24) {
-    if (!opts.allow24 || minute !== 0) {
-      return null;
-    }
-    return 24 * 60;
-  }
-  return hour * 60 + minute;
-}
-
-function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(nowMs));
-    const map: Record<string, string> = {};
-    for (const part of parts) {
-      if (part.type !== "literal") {
-        map[part.type] = part.value;
-      }
-    }
-    const hour = Number(map.hour);
-    const minute = Number(map.minute);
-    if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-      return null;
-    }
-    return hour * 60 + minute;
-  } catch {
-    return null;
-  }
-}
-
-function isWithinActiveHours(
-  cfg: OpenClawConfig,
-  heartbeat?: HeartbeatConfig,
-  nowMs?: number,
-): boolean {
-  const active = heartbeat?.activeHours;
-  if (!active) {
-    return true;
-  }
-
-  const startMin = parseActiveHoursTime({ allow24: false }, active.start);
-  const endMin = parseActiveHoursTime({ allow24: true }, active.end);
-  if (startMin === null || endMin === null) {
-    return true;
-  }
-  if (startMin === endMin) {
-    return true;
-  }
-
-  const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
-  if (currentMin === null) {
-    return true;
-  }
-
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
-  }
-  return currentMin >= startMin || currentMin < endMin;
-}
+export { isCronSystemEvent };
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -349,7 +264,9 @@ function resolveHeartbeatSession(
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
+  const storePath = resolveStorePath(sessionCfg?.store, {
+    agentId: storeAgentId,
+  });
   const store = loadSessionStore(storePath);
   const mainEntry = store[mainSessionKey];
 
@@ -380,32 +297,16 @@ function resolveHeartbeatSession(
   if (canonical !== "global") {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      return { sessionKey: canonical, storePath, store, entry: store[canonical] };
+      return {
+        sessionKey: canonical,
+        storePath,
+        store,
+        entry: store[canonical],
+      };
     }
   }
 
   return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
-}
-
-function resolveHeartbeatReplyPayload(
-  replyResult: ReplyPayload | ReplyPayload[] | undefined,
-): ReplyPayload | undefined {
-  if (!replyResult) {
-    return undefined;
-  }
-  if (!Array.isArray(replyResult)) {
-    return replyResult;
-  }
-  for (let idx = replyResult.length - 1; idx >= 0; idx -= 1) {
-    const payload = replyResult[idx];
-    if (!payload) {
-      continue;
-    }
-    if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
-      return payload;
-    }
-  }
-  return undefined;
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -505,13 +406,21 @@ export async function runHeartbeatOnce(opts: {
 
   // Skip heartbeat if HEARTBEAT.md exists but has no actionable content.
   // This saves API calls/costs when the file is effectively empty (only comments/headers).
-  // EXCEPTION: Don't skip for exec events - they have pending system events to process.
+  // EXCEPTION: Don't skip for exec events, cron events, or explicit wake requests -
+  // they have pending system events to process regardless of HEARTBEAT.md content.
   const isExecEventReason = opts.reason === "exec-event";
+  const isCronEventReason = Boolean(opts.reason?.startsWith("cron:"));
+  const isWakeReason = opts.reason === "wake" || Boolean(opts.reason?.startsWith("hook:"));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && !isExecEventReason) {
+    if (
+      isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
+      !isExecEventReason &&
+      !isCronEventReason &&
+      !isWakeReason
+    ) {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "empty-heartbeat-file",
@@ -527,6 +436,19 @@ export async function runHeartbeatOnce(opts: {
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const heartbeatAccountId = heartbeat?.accountId?.trim();
+  if (delivery.reason === "unknown-account") {
+    log.warn("heartbeat: unknown accountId", {
+      accountId: delivery.accountId ?? heartbeatAccountId ?? null,
+      target: heartbeat?.target ?? "last",
+    });
+  } else if (heartbeatAccountId) {
+    log.info("heartbeat: using explicit accountId", {
+      accountId: delivery.accountId ?? heartbeatAccountId,
+      target: heartbeat?.target ?? "last",
+      channel: delivery.channel,
+    });
+  }
   const visibility =
     delivery.channel !== "none"
       ? resolveHeartbeatVisibility({
@@ -536,21 +458,42 @@ export async function runHeartbeatOnce(opts: {
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
-  const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId).responsePrefix;
+  const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
+    channel: delivery.channel !== "none" ? delivery.channel : undefined,
+    accountId: delivery.accountId,
+  }).responsePrefix;
 
-  // Check if this is an exec event with pending exec completion system events.
+  // Check if this is an exec event or cron event with pending system events.
   // If so, use a specialized prompt that instructs the model to relay the result
   // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
   const isExecEvent = opts.reason === "exec-event";
-  const pendingEvents = isExecEvent ? peekSystemEvents(sessionKey) : [];
-  const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
-
-  const prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
+  const pendingEventEntries = peekSystemEventEntries(sessionKey);
+  const hasTaggedCronEvents = pendingEventEntries.some((event) =>
+    event.contextKey?.startsWith("cron:"),
+  );
+  const shouldInspectPendingEvents = isExecEvent || isCronEventReason || hasTaggedCronEvents;
+  const pendingEvents = shouldInspectPendingEvents
+    ? pendingEventEntries.map((event) => event.text)
+    : [];
+  const cronEvents = pendingEventEntries
+    .filter(
+      (event) =>
+        (isCronEventReason || event.contextKey?.startsWith("cron:")) &&
+        isCronSystemEvent(event.text),
+    )
+    .map((event) => event.text);
+  const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
+  const hasCronEvents = cronEvents.length > 0;
+  const prompt = hasExecCompletion
+    ? EXEC_EVENT_PROMPT
+    : hasCronEvents
+      ? buildCronEventPrompt(cronEvents)
+      : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
-    Body: prompt,
+    Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
-    Provider: hasExecCompletion ? "exec-event" : "heartbeat",
+    Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
@@ -559,6 +502,7 @@ export async function runHeartbeatOnce(opts: {
       reason: "alerts-disabled",
       durationMs: Date.now() - startedAt,
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
+      accountId: delivery.accountId,
     });
     return { status: "skipped", reason: "alerts-disabled" };
   }
@@ -588,13 +532,18 @@ export async function runHeartbeatOnce(opts: {
       to: delivery.to,
       accountId: delivery.accountId,
       payloads: [{ text: heartbeatOkText }],
+      agentId,
       deps: opts.deps,
     });
     return true;
   };
 
   try {
-    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, cfg);
+    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const replyOpts = heartbeatModelOverride
+      ? { isHeartbeat: true, heartbeatModelOverride }
+      : { isHeartbeat: true };
+    const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
@@ -616,6 +565,7 @@ export async function runHeartbeatOnce(opts: {
         reason: opts.reason,
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
@@ -649,6 +599,7 @@ export async function runHeartbeatOnce(opts: {
         reason: opts.reason,
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
@@ -685,6 +636,7 @@ export async function runHeartbeatOnce(opts: {
         durationMs: Date.now() - startedAt,
         hasMedia: false,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -704,12 +656,17 @@ export async function runHeartbeatOnce(opts: {
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
+        accountId: delivery.accountId,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
     if (!visibility.showAlerts) {
-      await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
@@ -717,6 +674,7 @@ export async function runHeartbeatOnce(opts: {
         durationMs: Date.now() - startedAt,
         channel: delivery.channel,
         hasMedia: mediaUrls.length > 0,
+        accountId: delivery.accountId,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
@@ -738,6 +696,7 @@ export async function runHeartbeatOnce(opts: {
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
           channel: delivery.channel,
+          accountId: delivery.accountId,
         });
         log.info("heartbeat: channel not ready", {
           channel: delivery.channel,
@@ -752,6 +711,7 @@ export async function runHeartbeatOnce(opts: {
       channel: delivery.channel,
       to: delivery.to,
       accountId: deliveryAccountId,
+      agentId,
       payloads: [
         ...reasoningPayloads,
         ...(shouldSkipMain
@@ -787,6 +747,7 @@ export async function runHeartbeatOnce(opts: {
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
+      accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     return { status: "ran", durationMs: Date.now() - startedAt };
@@ -797,6 +758,7 @@ export async function runHeartbeatOnce(opts: {
       reason,
       durationMs: Date.now() - startedAt,
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
+      accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
@@ -831,6 +793,11 @@ export function startHeartbeatRunner(opts: {
     return now + intervalMs;
   };
 
+  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
+    agent.lastRunMs = now;
+    agent.nextDueMs = now + agent.intervalMs;
+  };
+
   const scheduleNext = () => {
     if (state.stopped) {
       return;
@@ -854,6 +821,7 @@ export function startHeartbeatRunner(opts: {
     }
     const delay = Math.max(0, nextDue - now);
     state.timer = setTimeout(() => {
+      state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
     state.timer.unref?.();
@@ -907,11 +875,23 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
+    if (state.stopped) {
+      return {
+        status: "skipped",
+        reason: "disabled",
+      } satisfies HeartbeatRunResult;
+    }
     if (!heartbeatsEnabled) {
-      return { status: "skipped", reason: "disabled" } satisfies HeartbeatRunResult;
+      return {
+        status: "skipped",
+        reason: "disabled",
+      } satisfies HeartbeatRunResult;
     }
     if (state.agents.size === 0) {
-      return { status: "skipped", reason: "disabled" } satisfies HeartbeatRunResult;
+      return {
+        status: "skipped",
+        reason: "disabled",
+      } satisfies HeartbeatRunResult;
     }
 
     const reason = params?.reason;
@@ -925,19 +905,30 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
 
-      const res = await runOnce({
-        cfg: state.cfg,
-        agentId: agent.agentId,
-        heartbeat: agent.heartbeat,
-        reason,
-        deps: { runtime: state.runtime },
-      });
+      let res: HeartbeatRunResult;
+      try {
+        res = await runOnce({
+          cfg: state.cfg,
+          agentId: agent.agentId,
+          heartbeat: agent.heartbeat,
+          reason,
+          deps: { runtime: state.runtime },
+        });
+      } catch (err) {
+        // If runOnce throws (e.g. during session compaction), we must still
+        // advance the timer and call scheduleNext so heartbeats keep firing.
+        const errMsg = formatErrorMessage(err);
+        log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+        advanceAgentSchedule(agent, now);
+        continue;
+      }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        advanceAgentSchedule(agent, now);
+        scheduleNext();
         return res;
       }
       if (res.status !== "skipped" || res.reason !== "disabled") {
-        agent.lastRunMs = now;
-        agent.nextDueMs = now + agent.intervalMs;
+        advanceAgentSchedule(agent, now);
       }
       if (res.status === "ran") {
         ran = true;
@@ -951,12 +942,16 @@ export function startHeartbeatRunner(opts: {
     return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
-  setHeartbeatWakeHandler(async (params) => run({ reason: params.reason }));
+  const wakeHandler: HeartbeatWakeHandler = async (params) => run({ reason: params.reason });
+  const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);
 
   const cleanup = () => {
+    if (state.stopped) {
+      return;
+    }
     state.stopped = true;
-    setHeartbeatWakeHandler(null);
+    disposeWakeHandler();
     if (state.timer) {
       clearTimeout(state.timer);
     }

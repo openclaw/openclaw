@@ -1,48 +1,42 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
-type ToolCallLike = {
-  id: string;
-  name?: string;
+type ToolCallBlock = {
+  type?: unknown;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+  arguments?: unknown;
 };
 
-function extractToolCallsFromAssistant(
-  msg: Extract<AgentMessage, { role: "assistant" }>,
-): ToolCallLike[] {
-  const content = msg.content;
-  if (!Array.isArray(content)) {
-    return [];
+function isToolCallBlock(block: unknown): block is ToolCallBlock {
+  if (!block || typeof block !== "object") {
+    return false;
   }
-
-  const toolCalls: ToolCallLike[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
-      continue;
-    }
-
-    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
-      toolCalls.push({
-        id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
-      });
-    }
-  }
-  return toolCalls;
+  const type = (block as { type?: unknown }).type;
+  return (
+    typeof type === "string" &&
+    (type === "toolCall" || type === "toolUse" || type === "functionCall")
+  );
 }
 
-function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
-  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
-  if (typeof toolCallId === "string" && toolCallId) {
-    return toolCallId;
-  }
-  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
-  if (typeof toolUseId === "string" && toolUseId) {
-    return toolUseId;
-  }
-  return null;
+function hasToolCallInput(block: ToolCallBlock): boolean {
+  const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
+  const hasArguments =
+    "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
+  return hasInput || hasArguments;
+}
+
+function hasNonEmptyStringField(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasToolCallId(block: ToolCallBlock): boolean {
+  return hasNonEmptyStringField(block.id);
+}
+
+function hasToolCallName(block: ToolCallBlock): boolean {
+  return hasNonEmptyStringField(block.name);
 }
 
 function makeMissingToolResult(params: {
@@ -65,6 +59,88 @@ function makeMissingToolResult(params: {
 }
 
 export { makeMissingToolResult };
+
+export type ToolCallInputRepairReport = {
+  messages: AgentMessage[];
+  droppedToolCalls: number;
+  droppedAssistantMessages: number;
+};
+
+export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
+      out.push(msg);
+      continue;
+    }
+    if (!("details" in msg)) {
+      out.push(msg);
+      continue;
+    }
+    const { details: _details, ...rest } = msg as unknown as Record<string, unknown>;
+    touched = true;
+    out.push(rest as unknown as AgentMessage);
+  }
+  return touched ? out : messages;
+}
+
+export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRepairReport {
+  let droppedToolCalls = 0;
+  let droppedAssistantMessages = 0;
+  let changed = false;
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const nextContent = [];
+    let droppedInMessage = 0;
+
+    for (const block of msg.content) {
+      if (
+        isToolCallBlock(block) &&
+        (!hasToolCallInput(block) || !hasToolCallId(block) || !hasToolCallName(block))
+      ) {
+        droppedToolCalls += 1;
+        droppedInMessage += 1;
+        changed = true;
+        continue;
+      }
+      nextContent.push(block);
+    }
+
+    if (droppedInMessage > 0) {
+      if (nextContent.length === 0) {
+        droppedAssistantMessages += 1;
+        changed = true;
+        continue;
+      }
+      out.push({ ...msg, content: nextContent });
+      continue;
+    }
+
+    out.push(msg);
+  }
+
+  return {
+    messages: changed ? out : messages,
+    droppedToolCalls,
+    droppedAssistantMessages,
+  };
+}
+
+export function sanitizeToolCallInputs(messages: AgentMessage[]): AgentMessage[] {
+  return repairToolCallInputs(messages).messages;
+}
 
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
   return repairToolUseResultPairing(messages).messages;
@@ -128,6 +204,19 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+
+    // Skip tool call extraction for aborted or errored assistant messages.
+    // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
+    // (e.g., partialJson: true) and should not have synthetic tool_results created.
+    // Creating synthetic results for incomplete tool calls causes API 400 errors:
+    // "unexpected tool_use_id found in tool_result blocks"
+    // See: https://github.com/openclaw/openclaw/issues/4597
+    const stopReason = (assistant as { stopReason?: string }).stopReason;
+    if (stopReason === "error" || stopReason === "aborted") {
+      out.push(msg);
+      continue;
+    }
+
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
       out.push(msg);

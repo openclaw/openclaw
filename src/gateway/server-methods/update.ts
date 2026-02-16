@@ -1,4 +1,5 @@
 import type { GatewayRequestHandlers } from "./types.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -6,40 +7,18 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateUpdateRunParams,
-} from "../protocol/index.js";
+import { validateUpdateRunParams } from "../protocol/index.js";
+import { parseRestartRequestParams } from "./restart-request.js";
+import { assertValidParams } from "./validation.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {
-    if (!validateUpdateRunParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid update.run params: ${formatValidationErrors(validateUpdateRunParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
-    const sessionKey =
-      typeof (params as { sessionKey?: unknown }).sessionKey === "string"
-        ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
-        : undefined;
-    const note =
-      typeof (params as { note?: unknown }).note === "string"
-        ? (params as { note?: string }).note?.trim() || undefined
-        : undefined;
-    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-    const restartDelayMs =
-      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-        ? Math.max(0, Math.floor(restartDelayMsRaw))
-        : undefined;
+    const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)
@@ -48,6 +27,8 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
+      const config = loadConfig();
+      const configChannel = normalizeUpdateChannel(config.update?.channel);
       const root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
@@ -58,6 +39,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         timeoutMs,
         cwd: root,
         argv1: process.argv[1],
+        channel: configChannel ?? undefined,
       });
     } catch (err) {
       result = {

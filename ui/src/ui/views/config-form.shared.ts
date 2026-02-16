@@ -1,4 +1,4 @@
-import type { ConfigUiHints } from "../types";
+import type { ConfigUiHints } from "../types.ts";
 
 export type JsonSchema = {
   type?: string | string[];
@@ -91,15 +91,4 @@ export function humanize(raw: string) {
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/\s+/g, " ")
     .replace(/^./, (m) => m.toUpperCase());
-}
-
-export function isSensitivePath(path: Array<string | number>): boolean {
-  const key = pathKey(path).toLowerCase();
-  return (
-    key.includes("token") ||
-    key.includes("password") ||
-    key.includes("secret") ||
-    key.includes("apikey") ||
-    key.endsWith("key")
-  );
 }

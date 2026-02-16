@@ -71,6 +71,9 @@ export type DiscordThreadCreate = {
   messageId?: string;
   name: string;
   autoArchiveMinutes?: number;
+  content?: string;
+  /** Discord thread type (default: PublicThread for standalone threads). */
+  type?: number;
 };
 
 export type DiscordThreadList = {
@@ -139,6 +142,9 @@ export type DiscordChannelEdit = {
   parentId?: string | null;
   nsfw?: boolean;
   rateLimitPerUser?: number;
+  archived?: boolean;
+  locked?: boolean;
+  autoArchiveDuration?: number;
 };
 
 export type DiscordChannelMove = {

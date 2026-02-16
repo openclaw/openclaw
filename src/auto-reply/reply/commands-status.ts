@@ -80,7 +80,7 @@ function resolveModelAuthLabel(
       const snippet = formatApiKeySnippet(profile.token);
       return `token ${snippet}${label ? ` (${label})` : ""}`;
     }
-    const snippet = formatApiKeySnippet(profile.key);
+    const snippet = formatApiKeySnippet(profile.key ?? "");
     return `api-key ${snippet}${label ? ` (${label})` : ""}`;
   }
 
@@ -106,6 +106,7 @@ export async function buildStatusReply(params: {
   sessionEntry?: SessionEntry;
   sessionKey: string;
   sessionScope?: SessionScope;
+  storePath?: string;
   provider: string;
   model: string;
   contextTokens: number;
@@ -124,6 +125,7 @@ export async function buildStatusReply(params: {
     sessionEntry,
     sessionKey,
     sessionScope,
+    storePath,
     provider,
     model,
     contextTokens,
@@ -222,9 +224,11 @@ export async function buildStatusReply(params: {
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },
+    agentId: statusAgentId,
     sessionEntry,
     sessionKey,
     sessionScope,
+    sessionStorePath: storePath,
     groupActivation,
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
     resolvedVerbose: resolvedVerboseLevel,

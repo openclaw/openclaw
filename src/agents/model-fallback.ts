@@ -13,12 +13,14 @@ import {
   isTimeoutError,
 } from "./failover-error.js";
 import {
+  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   modelKey,
-  parseModelRef,
+  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -34,7 +36,11 @@ type FallbackAttempt = {
   code?: string;
 };
 
-function isAbortError(err: unknown): boolean {
+/**
+ * Fallback abort check. Only treats explicit AbortError names as user aborts.
+ * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
+ */
+function isFallbackAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
@@ -42,47 +48,17 @@ function isAbortError(err: unknown): boolean {
     return false;
   }
   const name = "name" in err ? String(err.name) : "";
-  // Only treat explicit AbortError names as user aborts.
-  // Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
   return name === "AbortError";
 }
 
 function shouldRethrowAbort(err: unknown): boolean {
-  return isAbortError(err) && !isTimeoutError(err);
+  return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
-function buildAllowedModelKeys(
-  cfg: OpenClawConfig | undefined,
-  defaultProvider: string,
-): Set<string> | null {
-  const rawAllowlist = (() => {
-    const modelMap = cfg?.agents?.defaults?.models ?? {};
-    return Object.keys(modelMap);
-  })();
-  if (rawAllowlist.length === 0) {
-    return null;
-  }
-  const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(String(raw ?? ""), defaultProvider);
-    if (!parsed) {
-      continue;
-    }
-    keys.add(modelKey(parsed.provider, parsed.model));
-  }
-  return keys.size > 0 ? keys : null;
-}
-
-function resolveImageFallbackCandidates(params: {
-  cfg: OpenClawConfig | undefined;
-  defaultProvider: string;
-  modelOverride?: string;
-}): ModelCandidate[] {
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg ?? {},
-    defaultProvider: params.defaultProvider,
-  });
-  const allowlist = buildAllowedModelKeys(params.cfg, params.defaultProvider);
+function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
+  candidates: ModelCandidate[];
+  addCandidate: (candidate: ModelCandidate, enforceAllowlist: boolean) => void;
+} {
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
@@ -100,6 +76,39 @@ function resolveImageFallbackCandidates(params: {
     seen.add(key);
     candidates.push(candidate);
   };
+
+  return { candidates, addCandidate };
+}
+
+type ModelFallbackErrorHandler = (attempt: {
+  provider: string;
+  model: string;
+  error: unknown;
+  attempt: number;
+  total: number;
+}) => void | Promise<void>;
+
+type ModelFallbackRunResult<T> = {
+  result: T;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+};
+
+function resolveImageFallbackCandidates(params: {
+  cfg: OpenClawConfig | undefined;
+  defaultProvider: string;
+  modelOverride?: string;
+}): ModelCandidate[] {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg ?? {},
+    defaultProvider: params.defaultProvider,
+  });
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  const { candidates, addCandidate } = createModelCandidateCollector(allowlist);
 
   const addRaw = (raw: string, enforceAllowlist: boolean) => {
     const resolved = resolveModelRefFromString({
@@ -160,32 +169,20 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const provider = String(params.provider ?? "").trim() || defaultProvider;
-  const model = String(params.model ?? "").trim() || defaultModel;
+  const providerRaw = String(params.provider ?? "").trim() || defaultProvider;
+  const modelRaw = String(params.model ?? "").trim() || defaultModel;
+  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
   });
-  const allowlist = buildAllowedModelKeys(params.cfg, defaultProvider);
-  const seen = new Set<string>();
-  const candidates: ModelCandidate[] = [];
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider,
+  });
+  const { candidates, addCandidate } = createModelCandidateCollector(allowlist);
 
-  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
-    if (!candidate.provider || !candidate.model) {
-      return;
-    }
-    const key = modelKey(candidate.provider, candidate.model);
-    if (seen.has(key)) {
-      return;
-    }
-    if (enforceAllowlist && allowlist && !allowlist.has(key)) {
-      return;
-    }
-    seen.add(key);
-    candidates.push(candidate);
-  };
-
-  addCandidate({ provider, model }, false);
+  addCandidate(normalizedPrimary, false);
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
@@ -228,19 +225,8 @@ export async function runWithModelFallback<T>(params: {
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
-  onError?: (attempt: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => void | Promise<void>;
-}): Promise<{
-  result: T;
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-}> {
+  onError?: ModelFallbackErrorHandler;
+}): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
@@ -284,6 +270,14 @@ export async function runWithModelFallback<T>(params: {
       };
     } catch (err) {
       if (shouldRethrowAbort(err)) {
+        throw err;
+      }
+      // Context overflow errors should be handled by the inner runner's
+      // compaction/retry logic, not by model fallback.  If one escapes as a
+      // throw, rethrow it immediately rather than trying a different model
+      // that may have a smaller context window and fail worse.
+      const errMessage = err instanceof Error ? err.message : String(err);
+      if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
       const normalized =
@@ -338,19 +332,8 @@ export async function runWithImageModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
-  onError?: (attempt: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => void | Promise<void>;
-}): Promise<{
-  result: T;
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-}> {
+  onError?: ModelFallbackErrorHandler;
+}): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,

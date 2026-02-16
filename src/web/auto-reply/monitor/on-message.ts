@@ -1,10 +1,10 @@
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
-import type { loadConfig } from "../../../config/config.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
+import { loadConfig } from "../../../config/config.js";
 import { logVerbose } from "../../../globals.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../routing/session-key.js";
@@ -63,12 +63,13 @@ export function createWebOnMessageHandler(params: {
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
+    // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const route = resolveAgentRoute({
-      cfg: params.cfg,
+      cfg: loadConfig(),
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
-        kind: msg.chatType === "group" ? "group" : "dm",
+        kind: msg.chatType === "group" ? "group" : "direct",
         id: peerId,
       },
     });

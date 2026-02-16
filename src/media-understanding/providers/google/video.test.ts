@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../../../infra/net/ssrf.js";
 import { describeGeminiVideo } from "./video.js";
+
+const TEST_NET_IP = "203.0.113.10";
 
 const resolveRequestUrl = (input: RequestInfo | URL) => {
   if (typeof input === "string") {
@@ -11,7 +14,37 @@ const resolveRequestUrl = (input: RequestInfo | URL) => {
   return input.url;
 };
 
+function stubPinnedHostname(hostname: string) {
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+  const addresses = [TEST_NET_IP];
+  return {
+    hostname: normalized,
+    addresses,
+    lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+  };
+}
+
 describe("describeGeminiVideo", () => {
+  let resolvePinnedHostnameWithPolicySpy: ReturnType<typeof vi.spyOn>;
+  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // Stub both entry points so fetch-guard never does live DNS (CI can use either path).
+    resolvePinnedHostnameWithPolicySpy = vi
+      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
+    resolvePinnedHostnameSpy = vi
+      .spyOn(ssrf, "resolvePinnedHostname")
+      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
+  });
+
+  afterEach(() => {
+    resolvePinnedHostnameWithPolicySpy?.mockRestore();
+    resolvePinnedHostnameSpy?.mockRestore();
+    resolvePinnedHostnameWithPolicySpy = undefined;
+    resolvePinnedHostnameSpy = undefined;
+  });
+
   it("respects case-insensitive x-goog-api-key overrides", async () => {
     let seenKey: string | null = null;
     const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {

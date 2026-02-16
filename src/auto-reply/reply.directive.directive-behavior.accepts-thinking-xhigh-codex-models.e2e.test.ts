@@ -1,13 +1,13 @@
+import "./reply.directive.directive-behavior.e2e-mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { loadSessionStore } from "../config/sessions.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  installDirectiveBehaviorE2EHooks,
+  runEmbeddedPiAgent,
+  withTempHome,
+} from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
-
-const MAIN_SESSION_KEY = "agent:main:main";
 
 async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
   const { workspaceDir, name, description } = params;
@@ -20,57 +20,8 @@ async function writeSkill(params: { workspaceDir: string; name: string; descript
   );
 }
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
-
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      return await fn(home);
-    },
-    {
-      env: {
-        OPENCLAW_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-        PI_CODING_AGENT_DIR: (home) => path.join(home, ".openclaw", "agent"),
-      },
-      prefix: "openclaw-reply-",
-    },
-  );
-}
-
-function _assertModelSelection(
-  storePath: string,
-  selection: { model?: string; provider?: string } = {},
-) {
-  const store = loadSessionStore(storePath);
-  const entry = store[MAIN_SESSION_KEY];
-  expect(entry).toBeDefined();
-  expect(entry?.modelOverride).toBe(selection.model);
-  expect(entry?.providerOverride).toBe(selection.provider);
-}
-
 describe("directive behavior", () => {
-  beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
-    vi.mocked(loadModelCatalog).mockResolvedValue([
-      { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
-      { id: "claude-sonnet-4-1", name: "Sonnet 4.1", provider: "anthropic" },
-      { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
-    ]);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  installDirectiveBehaviorE2EHooks();
 
   it("accepts /thinking xhigh for codex models", async () => {
     await withTempHome(async (home) => {
@@ -154,14 +105,12 @@ describe("directive behavior", () => {
 
       const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
       expect(texts).toContain(
-        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.2-codex or openai-codex/gpt-5.1-codex.',
+        'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex or github-copilot/gpt-5.2.',
       );
     });
   });
   it("keeps reserved command aliases from matching after trimming", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-
       const res = await getReplyFromConfig(
         {
           Body: "/help",
@@ -192,7 +141,6 @@ describe("directive behavior", () => {
   });
   it("treats skill commands as reserved for model aliases", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
       const workspace = path.join(home, "openclaw");
       await writeSkill({
         workspaceDir: workspace,
@@ -230,8 +178,6 @@ describe("directive behavior", () => {
   });
   it("errors on invalid queue options", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-
       const res = await getReplyFromConfig(
         {
           Body: "/queue collect debounce:bogus cap:zero drop:maybe",
@@ -261,8 +207,6 @@ describe("directive behavior", () => {
   });
   it("shows current queue settings when /queue has no arguments", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-
       const res = await getReplyFromConfig(
         {
           Body: "/queue",
@@ -304,8 +248,6 @@ describe("directive behavior", () => {
   });
   it("shows current think level when /think has no argument", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
-
       const res = await getReplyFromConfig(
         { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},

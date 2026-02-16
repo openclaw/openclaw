@@ -36,8 +36,12 @@ export type DiscordGuildChannelConfig = {
   enabled?: boolean;
   /** Optional allowlist for channel senders (ids or names). */
   users?: Array<string | number>;
+  /** Optional allowlist for channel senders by role ID. */
+  roles?: Array<string | number>;
   /** Optional system prompt snippet for this channel. */
   systemPrompt?: string;
+  /** If false, omit thread starter context for this channel (default: true). */
+  includeThreadStarter?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -50,7 +54,10 @@ export type DiscordGuildEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
+  /** Optional allowlist for guild senders (ids or names). */
   users?: Array<string | number>;
+  /** Optional allowlist for guild senders by role ID. */
+  roles?: Array<string | number>;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -73,6 +80,8 @@ export type DiscordActionConfig = {
   emojiUploads?: boolean;
   stickerUploads?: boolean;
   channels?: boolean;
+  /** Enable bot presence/activity changes (default: false). */
+  presence?: boolean;
 };
 
 export type DiscordIntentsConfig = {
@@ -91,6 +100,26 @@ export type DiscordExecApprovalConfig = {
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */
   sessionFilter?: string[];
+  /** Delete approval DMs after approval, denial, or timeout. Default: false. */
+  cleanupAfterResolve?: boolean;
+  /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
+   *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
+   *  are only usable by configured approvers; other users receive an ephemeral denial. */
+  target?: "dm" | "channel" | "both";
+};
+
+export type DiscordAgentComponentsConfig = {
+  /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
+  enabled?: boolean;
+};
+
+export type DiscordUiComponentsConfig = {
+  /** Accent color used by Discord component containers (hex). */
+  accentColor?: string;
+};
+
+export type DiscordUiConfig = {
+  components?: DiscordUiComponentsConfig;
 };
 
 export type DiscordAccountConfig = {
@@ -107,6 +136,8 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;
+  /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
+  proxy?: string;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**
@@ -142,6 +173,16 @@ export type DiscordAccountConfig = {
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /**
+   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Legacy key: channels.discord.dm.policy.
+   */
+  dmPolicy?: DmPolicy;
+  /**
+   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Legacy key: channels.discord.dm.allowFrom.
+   */
+  allowFrom?: Array<string | number>;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
@@ -149,10 +190,29 @@ export type DiscordAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
+  /** Agent-controlled interactive components (buttons, select menus). */
+  agentComponents?: DiscordAgentComponentsConfig;
+  /** Discord UI customization (components, modals, etc.). */
+  ui?: DiscordUiConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Discord supports both unicode emoji and custom emoji names.
+   */
+  ackReaction?: string;
+  /** Bot activity status text (e.g. "Watching X"). */
+  activity?: string;
+  /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
+  status?: "online" | "dnd" | "idle" | "invisible";
+  /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
+  activityType?: 0 | 1 | 2 | 3 | 4 | 5;
+  /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
+  activityUrl?: string;
 };
 
 export type DiscordConfig = {

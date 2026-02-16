@@ -20,6 +20,7 @@ export type GatewayRuntimeConfig = {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   controlUiBasePath: string;
+  controlUiRoot?: string;
   resolvedAuth: ResolvedGatewayAuth;
   authMode: ResolvedGatewayAuth["mode"];
   tailscaleConfig: GatewayTailscaleConfig;
@@ -51,6 +52,11 @@ export async function resolveGatewayRuntimeConfig(params: {
   const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
+  const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
+  const controlUiRoot =
+    typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
+      ? controlUiRootRaw.trim()
+      : undefined;
   const authBase = params.cfg.gateway?.auth ?? {};
   const authOverrides = params.auth ?? {};
   const authConfig = {
@@ -79,6 +85,8 @@ export async function resolveGatewayRuntimeConfig(params: {
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
+  const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
+
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
@@ -88,10 +96,23 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
-  if (!isLoopbackHost(bindHost) && !hasSharedSecret) {
+  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );
+  }
+
+  if (authMode === "trusted-proxy") {
+    if (isLoopbackHost(bindHost)) {
+      throw new Error(
+        "gateway auth mode=trusted-proxy makes no sense with bind=loopback; use bind=lan or bind=custom with gateway.trustedProxies configured",
+      );
+    }
+    if (trustedProxies.length === 0) {
+      throw new Error(
+        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
+      );
+    }
   }
 
   return {
@@ -103,6 +124,7 @@ export async function resolveGatewayRuntimeConfig(params: {
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }
       : undefined,
     controlUiBasePath,
+    controlUiRoot,
     resolvedAuth,
     authMode,
     tailscaleConfig,

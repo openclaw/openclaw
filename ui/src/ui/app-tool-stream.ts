@@ -1,4 +1,4 @@
-import { truncateText } from "./format";
+import { truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -257,7 +257,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       sessionKey,
       name,
       args,
-      output,
+      output: output || undefined,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       updatedAt: now,
       message: {},
@@ -270,7 +270,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       entry.args = args;
     }
     if (output !== undefined) {
-      entry.output = output;
+      entry.output = output || undefined;
     }
     entry.updatedAt = now;
   }

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -6,7 +9,8 @@ import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createIMessageTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { loadWebMedia } from "../../web/media.js";
 import { runMessageAction } from "./message-action-runner.js";
 
@@ -445,6 +449,310 @@ describe("runMessageAction sendAttachment hydration", () => {
     expect((result.payload as { buffer?: string }).buffer).toBe(
       Buffer.from("hello").toString("base64"),
     );
+  });
+
+  it("rewrites sandboxed media paths for sendAttachment", async () => {
+    const cfg = {
+      channels: {
+        bluebubbles: {
+          enabled: true,
+          serverUrl: "http://localhost:1234",
+          password: "test-password",
+        },
+      },
+    } as OpenClawConfig;
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
+    try {
+      await runMessageAction({
+        cfg,
+        action: "sendAttachment",
+        params: {
+          channel: "bluebubbles",
+          target: "+15551234567",
+          media: "./data/pic.png",
+          message: "caption",
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      const call = vi.mocked(loadWebMedia).mock.calls[0];
+      expect(call?.[0]).toBe(path.join(sandboxDir, "data", "pic.png"));
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runMessageAction sandboxed media validation", () => {
+  beforeEach(async () => {
+    const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
+    const { setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js");
+    const runtime = createPluginRuntime();
+    setSlackRuntime(runtime);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: slackPlugin,
+        },
+      ]),
+    );
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("rejects media outside the sandbox root", async () => {
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
+    try {
+      await expect(
+        runMessageAction({
+          cfg: slackConfig,
+          action: "send",
+          params: {
+            channel: "slack",
+            target: "#C12345678",
+            media: "/etc/passwd",
+            message: "",
+          },
+          sandboxRoot: sandboxDir,
+          dryRun: true,
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects file:// media outside the sandbox root", async () => {
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
+    try {
+      await expect(
+        runMessageAction({
+          cfg: slackConfig,
+          action: "send",
+          params: {
+            channel: "slack",
+            target: "#C12345678",
+            media: "file:///etc/passwd",
+            message: "",
+          },
+          sandboxRoot: sandboxDir,
+          dryRun: true,
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites sandbox-relative media paths", async () => {
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
+    try {
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          media: "./data/file.txt",
+          message: "",
+        },
+        sandboxRoot: sandboxDir,
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites MEDIA directives under sandbox", async () => {
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
+    try {
+      const result = await runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "Hello\nMEDIA: ./data/note.ogg",
+        },
+        sandboxRoot: sandboxDir,
+        dryRun: true,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "note.ogg"));
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects data URLs in media params", async () => {
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          target: "#C12345678",
+          media: "data:image/png;base64,abcd",
+          message: "",
+        },
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/data:/i);
+  });
+});
+
+describe("runMessageAction media caption behavior", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("promotes caption to message for media sends when message is empty", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "m1",
+      chatId: "c1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({
+                channel: "testchat",
+                messageId: "t1",
+                chatId: "c1",
+              }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+    const cfg = {
+      channels: {
+        testchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        media: "https://example.com/cat.png",
+        caption: "caption-only text",
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "caption-only text",
+        mediaUrl: "https://example.com/cat.png",
+      }),
+    );
+  });
+});
+
+describe("runMessageAction card-only send behavior", () => {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({
+      ok: true,
+      card: params.card ?? null,
+      message: params.message ?? null,
+    }),
+  );
+
+  const cardPlugin: ChannelPlugin = {
+    id: "cardchat",
+    meta: {
+      id: "cardchat",
+      label: "Card Chat",
+      selectionLabel: "Card Chat",
+      docsPath: "/channels/cardchat",
+      blurb: "Card-only send test plugin.",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ enabled: true }),
+      isConfigured: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+      supportsAction: ({ action }) => action === "send",
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "cardchat",
+          source: "test",
+          plugin: cardPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("allows card-only sends without text or media", async () => {
+    const cfg = {
+      channels: {
+        cardchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const card = {
+      type: "AdaptiveCard",
+      version: "1.4",
+      body: [{ type: "TextBlock", text: "Card-only payload" }],
+    };
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "cardchat",
+        target: "channel:test-card",
+        card,
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.handledBy).toBe("plugin");
+    expect(handleAction).toHaveBeenCalled();
+    expect(result.payload).toMatchObject({
+      ok: true,
+      card,
+    });
   });
 });
 

@@ -16,6 +16,13 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
+const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+  "opus-4.6": "claude-opus-4-6",
+  "opus-4.5": "claude-opus-4-5",
+  "sonnet-4.5": "claude-sonnet-4-5",
+};
+const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
+
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -59,13 +66,7 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  if (lower === "opus-4.5") {
-    return "claude-opus-4-5";
-  }
-  if (lower === "sonnet-4.5") {
-    return "claude-sonnet-4-5";
-  }
-  return trimmed;
+  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
@@ -78,6 +79,28 @@ function normalizeProviderModelId(provider: string, model: string): string {
   return model;
 }
 
+function shouldUseOpenAICodexProvider(provider: string, model: string): boolean {
+  if (provider !== "openai") {
+    return false;
+  }
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return OPENAI_CODEX_OAUTH_MODEL_PREFIXES.some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
+  );
+}
+
+export function normalizeModelRef(provider: string, model: string): ModelRef {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
+  if (shouldUseOpenAICodexProvider(normalizedProvider, normalizedModel)) {
+    return { provider: "openai-codex", model: normalizedModel };
+  }
+  return { provider: normalizedProvider, model: normalizedModel };
+}
+
 export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -85,18 +108,41 @@ export function parseModelRef(raw: string, defaultProvider: string): ModelRef | 
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    const provider = normalizeProviderId(defaultProvider);
-    const model = normalizeProviderModelId(provider, trimmed);
-    return { provider, model };
+    return normalizeModelRef(defaultProvider, trimmed);
   }
   const providerRaw = trimmed.slice(0, slash).trim();
-  const provider = normalizeProviderId(providerRaw);
   const model = trimmed.slice(slash + 1).trim();
-  if (!provider || !model) {
+  if (!providerRaw || !model) {
     return null;
   }
-  const normalizedModel = normalizeProviderModelId(provider, model);
-  return { provider, model: normalizedModel };
+  return normalizeModelRef(providerRaw, model);
+}
+
+export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
+  const parsed = parseModelRef(raw, defaultProvider);
+  if (!parsed) {
+    return null;
+  }
+  return modelKey(parsed.provider, parsed.model);
+}
+
+export function buildConfiguredAllowlistKeys(params: {
+  cfg: OpenClawConfig | undefined;
+  defaultProvider: string;
+}): Set<string> | null {
+  const rawAllowlist = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+  if (rawAllowlist.length === 0) {
+    return null;
+  }
+
+  const keys = new Set<string>();
+  for (const raw of rawAllowlist) {
+    const key = resolveAllowlistModelKey(String(raw ?? ""), params.defaultProvider);
+    if (key) {
+      keys.add(key);
+    }
+  }
+  return keys.size > 0 ? keys : null;
 }
 
 export function buildModelAliasIndex(params: {
