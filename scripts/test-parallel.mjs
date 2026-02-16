@@ -31,6 +31,8 @@ const unitIsolatedFilesRaw = [
   "src/browser/server-context.ensure-tab-available.prefers-last-target.test.ts",
   // Keep this high-variance heavy file off the unit-fast critical path.
   "src/auto-reply/reply.block-streaming.test.ts",
+  // Integration test is process-heavy and can bottleneck unit-fast.
+  "test/git-hooks-pre-commit.integration.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
 ];
