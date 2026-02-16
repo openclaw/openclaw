@@ -31,11 +31,15 @@ describe("detectBinary", () => {
     if (process.platform !== "darwin") {
       return;
     }
+    // Skip if brew is not installed on this machine at all
+    const hasBrew = await detectBinary("brew");
+    if (!hasBrew) {
+      return;
+    }
     const originalPath = process.env.PATH;
     // Simulate macOS app's restricted PATH
     process.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
     try {
-      // brew is at /opt/homebrew/bin/brew on Apple Silicon
       const found = await detectBinary("brew");
       expect(found).toBe(true);
     } finally {

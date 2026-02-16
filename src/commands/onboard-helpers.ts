@@ -339,8 +339,14 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   }
 }
 
+let cachedSystemPath: string | undefined | null = null;
+
 async function resolveSystemPath(): Promise<string | undefined> {
+  if (cachedSystemPath !== null) {
+    return cachedSystemPath;
+  }
   if (process.platform !== "darwin") {
+    cachedSystemPath = undefined;
     return undefined;
   }
   try {
@@ -369,8 +375,10 @@ async function resolveSystemPath(): Promise<string | undefined> {
         dirs.push(brewDir);
       }
     }
-    return dirs.length > 0 ? dirs.join(":") : undefined;
+    cachedSystemPath = dirs.length > 0 ? dirs.join(":") : undefined;
+    return cachedSystemPath;
   } catch {
+    cachedSystemPath = undefined;
     return undefined;
   }
 }
