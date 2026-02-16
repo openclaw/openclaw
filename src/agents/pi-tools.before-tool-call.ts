@@ -1,3 +1,4 @@
+import type { SessionState } from "../logging/diagnostic-session-state.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -15,6 +16,27 @@ const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
 const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
+const LOOP_WARNING_BUCKET_SIZE = 10;
+const MAX_LOOP_WARNING_KEYS = 256;
+
+function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
+  if (!state.toolLoopWarningBuckets) {
+    state.toolLoopWarningBuckets = new Map();
+  }
+  const bucket = Math.floor(count / LOOP_WARNING_BUCKET_SIZE);
+  const lastBucket = state.toolLoopWarningBuckets.get(warningKey) ?? 0;
+  if (bucket <= lastBucket) {
+    return false;
+  }
+  state.toolLoopWarningBuckets.set(warningKey, bucket);
+  if (state.toolLoopWarningBuckets.size > MAX_LOOP_WARNING_KEYS) {
+    const oldest = state.toolLoopWarningBuckets.keys().next().value;
+    if (oldest) {
+      state.toolLoopWarningBuckets.delete(oldest);
+    }
+  }
+  return true;
+}
 
 async function recordLoopOutcome(args: {
   ctx?: HookContext;
@@ -86,18 +108,21 @@ export async function runBeforeToolCallHook(args: {
           reason: loopResult.message,
         };
       } else {
-        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
-        logToolLoopAction({
-          sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx?.agentId,
-          toolName,
-          level: "warning",
-          action: "warn",
-          detector: loopResult.detector,
-          count: loopResult.count,
-          message: loopResult.message,
-          pairedToolName: loopResult.pairedToolName,
-        });
+        const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
+        if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
+          log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+          logToolLoopAction({
+            sessionKey: args.ctx.sessionKey,
+            sessionId: args.ctx?.agentId,
+            toolName,
+            level: "warning",
+            action: "warn",
+            detector: loopResult.detector,
+            count: loopResult.count,
+            message: loopResult.message,
+            pairedToolName: loopResult.pairedToolName,
+          });
+        }
       }
     }
 

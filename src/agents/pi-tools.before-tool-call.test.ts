@@ -112,6 +112,36 @@ describe("before_tool_call loop detection behavior", () => {
     ).rejects.toThrow("global circuit breaker");
   });
 
+  it("coalesces repeated generic warning events into threshold buckets", async () => {
+    const emitted: DiagnosticToolLoopEvent[] = [];
+    const stop = onDiagnosticEvent((evt) => {
+      if (evt.type === "tool.loop" && evt.level === "warning") {
+        emitted.push(evt);
+      }
+    });
+    try {
+      const execute = vi.fn().mockResolvedValue({
+        content: [{ type: "text", text: "same output" }],
+        details: { ok: true },
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+        agentId: "main",
+        sessionKey: "main",
+      });
+      const params = { path: "/tmp/file" };
+
+      for (let i = 0; i < 21; i += 1) {
+        await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+      }
+
+      const genericWarns = emitted.filter((evt) => evt.detector === "generic_repeat");
+      expect(genericWarns.map((evt) => evt.count)).toEqual([10, 20]);
+    } finally {
+      stop();
+    }
+  });
+
   it("emits structured warning diagnostic events for ping-pong loops", async () => {
     const emitted: DiagnosticToolLoopEvent[] = [];
     const stop = onDiagnosticEvent((evt) => {

@@ -20,6 +20,7 @@ export type LoopDetectionResult =
       count: number;
       message: string;
       pairedToolName?: string;
+      warningKey?: string;
     };
 
 export const TOOL_CALL_HISTORY_SIZE = 30;
@@ -161,7 +162,7 @@ function getNoProgressStreak(
   history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
   toolName: string,
   argsHash: string,
-): number {
+): { count: number; latestResultHash?: string } {
   let streak = 0;
   let latestResultHash: string | undefined;
 
@@ -184,7 +185,7 @@ function getNoProgressStreak(
     streak += 1;
   }
 
-  return streak;
+  return { count: streak, latestResultHash };
 }
 
 function getPingPongStreak(
@@ -253,7 +254,8 @@ export function detectToolCallLoop(
 ): LoopDetectionResult {
   const history = state.toolCallHistory ?? [];
   const currentHash = hashToolCall(toolName, params);
-  const noProgressStreak = getNoProgressStreak(history, toolName, currentHash);
+  const noProgress = getNoProgressStreak(history, toolName, currentHash);
+  const noProgressStreak = noProgress.count;
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
 
@@ -267,6 +269,7 @@ export function detectToolCallLoop(
       detector: "global_circuit_breaker",
       count: noProgressStreak,
       message: `CRITICAL: ${toolName} has repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+      warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
@@ -278,6 +281,7 @@ export function detectToolCallLoop(
       detector: "known_poll_no_progress",
       count: noProgressStreak,
       message: `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.`,
+      warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
@@ -289,6 +293,7 @@ export function detectToolCallLoop(
       detector: "known_poll_no_progress",
       count: noProgressStreak,
       message: `WARNING: You have called ${toolName} ${noProgressStreak} times with identical arguments and no progress. Stop polling and either (1) increase wait time between checks, or (2) report the task as failed if the process is stuck.`,
+      warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
@@ -303,6 +308,7 @@ export function detectToolCallLoop(
       count: pingPong.count,
       message: `CRITICAL: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This appears to be a stuck ping-pong loop. Session execution blocked to prevent resource waste.`,
       pairedToolName: pingPong.pairedToolName,
+      warningKey: `pingpong:${toolName}:${currentHash}:${pingPong.pairedToolName ?? "unknown"}`,
     };
   }
 
@@ -317,6 +323,7 @@ export function detectToolCallLoop(
       count: pingPong.count,
       message: `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
       pairedToolName: pingPong.pairedToolName,
+      warningKey: `pingpong:${toolName}:${currentHash}:${pingPong.pairedToolName ?? "unknown"}`,
     };
   }
 
@@ -333,6 +340,7 @@ export function detectToolCallLoop(
       detector: "generic_repeat",
       count: recentCount,
       message: `WARNING: You have called ${toolName} ${recentCount} times with identical arguments. If this is not making progress, stop retrying and report the task as failed.`,
+      warningKey: `generic:${toolName}:${currentHash}`,
     };
   }
 

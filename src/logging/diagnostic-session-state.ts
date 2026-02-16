@@ -7,6 +7,7 @@ export type SessionState = {
   state: SessionStateValue;
   queueDepth: number;
   toolCallHistory?: ToolCallRecord[];
+  toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
 };
 
