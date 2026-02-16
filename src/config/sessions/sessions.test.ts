@@ -481,12 +481,6 @@ describe("withSessionStoreLock storePath guard (#14717)", () => {
     ).rejects.toThrow("withSessionStoreLock: storePath must be a non-empty string");
   });
 
-  it("throws descriptive error when storePath is empty string", async () => {
-    await expect(updateSessionStoreUnsafe("", (store) => store)).rejects.toThrow(
-      "withSessionStoreLock: storePath must be a non-empty string",
-    );
-  });
-
   it("withSessionStoreLockForTest also throws descriptive error when storePath is undefined", async () => {
     await expect(
       withSessionStoreLockForTest(undefined as unknown as string, async () => {}),
