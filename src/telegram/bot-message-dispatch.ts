@@ -421,7 +421,11 @@ export const dispatchTelegramMessage = async ({
       },
     }));
   } finally {
-    if (!finalizedViaPreviewMessage) {
+    // Only delete the draft if no Telegram message was ever created.
+    // When a preview message exists (messageId is set) it may contain
+    // user-visible streamed content that should be preserved — for example
+    // when all final payloads carry isError and none finalized the preview.
+    if (!finalizedViaPreviewMessage && !draftStream?.messageId()) {
       await draftStream?.clear();
     }
     draftStream?.stop();
