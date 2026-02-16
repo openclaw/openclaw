@@ -55,6 +55,7 @@ export const zh_TW: TranslationMap = {
       token: "網關令牌",
       password: "密碼 (不存儲)",
       sessionKey: "默認會話密鑰",
+      language: "語言",
       connectHint: "點擊連接以應用連接更改。",
     },
     snapshot: {
@@ -99,5 +100,11 @@ export const zh_TW: TranslationMap = {
     thinkingToggle: "切換助手思考/工作輸出",
     focusToggle: "切換專注模式 (隱藏側邊欄 + 頁面頁眉)",
     onboardingDisabled: "引導期間禁用",
+  },
+  languages: {
+    en: "English",
+    zhCN: "简体中文 (簡體中文)",
+    zhTW: "繁體中文 (繁體中文)",
+    ptBR: "Português (巴西葡萄牙語)",
   },
 };
