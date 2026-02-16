@@ -20,20 +20,43 @@ const createAntigravityFetch = (
 const getRequestBody = (init?: Parameters<typeof fetch>[1]) =>
   typeof init?.body === "string" ? init.body : undefined;
 
+type EndpointHandler = (init?: Parameters<typeof fetch>[1]) => Promise<Response> | Response;
+
+function createEndpointFetch(spec: {
+  loadCodeAssist?: EndpointHandler;
+  fetchAvailableModels?: EndpointHandler;
+}) {
+  return createAntigravityFetch(async (url, init) => {
+    if (url.includes("loadCodeAssist")) {
+      return (await spec.loadCodeAssist?.(init)) ?? makeResponse(404, "not found");
+    }
+    if (url.includes("fetchAvailableModels")) {
+      return (await spec.fetchAvailableModels?.(init)) ?? makeResponse(404, "not found");
+    }
+    return makeResponse(404, "not found");
+  });
+}
+
+async function runUsage(mockFetch: ReturnType<typeof createAntigravityFetch>) {
+  return fetchAntigravityUsage("token-123", 5000, mockFetch);
+}
+
+function findWindow(snapshot: Awaited<ReturnType<typeof fetchAntigravityUsage>>, label: string) {
+  return snapshot.windows.find((window) => window.label === label);
+}
+
 describe("fetchAntigravityUsage", () => {
   it("returns 3 windows when both endpoints succeed", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
           availablePromptCredits: 750,
           planInfo: { monthlyPromptCredits: 1000 },
           planType: "Standard",
           currentTier: { id: "tier1", name: "Standard Tier" },
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+        }),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             "gemini-pro-1.5": {
               quotaInfo: {
@@ -50,13 +73,10 @@ describe("fetchAntigravityUsage", () => {
               },
             },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
+    const snapshot = await runUsage(mockFetch);
 
     expect(snapshot.provider).toBe("google-antigravity");
     expect(snapshot.displayName).toBe("Antigravity");
@@ -64,14 +84,14 @@ describe("fetchAntigravityUsage", () => {
     expect(snapshot.plan).toBe("Standard Tier");
     expect(snapshot.error).toBeUndefined();
 
-    const creditsWindow = snapshot.windows.find((w) => w.label === "Credits");
+    const creditsWindow = findWindow(snapshot, "Credits");
     expect(creditsWindow?.usedPercent).toBe(25); // (1000 - 750) / 1000 * 100
 
-    const proWindow = snapshot.windows.find((w) => w.label === "gemini-pro-1.5");
+    const proWindow = findWindow(snapshot, "gemini-pro-1.5");
     expect(proWindow?.usedPercent).toBe(40); // (1 - 0.6) * 100
     expect(proWindow?.resetAt).toBe(new Date("2026-01-08T00:00:00Z").getTime());
 
-    const flashWindow = snapshot.windows.find((w) => w.label === "gemini-flash-2.0");
+    const flashWindow = findWindow(snapshot, "gemini-flash-2.0");
     expect(flashWindow?.usedPercent).toBeCloseTo(20, 1); // (1 - 0.8) * 100
     expect(flashWindow?.resetAt).toBe(new Date("2026-01-08T00:00:00Z").getTime());
 
@@ -79,23 +99,17 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns Credits only when loadCodeAssist succeeds but fetchAvailableModels fails", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
           availablePromptCredits: 250,
           planInfo: { monthlyPromptCredits: 1000 },
           currentTier: { name: "Free" },
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(403, { error: { message: "Permission denied" } });
-      }
-
-      return makeResponse(404, "not found");
+        }),
+      fetchAvailableModels: () => makeResponse(403, { error: { message: "Permission denied" } }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
+    const snapshot = await runUsage(mockFetch);
 
     expect(snapshot.provider).toBe("google-antigravity");
     expect(snapshot.windows).toHaveLength(1);
@@ -110,13 +124,10 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns model IDs when fetchAvailableModels succeeds but loadCodeAssist fails", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(500, "Internal server error");
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(500, "Internal server error"),
+      fetchAvailableModels: () =>
+        makeResponse(200, {
           models: {
             "gemini-pro-1.5": {
               quotaInfo: { remainingFraction: 0.5, resetTime: "2026-01-08T00:00:00Z" },
@@ -125,89 +136,61 @@ describe("fetchAntigravityUsage", () => {
               quotaInfo: { remainingFraction: 0.7, resetTime: "2026-01-08T00:00:00Z" },
             },
           },
-        });
-      }
-
-      return makeResponse(404, "not found");
+        }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
+    const snapshot = await runUsage(mockFetch);
 
     expect(snapshot.provider).toBe("google-antigravity");
     expect(snapshot.windows).toHaveLength(2);
     expect(snapshot.error).toBeUndefined();
 
-    const proWindow = snapshot.windows.find((w) => w.label === "gemini-pro-1.5");
+    const proWindow = findWindow(snapshot, "gemini-pro-1.5");
     expect(proWindow?.usedPercent).toBe(50); // (1 - 0.5) * 100
 
-    const flashWindow = snapshot.windows.find((w) => w.label === "gemini-flash-2.0");
+    const flashWindow = findWindow(snapshot, "gemini-flash-2.0");
     expect(flashWindow?.usedPercent).toBeCloseTo(30, 1); // (1 - 0.7) * 100
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("uses cloudaicompanionProject string as project id", async () => {
+  it.each([
+    {
+      name: "uses cloudaicompanionProject string as project id",
+      project: "projects/alpha",
+      expectedBody: JSON.stringify({ project: "projects/alpha" }),
+    },
+    {
+      name: "uses cloudaicompanionProject object id when present",
+      project: { id: "projects/beta" },
+      expectedBody: JSON.stringify({ project: "projects/beta" }),
+    },
+  ])("$name", async ({ project, expectedBody }) => {
     let capturedBody: string | undefined;
-    const mockFetch = createAntigravityFetch(async (url, init) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () =>
+        makeResponse(200, {
           availablePromptCredits: 900,
           planInfo: { monthlyPromptCredits: 1000 },
-          cloudaicompanionProject: "projects/alpha",
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
+          cloudaicompanionProject: project,
+        }),
+      fetchAvailableModels: (init) => {
         capturedBody = getRequestBody(init);
         return makeResponse(200, { models: {} });
-      }
-
-      return makeResponse(404, "not found");
+      },
     });
 
-    await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
-    expect(capturedBody).toBe(JSON.stringify({ project: "projects/alpha" }));
-  });
-
-  it("uses cloudaicompanionProject object id when present", async () => {
-    let capturedBody: string | undefined;
-    const mockFetch = createAntigravityFetch(async (url, init) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
-          availablePromptCredits: 900,
-          planInfo: { monthlyPromptCredits: 1000 },
-          cloudaicompanionProject: { id: "projects/beta" },
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        capturedBody = getRequestBody(init);
-        return makeResponse(200, { models: {} });
-      }
-
-      return makeResponse(404, "not found");
-    });
-
-    await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
-    expect(capturedBody).toBe(JSON.stringify({ project: "projects/beta" }));
+    await runUsage(mockFetch);
+    expect(capturedBody).toBe(expectedBody);
   });
 
   it("returns error snapshot when both endpoints fail", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(403, { error: { message: "Access denied" } });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(403, "Forbidden");
-      }
-
-      return makeResponse(404, "not found");
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(403, { error: { message: "Access denied" } }),
+      fetchAvailableModels: () => makeResponse(403, "Forbidden"),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
+    const snapshot = await runUsage(mockFetch);
 
     expect(snapshot.provider).toBe("google-antigravity");
     expect(snapshot.windows).toHaveLength(0);
@@ -217,67 +200,45 @@ describe("fetchAntigravityUsage", () => {
   });
 
   it("returns Token expired when fetchAvailableModels returns 401 and no windows", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(500, "Boom");
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(401, { error: { message: "Unauthorized" } });
-      }
-
-      return makeResponse(404, "not found");
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(500, "Boom"),
+      fetchAvailableModels: () => makeResponse(401, { error: { message: "Unauthorized" } }),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
+    const snapshot = await runUsage(mockFetch);
 
     expect(snapshot.error).toBe("Token expired");
     expect(snapshot.windows).toHaveLength(0);
   });
 
-  it("extracts plan info from currentTier.name", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
-          availablePromptCredits: 500,
-          planInfo: { monthlyPromptCredits: 1000 },
-          planType: "Basic",
-          currentTier: { id: "tier2", name: "Premium Tier" },
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(500, "Error");
-      }
-
-      return makeResponse(404, "not found");
+  it.each([
+    {
+      name: "extracts plan info from currentTier.name",
+      loadCodeAssist: {
+        availablePromptCredits: 500,
+        planInfo: { monthlyPromptCredits: 1000 },
+        planType: "Basic",
+        currentTier: { id: "tier2", name: "Premium Tier" },
+      },
+      expectedPlan: "Premium Tier",
+    },
+    {
+      name: "falls back to planType when currentTier.name is missing",
+      loadCodeAssist: {
+        availablePromptCredits: 500,
+        planInfo: { monthlyPromptCredits: 1000 },
+        planType: "Basic Plan",
+      },
+      expectedPlan: "Basic Plan",
+    },
+  ])("$name", async ({ loadCodeAssist, expectedPlan }) => {
+    const mockFetch = createEndpointFetch({
+      loadCodeAssist: () => makeResponse(200, loadCodeAssist),
+      fetchAvailableModels: () => makeResponse(500, "Error"),
     });
 
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
-    expect(snapshot.plan).toBe("Premium Tier");
-  });
-
-  it("falls back to planType when currentTier.name is missing", async () => {
-    const mockFetch = createAntigravityFetch(async (url) => {
-      if (url.includes("loadCodeAssist")) {
-        return makeResponse(200, {
-          availablePromptCredits: 500,
-          planInfo: { monthlyPromptCredits: 1000 },
-          planType: "Basic Plan",
-        });
-      }
-
-      if (url.includes("fetchAvailableModels")) {
-        return makeResponse(500, "Error");
-      }
-
-      return makeResponse(404, "not found");
-    });
-
-    const snapshot = await fetchAntigravityUsage("token-123", 5000, mockFetch);
-
-    expect(snapshot.plan).toBe("Basic Plan");
+    const snapshot = await runUsage(mockFetch);
+    expect(snapshot.plan).toBe(expectedPlan);
   });
 
   it("includes reset times in model windows", async () => {
