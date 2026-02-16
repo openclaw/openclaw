@@ -261,7 +261,7 @@ This is the “common models” run we expect to keep working:
 - OpenAI Codex: `openai-codex/gpt-5.3-codex` (optional: `openai-codex/gpt-5.3-codex-codex`)
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
 - Google (Gemini API): `google/gemini-3-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
-- Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
+- Google (Antigravity): `google-antigravity/claude-opus-4-5-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.1`
 
