@@ -52,6 +52,10 @@ const LIVE_TEST_KEY_MAP: Record<string, { keys: string[]; files: string[] }> = {
     keys: ["DEEPGRAM_API_KEY"],
     files: ["src/media-understanding/providers/deepgram/audio.live.test.ts"],
   },
+  OPENCLAW_LIVE_TELEGRAM_CHAT_ID: {
+    keys: ["TELEGRAM_BOT_TOKEN", "OPENCLAW_LIVE_TELEGRAM_CHAT_ID"],
+    files: ["src/telegram/telegram-e2e.live.test.ts"],
+  },
 };
 
 /** Classify an error message into a short type label */
