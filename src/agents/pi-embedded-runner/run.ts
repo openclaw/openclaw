@@ -470,7 +470,11 @@ export async function runEmbeddedPiAgent(
             model,
             copilotGitHubToken:
               model.provider === "github-copilot"
-                ? (apiKeyInfo as { apiKey?: string } | null)?.apiKey
+                ? (() => {
+                    const raw = (apiKeyInfo as { apiKey?: string } | null)?.apiKey;
+                    // Don't pass the "sdk-managed" marker as a real token.
+                    return raw && raw !== "sdk-managed" ? raw : undefined;
+                  })()
                 : undefined,
             authStorage,
             modelRegistry,

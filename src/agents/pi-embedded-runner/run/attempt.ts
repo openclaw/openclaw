@@ -614,7 +614,9 @@ export async function runEmbeddedAttempt(
         const { createCopilotSdkStreamFn } =
           await import("../../../providers/copilot-sdk-stream.js");
         // Use the raw GitHub token threaded from run.ts (already resolved
-        // from auth profiles or env). Falls back to env vars / useLoggedInUser.
+        // from auth profiles or env). When undefined, the SDK falls back to
+        // useLoggedInUser (stored OAuth from `copilot auth login`), which
+        // supports the device-flow login without needing gh CLI.
         const githubToken =
           params.copilotGitHubToken ||
           (
