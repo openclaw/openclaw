@@ -1,5 +1,7 @@
 # MVP Launch Checkpoint (2026-02-14)
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 This document preserves the recovery path to reach the validated state where:
 
 - OpenClaw can call dispatch tools from chat

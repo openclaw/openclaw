@@ -1,5 +1,7 @@
 # GLZ-12 Autonomy Rollout Controls
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 ## Purpose
 
 Runbook for operator controls used when an automation rollout needs to be paused, constrained, or rolled back.

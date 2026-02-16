@@ -1,5 +1,7 @@
 # GLZ-09 Contract: Blind closeout candidate heuristics + manual review
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 Timestamp baseline: 2026-02-15 PST
 Story: `GLZ-09: Blind closeout candidate automation with risk escalation`
 

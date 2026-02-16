@@ -1,5 +1,7 @@
 # GLZ-05 Contract: Assignment recommendation + capability/zone matching
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 Timestamp baseline: 2026-02-14 PST
 Story: `GLZ-05: Assignment recommendation and assignment dispatch readiness`
 

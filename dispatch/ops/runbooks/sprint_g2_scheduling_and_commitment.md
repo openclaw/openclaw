@@ -1,5 +1,7 @@
 # Runbook: Sprint G2 Scheduling and Commitment (GLZ-04/05/06)
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 Scope of this run:
 
 - GLZ-04 queue prioritization and dispatch ordering.

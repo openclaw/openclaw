@@ -1,5 +1,7 @@
 # Dispatch Operability Runbooks
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 These runbooks include MVP-06 operational alert response and MVP-08 pilot cutover readiness for the v0 dispatch release.
 
 Alert sources:

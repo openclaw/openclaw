@@ -1,5 +1,7 @@
 # Runbook: Completion Rejection Spike
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 Alert code: `COMPLETION_REJECTION_SPIKE`
 
 ## Signal

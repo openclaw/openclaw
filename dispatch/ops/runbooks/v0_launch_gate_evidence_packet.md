@@ -1,5 +1,7 @@
 # V0 Launch Gate Evidence Packet
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 ## Scope
 
 - Story: `V0-LAUNCH-GATE`

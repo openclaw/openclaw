@@ -1498,3 +1498,65 @@ Validation:
 - Temporal skeleton demo:
   - Run: `node --input-type=module -e "import('./packages/control-plane-temporal/src/worker.mjs'); setTimeout(() => process.exit(0), 1800);"`
   - Output snippet: `{"level":"info","service":"control-plane-temporal","event":"worker.skeleton.start",...}`
+
+### E1-F2-S1 — Working Session (2026-02-16)
+
+Goal: Standardize trace propagation on W3C traceparent/tracestate across api → outbox → temporal activity, while preserving legacy x-trace-id compatibility.
+
+Scope (strict checklist)
+
+- API ingress accepts either (traceparent + tracestate) or legacy x-trace-id.
+- Precedence enforced: if both present, W3C wins (traceparent/tracestate preferred).
+- Legacy-only path: map x-trace-id into trace model; preserve compatibility and keep source = null.
+- Propagate resolved trace context into outbox payload (api → outbox).
+- Temporal activity reads trace fields from outbox payload and includes them in activity context (outbox → temporal activity).
+- Deterministic structured logs at each hop:
+  - API request log,
+  - outbox enqueue log/event,
+  - temporal activity log.
+- Unit tests cover:
+  - W3C path preserves traceparent/tracestate,
+  - legacy-only path sets source: null and remains compatible.
+- Explicit end-to-end evidence:
+  - Route: POST /tickets
+  - Test: `node --test dispatch/tests/story_09_observability.node.test.mjs`
+  - Demo: a command/script that prints trace headers at each hop (API in → outbox entry → temporal activity).
+
+What changed
+
+- [ ] Implemented ingress extraction + precedence (API)
+- [ ] Propagated resolved trace context into outbox payload
+- [ ] Hydrated Temporal activity context from outbox trace fields
+- [ ] Added deterministic structured trace logs at API/outbox/activity hops
+- [ ] Added/extended unit tests (W3C + legacy)
+- [ ] Added trace demo command/script (prints per hop)
+- [ ] PR merged: <link>
+- [ ] Evidence captured in PR: commands + outputs
+
+Rule: If `traceparent` is present, the system must not generate a new trace id.
+
+Why
+
+Align on W3C tracing for consistent end-to-end observability.
+
+Preserve legacy clients via x-trace-id mapping without breaking behavior.
+
+How to test (acceptance evidence)
+
+- `node --test packages/dispatch-contracts/tests/contracts.test.mjs`
+- `node --test dispatch/tests/story_09_observability.node.test.mjs`
+- `node --input-type=module -e "<TRACE DEMO COMMAND HERE>"`
+
+Expected outputs
+
+- Logs show consistent trace fields at all three hops (API, outbox enqueue, temporal activity).
+- When both legacy + W3C headers are sent, W3C fields are used.
+- When only legacy header is sent, propagation works and source: null is preserved.
+
+What’s next
+
+Open PR: E1-F2-S1 standardize trace propagation in command chain
+
+Branch: `codex/e1-f2-s1-trace-propagation`
+
+Confirm reviewers can validate propagation via both test output and demo output.

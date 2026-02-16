@@ -1,5 +1,7 @@
 # MVP-08: Pilot UAT and Cutover Readiness
 
+Legacy ID retained for history; see `99-Appendix/legacy-id-mapping.md` for the current E/F/S mapping.
+
 ## Purpose
 
 Define the production cutover readiness gate for the v0 dispatch release. This runbook is intended for pilot start/stop windows and verifies that dispatcher/technician lifecycle paths are stable across top incident templates.
