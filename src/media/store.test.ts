@@ -102,6 +102,21 @@ describe("media store", () => {
     });
   });
 
+  it("cleans old media files in first-level subdirectories", async () => {
+    await withTempStore(async (store) => {
+      const saved = await store.saveMediaBuffer(Buffer.from("nested"), "text/plain", "inbound");
+      const inboundDir = path.dirname(saved.path);
+      const past = Date.now() - 10_000;
+      await fs.utimes(saved.path, past / 1000, past / 1000);
+
+      await store.cleanOldMedia(1);
+
+      await expect(fs.stat(saved.path)).rejects.toThrow();
+      const inboundStat = await fs.stat(inboundDir);
+      expect(inboundStat.isDirectory()).toBe(true);
+    });
+  });
+
   it("sets correct mime for xlsx by extension", async () => {
     await withTempStore(async (store, home) => {
       const xlsxPath = path.join(home, "sheet.xlsx");
