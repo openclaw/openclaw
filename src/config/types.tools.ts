@@ -355,6 +355,8 @@ export type ToolsConfig = {
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
   web?: {
+    /** Optional URL/domain allowlist for web tools. When configured, only URLs matching these patterns are allowed. */
+    urlAllowlist?: string[];
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
