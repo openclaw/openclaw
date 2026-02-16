@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { describe, expect, it } from "vitest";
 import { repairLoneSurrogates } from "./session-transcript-repair.js";
 
 describe("repairLoneSurrogates", () => {

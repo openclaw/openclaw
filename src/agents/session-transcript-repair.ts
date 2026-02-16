@@ -150,8 +150,7 @@ export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMes
 // not preceded by a high surrogate. These lone surrogates cause API rejections
 // ("no low surrogate in string") and are typically produced by streaming delta
 // assembly splitting supplementary plane characters.
-const LONE_SURROGATE_RE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 function repairStringLoneSurrogates(value: string): string {
   return value.replace(LONE_SURROGATE_RE, "\uFFFD");
@@ -165,7 +164,9 @@ function deepRepairSurrogates(value: unknown): unknown {
     let changed = false;
     const out = value.map((item) => {
       const repaired = deepRepairSurrogates(item);
-      if (repaired !== item) changed = true;
+      if (repaired !== item) {
+        changed = true;
+      }
       return repaired;
     });
     return changed ? out : value;
@@ -175,7 +176,9 @@ function deepRepairSurrogates(value: unknown): unknown {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
       const repaired = deepRepairSurrogates(v);
-      if (repaired !== v) changed = true;
+      if (repaired !== v) {
+        changed = true;
+      }
       out[k] = repaired;
     }
     return changed ? out : value;
