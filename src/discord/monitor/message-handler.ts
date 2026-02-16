@@ -9,7 +9,7 @@ import {
 import { danger } from "../../globals.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
-import { resolveDiscordMessageText } from "./message-utils.js";
+import { resolveDiscordMessageChannelId, resolveDiscordMessageText } from "./message-utils.js";
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -31,7 +31,10 @@ export function createDiscordMessageHandler(
       if (!message || !authorId) {
         return null;
       }
-      const channelId = message.channelId;
+      const channelId = resolveDiscordMessageChannelId({
+        message,
+        eventChannelId: entry.data.channel_id,
+      });
       if (!channelId) {
         return null;
       }
