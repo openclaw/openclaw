@@ -1292,3 +1292,62 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 });
+
+describe("initSessionState stale threadId fallback", () => {
+  it("does not inherit lastThreadId from a previous thread interaction in non-thread sessions", async () => {
+    const storePath = await createStorePath("stale-thread-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    // First interaction: inside a DM topic (thread session)
+    const threadResult = await initSessionState({
+      ctx: {
+        Body: "hello from topic",
+        SessionKey: "agent:main:main:thread:42",
+        MessageThreadId: 42,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(threadResult.sessionEntry.lastThreadId).toBe(42);
+
+    // Second interaction: plain DM (non-thread session), same store
+    // The main session should NOT inherit threadId=42
+    const mainResult = await initSessionState({
+      ctx: {
+        Body: "hello from DM",
+        SessionKey: "agent:main:main",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(mainResult.sessionEntry.lastThreadId).toBeUndefined();
+  });
+
+  it("preserves lastThreadId within the same thread session", async () => {
+    const storePath = await createStorePath("preserve-thread-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    // First message in thread
+    await initSessionState({
+      ctx: {
+        Body: "first",
+        SessionKey: "agent:main:main:thread:99",
+        MessageThreadId: 99,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Second message in same thread (MessageThreadId still present)
+    const result = await initSessionState({
+      ctx: {
+        Body: "second",
+        SessionKey: "agent:main:main:thread:99",
+        MessageThreadId: 99,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(result.sessionEntry.lastThreadId).toBe(99);
+  });
+});
