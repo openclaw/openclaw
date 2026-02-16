@@ -74,6 +74,60 @@ export type SessionTranscriptUsageSnapshot = {
 // Keep a generous near-threshold window so large assistant outputs still trigger
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
+const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
+
+function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      message?: { usage?: UsageLike };
+      usage?: UsageLike;
+    };
+    const usageRaw = parsed.message?.usage ?? parsed.usage;
+    const usage = normalizeUsage(usageRaw);
+    if (usage && hasNonzeroUsage(usage)) {
+      return usage;
+    }
+  } catch {
+    // ignore bad lines
+  }
+  return undefined;
+}
+
+async function readLastNonzeroUsageFromSessionLog(logPath: string) {
+  const handle = await fs.promises.open(logPath, "r");
+  try {
+    const stat = await handle.stat();
+    let position = stat.size;
+    let leadingPartial = "";
+    while (position > 0) {
+      const chunkSize = Math.min(TRANSCRIPT_TAIL_CHUNK_BYTES, position);
+      const start = position - chunkSize;
+      const buffer = Buffer.allocUnsafe(chunkSize);
+      const { bytesRead } = await handle.read(buffer, 0, chunkSize, start);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const chunk = buffer.toString("utf-8", 0, bytesRead);
+      const combined = `${chunk}${leadingPartial}`;
+      const lines = combined.split(/\n+/);
+      leadingPartial = lines.shift() ?? "";
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
+        if (usage) {
+          return usage;
+        }
+      }
+      position = start;
+    }
+    return parseUsageFromTranscriptLine(leadingPartial);
+  } finally {
+    await handle.close();
+  }
+}
 
 export async function readPromptTokensFromSessionLog(
   sessionId?: string,
@@ -103,26 +157,7 @@ export async function readPromptTokensFromSessionLog(
       pathOpts,
     );
 
-    const lines = (await fs.promises.readFile(logPath, "utf-8")).split(/\n+/);
-    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as {
-          message?: { usage?: UsageLike };
-          usage?: UsageLike;
-        };
-        const usageRaw = parsed.message?.usage ?? parsed.usage;
-        const usage = normalizeUsage(usageRaw);
-        if (usage && hasNonzeroUsage(usage)) {
-          lastUsage = usage;
-        }
-      } catch {
-        // ignore bad lines
-      }
-    }
+    const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
     if (!lastUsage) {
       return undefined;
     }
