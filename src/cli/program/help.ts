@@ -56,6 +56,8 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     );
 
   program.option("--no-color", "Disable ANSI colors", false);
+  program.helpOption("-h, --help", "Display help for command");
+  program.helpCommand("help [command]", "Display help for command");
 
   program.configureHelp({
     // sort options and subcommands alphabetically
