@@ -239,10 +239,9 @@ export function handleMessageEnd(
     text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
-  const apiThinking = extractAssistantThinking(assistantMessage);
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? apiThinking || extractThinkingFromTaggedText(rawText)
+      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
@@ -363,12 +362,6 @@ export function handleMessageEnd(
   }
   if (ctx.state.streamReasoning && rawThinking) {
     ctx.emitReasoningStream(rawThinking);
-    // For extended thinking (API blocks), onReasoningEnd won't be triggered
-    // by </think> tag processing, so we call it here to signal reasoning is complete.
-    // Only call if thinking came from API blocks to avoid double-calling when using <think> tags.
-    if (apiThinking) {
-      void ctx.params.onReasoningEnd?.();
-    }
   }
 
   if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
