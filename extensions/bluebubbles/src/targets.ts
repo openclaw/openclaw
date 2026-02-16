@@ -1,4 +1,5 @@
 import {
+  isAllowedParsedChatSender,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
@@ -330,6 +331,7 @@ export function isAllowedBlueBubblesSender(params: {
   chatGuid?: string | null;
   chatIdentifier?: string | null;
 }): boolean {
+<<<<<<< fix/bluebubbles-dmPolicy-enforcement
   const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
   if (allowFrom.length === 0) {
     // When policy requires pairing or allowlist, empty list = no one allowed.
@@ -371,6 +373,17 @@ export function isAllowedBlueBubblesSender(params: {
     }
   }
   return false;
+=======
+  return isAllowedParsedChatSender({
+    allowFrom: params.allowFrom,
+    sender: params.sender,
+    chatId: params.chatId,
+    chatGuid: params.chatGuid,
+    chatIdentifier: params.chatIdentifier,
+    normalizeSender: normalizeBlueBubblesHandle,
+    parseAllowTarget: parseBlueBubblesAllowTarget,
+  });
+>>>>>>> main
 }
 
 export function formatBlueBubblesChatTarget(params: {

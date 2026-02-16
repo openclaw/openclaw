@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import {
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "../channels/telegram/allow-from.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   OpenClawSchema,
@@ -143,26 +147,90 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   note(lines.join("\n"), "OpenCode Zen");
 }
 
-function normalizeTelegramAllowFromEntry(raw: unknown): string {
-  const base = typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
-  return base
-    .trim()
-    .replace(/^(telegram|tg):/i, "")
-    .trim();
-}
-
-function isNumericTelegramUserId(raw: string): boolean {
-  return /^\d+$/.test(raw);
-}
-
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
+
+type TelegramAllowFromListRef = {
+  pathLabel: string;
+  holder: Record<string, unknown>;
+  key: "allowFrom" | "groupAllowFrom";
+};
+
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function collectTelegramAccountScopes(
+  cfg: OpenClawConfig,
+): Array<{ prefix: string; account: Record<string, unknown> }> {
+  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
+  const telegram = asObjectRecord(cfg.channels?.telegram);
+  if (!telegram) {
+    return scopes;
+  }
+
+  scopes.push({ prefix: "channels.telegram", account: telegram });
+  const accounts = asObjectRecord(telegram.accounts);
+  if (!accounts) {
+    return scopes;
+  }
+  for (const key of Object.keys(accounts)) {
+    const account = asObjectRecord(accounts[key]);
+    if (!account) {
+      continue;
+    }
+    scopes.push({ prefix: `channels.telegram.accounts.${key}`, account });
+  }
+
+  return scopes;
+}
+
+function collectTelegramAllowFromLists(
+  prefix: string,
+  account: Record<string, unknown>,
+): TelegramAllowFromListRef[] {
+  const refs: TelegramAllowFromListRef[] = [
+    { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
+    { pathLabel: `${prefix}.groupAllowFrom`, holder: account, key: "groupAllowFrom" },
+  ];
+  const groups = asObjectRecord(account.groups);
+  if (!groups) {
+    return refs;
+  }
+
+  for (const groupId of Object.keys(groups)) {
+    const group = asObjectRecord(groups[groupId]);
+    if (!group) {
+      continue;
+    }
+    refs.push({
+      pathLabel: `${prefix}.groups.${groupId}.allowFrom`,
+      holder: group,
+      key: "allowFrom",
+    });
+    const topics = asObjectRecord(group.topics);
+    if (!topics) {
+      continue;
+    }
+    for (const topicId of Object.keys(topics)) {
+      const topic = asObjectRecord(topics[topicId]);
+      if (!topic) {
+        continue;
+      }
+      refs.push({
+        pathLabel: `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
+        holder: topic,
+        key: "allowFrom",
+      });
+    }
+  }
+  return refs;
+}
 
 function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllowFromUsernameHit[] {
   const hits: TelegramAllowFromUsernameHit[] = [];
-  const telegram = cfg.channels?.telegram;
-  if (!telegram) {
-    return hits;
-  }
 
   const scanList = (pathLabel: string, list: unknown) => {
     if (!Array.isArray(list)) {
@@ -180,51 +248,10 @@ function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllo
     }
   };
 
-  const scanAccount = (prefix: string, account: Record<string, unknown>) => {
-    scanList(`${prefix}.allowFrom`, account.allowFrom);
-    scanList(`${prefix}.groupAllowFrom`, account.groupAllowFrom);
-    const groups = account.groups;
-    if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
-      return;
+  for (const scope of collectTelegramAccountScopes(cfg)) {
+    for (const ref of collectTelegramAllowFromLists(scope.prefix, scope.account)) {
+      scanList(ref.pathLabel, ref.holder[ref.key]);
     }
-    const groupsRecord = groups as Record<string, unknown>;
-    for (const groupId of Object.keys(groupsRecord)) {
-      const group = groupsRecord[groupId];
-      if (!group || typeof group !== "object" || Array.isArray(group)) {
-        continue;
-      }
-      const groupRec = group as Record<string, unknown>;
-      scanList(`${prefix}.groups.${groupId}.allowFrom`, groupRec.allowFrom);
-      const topics = groupRec.topics;
-      if (!topics || typeof topics !== "object" || Array.isArray(topics)) {
-        continue;
-      }
-      const topicsRecord = topics as Record<string, unknown>;
-      for (const topicId of Object.keys(topicsRecord)) {
-        const topic = topicsRecord[topicId];
-        if (!topic || typeof topic !== "object" || Array.isArray(topic)) {
-          continue;
-        }
-        scanList(
-          `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
-          (topic as Record<string, unknown>).allowFrom,
-        );
-      }
-    }
-  };
-
-  scanAccount("channels.telegram", telegram as unknown as Record<string, unknown>);
-
-  const accounts = telegram.accounts;
-  if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-    return hits;
-  }
-  for (const key of Object.keys(accounts)) {
-    const account = accounts[key];
-    if (!account || typeof account !== "object" || Array.isArray(account)) {
-      continue;
-    }
-    scanAccount(`channels.telegram.accounts.${key}`, account as Record<string, unknown>);
   }
 
   return hits;
@@ -353,54 +380,170 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
   };
 
   const repairAccount = async (prefix: string, account: Record<string, unknown>) => {
-    await repairList(`${prefix}.allowFrom`, account, "allowFrom");
-    await repairList(`${prefix}.groupAllowFrom`, account, "groupAllowFrom");
-    const groups = account.groups;
-    if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
-      return;
-    }
-    const groupsRecord = groups as Record<string, unknown>;
-    for (const groupId of Object.keys(groupsRecord)) {
-      const group = groupsRecord[groupId];
-      if (!group || typeof group !== "object" || Array.isArray(group)) {
-        continue;
-      }
-      const groupRec = group as Record<string, unknown>;
-      await repairList(`${prefix}.groups.${groupId}.allowFrom`, groupRec, "allowFrom");
-      const topics = groupRec.topics;
-      if (!topics || typeof topics !== "object" || Array.isArray(topics)) {
-        continue;
-      }
-      const topicsRecord = topics as Record<string, unknown>;
-      for (const topicId of Object.keys(topicsRecord)) {
-        const topic = topicsRecord[topicId];
-        if (!topic || typeof topic !== "object" || Array.isArray(topic)) {
-          continue;
-        }
-        await repairList(
-          `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
-          topic as Record<string, unknown>,
-          "allowFrom",
-        );
-      }
+    for (const ref of collectTelegramAllowFromLists(prefix, account)) {
+      await repairList(ref.pathLabel, ref.holder, ref.key);
     }
   };
 
-  const telegram = next.channels?.telegram;
-  if (telegram && typeof telegram === "object" && !Array.isArray(telegram)) {
-    await repairAccount("channels.telegram", telegram as unknown as Record<string, unknown>);
-    const accounts = (telegram as Record<string, unknown>).accounts;
-    if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-      for (const key of Object.keys(accounts as Record<string, unknown>)) {
-        const account = (accounts as Record<string, unknown>)[key];
-        if (!account || typeof account !== "object" || Array.isArray(account)) {
-          continue;
-        }
-        await repairAccount(
-          `channels.telegram.accounts.${key}`,
-          account as Record<string, unknown>,
-        );
+  for (const scope of collectTelegramAccountScopes(next)) {
+    await repairAccount(scope.prefix, scope.account);
+  }
+
+  if (changes.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+  return { config: next, changes };
+}
+
+type DiscordNumericIdHit = { path: string; entry: number };
+
+type DiscordIdListRef = {
+  pathLabel: string;
+  holder: Record<string, unknown>;
+  key: string;
+};
+
+function collectDiscordAccountScopes(
+  cfg: OpenClawConfig,
+): Array<{ prefix: string; account: Record<string, unknown> }> {
+  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
+  const discord = asObjectRecord(cfg.channels?.discord);
+  if (!discord) {
+    return scopes;
+  }
+
+  scopes.push({ prefix: "channels.discord", account: discord });
+  const accounts = asObjectRecord(discord.accounts);
+  if (!accounts) {
+    return scopes;
+  }
+  for (const key of Object.keys(accounts)) {
+    const account = asObjectRecord(accounts[key]);
+    if (!account) {
+      continue;
+    }
+    scopes.push({ prefix: `channels.discord.accounts.${key}`, account });
+  }
+
+  return scopes;
+}
+
+function collectDiscordIdLists(
+  prefix: string,
+  account: Record<string, unknown>,
+): DiscordIdListRef[] {
+  const refs: DiscordIdListRef[] = [
+    { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
+  ];
+  const dm = asObjectRecord(account.dm);
+  if (dm) {
+    refs.push({ pathLabel: `${prefix}.dm.allowFrom`, holder: dm, key: "allowFrom" });
+    refs.push({ pathLabel: `${prefix}.dm.groupChannels`, holder: dm, key: "groupChannels" });
+  }
+  const execApprovals = asObjectRecord(account.execApprovals);
+  if (execApprovals) {
+    refs.push({
+      pathLabel: `${prefix}.execApprovals.approvers`,
+      holder: execApprovals,
+      key: "approvers",
+    });
+  }
+  const guilds = asObjectRecord(account.guilds);
+  if (!guilds) {
+    return refs;
+  }
+
+  for (const guildId of Object.keys(guilds)) {
+    const guild = asObjectRecord(guilds[guildId]);
+    if (!guild) {
+      continue;
+    }
+    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.users`, holder: guild, key: "users" });
+    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.roles`, holder: guild, key: "roles" });
+    const channels = asObjectRecord(guild.channels);
+    if (!channels) {
+      continue;
+    }
+    for (const channelId of Object.keys(channels)) {
+      const channel = asObjectRecord(channels[channelId]);
+      if (!channel) {
+        continue;
       }
+      refs.push({
+        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.users`,
+        holder: channel,
+        key: "users",
+      });
+      refs.push({
+        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.roles`,
+        holder: channel,
+        key: "roles",
+      });
+    }
+  }
+  return refs;
+}
+
+function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumericIdHit[] {
+  const hits: DiscordNumericIdHit[] = [];
+  const scanList = (pathLabel: string, list: unknown) => {
+    if (!Array.isArray(list)) {
+      return;
+    }
+    for (const [index, entry] of list.entries()) {
+      if (typeof entry !== "number") {
+        continue;
+      }
+      hits.push({ path: `${pathLabel}[${index}]`, entry });
+    }
+  };
+
+  for (const scope of collectDiscordAccountScopes(cfg)) {
+    for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
+      scanList(ref.pathLabel, ref.holder[ref.key]);
+    }
+  }
+
+  return hits;
+}
+
+function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const hits = scanDiscordNumericIdEntries(cfg);
+  if (hits.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const next = structuredClone(cfg);
+  const changes: string[] = [];
+
+  const repairList = (pathLabel: string, holder: Record<string, unknown>, key: string) => {
+    const raw = holder[key];
+    if (!Array.isArray(raw)) {
+      return;
+    }
+    let converted = 0;
+    const updated = raw.map((entry) => {
+      if (typeof entry === "number") {
+        converted += 1;
+        return String(entry);
+      }
+      return entry;
+    });
+    if (converted === 0) {
+      return;
+    }
+    holder[key] = updated;
+    changes.push(
+      `- ${pathLabel}: converted ${converted} numeric ${converted === 1 ? "entry" : "entries"} to strings`,
+    );
+  };
+
+  for (const scope of collectDiscordAccountScopes(next)) {
+    for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
+      repairList(ref.pathLabel, ref.holder, ref.key);
     }
   }
 
@@ -548,6 +691,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pendingChanges = true;
       cfg = repair.config;
     }
+
+    const discordRepair = maybeRepairDiscordNumericIds(candidate);
+    if (discordRepair.changes.length > 0) {
+      note(discordRepair.changes.join("\n"), "Doctor changes");
+      candidate = discordRepair.config;
+      pendingChanges = true;
+      cfg = discordRepair.config;
+    }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
@@ -555,6 +706,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         [
           `- Telegram allowFrom contains ${hits.length} non-numeric entries (e.g. ${hits[0]?.entry ?? "@"}); Telegram authorization requires numeric sender IDs.`,
           `- Run "${formatCliCommand("openclaw doctor --fix")}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
+    }
+
+    const discordHits = scanDiscordNumericIdEntries(candidate);
+    if (discordHits.length > 0) {
+      note(
+        [
+          `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${discordHits[0]?.path}=${discordHits[0]?.entry}).`,
+          `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
         ].join("\n"),
         "Doctor warnings",
       );

@@ -116,6 +116,11 @@ export const detectLegacyStateMigrations = vi.fn().mockResolvedValue({
     targetDir: "/tmp/oauth/whatsapp/default",
     hasLegacy: false,
   },
+  pairingAllowFrom: {
+    legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
+    targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
+    hasLegacyTelegram: false,
+  },
   preview: [],
 }) as unknown as MockFn;
 
@@ -123,6 +128,17 @@ export const runLegacyStateMigrations = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+
+const DEFAULT_CONFIG_SNAPSHOT = {
+  path: "/tmp/openclaw.json",
+  exists: true,
+  raw: "{}",
+  parsed: {},
+  valid: true,
+  config: {},
+  issues: [],
+  legacyIssues: [],
+} as const;
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -256,29 +272,43 @@ vi.mock("./doctor-state-migrations.js", () => ({
   runLegacyStateMigrations,
 }));
 
+export function mockDoctorConfigSnapshot(
+  params: {
+    config?: Record<string, unknown>;
+    parsed?: Record<string, unknown>;
+    valid?: boolean;
+    issues?: Array<{ path: string; message: string }>;
+    legacyIssues?: Array<{ path: string; message: string }>;
+  } = {},
+) {
+  readConfigFileSnapshot.mockResolvedValue({
+    ...DEFAULT_CONFIG_SNAPSHOT,
+    config: params.config ?? DEFAULT_CONFIG_SNAPSHOT.config,
+    parsed: params.parsed ?? DEFAULT_CONFIG_SNAPSHOT.parsed,
+    valid: params.valid ?? DEFAULT_CONFIG_SNAPSHOT.valid,
+    issues: params.issues ?? DEFAULT_CONFIG_SNAPSHOT.issues,
+    legacyIssues: params.legacyIssues ?? DEFAULT_CONFIG_SNAPSHOT.legacyIssues,
+  });
+}
+
+export function createDoctorRuntime() {
+  return {
+    log: vi.fn() as unknown as MockFn,
+    error: vi.fn() as unknown as MockFn,
+    exit: vi.fn() as unknown as MockFn,
+  };
+}
+
 export async function arrangeLegacyStateMigrationTest(): Promise<{
   doctorCommand: unknown;
   runtime: { log: MockFn; error: MockFn; exit: MockFn };
   detectLegacyStateMigrations: MockFn;
   runLegacyStateMigrations: MockFn;
 }> {
-  readConfigFileSnapshot.mockResolvedValue({
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    valid: true,
-    config: {},
-    issues: [],
-    legacyIssues: [],
-  });
+  mockDoctorConfigSnapshot();
 
   const { doctorCommand } = await import("./doctor.js");
-  const runtime = {
-    log: vi.fn() as unknown as MockFn,
-    error: vi.fn() as unknown as MockFn,
-    exit: vi.fn() as unknown as MockFn,
-  };
+  const runtime = createDoctorRuntime();
 
   detectLegacyStateMigrations.mockClear();
   runLegacyStateMigrations.mockClear();
@@ -305,6 +335,11 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
       legacyDir: "/tmp/oauth",
       targetDir: "/tmp/oauth/whatsapp/default",
       hasLegacy: false,
+    },
+    pairingAllowFrom: {
+      legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
+      targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
+      hasLegacyTelegram: false,
     },
     preview: ["- Legacy sessions detected"],
   });
