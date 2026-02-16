@@ -848,6 +848,7 @@ export async function runEmbeddedAttempt(
             }).sessionAgentId;
 
       let promptError: unknown = null;
+      let promptErrorSource: "prompt" | "compaction" | null = null;
       try {
         const promptStartedAt = Date.now();
 
@@ -1000,6 +1001,7 @@ export async function runEmbeddedAttempt(
           }
         } catch (err) {
           promptError = err;
+          promptErrorSource = "prompt";
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
@@ -1022,6 +1024,7 @@ export async function runEmbeddedAttempt(
           if (isRunnerAbortError(err)) {
             if (!promptError) {
               promptError = err;
+              promptErrorSource = "compaction";
             }
             if (!isProbeSession) {
               log.debug(
@@ -1070,6 +1073,23 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
+
+        if (promptError && promptErrorSource === "prompt") {
+          try {
+            sessionManager.appendCustomEntry("openclaw:prompt-error", {
+              timestamp: Date.now(),
+              runId: params.runId,
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.modelId,
+              api: params.model.api,
+              error: describeUnknownError(promptError),
+            });
+          } catch (entryErr) {
+            log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+          }
+        }
+
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: timedOutDuringCompaction
