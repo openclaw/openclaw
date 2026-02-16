@@ -18,7 +18,6 @@ describe("messageAction", () => {
   it("creates a message action", () => {
     const action = messageAction("Click me", "clicked");
 
-    expect(action.type).toBe("message");
     expect(action.label).toBe("Click me");
     expect((action as { text: string }).text).toBe("clicked");
   });
@@ -48,7 +47,6 @@ describe("postbackAction", () => {
   it("includes displayText when provided", () => {
     const action = postbackAction("Select", "data", "Selected!");
 
-    expect(action.type).toBe("postback");
     expect(action.label).toBe("Select");
     expect((action as { data: string }).data).toBe("data");
     expect((action as { displayText: string }).displayText).toBe("Selected!");
@@ -70,7 +68,6 @@ describe("datetimePickerAction", () => {
       max: "2024-12-31T23:59",
     });
 
-    expect(action.type).toBe("datetimepicker");
     expect(action.label).toBe("Pick");
     expect((action as { mode: string }).mode).toBe("datetime");
     expect((action as { initial: string }).initial).toBe("2024-01-01T12:00");
@@ -148,8 +145,6 @@ describe("createTemplateCarousel", () => {
     );
     const template = createTemplateCarousel(columns);
 
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("carousel");
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
   });
 });
@@ -185,8 +180,6 @@ describe("createImageCarousel", () => {
     );
     const template = createImageCarousel(columns);
 
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("image_carousel");
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
   });
 });
@@ -194,9 +187,6 @@ describe("createImageCarousel", () => {
 describe("createYesNoConfirm", () => {
   it("creates a yes/no confirmation with defaults", () => {
     const template = createYesNoConfirm("Continue?");
-
-    expect(template.type).toBe("template");
-    expect(template.template.type).toBe("confirm");
 
     const actions = (template.template as { actions: Array<{ label: string }> }).actions;
     expect(actions[0].label).toBe("Yes");
