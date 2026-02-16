@@ -321,7 +321,9 @@ describe("QmdMemoryManager", () => {
         emitAndClose(
           child,
           "stdout",
-          JSON.stringify([{ name: sessionCollectionName, path: wrongSessionsPath, mask: "**/*.md" }]),
+          JSON.stringify([
+            { name: sessionCollectionName, path: wrongSessionsPath, mask: "**/*.md" },
+          ]),
         );
         return child;
       }
@@ -340,7 +342,8 @@ describe("QmdMemoryManager", () => {
 
     const commands = spawnMock.mock.calls.map((call) => call[1] as string[]);
     const removeSessions = commands.find(
-      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
+      (args) =>
+        args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
     );
     expect(removeSessions).toBeDefined();
 
@@ -373,7 +376,11 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "collection" && args[1] === "list") {
         const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", JSON.stringify([`workspace-${agentId}`, sessionCollectionName]));
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([`workspace-${agentId}`, sessionCollectionName]),
+        );
         return child;
       }
       return createMockChild();
@@ -384,7 +391,8 @@ describe("QmdMemoryManager", () => {
 
     const commands = spawnMock.mock.calls.map((call) => call[1] as string[]);
     const removeSessions = commands.find(
-      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
+      (args) =>
+        args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
     );
     expect(removeSessions).toBeDefined();
 
