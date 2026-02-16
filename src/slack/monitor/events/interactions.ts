@@ -215,6 +215,15 @@ function formatInteractionSelectionLabel(params: {
       params.summary.selectedValues.length - 3
     }`;
   }
+  if (params.summary.selectedDate) {
+    return params.summary.selectedDate;
+  }
+  if (params.summary.selectedTime) {
+    return params.summary.selectedTime;
+  }
+  if (typeof params.summary.selectedDateTime === "number") {
+    return new Date(params.summary.selectedDateTime * 1000).toISOString();
+  }
   if (params.summary.value?.trim()) {
     return params.summary.value.trim();
   }
