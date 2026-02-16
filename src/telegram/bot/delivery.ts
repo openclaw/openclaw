@@ -3,6 +3,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { TelegramInlineButtons } from "../button-types.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { danger, logVerbose } from "../../globals.js";
@@ -26,6 +27,7 @@ import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramThreadParams,
+  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   type TelegramThreadSpec,
 } from "./helpers.js";
@@ -39,6 +41,7 @@ export async function deliverReplies(params: {
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
+  mediaLocalRoots?: readonly string[];
   replyToMode: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
@@ -106,7 +109,7 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const telegramData = reply.channelData?.telegram as
-      | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+      | { buttons?: TelegramInlineButtons }
       | undefined;
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {
@@ -142,7 +145,9 @@ export async function deliverReplies(params: {
     let pendingFollowUpText: string | undefined;
     for (const mediaUrl of mediaList) {
       const isFirstMedia = first;
-      const media = await loadWebMedia(mediaUrl);
+      const media = await loadWebMedia(mediaUrl, {
+        localRoots: params.mediaLocalRoots,
+      });
       const kind = mediaKindFromMime(media.contentType ?? undefined);
       const isGif = isGifMedia({
         contentType: media.contentType,
@@ -306,6 +311,16 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
+  const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
+    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const fetched = await fetchRemoteMedia({
+      url,
+      fetchImpl,
+      filePathHint: filePath,
+    });
+    const originalName = fetched.fileName ?? filePath;
+    return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
+  };
 
   // Handle stickers separately - only static stickers (WEBP) are supported
   if (msg.sticker) {
@@ -330,20 +345,7 @@ export async function resolveMedia(
         logVerbose("telegram: fetch not available for sticker download");
         return null;
       }
-      const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-      const fetched = await fetchRemoteMedia({
-        url,
-        fetchImpl,
-        filePathHint: file.file_path,
-      });
-      const originalName = fetched.fileName ?? file.file_path;
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        maxBytes,
-        originalName,
-      );
+      const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
 
       // Check sticker cache for existing description
       const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
@@ -428,30 +430,8 @@ export async function resolveMedia(
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const fetched = await fetchRemoteMedia({
-    url,
-    fetchImpl,
-    filePathHint: file.file_path,
-  });
-  const originalName = fetched.fileName ?? file.file_path;
-  const saved = await saveMediaBuffer(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    maxBytes,
-    originalName,
-  );
-  let placeholder = "<media:document>";
-  if (msg.photo) {
-    placeholder = "<media:image>";
-  } else if (msg.video) {
-    placeholder = "<media:video>";
-  } else if (msg.video_note) {
-    placeholder = "<media:video>";
-  } else if (msg.audio || msg.voice) {
-    placeholder = "<media:audio>";
-  }
+  const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+  const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
 

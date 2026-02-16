@@ -1,23 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { onSpy } from "./bot.media.e2e-harness.js";
 
+async function createMessageHandlerAndReplySpy() {
+  const { createTelegramBot } = await import("./bot.js");
+  const replyModule = await import("../auto-reply/reply.js");
+  const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+
+  onSpy.mockReset();
+  replySpy.mockReset();
+
+  createTelegramBot({ token: "tok" });
+  const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+    ctx: Record<string, unknown>,
+  ) => Promise<void>;
+  expect(handler).toBeDefined();
+  return { handler, replySpy };
+}
+
 describe("telegram inbound media", () => {
   const _INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
   it(
     "includes location text and ctx fields for pins",
     async () => {
-      const { createTelegramBot } = await import("./bot.js");
-      const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
-
-      onSpy.mockReset();
-      replySpy.mockReset();
-
-      createTelegramBot({ token: "tok" });
-      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      expect(handler).toBeDefined();
+      const { handler, replySpy } = await createMessageHandlerAndReplySpy();
 
       await handler({
         message: {
@@ -50,18 +55,7 @@ describe("telegram inbound media", () => {
   it(
     "captures venue fields for named places",
     async () => {
-      const { createTelegramBot } = await import("./bot.js");
-      const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
-
-      onSpy.mockReset();
-      replySpy.mockReset();
-
-      createTelegramBot({ token: "tok" });
-      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      expect(handler).toBeDefined();
+      const { handler, replySpy } = await createMessageHandlerAndReplySpy();
 
       await handler({
         message: {

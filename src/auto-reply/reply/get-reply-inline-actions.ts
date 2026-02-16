@@ -11,11 +11,38 @@ import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { logVerbose } from "../../globals.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
-import { listSkillCommandsForWorkspace, resolveSkillCommandInvocation } from "../skill-commands.js";
+import {
+  listReservedChatSlashCommandNames,
+  listSkillCommandsForWorkspace,
+  resolveSkillCommandInvocation,
+} from "../skill-commands.js";
 import { getAbortMemory } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
 import { isDirectiveOnly } from "./directive-handling.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
+
+const builtinSlashCommands = (() => {
+  return listReservedChatSlashCommandNames([
+    "think",
+    "verbose",
+    "reasoning",
+    "elevated",
+    "exec",
+    "model",
+    "status",
+    "queue",
+  ]);
+})();
+
+function resolveSlashCommandName(commandBodyNormalized: string): string | null {
+  const trimmed = commandBodyNormalized.trim();
+  if (!trimmed.startsWith("/")) {
+    return null;
+  }
+  const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
+  const name = match?.[1]?.trim().toLowerCase() ?? "";
+  return name ? name : null;
+}
 
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -135,7 +162,12 @@ export async function handleInlineActions(params: {
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
 
-  const shouldLoadSkillCommands = command.commandBodyNormalized.startsWith("/");
+  const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
+  const shouldLoadSkillCommands =
+    allowTextCommands &&
+    slashCommandName !== null &&
+    // `/skill …` needs the full skill command list.
+    (slashCommandName === "skill" || !builtinSlashCommands.has(slashCommandName));
   const skillCommands =
     shouldLoadSkillCommands && params.skillCommands
       ? params.skillCommands

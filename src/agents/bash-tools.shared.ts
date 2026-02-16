@@ -1,11 +1,9 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import { killProcessTree } from "./shell-utils.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
@@ -112,13 +110,6 @@ export async function resolveSandboxWorkdir(params: {
       hostWorkdir: fallback,
       containerWorkdir: params.sandbox.containerWorkdir,
     };
-  }
-}
-
-export function killSession(session: { pid?: number; child?: ChildProcessWithoutNullStreams }) {
-  const pid = session.pid ?? session.child?.pid;
-  if (pid) {
-    killProcessTree(pid);
   }
 }
 
