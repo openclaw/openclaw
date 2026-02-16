@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "./health.js";
+import { stripAnsi } from "../terminal/ansi.js";
+import { formatHealthCheckFailure } from "./health-format.js";
 import { formatHealthChannelLines, healthCommand } from "./health.js";
 
 const runtime = {
@@ -170,6 +172,37 @@ describe("healthCommand", () => {
     const lines = formatHealthChannelLines(summary, { accountMode: "all" });
     expect(lines).toContain(
       "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
+    );
+  });
+});
+
+describe("formatHealthCheckFailure", () => {
+  it("keeps non-rich output stable", () => {
+    const err = new Error("gateway closed (1006 abnormal closure): no close reason");
+    expect(formatHealthCheckFailure(err, { rich: false })).toBe(
+      `Health check failed: ${String(err)}`,
+    );
+  });
+
+  it("formats gateway connection details as indented key/value lines", () => {
+    const err = new Error(
+      [
+        "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        "Gateway target: ws://127.0.0.1:19001",
+        "Source: local loopback",
+        "Config: /Users/steipete/.openclaw-dev/openclaw.json",
+        "Bind: loopback",
+      ].join("\n"),
+    );
+
+    expect(stripAnsi(formatHealthCheckFailure(err, { rich: true }))).toBe(
+      [
+        "Health check failed: gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        "  Gateway target: ws://127.0.0.1:19001",
+        "  Source: local loopback",
+        "  Config: /Users/steipete/.openclaw-dev/openclaw.json",
+        "  Bind: loopback",
+      ].join("\n"),
     );
   });
 });
