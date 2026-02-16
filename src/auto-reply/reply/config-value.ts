@@ -1,3 +1,5 @@
+import { t } from "../../i18n/index.js";
+
 export function parseConfigValue(raw: string): {
   value?: unknown;
   error?: string;

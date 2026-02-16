@@ -14,6 +14,7 @@ import {
   type DiscordChannelResolution,
 } from "../../../discord/resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../../../discord/resolve-users.js";
+import { t } from "../../../i18n/index.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { promptChannelAccessConfig } from "./channel-access.js";

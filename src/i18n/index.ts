@@ -1,13 +1,13 @@
-import de from "./de.json";
-import en from "./en.json";
-import es from "./es.json";
-import fr from "./fr.json";
-import ja from "./ja.json";
-import pl from "./pl.json";
-import pt from "./pt.json";
-import tr from "./tr.json";
-import uk from "./uk.json";
-import zh from "./zh.json";
+import de from "./de.json" with { type: "json" };
+import en from "./en.json" with { type: "json" };
+import es from "./es.json" with { type: "json" };
+import fr from "./fr.json" with { type: "json" };
+import ja from "./ja.json" with { type: "json" };
+import pl from "./pl.json" with { type: "json" };
+import pt from "./pt.json" with { type: "json" };
+import tr from "./tr.json" with { type: "json" };
+import uk from "./uk.json" with { type: "json" };
+import zh from "./zh.json" with { type: "json" };
 
 export type Locale = "en" | "uk" | "de" | "es" | "fr" | "pt" | "ja" | "zh" | "pl" | "tr";
 
@@ -107,26 +107,27 @@ export function initializeLocale(config?: { agents?: { defaults?: { locale?: str
  */
 export function t(key: string, params?: Record<string, string>): string {
   const parts = key.split(".");
-  let value: unknown = locales[currentLocale];
+  let value: unknown = locales[currentLocale] as Record<string, unknown>;
   for (const part of parts) {
-    value = value?.[part];
+    value = (value as Record<string, unknown>)?.[part];
   }
   if (typeof value !== "string") {
     // Fallback to English
-    value = locales.en as unknown;
+    value = locales.en as Record<string, unknown>;
     for (const part of parts) {
-      value = value?.[part];
+      value = (value as Record<string, unknown>)?.[part];
     }
   }
   if (typeof value !== "string") {
     return key;
   }
+  let result: string = value;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      value = value.replaceAll(`{${k}}`, v);
+      result = result.replaceAll(`{${k}}`, v);
     }
   }
-  return value;
+  return result;
 }
 
 /**

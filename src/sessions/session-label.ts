@@ -1,3 +1,5 @@
+import { t } from "../i18n/index.js";
+
 export const SESSION_LABEL_MAX_LENGTH = 64;
 
 export type ParsedSessionLabel = { ok: true; label: string } | { ok: false; error: string };

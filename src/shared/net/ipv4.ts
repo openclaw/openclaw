@@ -1,3 +1,5 @@
+import { t } from "../../i18n/index.js";
+
 export function validateIPv4AddressInput(value: string | undefined): string | undefined {
   if (!value) {
     return t("config.validation.ipv4_required");

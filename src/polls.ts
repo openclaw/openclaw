@@ -1,3 +1,5 @@
+import { t } from "./i18n/index.js";
+
 export type PollInput = {
   question: string;
   options: string[];
