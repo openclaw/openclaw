@@ -64,6 +64,17 @@ async function runPromptCustomApi(
   });
 }
 
+function expectOpenAiCompatResult(params: {
+  prompter: ReturnType<typeof createTestPrompter>;
+  textCalls: number;
+  selectCalls: number;
+  result: Awaited<ReturnType<typeof runPromptCustomApi>>;
+}) {
+  expect(params.prompter.text).toHaveBeenCalledTimes(params.textCalls);
+  expect(params.prompter.select).toHaveBeenCalledTimes(params.selectCalls);
+  expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
+}
+
 describe("promptCustomApiConfig", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -78,9 +89,7 @@ describe("promptCustomApiConfig", () => {
     stubFetchSequence([{ ok: true }]);
     const result = await runPromptCustomApi(prompter);
 
-    expect(prompter.text).toHaveBeenCalledTimes(5);
-    expect(prompter.select).toHaveBeenCalledTimes(1);
-    expect(result.config.models?.providers?.custom?.api).toBe("openai-completions");
+    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 1, result });
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
   });
 
@@ -104,9 +113,7 @@ describe("promptCustomApiConfig", () => {
     stubFetchSequence([{ ok: true }]);
     const result = await runPromptCustomApi(prompter);
 
-    expect(prompter.text).toHaveBeenCalledTimes(5);
-    expect(prompter.select).toHaveBeenCalledTimes(1);
-    expect(result.config.models?.providers?.custom?.api).toBe("openai-completions");
+    expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 1, result });
   });
 
   it("re-prompts base url when unknown detection fails", async () => {
