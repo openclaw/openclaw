@@ -7,6 +7,7 @@ import type {
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
+  mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
   promptChannelAccessConfig,
@@ -125,7 +126,7 @@ async function promptZalouserAllowFrom(params: {
       ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
       ...(results.filter(Boolean) as string[]),
     ];
-    const unique = [...new Set(merged)];
+    const unique = mergeAllowFromEntries(undefined, merged);
     if (accountId === DEFAULT_ACCOUNT_ID) {
       return {
         ...cfg,

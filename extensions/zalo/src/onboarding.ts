@@ -7,6 +7,7 @@ import type {
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
+  mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
 } from "openclaw/plugin-sdk";
@@ -151,7 +152,7 @@ async function promptZaloAllowFrom(params: {
     ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
     normalized,
   ];
-  const unique = [...new Set(merged)];
+  const unique = mergeAllowFromEntries(undefined, merged);
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
