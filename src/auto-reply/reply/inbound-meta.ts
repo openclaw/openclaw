@@ -18,6 +18,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   // Those belong in the user-role "untrusted context" blocks.
   const payload = {
     schema: "openclaw.inbound_meta.v1",
+    sender_id: safeTrim(ctx.SenderId),
     channel: safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface) ?? safeTrim(ctx.Provider),
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
