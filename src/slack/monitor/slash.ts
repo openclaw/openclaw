@@ -12,6 +12,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import {
   normalizeAllowList,
   normalizeAllowListLower,
@@ -36,17 +37,6 @@ async function getCommandsRegistry(): Promise<CommandsRegistry> {
     commandsRegistry = await import("../../auto-reply/commands-registry.js");
   }
   return commandsRegistry;
-}
-
-function chunkItems<T>(items: T[], size: number): T[][] {
-  if (size <= 0) {
-    return [items];
-  }
-  const rows: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    rows.push(items.slice(i, i + size));
-  }
-  return rows;
 }
 
 function encodeSlackCommandArgValue(parts: {
