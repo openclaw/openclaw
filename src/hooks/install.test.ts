@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
+import { isAddressInUseError } from "./gmail-watcher.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
 let tempDirIndex = 0;
@@ -194,16 +196,10 @@ describe("installHooksFromPath", () => {
     if (!res.ok) {
       return;
     }
-
-    const calls = run.mock.calls.filter((c) => Array.isArray(c[0]) && c[0][0] === "npm");
-    expect(calls.length).toBe(1);
-    const first = calls[0];
-    if (!first) {
-      throw new Error("expected npm install call");
-    }
-    const [argv, opts] = first;
-    expect(argv).toEqual(["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"]);
-    expect(opts?.cwd).toBe(res.targetDir);
+    expectSingleNpmInstallIgnoreScriptsCall({
+      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
+      expectedCwd: res.targetDir,
+    });
   });
 });
 
@@ -294,5 +290,15 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.error).toContain("unsupported npm spec");
+  });
+});
+
+describe("gmail watcher", () => {
+  it("detects address already in use errors", () => {
+    expect(isAddressInUseError("listen tcp 127.0.0.1:8788: bind: address already in use")).toBe(
+      true,
+    );
+    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
+    expect(isAddressInUseError("some other error")).toBe(false);
   });
 });

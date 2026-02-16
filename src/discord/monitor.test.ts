@@ -38,6 +38,22 @@ const makeEntries = (
   return out;
 };
 
+function createAutoThreadMentionContext() {
+  const guildInfo: DiscordGuildEntryResolved = {
+    requireMention: true,
+    channels: {
+      general: { allow: true, autoThread: true },
+    },
+  };
+  const channelConfig = resolveDiscordChannelConfig({
+    guildInfo,
+    channelId: "1",
+    channelName: "General",
+    channelSlug: "general",
+  });
+  return { guildInfo, channelConfig };
+}
+
 describe("registerDiscordListener", () => {
   class FakeListener {}
 
@@ -402,18 +418,7 @@ describe("discord mention gating", () => {
   });
 
   it("does not require mention inside autoThread threads", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { allow: true, autoThread: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
+    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,
@@ -427,18 +432,7 @@ describe("discord mention gating", () => {
   });
 
   it("requires mention inside user-created threads with autoThread enabled", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { allow: true, autoThread: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
+    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,
@@ -452,18 +446,7 @@ describe("discord mention gating", () => {
   });
 
   it("requires mention when thread owner is unknown", () => {
-    const guildInfo: DiscordGuildEntryResolved = {
-      requireMention: true,
-      channels: {
-        general: { allow: true, autoThread: true },
-      },
-    };
-    const channelConfig = resolveDiscordChannelConfig({
-      guildInfo,
-      channelId: "1",
-      channelName: "General",
-      channelSlug: "general",
-    });
+    const { guildInfo, channelConfig } = createAutoThreadMentionContext();
     expect(
       resolveDiscordShouldRequireMention({
         isGuildMessage: true,

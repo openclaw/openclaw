@@ -140,7 +140,12 @@ export function handleMessageUpdate(
     })
     .trim();
   if (next) {
+    const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+    // Detect when thinking block ends (</think> tag processed)
+    if (wasThinking && !ctx.state.partialBlockState.thinking) {
+      void ctx.params.onReasoningEnd?.();
+    }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
     const cleanedText = parsedFull.text;
