@@ -1,4 +1,4 @@
-import { editSlackMessage } from "./actions.js";
+import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
 
 const SLACK_STREAM_MAX_CHARS = 4000;
@@ -7,6 +7,7 @@ const DEFAULT_THROTTLE_MS = 1000;
 export type SlackDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
+  clear: () => Promise<void>;
   stop: () => void;
   forceNewMessage: () => void;
   messageId: () => string | undefined;
@@ -25,11 +26,13 @@ export function createSlackDraftStream(params: {
   warn?: (message: string) => void;
   send?: typeof sendMessageSlack;
   edit?: typeof editSlackMessage;
+  remove?: typeof deleteSlackMessage;
 }): SlackDraftStream {
   const maxChars = Math.min(params.maxChars ?? SLACK_STREAM_MAX_CHARS, SLACK_STREAM_MAX_CHARS);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const send = params.send ?? sendMessageSlack;
   const edit = params.edit ?? editSlackMessage;
+  const remove = params.remove ?? deleteSlackMessage;
 
   let streamMessageId: string | undefined;
   let streamChannelId: string | undefined;
@@ -152,6 +155,31 @@ export function createSlackDraftStream(params: {
     }
   };
 
+  const clear = async () => {
+    stop();
+    if (inFlightPromise) {
+      await inFlightPromise;
+    }
+    const channelId = streamChannelId;
+    const messageId = streamMessageId;
+    streamChannelId = undefined;
+    streamMessageId = undefined;
+    lastSentText = "";
+    if (!channelId || !messageId) {
+      return;
+    }
+    try {
+      await remove(channelId, messageId, {
+        token: params.token,
+        accountId: params.accountId,
+      });
+    } catch (err) {
+      params.warn?.(
+        `slack stream preview cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
   const forceNewMessage = () => {
     streamMessageId = undefined;
     streamChannelId = undefined;
@@ -164,6 +192,7 @@ export function createSlackDraftStream(params: {
   return {
     update,
     flush,
+    clear,
     stop,
     forceNewMessage,
     messageId: () => streamMessageId,
