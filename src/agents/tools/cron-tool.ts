@@ -219,7 +219,8 @@ JOB SCHEMA (for add action):
   "payload": { ... },       // Required: what to execute
   "delivery": { ... },      // Optional: announce summary (isolated only)
   "sessionTarget": "main" | "isolated",  // Required
-  "enabled": true | false   // Optional, default true
+  "enabled": true | false,  // Optional, default true
+  "notify": true | false    // Optional webhook opt-in; set true for user-facing reminders
 }
 
 SCHEDULE TYPES (schedule.kind):
@@ -246,6 +247,7 @@ DELIVERY (isolated-only, top-level):
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+- For reminders users should be notified about, set notify=true.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
 
 WAKE MODES (for wake action):
@@ -292,6 +294,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "payload",
               "delivery",
               "enabled",
+              "notify",
               "description",
               "deleteAfterRun",
               "agentId",

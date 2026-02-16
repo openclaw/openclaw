@@ -15,6 +15,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   description: "",
   agentId: "",
   enabled: true,
+  notify: false,
   scheduleKind: "every",
   scheduleAt: "",
   everyAmount: "30",

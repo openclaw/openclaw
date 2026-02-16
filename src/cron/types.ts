@@ -71,6 +71,7 @@ export type CronJob = {
   name: string;
   description?: string;
   enabled: boolean;
+  notify?: boolean;
   deleteAfterRun?: boolean;
   createdAtMs: number;
   updatedAtMs: number;
