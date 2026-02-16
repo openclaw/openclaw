@@ -20,14 +20,6 @@ vi.mock("../../routing/resolve-route.js", () => ({
   resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
 }));
 
-vi.mock("../../agents/identity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/identity.js")>();
-  return {
-    ...actual,
-    resolveEffectiveMessagesConfig: () => ({ responsePrefix: "" }),
-  };
-});
-
 type SlashHarnessMocks = {
   dispatchMock: ReturnType<typeof vi.fn>;
   readAllowFromStoreMock: ReturnType<typeof vi.fn>;
