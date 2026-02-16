@@ -28,6 +28,25 @@ jobs:
         id: check
         uses: ./.github/actions/detect-docs-changes
 
+  # Enforce review deadlines for active dependency scanner exceptions.
+  dependency-exceptions:
+    needs: [docs-scope]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          check-latest: true
+
+      - name: Check dependency exception review dates
+        run: node scripts/check-dependency-exceptions.mjs
+
   # Detect which heavy areas are touched so PRs can skip unrelated expensive jobs.
   # Push to main keeps broad coverage.
   changed-scope:

@@ -6,6 +6,7 @@
 
 - [Threat Model](./THREAT-MODEL-ATLAS.md) - MITRE ATLAS-based threat model for the OpenClaw ecosystem
 - [Contributing to the Threat Model](./CONTRIBUTING-THREAT-MODEL.md) - How to add threats, mitigations, and attack chains
+- [Dependency Exception Register](./dependency-exceptions.md) - Time-bounded scanner exceptions with owners, mitigations, and review dates
 
 ## Reporting Vulnerabilities
 
