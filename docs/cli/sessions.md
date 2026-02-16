@@ -13,4 +13,7 @@ List stored conversation sessions.
 openclaw sessions
 openclaw sessions --active 120
 openclaw sessions --json
+openclaw sessions --json-debug
 ```
+
+`--json-debug` implies `--json` and adds per-session path diagnostics (for example `sessionFileStatus`, resolved transcript path, and transcript existence) to help isolate session-store path mismatches.

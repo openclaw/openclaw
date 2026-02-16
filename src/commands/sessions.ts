@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { RuntimeEnv } from "../runtime.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -130,6 +132,54 @@ const formatFlagsCell = (row: SessionRow, rich: boolean) => {
   return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 };
 
+type SessionFileStatus = "missing" | "empty" | "ok" | "outside_sessions_dir";
+
+type SessionPathDebugInfo = {
+  sessionFileRaw: string | null;
+  sessionFileResolved: string | null;
+  sessionFileStatus: SessionFileStatus;
+  transcriptExists: boolean | null;
+};
+
+function isWithinDir(candidatePath: string, dirPath: string): boolean {
+  const relative = path.relative(path.resolve(dirPath), path.resolve(candidatePath));
+  return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function resolveSessionPathDebugInfo(
+  entry: SessionEntry | undefined,
+  sessionsDir: string,
+): SessionPathDebugInfo {
+  const sessionFileRaw = typeof entry?.sessionFile === "string" ? entry.sessionFile : null;
+  if (sessionFileRaw === null) {
+    return {
+      sessionFileRaw: null,
+      sessionFileResolved: null,
+      sessionFileStatus: "missing",
+      transcriptExists: null,
+    };
+  }
+  const trimmed = sessionFileRaw.trim();
+  if (!trimmed) {
+    return {
+      sessionFileRaw,
+      sessionFileResolved: null,
+      sessionFileStatus: "empty",
+      transcriptExists: null,
+    };
+  }
+  const sessionFileResolved = path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(sessionsDir, trimmed);
+  const withinSessionsDir = isWithinDir(sessionFileResolved, sessionsDir);
+  return {
+    sessionFileRaw,
+    sessionFileResolved,
+    sessionFileStatus: withinSessionsDir ? "ok" : "outside_sessions_dir",
+    transcriptExists: withinSessionsDir ? fs.existsSync(sessionFileResolved) : null,
+  };
+}
+
 function toRows(store: Record<string, SessionEntry>): SessionRow[] {
   return Object.entries(store)
     .map(([key, entry]) => {
@@ -160,7 +210,7 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
 }
 
 export async function sessionsCommand(
-  opts: { json?: boolean; store?: string; active?: string },
+  opts: { json?: boolean; jsonDebug?: boolean; store?: string; active?: string },
   runtime: RuntimeEnv,
 ) {
   const cfg = loadConfig();
@@ -198,7 +248,11 @@ export async function sessionsCommand(
     return Date.now() - row.updatedAt <= activeMinutes * 60_000;
   });
 
-  if (opts.json) {
+  const includeJsonDebug = opts.jsonDebug === true;
+  const outputJson = opts.json || includeJsonDebug;
+
+  if (outputJson) {
+    const sessionsDir = path.dirname(path.resolve(storePath));
     runtime.log(
       JSON.stringify(
         {
@@ -213,6 +267,11 @@ export async function sessionsCommand(
             contextTokens:
               r.contextTokens ?? lookupContextTokens(r.model) ?? configContextTokens ?? null,
             model: r.model ?? configModel ?? null,
+            ...(includeJsonDebug
+              ? {
+                  debug: resolveSessionPathDebugInfo(store[r.key], sessionsDir),
+                }
+              : {}),
           })),
         },
         null,

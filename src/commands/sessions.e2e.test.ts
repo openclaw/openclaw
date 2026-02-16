@@ -136,13 +136,71 @@ describe("sessionsCommand", () => {
         key: string;
         totalTokens: number | null;
         totalTokensFresh: boolean;
+        debug?: unknown;
       }>;
     };
     const main = payload.sessions?.find((row) => row.key === "main");
     const group = payload.sessions?.find((row) => row.key === "discord:group:demo");
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(true);
+    expect(main?.debug).toBeUndefined();
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+    expect(group?.debug).toBeUndefined();
+  });
+
+  it("exports per-session path diagnostics in JSON debug mode", async () => {
+    const store = writeStore({
+      main: {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 10 * 60_000,
+        sessionFile: "main.jsonl",
+      },
+      "discord:group:demo": {
+        sessionId: "xyz",
+        updatedAt: Date.now() - 5 * 60_000,
+        sessionFile: "/tmp/not-in-sessions.jsonl",
+      },
+      "agent:main:no-path": {
+        sessionId: "no-path",
+        updatedAt: Date.now() - 3 * 60_000,
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store, jsonDebug: true }, runtime);
+
+    fs.rmSync(store);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      sessions?: Array<{
+        key: string;
+        debug?: {
+          sessionFileRaw: string | null;
+          sessionFileResolved: string | null;
+          sessionFileStatus: string;
+          transcriptExists: boolean | null;
+        };
+      }>;
+    };
+
+    const main = payload.sessions?.find((row) => row.key === "main");
+    const group = payload.sessions?.find((row) => row.key === "discord:group:demo");
+    const noPath = payload.sessions?.find((row) => row.key === "agent:main:no-path");
+
+    expect(main?.debug?.sessionFileRaw).toBe("main.jsonl");
+    expect(main?.debug?.sessionFileStatus).toBe("ok");
+    expect(main?.debug?.transcriptExists).toBe(false);
+    expect(typeof main?.debug?.sessionFileResolved).toBe("string");
+
+    expect(group?.debug?.sessionFileRaw).toBe("/tmp/not-in-sessions.jsonl");
+    expect(group?.debug?.sessionFileStatus).toBe("outside_sessions_dir");
+    expect(group?.debug?.transcriptExists).toBeNull();
+    expect(typeof group?.debug?.sessionFileResolved).toBe("string");
+
+    expect(noPath?.debug?.sessionFileRaw).toBeNull();
+    expect(noPath?.debug?.sessionFileResolved).toBeNull();
+    expect(noPath?.debug?.sessionFileStatus).toBe("missing");
+    expect(noPath?.debug?.transcriptExists).toBeNull();
   });
 });

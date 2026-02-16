@@ -45,7 +45,8 @@ const routeStatus: RouteSpec = {
 const routeSessions: RouteSpec = {
   match: (path) => path[0] === "sessions",
   run: async (argv) => {
-    const json = hasFlag(argv, "--json");
+    const jsonDebug = hasFlag(argv, "--json-debug");
+    const json = hasFlag(argv, "--json") || jsonDebug;
     const store = getFlagValue(argv, "--store");
     if (store === null) {
       return false;
@@ -55,7 +56,7 @@ const routeSessions: RouteSpec = {
       return false;
     }
     const { sessionsCommand } = await import("../../commands/sessions.js");
-    await sessionsCommand({ json, store, active }, defaultRuntime);
+    await sessionsCommand({ json, jsonDebug, store, active }, defaultRuntime);
     return true;
   },
 };
