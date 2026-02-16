@@ -273,6 +273,14 @@ export const VoiceCallConfigSchema = z
     /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
 
+    /**
+     * Maximum age of a call in seconds before it is automatically reaped.
+     * Catches calls stuck in unexpected states (e.g., notify-mode calls that
+     * never receive a terminal webhook). Set to 0 to disable.
+     * Default: 0 (disabled). Recommended: 120-300 for production.
+     */
+    staleCallReaperSeconds: z.number().int().nonnegative().default(0),
+
     /** Silence timeout for end-of-speech detection (ms) */
     silenceTimeoutMs: z.number().int().positive().default(800),
 
