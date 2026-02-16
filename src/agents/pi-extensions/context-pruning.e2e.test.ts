@@ -78,6 +78,40 @@ function makeUser(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: Date.now() };
 }
 
+type ContextHandler = (
+  event: { messages: AgentMessage[] },
+  ctx: ExtensionContext,
+) => { messages: AgentMessage[] } | undefined;
+
+function createContextHandler(): ContextHandler {
+  let handler: ContextHandler | undefined;
+  const api = {
+    on: (name: string, fn: unknown) => {
+      if (name === "context") {
+        handler = fn as ContextHandler;
+      }
+    },
+    appendEntry: (_type: string, _data?: unknown) => {},
+  } as unknown as ExtensionAPI;
+
+  contextPruningExtension(api);
+  if (!handler) {
+    throw new Error("missing context handler");
+  }
+  return handler;
+}
+
+function runContextHandler(
+  handler: ContextHandler,
+  messages: AgentMessage[],
+  sessionManager: unknown,
+) {
+  return handler({ messages }, {
+    model: undefined,
+    sessionManager,
+  } as unknown as ExtensionContext);
+}
+
 describe("context-pruning", () => {
   it("mode off disables pruning", () => {
     expect(computeEffectiveSettings({ mode: "off" })).toBeNull();
@@ -281,32 +315,8 @@ describe("context-pruning", () => {
       makeAssistant("a2"),
     ];
 
-    let handler:
-      | ((
-          event: { messages: AgentMessage[] },
-          ctx: ExtensionContext,
-        ) => { messages: AgentMessage[] } | undefined)
-      | undefined;
-
-    const api = {
-      on: (name: string, fn: unknown) => {
-        if (name === "context") {
-          handler = fn as typeof handler;
-        }
-      },
-      appendEntry: (_type: string, _data?: unknown) => {},
-    } as unknown as ExtensionAPI;
-
-    contextPruningExtension(api);
-
-    if (!handler) {
-      throw new Error("missing context handler");
-    }
-
-    const result = handler({ messages }, {
-      model: undefined,
-      sessionManager,
-    } as unknown as ExtensionContext);
+    const handler = createContextHandler();
+    const result = runContextHandler(handler, messages, sessionManager);
 
     if (!result) {
       throw new Error("expected handler to return messages");
@@ -343,31 +353,8 @@ describe("context-pruning", () => {
       }),
     ];
 
-    let handler:
-      | ((
-          event: { messages: AgentMessage[] },
-          ctx: ExtensionContext,
-        ) => { messages: AgentMessage[] } | undefined)
-      | undefined;
-
-    const api = {
-      on: (name: string, fn: unknown) => {
-        if (name === "context") {
-          handler = fn as typeof handler;
-        }
-      },
-      appendEntry: (_type: string, _data?: unknown) => {},
-    } as unknown as ExtensionAPI;
-
-    contextPruningExtension(api);
-    if (!handler) {
-      throw new Error("missing context handler");
-    }
-
-    const first = handler({ messages }, {
-      model: undefined,
-      sessionManager,
-    } as unknown as ExtensionContext);
+    const handler = createContextHandler();
+    const first = runContextHandler(handler, messages, sessionManager);
     if (!first) {
       throw new Error("expected first prune");
     }
@@ -379,10 +366,7 @@ describe("context-pruning", () => {
     }
     expect(runtime.lastCacheTouchAt).toBeGreaterThan(lastTouch);
 
-    const second = handler({ messages }, {
-      model: undefined,
-      sessionManager,
-    } as unknown as ExtensionContext);
+    const second = runContextHandler(handler, messages, sessionManager);
     expect(second).toBeUndefined();
   });
 

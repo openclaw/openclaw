@@ -108,17 +108,32 @@ vi.mock("../gateway/probe.js", () => ({
   probeGateway: (opts: unknown) => probeGateway(opts),
 }));
 
+function createRuntimeCapture() {
+  const runtimeLogs: string[] = [];
+  const runtimeErrors: string[] = [];
+  const runtime = {
+    log: (msg: string) => runtimeLogs.push(msg),
+    error: (msg: string) => runtimeErrors.push(msg),
+    exit: (code: number) => {
+      throw new Error(`__exit__:${code}`);
+    },
+  };
+  return { runtime, runtimeLogs, runtimeErrors };
+}
+
+async function withUserEnv(user: string, fn: () => Promise<void>) {
+  const originalUser = process.env.USER;
+  try {
+    process.env.USER = user;
+    await fn();
+  } finally {
+    process.env.USER = originalUser;
+  }
+}
+
 describe("gateway-status command", () => {
   it("prints human output by default", async () => {
-    const runtimeLogs: string[] = [];
-    const runtimeErrors: string[] = [];
-    const runtime = {
-      log: (msg: string) => runtimeLogs.push(msg),
-      error: (msg: string) => runtimeErrors.push(msg),
-      exit: (code: number) => {
-        throw new Error(`__exit__:${code}`);
-      },
-    };
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
 
     const { gatewayStatusCommand } = await import("./gateway-status.js");
     await gatewayStatusCommand(
@@ -133,15 +148,7 @@ describe("gateway-status command", () => {
   });
 
   it("prints a structured JSON envelope when --json is set", async () => {
-    const runtimeLogs: string[] = [];
-    const runtimeErrors: string[] = [];
-    const runtime = {
-      log: (msg: string) => runtimeLogs.push(msg),
-      error: (msg: string) => runtimeErrors.push(msg),
-      exit: (code: number) => {
-        throw new Error(`__exit__:${code}`);
-      },
-    };
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
 
     const { gatewayStatusCommand } = await import("./gateway-status.js");
     await gatewayStatusCommand(
@@ -160,14 +167,7 @@ describe("gateway-status command", () => {
   });
 
   it("supports SSH tunnel targets", async () => {
-    const runtimeLogs: string[] = [];
-    const runtime = {
-      log: (msg: string) => runtimeLogs.push(msg),
-      error: (_msg: string) => {},
-      exit: (code: number) => {
-        throw new Error(`__exit__:${code}`);
-      },
-    };
+    const { runtime, runtimeLogs } = createRuntimeCapture();
 
     startSshPortForward.mockClear();
     sshStop.mockClear();
@@ -193,18 +193,8 @@ describe("gateway-status command", () => {
   });
 
   it("skips invalid ssh-auto discovery targets", async () => {
-    const runtimeLogs: string[] = [];
-    const runtime = {
-      log: (msg: string) => runtimeLogs.push(msg),
-      error: (_msg: string) => {},
-      exit: (code: number) => {
-        throw new Error(`__exit__:${code}`);
-      },
-    };
-
-    const originalUser = process.env.USER;
-    try {
-      process.env.USER = "steipete";
+    const { runtime } = createRuntimeCapture();
+    await withUserEnv("steipete", async () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
@@ -226,24 +216,12 @@ describe("gateway-status command", () => {
       expect(startSshPortForward).toHaveBeenCalledTimes(1);
       const call = startSshPortForward.mock.calls[0]?.[0] as { target: string };
       expect(call.target).toBe("steipete@goodhost");
-    } finally {
-      process.env.USER = originalUser;
-    }
+    });
   });
 
   it("infers SSH target from gateway.remote.url and ssh config", async () => {
-    const runtimeLogs: string[] = [];
-    const runtime = {
-      log: (msg: string) => runtimeLogs.push(msg),
-      error: (_msg: string) => {},
-      exit: (code: number) => {
-        throw new Error(`__exit__:${code}`);
-      },
-    };
-
-    const originalUser = process.env.USER;
-    try {
-      process.env.USER = "steipete";
+    const { runtime } = createRuntimeCapture();
+    await withUserEnv("steipete", async () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
@@ -271,24 +249,12 @@ describe("gateway-status command", () => {
       };
       expect(call.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
       expect(call.identity).toBe("/tmp/id_ed25519");
-    } finally {
-      process.env.USER = originalUser;
-    }
+    });
   });
 
   it("falls back to host-only when USER is missing and ssh config is unavailable", async () => {
-    const runtimeLogs: string[] = [];
-    const runtime = {
-      log: (msg: string) => runtimeLogs.push(msg),
-      error: (_msg: string) => {},
-      exit: (code: number) => {
-        throw new Error(`__exit__:${code}`);
-      },
-    };
-
-    const originalUser = process.env.USER;
-    try {
-      process.env.USER = "";
+    const { runtime } = createRuntimeCapture();
+    await withUserEnv("", async () => {
       loadConfig.mockReturnValueOnce({
         gateway: {
           mode: "remote",
@@ -308,20 +274,11 @@ describe("gateway-status command", () => {
         target: string;
       };
       expect(call.target).toBe("studio.example");
-    } finally {
-      process.env.USER = originalUser;
-    }
+    });
   });
 
   it("keeps explicit SSH identity even when ssh config provides one", async () => {
-    const runtimeLogs: string[] = [];
-    const runtime = {
-      log: (msg: string) => runtimeLogs.push(msg),
-      error: (_msg: string) => {},
-      exit: (code: number) => {
-        throw new Error(`__exit__:${code}`);
-      },
-    };
+    const { runtime } = createRuntimeCapture();
 
     loadConfig.mockReturnValueOnce({
       gateway: {

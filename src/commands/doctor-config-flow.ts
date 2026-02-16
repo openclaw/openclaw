@@ -149,12 +149,88 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
+type TelegramAllowFromListRef = {
+  pathLabel: string;
+  holder: Record<string, unknown>;
+  key: "allowFrom" | "groupAllowFrom";
+};
+
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function collectTelegramAccountScopes(
+  cfg: OpenClawConfig,
+): Array<{ prefix: string; account: Record<string, unknown> }> {
+  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
+  const telegram = asObjectRecord(cfg.channels?.telegram);
+  if (!telegram) {
+    return scopes;
+  }
+
+  scopes.push({ prefix: "channels.telegram", account: telegram });
+  const accounts = asObjectRecord(telegram.accounts);
+  if (!accounts) {
+    return scopes;
+  }
+  for (const key of Object.keys(accounts)) {
+    const account = asObjectRecord(accounts[key]);
+    if (!account) {
+      continue;
+    }
+    scopes.push({ prefix: `channels.telegram.accounts.${key}`, account });
+  }
+
+  return scopes;
+}
+
+function collectTelegramAllowFromLists(
+  prefix: string,
+  account: Record<string, unknown>,
+): TelegramAllowFromListRef[] {
+  const refs: TelegramAllowFromListRef[] = [
+    { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
+    { pathLabel: `${prefix}.groupAllowFrom`, holder: account, key: "groupAllowFrom" },
+  ];
+  const groups = asObjectRecord(account.groups);
+  if (!groups) {
+    return refs;
+  }
+
+  for (const groupId of Object.keys(groups)) {
+    const group = asObjectRecord(groups[groupId]);
+    if (!group) {
+      continue;
+    }
+    refs.push({
+      pathLabel: `${prefix}.groups.${groupId}.allowFrom`,
+      holder: group,
+      key: "allowFrom",
+    });
+    const topics = asObjectRecord(group.topics);
+    if (!topics) {
+      continue;
+    }
+    for (const topicId of Object.keys(topics)) {
+      const topic = asObjectRecord(topics[topicId]);
+      if (!topic) {
+        continue;
+      }
+      refs.push({
+        pathLabel: `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
+        holder: topic,
+        key: "allowFrom",
+      });
+    }
+  }
+  return refs;
+}
+
 function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllowFromUsernameHit[] {
   const hits: TelegramAllowFromUsernameHit[] = [];
-  const telegram = cfg.channels?.telegram;
-  if (!telegram) {
-    return hits;
-  }
 
   const scanList = (pathLabel: string, list: unknown) => {
     if (!Array.isArray(list)) {
@@ -172,51 +248,10 @@ function scanTelegramAllowFromUsernameEntries(cfg: OpenClawConfig): TelegramAllo
     }
   };
 
-  const scanAccount = (prefix: string, account: Record<string, unknown>) => {
-    scanList(`${prefix}.allowFrom`, account.allowFrom);
-    scanList(`${prefix}.groupAllowFrom`, account.groupAllowFrom);
-    const groups = account.groups;
-    if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
-      return;
+  for (const scope of collectTelegramAccountScopes(cfg)) {
+    for (const ref of collectTelegramAllowFromLists(scope.prefix, scope.account)) {
+      scanList(ref.pathLabel, ref.holder[ref.key]);
     }
-    const groupsRecord = groups as Record<string, unknown>;
-    for (const groupId of Object.keys(groupsRecord)) {
-      const group = groupsRecord[groupId];
-      if (!group || typeof group !== "object" || Array.isArray(group)) {
-        continue;
-      }
-      const groupRec = group as Record<string, unknown>;
-      scanList(`${prefix}.groups.${groupId}.allowFrom`, groupRec.allowFrom);
-      const topics = groupRec.topics;
-      if (!topics || typeof topics !== "object" || Array.isArray(topics)) {
-        continue;
-      }
-      const topicsRecord = topics as Record<string, unknown>;
-      for (const topicId of Object.keys(topicsRecord)) {
-        const topic = topicsRecord[topicId];
-        if (!topic || typeof topic !== "object" || Array.isArray(topic)) {
-          continue;
-        }
-        scanList(
-          `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
-          (topic as Record<string, unknown>).allowFrom,
-        );
-      }
-    }
-  };
-
-  scanAccount("channels.telegram", telegram as unknown as Record<string, unknown>);
-
-  const accounts = telegram.accounts;
-  if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-    return hits;
-  }
-  for (const key of Object.keys(accounts)) {
-    const account = accounts[key];
-    if (!account || typeof account !== "object" || Array.isArray(account)) {
-      continue;
-    }
-    scanAccount(`channels.telegram.accounts.${key}`, account as Record<string, unknown>);
   }
 
   return hits;
@@ -345,55 +380,13 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
   };
 
   const repairAccount = async (prefix: string, account: Record<string, unknown>) => {
-    await repairList(`${prefix}.allowFrom`, account, "allowFrom");
-    await repairList(`${prefix}.groupAllowFrom`, account, "groupAllowFrom");
-    const groups = account.groups;
-    if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
-      return;
-    }
-    const groupsRecord = groups as Record<string, unknown>;
-    for (const groupId of Object.keys(groupsRecord)) {
-      const group = groupsRecord[groupId];
-      if (!group || typeof group !== "object" || Array.isArray(group)) {
-        continue;
-      }
-      const groupRec = group as Record<string, unknown>;
-      await repairList(`${prefix}.groups.${groupId}.allowFrom`, groupRec, "allowFrom");
-      const topics = groupRec.topics;
-      if (!topics || typeof topics !== "object" || Array.isArray(topics)) {
-        continue;
-      }
-      const topicsRecord = topics as Record<string, unknown>;
-      for (const topicId of Object.keys(topicsRecord)) {
-        const topic = topicsRecord[topicId];
-        if (!topic || typeof topic !== "object" || Array.isArray(topic)) {
-          continue;
-        }
-        await repairList(
-          `${prefix}.groups.${groupId}.topics.${topicId}.allowFrom`,
-          topic as Record<string, unknown>,
-          "allowFrom",
-        );
-      }
+    for (const ref of collectTelegramAllowFromLists(prefix, account)) {
+      await repairList(ref.pathLabel, ref.holder, ref.key);
     }
   };
 
-  const telegram = next.channels?.telegram;
-  if (telegram && typeof telegram === "object" && !Array.isArray(telegram)) {
-    await repairAccount("channels.telegram", telegram as unknown as Record<string, unknown>);
-    const accounts = (telegram as Record<string, unknown>).accounts;
-    if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-      for (const key of Object.keys(accounts as Record<string, unknown>)) {
-        const account = (accounts as Record<string, unknown>)[key];
-        if (!account || typeof account !== "object" || Array.isArray(account)) {
-          continue;
-        }
-        await repairAccount(
-          `channels.telegram.accounts.${key}`,
-          account as Record<string, unknown>,
-        );
-      }
-    }
+  for (const scope of collectTelegramAccountScopes(next)) {
+    await repairAccount(scope.prefix, scope.account);
   }
 
   if (changes.length === 0) {

@@ -12,6 +12,28 @@ vi.mock("../agent-scope.js", () => ({
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  async function executeAddAndReadDelivery(params: {
+    callId: string;
+    agentSessionKey: string;
+    delivery?: { mode?: string; channel?: string; to?: string } | null;
+  }) {
+    const tool = createCronTool({ agentSessionKey: params.agentSessionKey });
+    await tool.execute(params.callId, {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+        ...(params.delivery !== undefined ? { delivery: params.delivery } : {}),
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    return call?.params?.delivery;
+  }
+
   beforeEach(() => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({ ok: true });
@@ -249,24 +271,12 @@ describe("cron tool", () => {
   });
 
   it("infers delivery from threaded session keys", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    const tool = createCronTool({
-      agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
-    });
-    await tool.execute("call-thread", {
-      action: "add",
-      job: {
-        name: "reminder",
-        schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "agentTurn", message: "hello" },
-      },
-    });
-
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
-    };
-    expect(call?.params?.delivery).toEqual({
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-thread",
+        agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
+      }),
+    ).toEqual({
       mode: "announce",
       channel: "slack",
       to: "general",
@@ -274,24 +284,12 @@ describe("cron tool", () => {
   });
 
   it("preserves telegram forum topics when inferring delivery", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    const tool = createCronTool({
-      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
-    });
-    await tool.execute("call-telegram-topic", {
-      action: "add",
-      job: {
-        name: "reminder",
-        schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "agentTurn", message: "hello" },
-      },
-    });
-
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
-    };
-    expect(call?.params?.delivery).toEqual({
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-topic",
+        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      }),
+    ).toEqual({
       mode: "announce",
       channel: "telegram",
       to: "-1001234567890:topic:99",
@@ -299,23 +297,13 @@ describe("cron tool", () => {
   });
 
   it("infers delivery when delivery is null", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    const tool = createCronTool({ agentSessionKey: "agent:main:dm:alice" });
-    await tool.execute("call-null-delivery", {
-      action: "add",
-      job: {
-        name: "reminder",
-        schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "agentTurn", message: "hello" },
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-null-delivery",
+        agentSessionKey: "agent:main:dm:alice",
         delivery: null,
-      },
-    });
-
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
-    };
-    expect(call?.params?.delivery).toEqual({
+      }),
+    ).toEqual({
       mode: "announce",
       to: "alice",
     });

@@ -10,6 +10,43 @@ const runtime = {
   exit: vi.fn(),
 };
 
+const defaultSessions = { path: "/tmp/sessions.json", count: 0, recent: [] };
+
+const createMainAgentSummary = (sessions = defaultSessions) => ({
+  agentId: "main",
+  isDefault: true,
+  heartbeat: {
+    enabled: true,
+    every: "1m",
+    everyMs: 60_000,
+    prompt: "hi",
+    target: "last",
+    ackMaxChars: 160,
+  },
+  sessions,
+});
+
+const createHealthSummary = (params: {
+  channels: HealthSummary["channels"];
+  channelOrder: string[];
+  channelLabels: HealthSummary["channelLabels"];
+  sessions?: HealthSummary["sessions"];
+}): HealthSummary => {
+  const sessions = params.sessions ?? defaultSessions;
+  return {
+    ok: true,
+    ts: Date.now(),
+    durationMs: 5,
+    channels: params.channels,
+    channelOrder: params.channelOrder,
+    channelLabels: params.channelLabels,
+    heartbeatSeconds: 60,
+    defaultAgentId: "main",
+    agents: [createMainAgentSummary(sessions)],
+    sessions,
+  };
+};
+
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
@@ -26,10 +63,7 @@ describe("healthCommand", () => {
       count: 1,
       recent: [{ key: "+1555", updatedAt: Date.now(), age: 0 }],
     };
-    const snapshot: HealthSummary = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 5,
+    const snapshot = createHealthSummary({
       channels: {
         whatsapp: { accountId: "default", linked: true, authAgeMs: 5000 },
         telegram: {
@@ -45,25 +79,8 @@ describe("healthCommand", () => {
         telegram: "Telegram",
         discord: "Discord",
       },
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [
-        {
-          agentId: "main",
-          isDefault: true,
-          heartbeat: {
-            enabled: true,
-            every: "1m",
-            everyMs: 60_000,
-            prompt: "hi",
-            target: "last",
-            ackMaxChars: 160,
-          },
-          sessions: agentSessions,
-        },
-      ],
       sessions: agentSessions,
-    };
+    });
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: true, timeoutMs: 5000 }, runtime as never);
@@ -77,40 +94,21 @@ describe("healthCommand", () => {
   });
 
   it("prints text summary when not json", async () => {
-    callGatewayMock.mockResolvedValueOnce({
-      ok: true,
-      ts: Date.now(),
-      durationMs: 5,
-      channels: {
-        whatsapp: { accountId: "default", linked: false, authAgeMs: null },
-        telegram: { accountId: "default", configured: false },
-        discord: { accountId: "default", configured: false },
-      },
-      channelOrder: ["whatsapp", "telegram", "discord"],
-      channelLabels: {
-        whatsapp: "WhatsApp",
-        telegram: "Telegram",
-        discord: "Discord",
-      },
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [
-        {
-          agentId: "main",
-          isDefault: true,
-          heartbeat: {
-            enabled: true,
-            every: "1m",
-            everyMs: 60_000,
-            prompt: "hi",
-            target: "last",
-            ackMaxChars: 160,
-          },
-          sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    callGatewayMock.mockResolvedValueOnce(
+      createHealthSummary({
+        channels: {
+          whatsapp: { accountId: "default", linked: false, authAgeMs: null },
+          telegram: { accountId: "default", configured: false },
+          discord: { accountId: "default", configured: false },
         },
-      ],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-    } satisfies HealthSummary);
+        channelOrder: ["whatsapp", "telegram", "discord"],
+        channelLabels: {
+          whatsapp: "WhatsApp",
+          telegram: "Telegram",
+          discord: "Discord",
+        },
+      }),
+    );
 
     await healthCommand({ json: false }, runtime as never);
 
@@ -119,10 +117,7 @@ describe("healthCommand", () => {
   });
 
   it("formats per-account probe timings", () => {
-    const summary: HealthSummary = {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 5,
+    const summary = createHealthSummary({
       channels: {
         telegram: {
           accountId: "main",
@@ -149,25 +144,7 @@ describe("healthCommand", () => {
       },
       channelOrder: ["telegram"],
       channelLabels: { telegram: "Telegram" },
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [
-        {
-          agentId: "main",
-          isDefault: true,
-          heartbeat: {
-            enabled: true,
-            every: "1m",
-            everyMs: 60_000,
-            prompt: "hi",
-            target: "last",
-            ackMaxChars: 160,
-          },
-          sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-        },
-      ],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
-    };
+    });
 
     const lines = formatHealthChannelLines(summary, { accountMode: "all" });
     expect(lines).toContain(

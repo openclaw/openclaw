@@ -29,11 +29,26 @@ vi.mock("../runtime.js", () => ({
 
 const { registerCronCli } = await import("./cron-cli.js");
 
+type CronUpdatePatch = {
+  patch?: {
+    payload?: { message?: string };
+    delivery?: { mode?: string; channel?: string; to?: string; bestEffort?: boolean };
+  };
+};
+
 function buildProgram() {
   const program = new Command();
   program.exitOverride();
   registerCronCli(program);
   return program;
+}
+
+async function runCronEditAndGetPatch(editArgs: string[]): Promise<CronUpdatePatch> {
+  callGatewayFromCli.mockClear();
+  const program = buildProgram();
+  await program.parseAsync(["cron", "edit", "job-1", ...editArgs], { from: "user" });
+  const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+  return (updateCall?.[2] ?? {}) as CronUpdatePatch;
 }
 
 describe("cron cli", () => {
@@ -347,34 +362,15 @@ describe("cron cli", () => {
   });
 
   it("includes delivery fields when explicitly provided with message", async () => {
-    callGatewayFromCli.mockClear();
-
-    const program = buildProgram();
-
-    // Update message AND delivery - should include both
-    await program.parseAsync(
-      [
-        "cron",
-        "edit",
-        "job-1",
-        "--message",
-        "Updated message",
-        "--deliver",
-        "--channel",
-        "telegram",
-        "--to",
-        "19098680",
-      ],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: {
-        payload?: { message?: string };
-        delivery?: { mode?: string; channel?: string; to?: string };
-      };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "Updated message",
+      "--deliver",
+      "--channel",
+      "telegram",
+      "--to",
+      "19098680",
+    ]);
 
     // Should include everything
     expect(patch?.patch?.payload?.message).toBe("Updated message");
@@ -384,22 +380,11 @@ describe("cron cli", () => {
   });
 
   it("includes best-effort delivery when provided with message", async () => {
-    callGatewayFromCli.mockClear();
-
-    const program = buildProgram();
-
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--message", "Updated message", "--best-effort-deliver"],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: {
-        payload?: { message?: string };
-        delivery?: { bestEffort?: boolean; mode?: string };
-      };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "Updated message",
+      "--best-effort-deliver",
+    ]);
 
     expect(patch?.patch?.payload?.message).toBe("Updated message");
     expect(patch?.patch?.delivery?.mode).toBe("announce");
@@ -407,22 +392,11 @@ describe("cron cli", () => {
   });
 
   it("includes no-best-effort delivery when provided with message", async () => {
-    callGatewayFromCli.mockClear();
-
-    const program = buildProgram();
-
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--message", "Updated message", "--no-best-effort-deliver"],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: {
-        payload?: { message?: string };
-        delivery?: { bestEffort?: boolean; mode?: string };
-      };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "Updated message",
+      "--no-best-effort-deliver",
+    ]);
 
     expect(patch?.patch?.payload?.message).toBe("Updated message");
     expect(patch?.patch?.delivery?.mode).toBe("announce");

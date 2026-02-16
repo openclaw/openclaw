@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
@@ -11,31 +10,16 @@ import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setupChannels } from "./onboard-channels.js";
-
-const noopAsync = async () => {};
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit:${code}`);
-    }),
-  };
-}
+import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-  return {
-    intro: vi.fn(noopAsync),
-    outro: vi.fn(noopAsync),
-    note: vi.fn(noopAsync),
-    select: vi.fn(async () => "__done__" as never),
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
+  return createWizardPrompter(
+    {
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      ...overrides,
+    },
+    { defaultSelect: "__done__" },
+  );
 }
 
 vi.mock("node:fs/promises", () => ({
@@ -88,7 +72,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    const runtime = createRuntime();
+    const runtime = createExitThrowingRuntime();
 
     await setupChannels({} as OpenClawConfig, runtime, prompter, {
       skipConfirm: true,
@@ -119,7 +103,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    const runtime = createRuntime();
+    const runtime = createExitThrowingRuntime();
 
     await setupChannels({} as OpenClawConfig, runtime, prompter, {
       skipConfirm: true,
@@ -157,7 +141,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    const runtime = createRuntime();
+    const runtime = createExitThrowingRuntime();
 
     await setupChannels(
       {
@@ -209,7 +193,7 @@ describe("setupChannels", () => {
       text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
     });
 
-    const runtime = createRuntime();
+    const runtime = createExitThrowingRuntime();
 
     await setupChannels(
       {

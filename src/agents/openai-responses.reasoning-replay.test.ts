@@ -18,13 +18,51 @@ function buildModel(): Model<"openai-responses"> {
   };
 }
 
+function extractInputTypes(payload: Record<string, unknown> | undefined) {
+  const input = Array.isArray(payload?.input) ? payload.input : [];
+  return input
+    .map((item) =>
+      item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
+    )
+    .filter((t): t is string => typeof t === "string");
+}
+
+async function runAbortedOpenAIResponsesStream(params: {
+  messages: Array<
+    AssistantMessage | ToolResultMessage | { role: "user"; content: string; timestamp: number }
+  >;
+  tools?: Array<{
+    name: string;
+    description: string;
+    parameters: ReturnType<typeof Type.Object>;
+  }>;
+}) {
+  const controller = new AbortController();
+  controller.abort();
+  let payload: Record<string, unknown> | undefined;
+
+  const stream = streamOpenAIResponses(
+    buildModel(),
+    {
+      systemPrompt: "system",
+      messages: params.messages,
+      ...(params.tools ? { tools: params.tools } : {}),
+    },
+    {
+      apiKey: "test",
+      signal: controller.signal,
+      onPayload: (nextPayload) => {
+        payload = nextPayload as Record<string, unknown>;
+      },
+    },
+  );
+
+  await stream.result();
+  return extractInputTypes(payload);
+}
+
 describe("openai-responses reasoning replay", () => {
   it("replays reasoning for tool-call-only turns (OpenAI requires it)", async () => {
-    const model = buildModel();
-    const controller = new AbortController();
-    controller.abort();
-    let payload: Record<string, unknown> | undefined;
-
     const assistantToolOnly: AssistantMessage = {
       role: "assistant",
       api: "openai-responses",
@@ -68,49 +106,29 @@ describe("openai-responses reasoning replay", () => {
       timestamp: Date.now(),
     };
 
-    const stream = streamOpenAIResponses(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "user",
-            content: "Call noop.",
-            timestamp: Date.now(),
-          },
-          assistantToolOnly,
-          toolResult,
-          {
-            role: "user",
-            content: "Now reply with ok.",
-            timestamp: Date.now(),
-          },
-        ],
-        tools: [
-          {
-            name: "noop",
-            description: "no-op",
-            parameters: Type.Object({}, { additionalProperties: false }),
-          },
-        ],
-      },
-      {
-        apiKey: "test",
-        signal: controller.signal,
-        onPayload: (nextPayload) => {
-          payload = nextPayload as Record<string, unknown>;
+    const types = await runAbortedOpenAIResponsesStream({
+      messages: [
+        {
+          role: "user",
+          content: "Call noop.",
+          timestamp: Date.now(),
         },
-      },
-    );
-
-    await stream.result();
-
-    const input = Array.isArray(payload?.input) ? payload?.input : [];
-    const types = input
-      .map((item) =>
-        item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
-      )
-      .filter((t): t is string => typeof t === "string");
+        assistantToolOnly,
+        toolResult,
+        {
+          role: "user",
+          content: "Now reply with ok.",
+          timestamp: Date.now(),
+        },
+      ],
+      tools: [
+        {
+          name: "noop",
+          description: "no-op",
+          parameters: Type.Object({}, { additionalProperties: false }),
+        },
+      ],
+    });
 
     expect(types).toContain("reasoning");
     expect(types).toContain("function_call");
@@ -127,11 +145,6 @@ describe("openai-responses reasoning replay", () => {
   });
 
   it("still replays reasoning when paired with an assistant message", async () => {
-    const model = buildModel();
-    const controller = new AbortController();
-    controller.abort();
-    let payload: Record<string, unknown> | undefined;
-
     const assistantWithText: AssistantMessage = {
       role: "assistant",
       api: "openai-responses",
@@ -161,33 +174,13 @@ describe("openai-responses reasoning replay", () => {
       ],
     };
 
-    const stream = streamOpenAIResponses(
-      model,
-      {
-        systemPrompt: "system",
-        messages: [
-          { role: "user", content: "Hi", timestamp: Date.now() },
-          assistantWithText,
-          { role: "user", content: "Ok", timestamp: Date.now() },
-        ],
-      },
-      {
-        apiKey: "test",
-        signal: controller.signal,
-        onPayload: (nextPayload) => {
-          payload = nextPayload as Record<string, unknown>;
-        },
-      },
-    );
-
-    await stream.result();
-
-    const input = Array.isArray(payload?.input) ? payload?.input : [];
-    const types = input
-      .map((item) =>
-        item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
-      )
-      .filter((t): t is string => typeof t === "string");
+    const types = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+        assistantWithText,
+        { role: "user", content: "Ok", timestamp: Date.now() },
+      ],
+    });
 
     expect(types).toContain("reasoning");
     expect(types).toContain("message");

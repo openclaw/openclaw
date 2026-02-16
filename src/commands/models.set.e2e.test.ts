@@ -11,6 +11,27 @@ vi.mock("../config/config.js", () => ({
   loadConfig,
 }));
 
+function mockConfigSnapshot(config: Record<string, unknown> = {}) {
+  readConfigFileSnapshot.mockResolvedValue({
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    valid: true,
+    config,
+    issues: [],
+    legacyIssues: [],
+  });
+}
+
+function makeRuntime() {
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+}
+
+function getWrittenConfig() {
+  return writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+}
+
 describe("models set + fallbacks", () => {
   beforeEach(() => {
     readConfigFileSnapshot.mockReset();
@@ -18,24 +39,14 @@ describe("models set + fallbacks", () => {
   });
 
   it("normalizes z.ai provider in models set", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
-
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
     const { modelsSetCommand } = await import("./models/set.js");
 
     await modelsSetCommand("z.ai/glm-4.7", runtime);
 
     expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+    const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
         model: { primary: "zai/glm-4.7" },
@@ -45,24 +56,14 @@ describe("models set + fallbacks", () => {
   });
 
   it("normalizes z-ai provider in models fallbacks add", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: { agents: { defaults: { model: { fallbacks: [] } } } },
-      issues: [],
-      legacyIssues: [],
-    });
-
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    mockConfigSnapshot({ agents: { defaults: { model: { fallbacks: [] } } } });
+    const runtime = makeRuntime();
     const { modelsFallbacksAddCommand } = await import("./models/fallbacks.js");
 
     await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
 
     expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+    const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
         model: { fallbacks: ["zai/glm-4.7"] },
@@ -72,24 +73,14 @@ describe("models set + fallbacks", () => {
   });
 
   it("normalizes provider casing in models set", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
-
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
     const { modelsSetCommand } = await import("./models/set.js");
 
     await modelsSetCommand("Z.AI/glm-4.7", runtime);
 
     expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+    const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
         model: { primary: "zai/glm-4.7" },
