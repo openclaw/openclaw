@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSkill } from "./skills-install.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 
@@ -72,23 +72,32 @@ async function writeSkillWithInstaller(
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
 
+  beforeAll(async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-test-"));
+    await writeSkillWithInstaller(workspaceDir, "go-tool-single", "go", {
+      module: "example.com/tool@latest",
+    });
+    await writeSkillWithInstallers(workspaceDir, "go-tool-multi", [
+      { id: "brew", kind: "brew", formula: "go" },
+      { id: "go", kind: "go", module: "example.com/tool@latest" },
+    ]);
+    await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
+      package: "example-package",
+    });
+  });
+
   beforeEach(async () => {
     runCommandWithTimeoutMock.mockReset();
     scanDirectoryWithSummaryMock.mockReset();
     hasBinaryMock.mockReset();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-test-"));
     scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
   });
 
   it("apt-get available but sudo missing/unusable returns helpful error for go install", async () => {
-    await writeSkillWithInstaller(workspaceDir, "go-tool", "go", {
-      module: "example.com/tool@latest",
-    });
-
     // go not available, brew not available, apt-get + sudo are available, sudo check fails
     hasBinaryMock.mockImplementation((bin: string) => {
       if (bin === "go") {
@@ -112,7 +121,7 @@ describe("skills-install fallback edge cases", () => {
 
     const result = await installSkill({
       workspaceDir,
-      skillName: "go-tool",
+      skillName: "go-tool-single",
       installId: "deps",
     });
 
@@ -134,11 +143,6 @@ describe("skills-install fallback edge cases", () => {
   });
 
   it("status-selected go installer fails gracefully when apt fallback needs sudo", async () => {
-    await writeSkillWithInstallers(workspaceDir, "go-tool", [
-      { id: "brew", kind: "brew", formula: "go" },
-      { id: "go", kind: "go", module: "example.com/tool@latest" },
-    ]);
-
     // no go/brew, but apt and sudo are present
     hasBinaryMock.mockImplementation((bin: string) => {
       if (bin === "go" || bin === "brew") {
@@ -157,12 +161,12 @@ describe("skills-install fallback edge cases", () => {
     });
 
     const status = buildWorkspaceSkillStatus(workspaceDir);
-    const skill = status.skills.find((entry) => entry.name === "go-tool");
+    const skill = status.skills.find((entry) => entry.name === "go-tool-multi");
     expect(skill?.install[0]?.id).toBe("go");
 
     const result = await installSkill({
       workspaceDir,
-      skillName: "go-tool",
+      skillName: "go-tool-multi",
       installId: skill?.install[0]?.id ?? "",
     });
 
@@ -171,10 +175,6 @@ describe("skills-install fallback edge cases", () => {
   });
 
   it("handles sudo probe spawn failures without throwing", async () => {
-    await writeSkillWithInstaller(workspaceDir, "go-tool", "go", {
-      module: "example.com/tool@latest",
-    });
-
     // go not available, brew not available, apt-get + sudo appear available
     hasBinaryMock.mockImplementation((bin: string) => {
       if (bin === "go") {
@@ -195,7 +195,7 @@ describe("skills-install fallback edge cases", () => {
 
     const result = await installSkill({
       workspaceDir,
-      skillName: "go-tool",
+      skillName: "go-tool-single",
       installId: "deps",
     });
 
@@ -211,10 +211,6 @@ describe("skills-install fallback edge cases", () => {
   });
 
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {
-    await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
-      package: "example-package",
-    });
-
     // uv not available, brew not available, curl IS available
     hasBinaryMock.mockImplementation((bin: string) => {
       if (bin === "uv") {
