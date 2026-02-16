@@ -76,6 +76,20 @@ final class AudioInputDeviceObserver {
         return "defaultInput=\(name) (\(uid))"
     }
 
+    static func hasUsableDefaultInputDevice() -> Bool {
+        let defaultUID = self.defaultInputDeviceUID()
+        let aliveUIDs = self.aliveInputDeviceUIDs()
+        return self.hasUsableDefaultInputDevice(defaultUID: defaultUID, aliveInputUIDs: aliveUIDs)
+    }
+
+    static func inputAvailabilitySummary() -> String {
+        let defaultUID = self.defaultInputDeviceUID()
+        let aliveUIDs = self.aliveInputDeviceUIDs()
+        let hasUsable = self.hasUsableDefaultInputDevice(defaultUID: defaultUID, aliveInputUIDs: aliveUIDs)
+        let defaultLabel = defaultUID ?? "none"
+        return "defaultInputUID=\(defaultLabel) aliveInputs=\(aliveUIDs.count) usable=\(hasUsable)"
+    }
+
     func start(onChange: @escaping @Sendable () -> Void) {
         guard !self.isActive else { return }
         self.isActive = true
@@ -210,7 +224,20 @@ final class AudioInputDeviceObserver {
         return buffers.contains(where: { $0.mNumberChannels > 0 })
     }
 
+    private static func hasUsableDefaultInputDevice(defaultUID: String?, aliveInputUIDs: Set<String>) -> Bool {
+        guard let defaultUID, !defaultUID.isEmpty else { return false }
+        return aliveInputUIDs.contains(defaultUID)
+    }
+
     private func logDefaultInputChange(reason: StaticString) {
         self.logger.info("audio input changed (\(reason)) (\(Self.defaultInputDeviceSummary(), privacy: .public))")
     }
 }
+
+#if DEBUG
+extension AudioInputDeviceObserver {
+    static func _testHasUsableDefaultInputDevice(defaultUID: String?, aliveInputUIDs: Set<String>) -> Bool {
+        self.hasUsableDefaultInputDevice(defaultUID: defaultUID, aliveInputUIDs: aliveInputUIDs)
+    }
+}
+#endif
