@@ -107,4 +107,22 @@ describe("safePatternMatch", () => {
     // The literal ".*" is found in the string, so regex isn't needed
     expect(safePatternMatch("match .* this", ".*")).toBe(true);
   });
+
+  it("rejects regex matching on very long inputs (defense-in-depth)", () => {
+    const warnings: string[] = [];
+    const logger = { warn: (msg: string) => warnings.push(msg) };
+
+    // Input over 1000 chars should fall back to literal match only
+    const longInput = "a".repeat(1001);
+    const result = safePatternMatch(longInput, "^a+$", logger);
+
+    expect(result).toBe(false); // Literal "^a+$" not found, regex skipped
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("exceeds safe length");
+  });
+
+  it("allows regex on inputs under the length limit", () => {
+    const input = "a".repeat(500);
+    expect(safePatternMatch(input, "^a+$")).toBe(true);
+  });
 });
