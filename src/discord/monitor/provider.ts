@@ -7,6 +7,7 @@ import {
 } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { inspect } from "node:util";
+import { ProxyAgent, fetch as undiciFetch } from "undici";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
@@ -31,6 +32,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { wrapFetchWithAbortSignal } from "../../infra/fetch.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
@@ -116,6 +118,26 @@ function dedupeSkillCommandsForDiscord(
   return deduped;
 }
 
+function resolveDiscordRestFetch(proxyUrl: string | undefined, runtime: RuntimeEnv): typeof fetch {
+  const proxy = proxyUrl?.trim();
+  if (!proxy) {
+    return fetch;
+  }
+  try {
+    const agent = new ProxyAgent(proxy);
+    const fetcher = ((input: RequestInfo | URL, init?: RequestInit) =>
+      undiciFetch(input as string | URL, {
+        ...(init as Record<string, unknown>),
+        dispatcher: agent,
+      }) as unknown as Promise<Response>) as typeof fetch;
+    runtime.log?.("discord: rest proxy enabled");
+    return wrapFetchWithAbortSignal(fetcher);
+  } catch (err) {
+    runtime.error?.(danger(`discord: invalid rest proxy: ${String(err)}`));
+    return fetch;
+  }
+}
+
 async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
@@ -182,6 +204,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const discordCfg = account.config;
+  const discordRestFetch = resolveDiscordRestFetch(discordCfg.proxy, runtime);
   const dmConfig = discordCfg.dm;
   let guildEntries = discordCfg.guilds;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
@@ -257,6 +280,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           const resolved = await resolveDiscordChannelAllowlist({
             token,
             entries: entries.map((entry) => entry.input),
+            fetcher: discordRestFetch,
           });
           const nextGuilds = { ...guildEntries };
           const mapping: string[] = [];
@@ -313,6 +337,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         const resolvedUsers = await resolveDiscordUserAllowlist({
           token,
           entries: allowEntries.map((entry) => String(entry)),
+          fetcher: discordRestFetch,
         });
         const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(resolvedUsers);
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -342,6 +367,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           const resolvedUsers = await resolveDiscordUserAllowlist({
             token,
             entries: Array.from(userEntries),
+            fetcher: discordRestFetch,
           });
           const { resolvedMap, mapping, unresolved } =
             buildAllowlistResolutionSummary(resolvedUsers);
@@ -383,7 +409,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
   }
 
-  const applicationId = await fetchDiscordApplicationId(token, 4000);
+  const applicationId = await fetchDiscordApplicationId(token, 4000, discordRestFetch);
   if (!applicationId) {
     throw new Error("Failed to resolve Discord application id");
   }
@@ -689,4 +715,5 @@ async function clearDiscordNativeCommands(params: {
 export const __testing = {
   createDiscordGatewayPlugin,
   dedupeSkillCommandsForDiscord,
+  resolveDiscordRestFetch,
 };
