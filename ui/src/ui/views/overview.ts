@@ -165,7 +165,7 @@ export function renderOverview(props: OverviewProps) {
             />
           </label>
           <label class="field">
-            <span>Language</span>
+            <span>${t("overview.access.language")}</span>
             <select
               .value=${currentLocale}
               @change=${(e: Event) => {
@@ -174,10 +174,10 @@ export function renderOverview(props: OverviewProps) {
                 props.onSettingsChange({ ...props.settings, locale: v });
               }}
             >
-              <option value="en">English</option>
-              <option value="zh-CN">简体中文 (Simplified Chinese)</option>
-              <option value="zh-TW">繁體中文 (Traditional Chinese)</option>
-              <option value="pt-BR">Português (Brazilian Portuguese)</option>
+              <option value="en">${t("languages.en")}</option>
+              <option value="zh-CN">${t("languages.zhCN")}</option>
+              <option value="zh-TW">${t("languages.zhTW")}</option>
+              <option value="pt-BR">${t("languages.ptBR")}</option>
             </select>
           </label>
         </div>

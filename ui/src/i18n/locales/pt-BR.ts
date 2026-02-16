@@ -59,6 +59,7 @@ export const pt_BR: TranslationMap = {
       token: "Token do Gateway",
       password: "Senha (não armazenada)",
       sessionKey: "Chave de Sessão Padrão",
+      language: "Idioma",
       connectHint: "Clique em Conectar para aplicar as alterações de conexão.",
     },
     snapshot: {
@@ -103,5 +104,11 @@ export const pt_BR: TranslationMap = {
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
     onboardingDisabled: "Desativado durante a integração",
+  },
+  languages: {
+    en: "English",
+    zhCN: "简体中文 (Chinês Simplificado)",
+    zhTW: "繁體中文 (Chinês Tradicional)",
+    ptBR: "Português (Português Brasileiro)",
   },
 };
