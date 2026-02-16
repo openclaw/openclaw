@@ -12,6 +12,7 @@ import { GatewayClient } from "./client.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
+  isNodeCommandAllowed,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -342,6 +343,40 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("camera.snap")).toBe(true);
     expect(allow.has("screen.record")).toBe(true);
     expect(allow.has("camera.clip")).toBe(false);
+  });
+
+  it("normalizes command and deny entries to lowercase", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            allowCommands: ["Camera.Snap", "SCREEN.RECORD"],
+            denyCommands: ["camera.snap"],
+          },
+        },
+      },
+      { platform: "ios", deviceFamily: "iPhone" },
+    );
+    expect(allow.has("camera.snap")).toBe(false);
+    expect(allow.has("screen.record")).toBe(true);
+    expect(allow.has("Camera.Snap")).toBe(false);
+    expect(allow.has("SCREEN.RECORD")).toBe(false);
+  });
+});
+
+describe("isNodeCommandAllowed", () => {
+  it("matches command case-insensitively against allowlist and declaredCommands", () => {
+    const allowlist = new Set(["device.info", "system.notify"]);
+    expect(
+      isNodeCommandAllowed({ command: "Device.Info", declaredCommands: ["Device.Info"], allowlist }),
+    ).toEqual({ ok: true });
+    expect(
+      isNodeCommandAllowed({
+        command: "SYSTEM.NOTIFY",
+        declaredCommands: ["System.Notify"],
+        allowlist,
+      }),
+    ).toEqual({ ok: true });
   });
 });
 
