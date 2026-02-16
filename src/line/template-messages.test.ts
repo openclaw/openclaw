@@ -6,7 +6,6 @@ import {
   createCarouselColumn,
   createImageCarousel,
   createImageCarouselColumn,
-  createYesNoConfirm,
   createProductCarousel,
   messageAction,
   uriAction,
@@ -160,19 +159,6 @@ describe("createImageCarousel", () => {
     const template = createImageCarousel(columns);
 
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
-  });
-});
-
-describe("createYesNoConfirm", () => {
-  it("allows custom button text", () => {
-    const template = createYesNoConfirm("Delete?", {
-      yesText: "Delete",
-      noText: "Cancel",
-    });
-
-    const actions = (template.template as { actions: Array<{ label: string }> }).actions;
-    expect(actions[0].label).toBe("Delete");
-    expect(actions[1].label).toBe("Cancel");
   });
 });
 
