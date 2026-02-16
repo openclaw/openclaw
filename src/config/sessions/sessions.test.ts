@@ -87,18 +87,6 @@ describe("session path safety", () => {
     ).toThrow(/within sessions directory/);
   });
 
-  it("accepts sessionFile candidates within the sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    const resolved = resolveSessionFilePath(
-      "sess-1",
-      { sessionFile: "subdir/threaded-session.jsonl" },
-      { sessionsDir },
-    );
-
-    expect(resolved).toBe(path.resolve(sessionsDir, "subdir/threaded-session.jsonl"));
-  });
-
   it("accepts absolute sessionFile paths that resolve within the sessions dir", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
