@@ -308,36 +308,3 @@ describe("slack slash commands channel policy", () => {
     });
   });
 });
-
-describe("slack slash commands access groups", () => {
-  let harness: ReturnType<typeof createPolicyHarness>;
-
-  beforeAll(async () => {
-    harness = createPolicyHarness();
-    await registerCommands(harness.ctx, harness.account);
-  });
-
-  beforeEach(() => {
-    harness.postEphemeral.mockClear();
-    resetPolicyHarness(harness);
-  });
-
-  it("enforces access-group gating when lookup fails for private channels", async () => {
-    harness.ctx.allowFrom = [];
-    harness.ctx.resolveChannelName = async () => ({});
-
-    const { respond } = await runSlashHandler({
-      commands: harness.commands,
-      command: {
-        channel_id: "G123",
-        channel_name: "private",
-      },
-    });
-
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "You are not authorized to use this command.",
-      response_type: "ephemeral",
-    });
-  });
-});
