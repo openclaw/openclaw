@@ -52,6 +52,8 @@ export type DiscordComponentButtonSpec = {
     animated?: boolean;
   };
   disabled?: boolean;
+  /** Optional allowlist of users who can interact with this button (ids or names). */
+  allowedUsers?: string[];
 };
 
 export type DiscordComponentSelectOption = {
@@ -161,6 +163,7 @@ export type DiscordComponentEntry = {
   agentId?: string;
   accountId?: string;
   reusable?: boolean;
+  allowedUsers?: string[];
   messageId?: string;
   createdAt?: number;
   expiresAt?: number;
@@ -234,6 +237,19 @@ function readOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function readOptionalStringArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  if (value.length === 0) {
+    return undefined;
+  }
+  return value.map((entry, index) => readString(entry, `${label}[${index}]`));
 }
 
 function readOptionalNumber(value: unknown): number | undefined {
@@ -360,6 +376,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
           }
         : undefined,
     disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
+    allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
   };
 }
 
@@ -698,6 +715,7 @@ function createButtonComponent(params: {
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
       modalId: params.modalId,
+      allowedUsers: params.spec.allowedUsers,
     },
   };
 }
