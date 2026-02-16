@@ -5,10 +5,14 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  buildChannelAccountSnapshot,
+  formatChannelAllowFrom,
+} from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
-import { formatAge } from "./format.js";
+import { formatTimeAgo } from "./format.js";
 
 export type ChannelRow = {
   id: ChannelId;
@@ -105,39 +109,6 @@ const resolveAccountConfigured = async (
   return configured !== false;
 };
 
-const buildAccountSnapshot = (params: {
-  plugin: ChannelPlugin;
-  account: unknown;
-  cfg: OpenClawConfig;
-  accountId: string;
-  enabled: boolean;
-  configured: boolean;
-}): ChannelAccountSnapshot => {
-  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
-  return {
-    enabled: params.enabled,
-    configured: params.configured,
-    ...described,
-    accountId: params.accountId,
-  };
-};
-
-const formatAllowFrom = (params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  allowFrom: Array<string | number>;
-}) => {
-  if (params.plugin.config.formatAllowFrom) {
-    return params.plugin.config.formatAllowFrom({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      allowFrom: params.allowFrom,
-    });
-  }
-  return params.allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
-};
-
 const buildAccountNotes = (params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -177,7 +148,7 @@ const buildAccountNotes = (params: {
   const allowFrom =
     plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ?? snapshot.allowFrom;
   if (allowFrom?.length) {
-    const formatted = formatAllowFrom({
+    const formatted = formatChannelAllowFrom({
       plugin,
       cfg,
       accountId: snapshot.accountId,
@@ -349,7 +320,7 @@ export async function buildChannelsTable(
       const account = plugin.config.resolveAccount(cfg, accountId);
       const enabled = resolveAccountEnabled(plugin, account, cfg);
       const configured = await resolveAccountConfigured(plugin, account, cfg);
-      const snapshot = buildAccountSnapshot({
+      const snapshot = buildChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
@@ -436,7 +407,7 @@ export async function buildChannelsTable(
           extra.push(link.selfE164);
         }
         if (link.linked && link.authAgeMs != null && link.authAgeMs >= 0) {
-          extra.push(`auth ${formatAge(link.authAgeMs)}`);
+          extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
         }
         if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
           extra.push(`accounts ${accounts.length || 1}`);

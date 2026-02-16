@@ -8,13 +8,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { HookHandler } from "../../hooks.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { resolveHookConfig } from "../../config.js";
+import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -39,6 +41,9 @@ async function getRecentSessionContent(
           const msg = entry.message;
           const role = msg.role;
           if ((role === "user" || role === "assistant") && msg.content) {
+            if (role === "user" && hasInterSessionUserProvenance(msg)) {
+              continue;
+            }
             // Extract text content
             const text = Array.isArray(msg.content)
               ? // oxlint-disable-next-line typescript/no-explicit-any
@@ -79,7 +84,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
-      : path.join(os.homedir(), ".openclaw", "workspace");
+      : path.join(resolveStateDir(process.env, os.homedir), "workspace");
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
@@ -121,15 +126,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
         messageCount,
       });
 
-      if (sessionContent && cfg) {
-        log.debug("Calling generateSlugViaLLM...");
-        // Dynamically import the LLM slug generator (avoids module caching issues)
-        // When compiled, handler is at dist/hooks/bundled/session-memory/handler.js
-        // Going up ../.. puts us at dist/hooks/, so just add llm-slug-generator.js
-        const openclawRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-        const slugGenPath = path.join(openclawRoot, "llm-slug-generator.js");
-        const { generateSlugViaLLM } = await import(slugGenPath);
+      // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
+      const isTestEnv =
+        process.env.OPENCLAW_TEST_FAST === "1" ||
+        process.env.VITEST === "true" ||
+        process.env.VITEST === "1" ||
+        process.env.NODE_ENV === "test";
+      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
 
+      if (sessionContent && cfg && allowLlmSlug) {
+        log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         slug = await generateSlugViaLLM({ sessionContent, cfg });
         log.debug("Generated slug", { slug });

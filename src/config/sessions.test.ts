@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { sleep } from "../utils.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildGroupDisplayName,
   deriveSessionKey,
@@ -17,6 +16,23 @@ import {
 } from "./sessions.js";
 
 describe("sessions", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createCaseDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-suite-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
   it("returns normalized per-sender key", () => {
     expect(deriveSessionKey("per-sender", { From: "whatsapp:+1555" })).toBe("+1555");
   });
@@ -95,7 +111,7 @@ describe("sessions", () => {
 
   it("updateLastRoute persists channel and target", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateLastRoute");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       storePath,
@@ -148,7 +164,7 @@ describe("sessions", () => {
 
   it("updateLastRoute prefers explicit deliveryContext", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateLastRoute");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(storePath, "{}", "utf-8");
 
@@ -176,9 +192,53 @@ describe("sessions", () => {
     });
   });
 
+  it("updateLastRoute clears threadId when explicit route omits threadId", async () => {
+    const mainSessionKey = "agent:main:main";
+    const dir = await createCaseDir("updateLastRoute");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [mainSessionKey]: {
+            sessionId: "sess-1",
+            updatedAt: 123,
+            deliveryContext: {
+              channel: "telegram",
+              to: "222",
+              threadId: "42",
+            },
+            lastChannel: "telegram",
+            lastTo: "222",
+            lastThreadId: "42",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: mainSessionKey,
+      deliveryContext: {
+        channel: "telegram",
+        to: "222",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "222",
+    });
+    expect(store[mainSessionKey]?.lastThreadId).toBeUndefined();
+  });
+
   it("updateLastRoute records origin + group metadata when ctx is provided", async () => {
     const sessionKey = "agent:main:whatsapp:group:123@g.us";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateLastRoute");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(storePath, "{}", "utf-8");
 
@@ -208,7 +268,7 @@ describe("sessions", () => {
 
   it("updateSessionStoreEntry preserves existing fields when patching", async () => {
     const sessionKey = "agent:main:main";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateSessionStoreEntry");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       storePath,
@@ -238,16 +298,16 @@ describe("sessions", () => {
   });
 
   it("updateSessionStore preserves concurrent additions", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(storePath, "{}", "utf-8");
 
     await Promise.all([
       updateSessionStore(storePath, (store) => {
-        store["agent:main:one"] = { sessionId: "sess-1", updatedAt: 1 };
+        store["agent:main:one"] = { sessionId: "sess-1", updatedAt: Date.now() };
       }),
       updateSessionStore(storePath, (store) => {
-        store["agent:main:two"] = { sessionId: "sess-2", updatedAt: 2 };
+        store["agent:main:two"] = { sessionId: "sess-2", updatedAt: Date.now() };
       }),
     ]);
 
@@ -257,12 +317,12 @@ describe("sessions", () => {
   });
 
   it("recovers from array-backed session stores", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(storePath, "[]", "utf-8");
 
     await updateSessionStore(storePath, (store) => {
-      store["agent:main:main"] = { sessionId: "sess-1", updatedAt: 1 };
+      store["agent:main:main"] = { sessionId: "sess-1", updatedAt: Date.now() };
     });
 
     const store = loadSessionStore(storePath);
@@ -273,14 +333,14 @@ describe("sessions", () => {
   });
 
   it("normalizes last route fields on write", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(storePath, "{}", "utf-8");
 
     await updateSessionStore(storePath, (store) => {
       store["agent:main:main"] = {
         sessionId: "sess-normalized",
-        updatedAt: 1,
+        updatedAt: Date.now(),
         lastChannel: " WhatsApp ",
         lastTo: " +1555 ",
         lastAccountId: " acct-1 ",
@@ -299,14 +359,14 @@ describe("sessions", () => {
   });
 
   it("updateSessionStore keeps deletions when concurrent writes happen", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateSessionStore");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       storePath,
       JSON.stringify(
         {
-          "agent:main:old": { sessionId: "sess-old", updatedAt: 1 },
-          "agent:main:keep": { sessionId: "sess-keep", updatedAt: 2 },
+          "agent:main:old": { sessionId: "sess-old", updatedAt: Date.now() },
+          "agent:main:keep": { sessionId: "sess-keep", updatedAt: Date.now() },
         },
         null,
         2,
@@ -319,7 +379,7 @@ describe("sessions", () => {
         delete store["agent:main:old"];
       }),
       updateSessionStore(storePath, (store) => {
-        store["agent:main:new"] = { sessionId: "sess-new", updatedAt: 3 };
+        store["agent:main:new"] = { sessionId: "sess-new", updatedAt: Date.now() };
       }),
     ]);
 
@@ -331,7 +391,7 @@ describe("sessions", () => {
 
   it("loadSessionStore auto-migrates legacy provider keys to channel keys", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("loadSessionStore");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       storePath,
@@ -411,7 +471,7 @@ describe("sessions", () => {
 
   it("updateSessionStoreEntry merges concurrent patches", async () => {
     const mainSessionKey = "agent:main:main";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await createCaseDir("updateSessionStoreEntry");
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       storePath,
@@ -429,24 +489,39 @@ describe("sessions", () => {
       "utf-8",
     );
 
-    await Promise.all([
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: mainSessionKey,
-        update: async () => {
-          await sleep(50);
-          return { modelOverride: "anthropic/claude-opus-4-5" };
-        },
-      }),
-      updateSessionStoreEntry({
-        storePath,
-        sessionKey: mainSessionKey,
-        update: async () => {
-          await sleep(10);
-          return { thinkingLevel: "high" };
-        },
-      }),
-    ]);
+    const createDeferred = <T>() => {
+      let resolve!: (value: T) => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+    const firstStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+
+    const p1 = updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      update: async () => {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+        return { modelOverride: "anthropic/claude-opus-4-5" };
+      },
+    });
+    const p2 = updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      update: async () => {
+        await firstStarted.promise;
+        return { thinkingLevel: "high" };
+      },
+    });
+
+    await firstStarted.promise;
+    releaseFirst.resolve();
+    await Promise.all([p1, p2]);
 
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");

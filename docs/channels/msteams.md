@@ -36,7 +36,7 @@ openclaw plugins install ./extensions/msteams
 If you choose Teams during configure/onboarding and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
@@ -422,6 +422,8 @@ If you need images/files in **channels** or want to fetch **message history**, y
 2. **Grant admin consent** for the tenant.
 3. Bump the Teams app **manifest version**, re-upload, and **reinstall the app in Teams**.
 4. **Fully quit and relaunch Teams** to clear cached app metadata.
+
+**Additional permission for user mentions:** User @mentions work out of the box for users in the conversation. However, if you want to dynamically search and mention users who are **not in the current conversation**, add `User.Read.All` (Application) permission and grant admin consent.
 
 ## Known Limitations
 

@@ -1,6 +1,6 @@
 {
   "globs": ["docs/**/*.md", "docs/**/*.mdx", "README.md"],
-  "ignores": ["docs/zh-CN/**", "docs/.i18n/**", "docs/reference/templates/**"],
+  "ignores": ["docs/zh-CN/**", "docs/.i18n/**", "docs/reference/templates/**", "**/.local/**"],
   "config": {
     "default": true,
 

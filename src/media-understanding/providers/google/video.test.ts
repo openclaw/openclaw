@@ -14,26 +14,34 @@ const resolveRequestUrl = (input: RequestInfo | URL) => {
   return input.url;
 };
 
+function stubPinnedHostname(hostname: string) {
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+  const addresses = [TEST_NET_IP];
+  return {
+    hostname: normalized,
+    addresses,
+    lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+  };
+}
+
 describe("describeGeminiVideo", () => {
+  let resolvePinnedHostnameWithPolicySpy: ReturnType<typeof vi.spyOn>;
   let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    resolvePinnedHostnameSpy = vi
+    // Stub both entry points so fetch-guard never does live DNS (CI can use either path).
+    resolvePinnedHostnameWithPolicySpy = vi
       .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
-      .mockImplementation(async (hostname) => {
-        // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-        const addresses = [TEST_NET_IP];
-        return {
-          hostname: normalized,
-          addresses,
-          lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-        };
-      });
+      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
+    resolvePinnedHostnameSpy = vi
+      .spyOn(ssrf, "resolvePinnedHostname")
+      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
   });
 
   afterEach(() => {
+    resolvePinnedHostnameWithPolicySpy?.mockRestore();
     resolvePinnedHostnameSpy?.mockRestore();
+    resolvePinnedHostnameWithPolicySpy = undefined;
     resolvePinnedHostnameSpy = undefined;
   });
 

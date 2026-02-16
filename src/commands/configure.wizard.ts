@@ -45,6 +45,44 @@ import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 
+async function runGatewayHealthCheck(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  port: number;
+}): Promise<void> {
+  const localLinks = resolveControlUiLinks({
+    bind: params.cfg.gateway?.bind ?? "loopback",
+    port: params.port,
+    customBindHost: params.cfg.gateway?.customBindHost,
+    basePath: undefined,
+  });
+  const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
+  const wsUrl = params.cfg.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
+  const token = params.cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN;
+  const password = params.cfg.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD;
+
+  await waitForGatewayReachable({
+    url: wsUrl,
+    token,
+    password,
+    deadlineMs: 15_000,
+  });
+
+  try {
+    await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+  } catch (err) {
+    params.runtime.error(formatHealthCheckFailure(err));
+    note(
+      [
+        "Docs:",
+        "https://docs.openclaw.ai/gateway/health",
+        "https://docs.openclaw.ai/gateway/troubleshooting",
+      ].join("\n"),
+      "Health check help",
+    );
+  }
+}
+
 async function promptConfigureSection(
   runtime: RuntimeEnv,
   hasSelection: boolean,
@@ -285,6 +323,28 @@ export async function runConfigureWizard(
       logConfigUpdated(runtime);
     };
 
+    const configureWorkspace = async () => {
+      const workspaceInput = guardCancel(
+        await text({
+          message: "Workspace directory",
+          initialValue: workspaceDir,
+        }),
+        runtime,
+      );
+      workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
+      nextConfig = {
+        ...nextConfig,
+        agents: {
+          ...nextConfig.agents,
+          defaults: {
+            ...nextConfig.agents?.defaults,
+            workspace: workspaceDir,
+          },
+        },
+      };
+      await ensureWorkspaceAndSessions(workspaceDir, runtime);
+    };
+
     if (opts.sections) {
       const selected = opts.sections;
       if (!selected || selected.length === 0) {
@@ -293,25 +353,7 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("workspace")) {
-        const workspaceInput = guardCancel(
-          await text({
-            message: "Workspace directory",
-            initialValue: workspaceDir,
-          }),
-          runtime,
-        );
-        workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
-        nextConfig = {
-          ...nextConfig,
-          agents: {
-            ...nextConfig.agents,
-            defaults: {
-              ...nextConfig.agents?.defaults,
-              workspace: workspaceDir,
-            },
-          },
-        };
-        await ensureWorkspaceAndSessions(workspaceDir, runtime);
+        await configureWorkspace();
       }
 
       if (selected.includes("model")) {
@@ -368,37 +410,7 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("health")) {
-        const localLinks = resolveControlUiLinks({
-          bind: nextConfig.gateway?.bind ?? "loopback",
-          port: gatewayPort,
-          customBindHost: nextConfig.gateway?.customBindHost,
-          basePath: undefined,
-        });
-        const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
-        const wsUrl =
-          nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
-        const token = nextConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN;
-        const password =
-          nextConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD;
-        await waitForGatewayReachable({
-          url: wsUrl,
-          token,
-          password,
-          deadlineMs: 15_000,
-        });
-        try {
-          await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-        } catch (err) {
-          runtime.error(formatHealthCheckFailure(err));
-          note(
-            [
-              "Docs:",
-              "https://docs.openclaw.ai/gateway/health",
-              "https://docs.openclaw.ai/gateway/troubleshooting",
-            ].join("\n"),
-            "Health check help",
-          );
-        }
+        await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
       }
     } else {
       let ranSection = false;
@@ -412,25 +424,7 @@ export async function runConfigureWizard(
         ranSection = true;
 
         if (choice === "workspace") {
-          const workspaceInput = guardCancel(
-            await text({
-              message: "Workspace directory",
-              initialValue: workspaceDir,
-            }),
-            runtime,
-          );
-          workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
-          nextConfig = {
-            ...nextConfig,
-            agents: {
-              ...nextConfig.agents,
-              defaults: {
-                ...nextConfig.agents?.defaults,
-                workspace: workspaceDir,
-              },
-            },
-          };
-          await ensureWorkspaceAndSessions(workspaceDir, runtime);
+          await configureWorkspace();
           await persistConfig();
         }
 
@@ -495,37 +489,7 @@ export async function runConfigureWizard(
         }
 
         if (choice === "health") {
-          const localLinks = resolveControlUiLinks({
-            bind: nextConfig.gateway?.bind ?? "loopback",
-            port: gatewayPort,
-            customBindHost: nextConfig.gateway?.customBindHost,
-            basePath: undefined,
-          });
-          const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
-          const wsUrl =
-            nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
-          const token = nextConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN;
-          const password =
-            nextConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD;
-          await waitForGatewayReachable({
-            url: wsUrl,
-            token,
-            password,
-            deadlineMs: 15_000,
-          });
-          try {
-            await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-          } catch (err) {
-            runtime.error(formatHealthCheckFailure(err));
-            note(
-              [
-                "Docs:",
-                "https://docs.openclaw.ai/gateway/health",
-                "https://docs.openclaw.ai/gateway/troubleshooting",
-              ].join("\n"),
-              "Health check help",
-            );
-          }
+          await runGatewayHealthCheck({ cfg: nextConfig, runtime, port: gatewayPort });
         }
       }
 
@@ -587,7 +551,7 @@ export async function runConfigureWizard(
     outro("Configure complete.");
   } catch (err) {
     if (err instanceof WizardCancelledError) {
-      runtime.exit(0);
+      runtime.exit(1);
       return;
     }
     throw err;
