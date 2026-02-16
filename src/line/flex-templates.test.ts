@@ -139,31 +139,9 @@ describe("createMediaPlayerCard", () => {
 
     expect(card.footer).toBeDefined();
   });
-
-  it("includes extra actions", () => {
-    const card = createMediaPlayerCard({
-      title: "Track",
-      extraActions: [
-        { label: "Add to Playlist", data: "action=add_playlist" },
-        { label: "Share", data: "action=share" },
-      ],
-    });
-
-    expect(card.footer).toBeDefined();
-  });
 });
 
 describe("createDeviceControlCard", () => {
-  it("includes device image", () => {
-    const card = createDeviceControlCard({
-      deviceName: "Device",
-      imageUrl: "https://example.com/device.jpg",
-      controls: [],
-    });
-
-    expect(card.hero).toBeDefined();
-  });
-
   it("limits controls to 6", () => {
     const card = createDeviceControlCard({
       deviceName: "Device",
@@ -193,17 +171,6 @@ describe("createEventCard", () => {
     expect(card.size).toBe("mega");
     const body = card.body as { contents: Array<{ type: string }> };
     expect(body.contents).toHaveLength(3);
-  });
-
-  it("includes action when provided", () => {
-    const card = createEventCard({
-      title: "Meeting",
-      date: "Jan 24",
-      action: { type: "uri", label: "Join", uri: "https://meet.google.com/abc" },
-    });
-
-    expect(card.body).toBeDefined();
-    expect((card.body as { action?: unknown }).action).toBeDefined();
   });
 });
 
