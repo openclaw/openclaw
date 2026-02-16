@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
+import { createSlackDraftStream } from "../../draft-stream.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { createSlackReplyDeliveryPlan, deliverReplies } from "../replies.js";
 
@@ -106,6 +107,36 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload) => {
+      const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
+      const draftMessageId = draftStream?.messageId();
+      const draftChannelId = draftStream?.channelId();
+      const finalText = payload.text;
+      const canFinalizeViaPreviewEdit =
+        mediaCount === 0 &&
+        !payload.isError &&
+        typeof finalText === "string" &&
+        finalText.trim().length > 0 &&
+        typeof draftMessageId === "string" &&
+        typeof draftChannelId === "string";
+
+      if (canFinalizeViaPreviewEdit) {
+        draftStream?.stop();
+        try {
+          await ctx.app.client.chat.update({
+            channel: draftChannelId,
+            ts: draftMessageId,
+            text: finalText.trim(),
+          });
+          return;
+        } catch (err) {
+          logVerbose(
+            `slack: preview final edit failed; falling back to standard send (${String(err)})`,
+          );
+        }
+      } else if (mediaCount > 0) {
+        draftStream?.stop();
+      }
+
       const replyThreadTs = replyPlan.nextThreadTs();
       await deliverReplies({
         replies: [payload],
@@ -126,6 +157,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     onIdle: typingCallbacks.onIdle,
   });
 
+  const draftStream = createSlackDraftStream({
+    target: prepared.replyTarget,
+    token: ctx.botToken,
+    accountId: account.accountId,
+    maxChars: Math.min(ctx.textLimit, 4000),
+    resolveThreadTs: () => replyPlan.nextThreadTs(),
+    onMessageSent: () => replyPlan.markSent(),
+    log: logVerbose,
+    warn: logVerbose,
+  });
+  let hasStreamedMessage = false;
+  const updateDraftFromPartial = (text?: string) => {
+    const trimmed = text?.trimEnd();
+    if (!trimmed) {
+      return;
+    }
+    draftStream.update(trimmed);
+    hasStreamedMessage = true;
+  };
+
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
     cfg,
@@ -139,8 +190,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           ? !account.config.blockStreaming
           : undefined,
       onModelSelected,
+      onPartialReply: async (payload) => {
+        updateDraftFromPartial(payload.text);
+      },
+      onAssistantMessageStart: async () => {
+        if (hasStreamedMessage) {
+          draftStream.forceNewMessage();
+          hasStreamedMessage = false;
+        }
+      },
+      onReasoningEnd: async () => {
+        if (hasStreamedMessage) {
+          draftStream.forceNewMessage();
+          hasStreamedMessage = false;
+        }
+      },
     },
   });
+  await draftStream.flush();
+  draftStream.stop();
   markDispatchIdle();
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
