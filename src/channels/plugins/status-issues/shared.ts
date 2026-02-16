@@ -30,3 +30,14 @@ export function appendMatchMetadata(
   const meta = formatMatchMetadata(params);
   return meta ? `${message} (${meta})` : message;
 }
+
+export function resolveEnabledConfiguredAccountId(account: {
+  accountId?: unknown;
+  enabled?: unknown;
+  configured?: unknown;
+}): string | null {
+  const accountId = asString(account.accountId) ?? "default";
+  const enabled = account.enabled !== false;
+  const configured = account.configured === true;
+  return enabled && configured ? accountId : null;
+}
