@@ -220,7 +220,7 @@ export async function handleTelegramAction(
     }
     const to = readStringParam(params, "to", { required: true });
     const question = readStringParam(params, "question", { required: true });
-    const options = (params.options ?? params.answers) as unknown;
+    const options = params.options ?? params.answers;
     if (!Array.isArray(options)) {
       throw new Error("options must be an array of strings");
     }
@@ -241,7 +241,7 @@ export async function handleTelegramAction(
       integer: true,
     });
     const maxSelections =
-      typeof params.allowMultiselect === "boolean" && params.allowMultiselect === true ? 2 : 1;
+      typeof params.allowMultiselect === "boolean" && params.allowMultiselect ? 2 : 1;
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
