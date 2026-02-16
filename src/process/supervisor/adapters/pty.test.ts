@@ -43,18 +43,26 @@ describe("createPtyAdapter", () => {
     vi.clearAllMocks();
   });
 
-  it("forwards explicit signals to node-pty kill", async () => {
-    spawnMock.mockReturnValue(createStubPty());
-    const { createPtyAdapter } = await import("./pty.js");
+  it("forwards explicit signals to node-pty kill on non-Windows", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      spawnMock.mockReturnValue(createStubPty());
+      const { createPtyAdapter } = await import("./pty.js");
 
-    const adapter = await createPtyAdapter({
-      shell: "bash",
-      args: ["-lc", "sleep 10"],
-    });
+      const adapter = await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "sleep 10"],
+      });
 
-    adapter.kill("SIGTERM");
-    expect(ptyKillMock).toHaveBeenCalledWith("SIGTERM");
-    expect(killProcessTreeMock).not.toHaveBeenCalled();
+      adapter.kill("SIGTERM");
+      expect(ptyKillMock).toHaveBeenCalledWith("SIGTERM");
+      expect(killProcessTreeMock).not.toHaveBeenCalled();
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
   });
 
   it("uses process-tree kill for SIGKILL by default", async () => {
