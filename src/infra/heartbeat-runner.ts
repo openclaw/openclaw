@@ -540,9 +540,10 @@ export async function runHeartbeatOnce(opts: {
 
   try {
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const replyOpts = heartbeatModelOverride
-      ? { isHeartbeat: true, heartbeatModelOverride }
-      : { isHeartbeat: true };
+      ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
+      : { isHeartbeat: true, suppressToolErrorWarnings };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;

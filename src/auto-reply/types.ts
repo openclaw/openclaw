@@ -29,6 +29,8 @@ export type GetReplyOptions = {
   isHeartbeat?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /** If true, suppress tool error warning payloads for this run. */
+  suppressToolErrorWarnings?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
