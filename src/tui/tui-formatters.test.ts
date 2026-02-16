@@ -145,20 +145,18 @@ describe("isCommandMessage", () => {
 });
 
 describe("sanitizeRenderableText", () => {
-  it("breaks very long unbroken tokens to avoid overflow", () => {
+  it("does not alter long tokens — no inserted characters (#17282)", () => {
     const input = "a".repeat(140);
     const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
 
-    expect(longestSegment).toBeLessThanOrEqual(32);
+    expect(sanitized).toBe(input);
   });
 
-  it("breaks moderately long unbroken tokens to protect narrow terminals", () => {
+  it("preserves moderately long tokens unchanged", () => {
     const input = "b".repeat(90);
     const sanitized = sanitizeRenderableText(input);
-    const longestSegment = Math.max(...sanitized.split(/\s+/).map((segment) => segment.length));
 
-    expect(longestSegment).toBeLessThanOrEqual(32);
+    expect(sanitized).toBe(input);
   });
 
   it("preserves long filesystem paths verbatim for copy safety", () => {
@@ -182,5 +180,42 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+  });
+
+  it("is idempotent — calling twice produces the same result", () => {
+    const input = "x".repeat(100);
+    const once = sanitizeRenderableText(input);
+    const twice = sanitizeRenderableText(once);
+
+    expect(twice).toBe(once);
+  });
+
+  it("leaves short tokens untouched", () => {
+    const input = "short token here";
+    expect(sanitizeRenderableText(input)).toBe(input);
+  });
+
+  it("preserves spaces between normal words alongside one long token", () => {
+    const input = "prefix " + "z".repeat(50) + " suffix";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("strips ANSI escape sequences", () => {
+    expect(sanitizeRenderableText("hello\x1b[31m red\x1b[0m")).toBe("hello red");
+  });
+
+  it("strips control characters but keeps tabs and newlines", () => {
+    expect(sanitizeRenderableText("a\x00b\tc\nd")).toBe("ab\tc\nd");
+  });
+
+  it("redacts binary-like lines with many replacement chars", () => {
+    const binaryLine = "\uFFFD".repeat(24);
+    expect(sanitizeRenderableText(binaryLine)).toBe("[binary data omitted]");
+  });
+
+  it("returns empty string unchanged", () => {
+    expect(sanitizeRenderableText("")).toBe("");
   });
 });
