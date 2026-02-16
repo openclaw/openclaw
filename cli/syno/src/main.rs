@@ -1,0 +1,153 @@
+use clap::{Parser, Subcommand};
+
+mod api;
+mod cli;
+mod config;
+mod crypto;
+
+#[derive(Parser)]
+#[command(name = "syno", version, about = "Synology DSM API CLI")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Configure connection settings
+    #[command(subcommand)]
+    Config(ConfigCmd),
+
+    /// Login to Synology DSM
+    Login(cli::auth::LoginArgs),
+
+    /// Logout from Synology DSM
+    Logout,
+
+    /// Show DSM system info
+    Info,
+
+    /// FileStation operations
+    #[command(subcommand)]
+    Fs(FsCmd),
+
+    /// DownloadStation operations
+    #[command(subcommand)]
+    Dl(DlCmd),
+
+    /// NoteStation operations
+    #[command(subcommand)]
+    Note(NoteCmd),
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Set configuration values
+    Set(cli::config::ConfigSetArgs),
+    /// Show current configuration
+    Show,
+}
+
+#[derive(Subcommand)]
+enum FsCmd {
+    /// List shared folders or files in a directory
+    Ls(cli::file_station::LsArgs),
+    /// Get info about a file or folder
+    Info(cli::file_station::InfoArgs),
+}
+
+#[derive(Subcommand)]
+enum DlCmd {
+    /// List download tasks
+    Ls,
+    /// Create a download task
+    Create(cli::download_station::CreateArgs),
+    /// Delete download tasks
+    Delete(cli::download_station::TaskIdsArgs),
+    /// Pause download tasks
+    Pause(cli::download_station::TaskIdsArgs),
+    /// Resume download tasks
+    Resume(cli::download_station::TaskIdsArgs),
+}
+
+#[derive(Subcommand)]
+enum NoteCmd {
+    /// Show NoteStation info
+    Info,
+    /// List notebooks
+    Notebooks,
+    /// List notes
+    Notes(cli::note_station::NoteListArgs),
+    /// Get a note by ID (with content)
+    Get(cli::note_station::NoteGetArgs),
+    /// Create a note
+    Create(cli::note_station::NoteCreateArgs),
+    /// Update a note (title and/or content)
+    Update(cli::note_station::NoteUpdateArgs),
+    /// Delete a note
+    Delete(cli::note_station::NoteDeleteArgs),
+    /// Move a note to another notebook
+    Move(cli::note_station::NoteMoveArgs),
+    /// Create a notebook
+    CreateNotebook(cli::note_station::CreateNotebookArgs),
+    /// Rename a notebook
+    RenameNotebook(cli::note_station::RenameNotebookArgs),
+    /// Delete a notebook
+    DeleteNotebook(cli::note_station::DeleteNotebookArgs),
+    /// Add a tag to a note (tag auto-created if not exists)
+    Tag(cli::note_station::NoteTagArgs),
+    /// Remove a tag from a note
+    Untag(cli::note_station::NoteTagArgs),
+    /// List tags
+    Tags,
+    /// List todos
+    Todos,
+    /// Full-text search notes
+    Search(cli::note_station::SearchArgs),
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Config(cmd) => match cmd {
+            ConfigCmd::Set(args) => cli::config::config_set(&args)?,
+            ConfigCmd::Show => cli::config::config_show()?,
+        },
+        Commands::Login(args) => cli::auth::login(&args).await?,
+        Commands::Logout => cli::auth::logout().await?,
+        Commands::Info => cli::system::info().await?,
+        Commands::Fs(cmd) => match cmd {
+            FsCmd::Ls(args) => cli::file_station::ls(&args).await?,
+            FsCmd::Info(args) => cli::file_station::info(&args).await?,
+        },
+        Commands::Dl(cmd) => match cmd {
+            DlCmd::Ls => cli::download_station::list().await?,
+            DlCmd::Create(args) => cli::download_station::create(&args).await?,
+            DlCmd::Delete(args) => cli::download_station::delete(&args).await?,
+            DlCmd::Pause(args) => cli::download_station::pause(&args).await?,
+            DlCmd::Resume(args) => cli::download_station::resume(&args).await?,
+        },
+        Commands::Note(cmd) => match cmd {
+            NoteCmd::Info => cli::note_station::info().await?,
+            NoteCmd::Notebooks => cli::note_station::notebooks().await?,
+            NoteCmd::Notes(args) => cli::note_station::notes(&args).await?,
+            NoteCmd::Get(args) => cli::note_station::get(&args).await?,
+            NoteCmd::Create(args) => cli::note_station::create(&args).await?,
+            NoteCmd::Update(args) => cli::note_station::update(&args).await?,
+            NoteCmd::Delete(args) => cli::note_station::delete(&args).await?,
+            NoteCmd::Move(args) => cli::note_station::move_note(&args).await?,
+            NoteCmd::CreateNotebook(args) => cli::note_station::create_notebook(&args).await?,
+            NoteCmd::RenameNotebook(args) => cli::note_station::rename_notebook(&args).await?,
+            NoteCmd::DeleteNotebook(args) => cli::note_station::delete_notebook(&args).await?,
+            NoteCmd::Tag(args) => cli::note_station::tag(&args).await?,
+            NoteCmd::Untag(args) => cli::note_station::untag(&args).await?,
+            NoteCmd::Tags => cli::note_station::tags().await?,
+            NoteCmd::Todos => cli::note_station::todos().await?,
+            NoteCmd::Search(args) => cli::note_station::search(&args).await?,
+        },
+    }
+
+    Ok(())
+}
