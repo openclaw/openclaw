@@ -762,7 +762,6 @@ export async function handleFeishuMessage(params: {
       "group";
 
     if (isGroup) {
-      const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
       const legacyTopicSessionMode =
         groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
       groupSessionScope =
