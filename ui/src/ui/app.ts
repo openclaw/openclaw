@@ -260,6 +260,8 @@ export class OpenClawApp extends LitElement {
   @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null = null;
   @state() usageTimeSeriesLoading = false;
+  @state() usageTimeSeriesCursorStart: number | null = null;
+  @state() usageTimeSeriesCursorEnd: number | null = null;
   @state() usageSessionLogs: import("./views/usage.js").SessionLogEntry[] | null = null;
   @state() usageSessionLogsLoading = false;
   @state() usageSessionLogsExpanded = false;
