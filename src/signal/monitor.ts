@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
+import { normalizeAllowList } from "../channels/allowlists/normalize.js";
 import { loadConfig } from "../config/config.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -58,10 +59,6 @@ export type MonitorSignalOpts = {
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
-}
-
-function normalizeAllowList(raw?: Array<string | number>): string[] {
-  return (raw ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 type SignalReactionTarget = {
