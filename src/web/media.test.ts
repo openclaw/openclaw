@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { sendVoiceMessageDiscord } from "../discord/send.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -330,6 +331,27 @@ describe("web media loading", () => {
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(fallbackPngCap);
+  });
+});
+
+describe("Discord voice message input hardening", () => {
+  it("rejects local paths outside allowed media roots", async () => {
+    const candidate = path.join(process.cwd(), "package.json");
+    await expect(sendVoiceMessageDiscord("channel:123", candidate)).rejects.toThrow(
+      /Local media path is not under an allowed directory/i,
+    );
+  });
+
+  it("blocks SSRF targets when given a private-network URL", async () => {
+    await expect(
+      sendVoiceMessageDiscord("channel:123", "http://127.0.0.1/voice.ogg"),
+    ).rejects.toThrow(/Failed to fetch media|Blocked|private|internal/i);
+  });
+
+  it("rejects non-http URL schemes", async () => {
+    await expect(
+      sendVoiceMessageDiscord("channel:123", "rtsp://example.com/voice.ogg"),
+    ).rejects.toThrow(/Local media path is not under an allowed directory|ENOENT|no such file/i);
   });
 });
 
