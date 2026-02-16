@@ -222,6 +222,9 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
+  logVerbose(
+    `slack send: to=${to} accountId=${opts.accountId ?? "default"} resolvedAccountId=${account.accountId} tokenSource=${account.botTokenSource}`,
+  );
   const token = resolveToken({
     explicit: opts.token,
     accountId: account.accountId,
