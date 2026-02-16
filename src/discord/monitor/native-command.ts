@@ -42,6 +42,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -144,17 +145,6 @@ function readDiscordCommandArgs(
     }
   }
   return Object.keys(values).length > 0 ? { values } : undefined;
-}
-
-function chunkItems<T>(items: T[], size: number): T[][] {
-  if (size <= 0) {
-    return [items];
-  }
-  const rows: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    rows.push(items.slice(i, i + size));
-  }
-  return rows;
 }
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
