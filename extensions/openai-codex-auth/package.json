@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/openai-codex-auth",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "OpenAI Codex CLI auth provider plugin - use ChatGPT Plus/Pro subscription for OpenAI models",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
