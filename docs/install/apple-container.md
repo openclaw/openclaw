@@ -12,11 +12,13 @@ title: "Apple Container"
 [Apple Container](https://github.com/apple/container) is Apple's official container runtime for macOS. It runs Linux containers in lightweight virtual machines and is optimized for Apple Silicon. The `container` command is Apple's native tool—not a generic placeholder.
 
 **Key points:**
+
 - Uses the same Docker image format (OCI-compatible)
 - Builds and runs the exact same `Dockerfile` as Docker and Podman
 - Images are interchangeable between `container`, `docker`, and `podman`
 
 **Official sources:**
+
 - GitHub: https://github.com/apple/container
 - Homebrew: `brew install container`
 - Provides the `container` command for all container operations
@@ -257,6 +259,7 @@ Error: No container runtime found. Install 'container', 'docker', or 'podman'
 ```
 
 **Recommendation:** Install Apple Container for the best experience on macOS:
+
 ```bash
 brew install container
 ```
@@ -480,6 +483,7 @@ container system start
 ```
 
 **Official sources:**
+
 - GitHub: https://github.com/apple/container
 - Homebrew formula: https://formulae.brew.sh/formula/container
 
