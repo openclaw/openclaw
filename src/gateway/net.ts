@@ -40,6 +40,10 @@ export function resolveHostName(hostHeader?: string): string {
       return host.slice(1, end);
     }
   }
+  // Unbracketed IPv6 host (e.g. "::1") has no port and should be returned as-is.
+  if (net.isIP(host) === 6) {
+    return host;
+  }
   const [name] = host.split(":");
   return name ?? "";
 }
