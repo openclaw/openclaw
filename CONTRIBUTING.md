@@ -16,7 +16,7 @@ Welcome to the lobster tank! 🦞
 - **Shadow** - Discord subsystem, Discord admin
   - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shad0wed](https://x.com/4shad0wed)
 
-- **Vignesh** - Memory (QMD), formal modeling, TUI, and Lobster
+- **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
   - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
 
 - **Jos** - Telegram, API, Nix mode
