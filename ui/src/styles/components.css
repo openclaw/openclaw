@@ -3071,3 +3071,12 @@
     display: flex;
   }
 }
+
+/* ===========================================
+   Status chip utility
+   =========================================== */
+
+.status-chip {
+  width: 54px;
+  text-align: center;
+}

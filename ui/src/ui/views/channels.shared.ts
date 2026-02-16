@@ -44,9 +44,9 @@ export function statusChip(
   naLabel = "N/A",
 ) {
   if (value === null || value === undefined) {
-    return html`<span class="log-level" style="width: 54px; text-align: center;">${naLabel}</span>`;
+    return html`<span class="log-level status-chip">${naLabel}</span>`;
   }
   return value
-    ? html`<span class="log-level ok" style="width: 54px; text-align: center;">${yesLabel}</span>`
-    : html`<span class="log-level warn" style="width: 54px; text-align: center;">${noLabel}</span>`;
+    ? html`<span class="log-level ok status-chip">${yesLabel}</span>`
+    : html`<span class="log-level warn status-chip">${noLabel}</span>`;
 }
