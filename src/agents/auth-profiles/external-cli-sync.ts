@@ -8,7 +8,6 @@ import {
   EXTERNAL_CLI_SYNC_TTL_MS,
   QWEN_CLI_PROFILE_ID,
   MINIMAX_CLI_PROFILE_ID,
-  CLAUDE_CLI_PROFILE_ID,
   log,
 } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
@@ -88,7 +87,7 @@ function syncExternalCliCredentialsForProvider(
 }
 
 /**
- * Sync OAuth credentials from external CLI tools (Qwen Code CLI, MiniMax CLI) into the store.
+ * Sync OAuth credentials from external CLI tools into the store.
  *
  * Returns true if any credentials were updated.
  */
@@ -143,22 +142,15 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
     // Only OAuth credentials (with refresh token) are useful for sync
     return cred?.type === "oauth" ? cred : null;
   };
-  if (
-    syncExternalCliCredentialsForProvider(
-      store,
-      CLAUDE_CLI_PROFILE_ID,
-      "anthropic",
-      readClaudeCreds,
-      now,
-    )
-  ) {
-    mutated = true;
-  }
-
-  // Also sync to "anthropic:default" if it exists with stale credentials
+  // Sync "anthropic:default" only when it is already oauth.
+  // Never auto-convert api_key/token profiles to oauth.
   const ANTHROPIC_DEFAULT_ID = "anthropic:default";
   const existingDefault = store.profiles[ANTHROPIC_DEFAULT_ID];
-  if (existingDefault && existingDefault.provider === "anthropic") {
+  if (
+    existingDefault &&
+    existingDefault.provider === "anthropic" &&
+    existingDefault.type === "oauth"
+  ) {
     if (
       syncExternalCliCredentialsForProvider(
         store,
