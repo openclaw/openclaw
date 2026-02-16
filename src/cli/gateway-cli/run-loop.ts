@@ -8,13 +8,13 @@ import {
   markGatewaySigusr1RestartHandled,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { clearQmdManagerCache } from "../../memory/search-manager.js";
 import {
   getActiveTaskCount,
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
-import { clearQmdManagerCache } from "../../memory/search-manager.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 
