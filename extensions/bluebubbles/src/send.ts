@@ -322,7 +322,7 @@ export async function sendMessageBlueBubbles(
   text: string,
   opts: BlueBubblesSendOpts = {},
 ): Promise<BlueBubblesSendResult> {
-  const trimmedText = text ?? "";
+  const trimmedText = (text ?? "").trimStart();
   if (!trimmedText.trim()) {
     throw new Error("BlueBubbles send requires text");
   }
