@@ -57,7 +57,7 @@ export function isTransientGatewayError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
-  const msg = err.message ?? "";
+  const msg = err.message;
   return (
     msg.includes("Attempted to reconnect zombie connection") ||
     msg.includes("Attempted to reconnect gateway after disconnecting first")
