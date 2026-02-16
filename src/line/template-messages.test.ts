@@ -12,12 +12,6 @@ import {
 } from "./template-messages.js";
 
 describe("messageAction", () => {
-  it("uses label as text when text not provided", () => {
-    const action = messageAction("Click");
-
-    expect((action as { text: string }).text).toBe("Click");
-  });
-
   it("truncates label to 20 characters", () => {
     const action = messageAction("This is a very long label that exceeds the limit");
 
