@@ -36,4 +36,23 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts per-agent subagents maxSpawnDepth and maxChildrenPerAgent", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "orchestrator",
+            subagents: {
+              maxSpawnDepth: 2,
+              maxChildrenPerAgent: 5,
+              allowAgents: ["*"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

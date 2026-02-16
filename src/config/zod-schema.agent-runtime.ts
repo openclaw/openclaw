@@ -535,6 +535,24 @@ export const AgentEntrySchema = z
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),
+        maxSpawnDepth: z
+          .number()
+          .int()
+          .min(1)
+          .max(5)
+          .optional()
+          .describe(
+            "Maximum nesting depth for sub-agent spawning. 1 = no nesting (default), 2 = sub-agents can spawn sub-sub-agents.",
+          ),
+        maxChildrenPerAgent: z
+          .number()
+          .int()
+          .min(1)
+          .max(20)
+          .optional()
+          .describe(
+            "Maximum number of active children a single agent session can spawn (default: 5).",
+          ),
         model: z
           .union([
             z.string(),

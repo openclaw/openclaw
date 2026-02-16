@@ -37,8 +37,14 @@ export type AgentConfig = {
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
+    /** Maximum nesting depth for sub-agent spawning (1 = no nesting, default). */
+    maxSpawnDepth?: number;
+    /** Maximum active children a single agent session can spawn (default: 5). */
+    maxChildrenPerAgent?: number;
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /** Default thinking level for spawned sub-agents. */
+    thinking?: string;
   };
   sandbox?: {
     mode?: "off" | "non-main" | "all";
