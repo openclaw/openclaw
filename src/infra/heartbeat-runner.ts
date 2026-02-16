@@ -895,13 +895,12 @@ export function startHeartbeatRunner(opts: {
     }
 
     const reason = params?.reason;
-    const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
 
     for (const agent of state.agents.values()) {
-      if (isInterval && now < agent.nextDueMs) {
+      if (now < agent.nextDueMs) {
         continue;
       }
 
@@ -939,7 +938,7 @@ export function startHeartbeatRunner(opts: {
     if (ran) {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
-    return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
+    return { status: "skipped", reason: "not-due" };
   };
 
   const wakeHandler: HeartbeatWakeHandler = async (params) => run({ reason: params.reason });
