@@ -211,7 +211,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBeUndefined();
-    expect(payloads[0]?.text).toContain("recovered")
+    expect(payloads[0]?.text).toContain("recovered");
   });
 
   it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
