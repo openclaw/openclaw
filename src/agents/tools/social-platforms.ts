@@ -18,7 +18,6 @@ import {
   readCache,
   readResponseText,
   resolveCacheTtlMs,
-  resolveTimeoutSeconds,
   withTimeout,
   writeCache,
 } from "./web-shared.js";
@@ -36,9 +35,9 @@ const INSTAGRAM_SEARCH_TYPES = ["hashtags", "places", "users"] as const;
 const TIKTOK_TYPES = ["search", "hashtags", "videos", "profiles"] as const;
 
 const DEFAULT_APIFY_BASE_URL = "https://api.apify.com";
-const DEFAULT_TIMEOUT_SECONDS = 60;
 const DEFAULT_MAX_RESULTS = 20;
 const MAX_RESULT_CHARS = 50_000;
+const HTTP_TIMEOUT_MS = 30_000;
 
 const ACTOR_IDS: Record<SocialPlatform, string> = {
   instagram: "shu8hvrXbJbY3Eb9W",
@@ -48,16 +47,16 @@ const ACTOR_IDS: Record<SocialPlatform, string> = {
 
 const SOCIAL_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
+const TERMINAL_STATUSES = new Set(["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"]);
+
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
 
-const SocialPlatformsSchema = Type.Object({
+const RequestSchema = Type.Object({
   platform: stringEnum(SOCIAL_PLATFORMS, {
     description: "Social media platform to scrape.",
   }),
-
-  // Instagram-specific
   instagramMode: Type.Optional(
     stringEnum(INSTAGRAM_MODES, {
       description: "Instagram: 'url' to scrape direct URLs, 'search' to search by query.",
@@ -69,15 +68,11 @@ const SocialPlatformsSchema = Type.Object({
         "Instagram data type. URL mode: posts, comments, mentions, urls. Search mode: hashtags, places, users.",
     }),
   ),
-
-  // TikTok-specific
   tiktokType: Type.Optional(
     stringEnum(TIKTOK_TYPES, {
       description: "TikTok input type: search queries, hashtags, video URLs, or profiles.",
     }),
   ),
-
-  // Common inputs
   urls: Type.Optional(
     Type.Array(Type.String(), {
       description: "URLs to scrape (Instagram URLs, TikTok video URLs, YouTube URLs).",
@@ -105,10 +100,43 @@ const SocialPlatformsSchema = Type.Object({
       maximum: 100,
     }),
   ),
+  actorInput: Type.Optional(
+    Type.Record(Type.String(), Type.Unknown(), {
+      description:
+        "Additional platform-specific Actor input parameters merged into the Actor input. " +
+        "Use this to fine-tune scraping behavior (filters, downloads, sorting, etc.). " +
+        "See platform-specific options in the tool description.",
+    }),
+  ),
+});
+
+const RunRefSchema = Type.Object({
+  runId: Type.String({ description: "Apify run ID from start response." }),
+  platform: stringEnum(SOCIAL_PLATFORMS, { description: "Platform of this run." }),
+  datasetId: Type.String({ description: "Dataset ID from start response." }),
+});
+
+const SocialPlatformsSchema = Type.Object({
+  action: stringEnum(["start", "collect"] as const, {
+    description:
+      "'start': fire off scraping jobs concurrently, returns immediately with run IDs. " +
+      "'collect': fetch results for previously started runs.",
+  }),
+  requests: Type.Optional(
+    Type.Array(RequestSchema, {
+      description:
+        "Scraping requests (for 'start' action). Each specifies a platform and its parameters.",
+    }),
+  ),
+  runs: Type.Optional(
+    Type.Array(RunRefSchema, {
+      description: "Run references from 'start' response (for 'collect' action).",
+    }),
+  ),
 });
 
 // ---------------------------------------------------------------------------
-// Config resolution (follows Firecrawl pattern)
+// Config resolution
 // ---------------------------------------------------------------------------
 
 type SocialConfig = NonNullable<OpenClawConfig["tools"]>["social"];
@@ -250,17 +278,22 @@ function buildYoutubeInput(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Apify API call
+// Apify async API helpers
 // ---------------------------------------------------------------------------
 
-async function runApifyActor(params: {
+interface ApifyRunInfo {
+  id: string;
+  defaultDatasetId: string;
+  status: string;
+}
+
+async function startApifyActorRun(params: {
   actorId: string;
   input: Record<string, unknown>;
   apiKey: string;
   baseUrl: string;
-  timeoutSeconds: number;
-}): Promise<unknown[]> {
-  const endpoint = `${params.baseUrl}/v2/acts/${params.actorId}/run-sync-get-dataset-items`;
+}): Promise<ApifyRunInfo> {
+  const endpoint = `${params.baseUrl}/v2/acts/${params.actorId}/runs`;
 
   const res = await fetch(endpoint, {
     method: "POST",
@@ -269,19 +302,67 @@ async function runApifyActor(params: {
       Authorization: `Bearer ${params.apiKey}`,
     },
     body: JSON.stringify(params.input),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    signal: withTimeout(undefined, HTTP_TIMEOUT_MS),
   });
 
   if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    const detail = detailResult.text;
-    throw new Error(`Apify actor run failed (${res.status}): ${detail || res.statusText}`);
+    const detail = await readResponseText(res, { maxBytes: 64_000 });
+    throw new Error(
+      `Failed to start Apify actor (${res.status}): ${detail.text || res.statusText}`,
+    );
   }
+
+  const body = (await res.json()) as { data: ApifyRunInfo };
+  return body.data;
+}
+
+async function getApifyRunStatus(params: {
+  runId: string;
+  apiKey: string;
+  baseUrl: string;
+}): Promise<{ status: string; defaultDatasetId: string }> {
+  const endpoint = `${params.baseUrl}/v2/actor-runs/${params.runId}`;
+
+  const res = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${params.apiKey}` },
+    signal: withTimeout(undefined, HTTP_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res, { maxBytes: 64_000 });
+    throw new Error(`Failed to get run status (${res.status}): ${detail.text || res.statusText}`);
+  }
+
+  const body = (await res.json()) as {
+    data: { status: string; defaultDatasetId: string };
+  };
+  return body.data;
+}
+
+async function getApifyDatasetItems(params: {
+  datasetId: string;
+  apiKey: string;
+  baseUrl: string;
+}): Promise<unknown[]> {
+  const endpoint = `${params.baseUrl}/v2/datasets/${params.datasetId}/items`;
+
+  const res = await fetch(endpoint, {
+    headers: { Authorization: `Bearer ${params.apiKey}` },
+    signal: withTimeout(undefined, HTTP_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res, { maxBytes: 64_000 });
+    throw new Error(
+      `Failed to get dataset items (${res.status}): ${detail.text || res.statusText}`,
+    );
+  }
+
   return (await res.json()) as unknown[];
 }
 
 // ---------------------------------------------------------------------------
-// Result formatters (Apify JSON → markdown for LLM)
+// Result formatters
 // ---------------------------------------------------------------------------
 
 function str(value: unknown): string {
@@ -429,9 +510,22 @@ function buildToolDescription(allowed: Set<SocialPlatform>): string {
     "Scrape structured data from social media platforms via Apify.",
     "Always prefer this tool over web_fetch for Instagram, TikTok, and YouTube data.",
     "",
-    "PARAMETER RULES:",
-    '- "platform" is always required.',
-    "- Each platform requires specific parameters (see below). Omit parameters not relevant to the chosen platform.",
+    "TWO-PHASE ASYNC PATTERN:",
+    '1. Call with action="start" and a requests array → fires off all scraping jobs concurrently, returns immediately with run IDs.',
+    "2. Do other work (reasoning, other tool calls, etc.).",
+    '3. Call with action="collect" and the runs array from step 1 → fetches results for completed runs, reports pending ones.',
+    "",
+    "START ACTION:",
+    '  action: "start"',
+    "  requests: array of request objects (one per scraping job, no limit per platform). Each request has:",
+    '    - platform (required): "instagram" | "tiktok" | "youtube"',
+    "    - platform-specific parameters (see below)",
+    "    - maxResults (optional, 1-100, default 20)",
+    "",
+    "COLLECT ACTION:",
+    '  action: "collect"',
+    "  runs: array of { runId, platform, datasetId } objects from the start response.",
+    "  Returns completed results + lists any still-pending runs. Call again if runs are pending.",
     "",
   ];
 
@@ -442,11 +536,16 @@ function buildToolDescription(allowed: Set<SocialPlatform>): string {
       '  Mode "url" — scrape direct Instagram URLs:',
       "    instagramType: posts | comments | mentions | urls",
       "    Requires: urls (array of Instagram post/profile/reel URLs)",
-      '    Example: { platform: "instagram", instagramMode: "url", instagramType: "posts", urls: ["https://www.instagram.com/natgeo/"] }',
       '  Mode "search" — search Instagram by keyword:',
       "    instagramType: hashtags | places | users",
       "    Requires: queries (array of search terms)",
-      '    Example: { platform: "instagram", instagramMode: "search", instagramType: "hashtags", queries: ["sunset photography"] }',
+      "  actorInput options for Instagram:",
+      "    resultsType: string — what to scrape: posts | comments | details | mentions | reels (default: posts)",
+      "    resultsLimit: number — max results per URL (default: 200)",
+      '    onlyPostsNewerThan: string — date filter, e.g. "2024-01-01" or "7 days"',
+      "    searchType: string — search type: user | hashtag | place (default: hashtag)",
+      "    searchLimit: number — max search results (1-250, default: 1)",
+      "    addParentData: boolean — add source metadata to results (default: false)",
       "",
     );
   }
@@ -455,11 +554,35 @@ function buildToolDescription(allowed: Set<SocialPlatform>): string {
     lines.push(
       'TIKTOK (platform="tiktok"):',
       "  Requires: tiktokType + the matching input array.",
-      '  tiktokType="search"   → requires queries (search terms)',
+      '  tiktokType="search"   → requires queries',
       '  tiktokType="hashtags" → requires hashtags (without # prefix)',
       '  tiktokType="videos"   → requires urls (TikTok video URLs)',
       '  tiktokType="profiles" → requires profiles (usernames without @)',
-      '  Example: { platform: "tiktok", tiktokType: "search", queries: ["AI coding tools"] }',
+      "  actorInput options for TikTok:",
+      "    resultsPerPage: number — results per hashtag/profile/search (1-1000000, default: 100)",
+      "    profileScrapeSections: string[] — sections to scrape: videos | reposts (default: [videos])",
+      "    profileSorting: string — sort profile content: latest | popular | oldest (default: latest)",
+      "    excludePinnedPosts: boolean — exclude pinned posts from profiles (default: false)",
+      '    oldestPostDateUnified: string — date filter for profile videos, e.g. "2024-01-01" or "30 days"',
+      '    newestPostDate: string — scrape videos published before this date, e.g. "2025-01-01"',
+      "    leastDiggs: number — min hearts filter (popularity filter)",
+      "    mostDiggs: number — max hearts filter (popularity filter)",
+      '    searchSection: string — filter search results: "" (Top) | "/video" (Video) | "/user" (Profile)',
+      "    maxProfilesPerQuery: number — max profiles for profile searches (default: 10)",
+      '    searchSorting: string — sort search results: "0" (relevant) | "1" (most liked) | "3" (latest)',
+      '    searchDatePosted: string — search date range: "0" (all time) | "1" (24h) | "2" (week) | "3" (month) | "4" (3 months) | "5" (6 months)',
+      "    scrapeRelatedVideos: boolean — scrape related videos for postURLs (default: false)",
+      "    shouldDownloadVideos: boolean — download TikTok videos (charged add-on, default: false)",
+      "    shouldDownloadSubtitles: boolean — download subtitles (default: false)",
+      "    shouldDownloadCovers: boolean — download thumbnails (default: false)",
+      "    shouldDownloadAvatars: boolean — download profile avatars (default: false)",
+      "    shouldDownloadSlideshowImages: boolean — download slideshow images (default: false)",
+      "    shouldDownloadMusicCovers: boolean — download sound covers (default: false)",
+      "    commentsPerPost: number — max comments per post (0 = none)",
+      "    maxRepliesPerComment: number — max replies per comment (0 = none)",
+      "    maxFollowersPerProfile: number — scrape follower profiles (0 = none, charged)",
+      "    maxFollowingPerProfile: number — scrape following profiles (0 = none, charged)",
+      "    proxyCountryCode: string — ISO country code for proxy, e.g. 'US', 'GB' (default: None)",
       "",
     );
   }
@@ -467,110 +590,267 @@ function buildToolDescription(allowed: Set<SocialPlatform>): string {
   if (allowed.has("youtube")) {
     lines.push(
       'YOUTUBE (platform="youtube"):',
-      "  Provide either urls (video/channel/playlist URLs) or queries (search keywords). At least one is required.",
-      '  Example (search): { platform: "youtube", queries: ["machine learning tutorial"] }',
-      '  Example (URL):    { platform: "youtube", urls: ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"] }',
+      "  Provide either urls or queries. At least one is required.",
+      "  actorInput options for YouTube:",
+      "    maxResults: number — max videos per search term (default: 10)",
+      "    maxResultsShorts: number — max shorts per search (default: 0)",
+      "    maxResultStreams: number — max streams per search (default: 0)",
+      "    downloadSubtitles: boolean — download video subtitles in SRT format (default: false)",
+      "    subtitlesLanguage: string — subtitle language: any | en | de | es | fr | it | ja | ko | nl | pt | ru (default: en)",
+      "    subtitlesFormat: string — subtitle format: srt | vtt | xml | plaintext (default: srt)",
+      "    preferAutoGeneratedSubtitles: boolean — prefer auto-generated over user subtitles (default: false)",
+      "    saveSubsToKVS: boolean — save subtitles to key-value store (default: false)",
+      "    sortingOrder: string — sort search results: relevance | rating | date | views",
+      "    dateFilter: string — upload date filter: hour | today | week | month | year",
+      "    videoType: string — video type filter: video | movie",
+      "    lengthFilter: string — length filter: under4 | between420 | plus20",
+      "    isHD: boolean — HD filter | is4K: boolean — 4K filter | isLive: boolean — Live filter",
+      "    hasSubtitles: boolean — Subtitles/CC filter | hasCC: boolean — Creative Commons filter",
+      '    oldestPostDate: string — scrape channel videos after this date, e.g. "2024-01-01" or "30 days"',
+      "    sortVideosBy: string — sort channel videos: NEWEST | POPULAR | OLDEST",
       "",
     );
   }
 
   lines.push(
-    "COMMON OPTIONS:",
-    "- maxResults: number (1-100, default 20). Controls how many items are returned.",
+    "EXAMPLE — scrape Instagram and TikTok concurrently:",
+    '  { action: "start", requests: [',
+    '    { platform: "instagram", instagramMode: "search", instagramType: "hashtags", queries: ["sunset"] },',
+    '    { platform: "tiktok", tiktokType: "search", queries: ["AI tools"], actorInput: { searchSection: "/video", searchSorting: "3" } }',
+    "  ]}",
+    "  → returns { runs: [{ runId, platform, datasetId }, ...] }",
+    '  Then: { action: "collect", runs: <runs from above> }',
   );
 
   return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
-// Core logic
+// Core logic — start
 // ---------------------------------------------------------------------------
 
-async function runSocialPlatforms(params: {
-  args: Record<string, unknown>;
+async function handleStart(params: {
+  requests: Record<string, unknown>[];
   allowedPlatforms: Set<SocialPlatform>;
-  apiKey: string | undefined;
+  apiKey: string;
   baseUrl: string;
   defaultMaxResults: number;
-  timeoutSeconds: number;
+}): Promise<Record<string, unknown>> {
+  if (!params.requests?.length) {
+    throw new ToolInputError("'start' action requires 'requests' array with at least one request.");
+  }
+
+  // Build all inputs up-front so validation errors fail fast before any API calls.
+  const prepared: {
+    platform: SocialPlatform;
+    actorId: string;
+    input: Record<string, unknown>;
+  }[] = [];
+
+  for (const req of params.requests) {
+    const platform = readStringParam(req, "platform", { required: true }) as SocialPlatform;
+    if (!params.allowedPlatforms.has(platform)) {
+      throw new ToolInputError(`Platform "${platform}" is not enabled.`);
+    }
+
+    const maxResults = readNumberParam(req, "maxResults") ?? params.defaultMaxResults;
+    const urls = readStringArrayParam(req, "urls");
+    const queries = readStringArrayParam(req, "queries");
+    const hashtags = readStringArrayParam(req, "hashtags");
+    const profiles = readStringArrayParam(req, "profiles");
+    const actorId = ACTOR_IDS[platform];
+
+    const actorInput =
+      req.actorInput && typeof req.actorInput === "object" && !Array.isArray(req.actorInput)
+        ? (req.actorInput as Record<string, unknown>)
+        : {};
+
+    let input: Record<string, unknown>;
+    switch (platform) {
+      case "instagram": {
+        const mode = readStringParam(req, "instagramMode", { required: true });
+        const type = readStringParam(req, "instagramType", { required: true });
+        input = {
+          ...buildInstagramInput({ mode, type, urls, queries, maxResults }),
+          ...actorInput,
+        };
+        break;
+      }
+      case "tiktok": {
+        const type = readStringParam(req, "tiktokType", { required: true });
+        input = {
+          ...buildTiktokInput({ type, queries, hashtags, urls, profiles, maxResults }),
+          ...actorInput,
+        };
+        break;
+      }
+      case "youtube": {
+        input = { ...buildYoutubeInput({ urls, queries, maxResults }), ...actorInput };
+        break;
+      }
+    }
+
+    prepared.push({ platform, actorId, input });
+  }
+
+  // Fire all Actor starts concurrently.
+  const results = await Promise.allSettled(
+    prepared.map(async ({ platform, actorId, input }) => {
+      const run = await startApifyActorRun({
+        actorId,
+        input,
+        apiKey: params.apiKey,
+        baseUrl: params.baseUrl,
+      });
+      return {
+        platform,
+        runId: run.id,
+        datasetId: run.defaultDatasetId,
+        status: run.status,
+      };
+    }),
+  );
+
+  const runs: { runId: string; platform: SocialPlatform; datasetId: string; status: string }[] = [];
+  const errors: { index: number; platform: string; error: string }[] = [];
+
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      runs.push(result.value);
+    } else {
+      errors.push({
+        index: i,
+        platform: prepared[i].platform,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  });
+
+  return {
+    action: "start",
+    message:
+      `Started ${runs.length} scraping job(s)` +
+      (errors.length ? `, ${errors.length} failed to start` : "") +
+      ". Use action 'collect' with the runs array to fetch results.",
+    runs,
+    ...(errors.length ? { errors } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Core logic — collect
+// ---------------------------------------------------------------------------
+
+async function handleCollect(params: {
+  runs: Record<string, unknown>[];
+  apiKey: string;
+  baseUrl: string;
   cacheTtlMs: number;
 }): Promise<Record<string, unknown>> {
-  const platform = readStringParam(params.args, "platform", { required: true }) as SocialPlatform;
-
-  if (!params.allowedPlatforms.has(platform)) {
-    throw new ToolInputError(`Platform "${platform}" is not enabled.`);
-  }
-  if (!params.apiKey) {
-    return {
-      error: "missing_api_key",
-      message: "Set APIFY_API_KEY env var or tools.social.apiKey in config.",
-      docs: "https://docs.openclaw.ai/tools/social",
-    };
+  if (!params.runs?.length) {
+    throw new ToolInputError("'collect' action requires 'runs' array.");
   }
 
-  const maxResults = readNumberParam(params.args, "maxResults") ?? params.defaultMaxResults;
-  const urls = readStringArrayParam(params.args, "urls");
-  const queries = readStringArrayParam(params.args, "queries");
-  const hashtags = readStringArrayParam(params.args, "hashtags");
-  const profiles = readStringArrayParam(params.args, "profiles");
+  const results = await Promise.allSettled(
+    params.runs.map(async (runRef) => {
+      const runId = readStringParam(runRef, "runId", { required: true });
+      const platform = readStringParam(runRef, "platform", {
+        required: true,
+      }) as SocialPlatform;
+      const datasetId = readStringParam(runRef, "datasetId", { required: true });
 
-  // Build platform-specific input
-  let input: Record<string, unknown>;
-  const actorId = ACTOR_IDS[platform];
+      // Return from cache if we already fetched this run.
+      const cacheKey = normalizeCacheKey(`social:run:${runId}`);
+      const cached = readCache(SOCIAL_CACHE, cacheKey);
+      if (cached) {
+        return { ...cached.value, cached: true };
+      }
 
-  switch (platform) {
-    case "instagram": {
-      const mode = readStringParam(params.args, "instagramMode", { required: true });
-      const type = readStringParam(params.args, "instagramType", { required: true });
-      input = buildInstagramInput({ mode, type, urls, queries, maxResults });
-      break;
+      // Check run status.
+      const runStatus = await getApifyRunStatus({
+        runId,
+        apiKey: params.apiKey,
+        baseUrl: params.baseUrl,
+      });
+
+      if (!TERMINAL_STATUSES.has(runStatus.status)) {
+        return {
+          platform,
+          runId,
+          status: runStatus.status,
+          pending: true,
+        } as Record<string, unknown>;
+      }
+
+      if (runStatus.status !== "SUCCEEDED") {
+        return {
+          platform,
+          runId,
+          status: runStatus.status,
+          error: `Run ended with status: ${runStatus.status}`,
+        } as Record<string, unknown>;
+      }
+
+      // Fetch dataset items.
+      const items = await getApifyDatasetItems({
+        datasetId,
+        apiKey: params.apiKey,
+        baseUrl: params.baseUrl,
+      });
+
+      const text = formatPlatformResults(platform, items);
+      const wrapped = wrapExternalContent(text, {
+        source: "social_platforms",
+        includeWarning: true,
+      });
+
+      const payload: Record<string, unknown> = {
+        platform,
+        runId,
+        status: "SUCCEEDED",
+        resultCount: items.length,
+        text: wrapped,
+        externalContent: { untrusted: true, source: "social_platforms", wrapped: true },
+        fetchedAt: new Date().toISOString(),
+      };
+
+      writeCache(SOCIAL_CACHE, cacheKey, payload, params.cacheTtlMs);
+      return payload;
+    }),
+  );
+
+  const completed: Record<string, unknown>[] = [];
+  const pending: Record<string, unknown>[] = [];
+  const errors: Record<string, unknown>[] = [];
+
+  for (const result of results) {
+    if (result.status === "rejected") {
+      errors.push({
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+      continue;
     }
-    case "tiktok": {
-      const type = readStringParam(params.args, "tiktokType", { required: true });
-      input = buildTiktokInput({ type, queries, hashtags, urls, profiles, maxResults });
-      break;
-    }
-    case "youtube": {
-      input = buildYoutubeInput({ urls, queries, maxResults });
-      break;
+    const value = result.value;
+    if (value.pending) {
+      pending.push(value);
+    } else if (value.error) {
+      errors.push(value);
+    } else {
+      completed.push(value);
     }
   }
 
-  // Cache check
-  const cacheKey = normalizeCacheKey(`social:${platform}:${JSON.stringify(input)}`);
-  const cached = readCache(SOCIAL_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
-  // Call Apify
-  const start = Date.now();
-  const items = await runApifyActor({
-    actorId,
-    input,
-    apiKey: params.apiKey,
-    baseUrl: params.baseUrl,
-    timeoutSeconds: params.timeoutSeconds,
-  });
-
-  // Format results
-  const text = formatPlatformResults(platform, items);
-  const wrapped = wrapExternalContent(text, {
-    source: "social_platforms",
-    includeWarning: true,
-  });
-
-  const payload: Record<string, unknown> = {
-    platform,
-    resultCount: items.length,
-    tookMs: Date.now() - start,
-    text: wrapped,
-    externalContent: { untrusted: true, source: "social_platforms", wrapped: true },
-    fetchedAt: new Date().toISOString(),
+  return {
+    action: "collect",
+    allDone: pending.length === 0,
+    message:
+      pending.length === 0
+        ? `All ${completed.length} run(s) completed.`
+        : `${completed.length} completed, ${pending.length} still running. Call collect again for pending runs.`,
+    completed,
+    ...(pending.length ? { pending } : {}),
+    ...(errors.length ? { errors } : {}),
   };
-
-  writeCache(SOCIAL_CACHE, cacheKey, payload, params.cacheTtlMs);
-  return payload;
 }
 
 // ---------------------------------------------------------------------------
@@ -589,7 +869,6 @@ export function createSocialPlatformsTool(options?: {
   const allowedPlatforms = resolveAllowedPlatforms(config);
   const baseUrl = resolveSocialBaseUrl(config);
   const defaultMaxResults = resolveMaxResults(config);
-  const timeoutSeconds = resolveTimeoutSeconds(config?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
   const cacheTtlMs = resolveCacheTtlMs(config?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
   const description = buildToolDescription(allowedPlatforms);
 
@@ -599,16 +878,40 @@ export function createSocialPlatformsTool(options?: {
     description,
     parameters: SocialPlatformsSchema,
     execute: async (_toolCallId, args) => {
-      const result = await runSocialPlatforms({
-        args: args as Record<string, unknown>,
-        allowedPlatforms,
-        apiKey,
-        baseUrl,
-        defaultMaxResults,
-        timeoutSeconds,
-        cacheTtlMs,
-      });
-      return jsonResult(result);
+      const typedArgs = args as Record<string, unknown>;
+      const action = readStringParam(typedArgs, "action", { required: true });
+
+      if (!apiKey) {
+        return jsonResult({
+          error: "missing_api_key",
+          message: "Set APIFY_API_KEY env var or tools.social.apiKey in config.",
+          docs: "https://docs.openclaw.ai/tools/social",
+        });
+      }
+
+      switch (action) {
+        case "start":
+          return jsonResult(
+            await handleStart({
+              requests: typedArgs.requests as Record<string, unknown>[],
+              allowedPlatforms,
+              apiKey,
+              baseUrl,
+              defaultMaxResults,
+            }),
+          );
+        case "collect":
+          return jsonResult(
+            await handleCollect({
+              runs: typedArgs.runs as Record<string, unknown>[],
+              apiKey,
+              baseUrl,
+              cacheTtlMs,
+            }),
+          );
+        default:
+          throw new ToolInputError(`Unknown action: "${action}". Use "start" or "collect".`);
+      }
     },
   };
 }
