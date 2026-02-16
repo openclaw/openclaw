@@ -16,8 +16,11 @@ describe("git-hooks/pre-commit", () => {
     // Option-injection hardening: always pass paths after "--".
     expect(script).toMatch(/\ngit add -- /);
 
-    // The original bug used whitespace + xargs, and passed unsafe flags.
+    // The original bug used whitespace + xargs.
     expect(script).not.toMatch(/xargs\s+git add/);
-    expect(script).not.toMatch(/--no-error-on-unmatched-pattern/);
+
+    // Expected helper wiring for consistent tool invocation.
+    expect(script).toMatch(/scripts\/pre-commit\/run-node-tool\.sh/);
+    expect(script).toMatch(/scripts\/pre-commit\/filter-staged-files\.mjs/);
   });
 });

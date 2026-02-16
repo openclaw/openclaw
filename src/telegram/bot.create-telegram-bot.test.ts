@@ -40,27 +40,6 @@ const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeEach(() => {
     process.env.TZ = "UTC";
-    loadConfig.mockReturnValue({
-      agents: {
-        defaults: {
-          envelopeTimezone: "utc",
-        },
-      },
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"] },
-      },
-    });
-    readChannelAllowFromStore.mockReset().mockResolvedValue([]);
-    upsertChannelPairingRequest
-      .mockReset()
-      .mockResolvedValue({ code: "PAIRCODE", created: true } as const);
-
-    // Some tests override reply behavior; keep a stable baseline between tests.
-    replySpy.mockReset();
-    replySpy.mockImplementation(async (_ctx, opts) => {
-      await opts?.onReplyStart?.();
-      return undefined;
-    });
   });
   afterEach(() => {
     process.env.TZ = ORIGINAL_TZ;
@@ -90,7 +69,7 @@ describe("createTelegramBot", () => {
       globalThis.fetch = originalFetch;
     }
   });
-  it("passes timeoutSeconds even without a custom fetch", () => {
+  it("applies global and per-account timeoutSeconds", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 60 },
@@ -103,8 +82,8 @@ describe("createTelegramBot", () => {
         client: expect.objectContaining({ timeoutSeconds: 60 }),
       }),
     );
-  });
-  it("prefers per-account timeoutSeconds overrides", () => {
+    botCtorSpy.mockClear();
+
     loadConfig.mockReturnValue({
       channels: {
         telegram: {

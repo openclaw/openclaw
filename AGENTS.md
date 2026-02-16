@@ -195,3 +195,39 @@
 - Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
 - Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
 - Kill the tmux session after publish.
+
+## Plugin Release Fast Path (no core `openclaw` publish)
+
+- Release only already-on-npm plugins. Source list is in `docs/reference/RELEASING.md` under "Current npm plugin list".
+- Run all CLI `op` calls and `npm publish` inside tmux to avoid hangs/interruption:
+  - `tmux new -d -s release-plugins-$(date +%Y%m%d-%H%M%S)`
+  - `eval "$(op signin --account my.1password.com)"`
+- 1Password helpers:
+  - password used by `npm login`:
+    `op item get Npmjs --format=json | jq -r '.fields[] | select(.id=="password").value'`
+  - OTP:
+    `op read 'op://Private/Npmjs/one-time password?attribute=otp'`
+- Fast publish loop (local helper script in `/tmp` is fine; keep repo clean):
+  - compare local plugin `version` to `npm view <name> version`
+  - only run `npm publish --access public --otp="<otp>"` when versions differ
+  - skip if package is missing on npm or version already matches.
+- Keep `openclaw` untouched: never run publish from repo root unless explicitly requested.
+- Post-check for each release:
+  - per-plugin: `npm view @openclaw/<name> version --userconfig "$(mktemp)"` should be `2026.2.15`
+  - core guard: `npm view openclaw version --userconfig "$(mktemp)"` should stay at previous version unless explicitly requested.
+
+## Changelog Release Notes
+
+- When cutting a mac release with beta GitHub prerelease:
+  - Tag `vYYYY.M.D-beta.N` from the release commit (example: `v2026.2.15-beta.1`).
+  - Create prerelease with title `openclaw YYYY.M.D-beta.N`.
+  - Use release notes from `CHANGELOG.md` version section (`Changes` + `Fixes`, no title duplicate).
+  - Attach at least `OpenClaw-YYYY.M.D.zip` and `OpenClaw-YYYY.M.D.dSYM.zip`; include `.dmg` if available.
+
+- Keep top version entries in `CHANGELOG.md` sorted by impact:
+  - `### Changes` first.
+  - `### Fixes` deduped and ranked with user-facing fixes first.
+- Before tagging/publishing, run:
+  - `node --import tsx scripts/release-check.ts`
+  - `pnpm release:check`
+  - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.

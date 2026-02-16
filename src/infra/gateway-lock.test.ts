@@ -90,16 +90,16 @@ describe("gateway lock", () => {
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 100,
-      pollIntervalMs: 5,
+      timeoutMs: 50,
+      pollIntervalMs: 2,
     });
     expect(lock).not.toBeNull();
 
     const pending = acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 100,
-      pollIntervalMs: 5,
+      timeoutMs: 15,
+      pollIntervalMs: 2,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
@@ -107,8 +107,8 @@ describe("gateway lock", () => {
     const lock2 = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 100,
-      pollIntervalMs: 5,
+      timeoutMs: 30,
+      pollIntervalMs: 2,
     });
     await lock2?.release();
     await cleanup();
@@ -173,8 +173,8 @@ describe("gateway lock", () => {
     const pending = acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 50,
-      pollIntervalMs: 5,
+      timeoutMs: 15,
+      pollIntervalMs: 2,
       staleMs: 10_000,
       platform: "linux",
     });
@@ -198,8 +198,8 @@ describe("gateway lock", () => {
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 30,
+      pollIntervalMs: 2,
       staleMs: 1,
       platform: "linux",
     });

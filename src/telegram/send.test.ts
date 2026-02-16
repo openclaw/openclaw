@@ -1,10 +1,11 @@
 import type { Bot } from "grammy";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
+import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
 
@@ -17,6 +18,38 @@ const {
   sendPollTelegram,
   sendStickerTelegram,
 } = await importTelegramSendModule();
+
+describe("sent-message-cache", () => {
+  afterEach(() => {
+    clearSentMessageCache();
+  });
+
+  it("records and retrieves sent messages", () => {
+    recordSentMessage(123, 1);
+    recordSentMessage(123, 2);
+    recordSentMessage(456, 10);
+
+    expect(wasSentByBot(123, 1)).toBe(true);
+    expect(wasSentByBot(123, 2)).toBe(true);
+    expect(wasSentByBot(456, 10)).toBe(true);
+    expect(wasSentByBot(123, 3)).toBe(false);
+    expect(wasSentByBot(789, 1)).toBe(false);
+  });
+
+  it("handles string chat IDs", () => {
+    recordSentMessage("123", 1);
+    expect(wasSentByBot("123", 1)).toBe(true);
+    expect(wasSentByBot(123, 1)).toBe(true);
+  });
+
+  it("clears cache", () => {
+    recordSentMessage(123, 1);
+    expect(wasSentByBot(123, 1)).toBe(true);
+
+    clearSentMessageCache();
+    expect(wasSentByBot(123, 1)).toBe(false);
+  });
+});
 
 describe("buildInlineKeyboard", () => {
   it("returns undefined for empty input", () => {
@@ -1286,6 +1319,22 @@ describe("editMessageTelegram", () => {
         reply_markup: { inline_keyboard: [] },
       }),
     );
+  });
+
+  it("treats 'message is not modified' as success", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error(
+        "400: Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message",
+      ),
+    );
+
+    await expect(
+      editMessageTelegram("123", 1, "hi", {
+        token: "tok",
+        cfg: {},
+      }),
+    ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
   });
 
   it("disables link previews when linkPreview is false", async () => {
