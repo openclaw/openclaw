@@ -24,6 +24,12 @@ async function checkUnauthorizedWorkDmSender() {
   });
 }
 
+function expectSilentlyBlocked(result: { allowed: boolean }) {
+  expect(result.allowed).toBe(false);
+  expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  expect(sendMessageMock).not.toHaveBeenCalled();
+}
+
 describe("checkInboundAccessControl pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
@@ -80,10 +86,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
 
     const result = await checkUnauthorizedWorkDmSender();
-
-    expect(result.allowed).toBe(false);
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sendMessageMock).not.toHaveBeenCalled();
+    expectSilentlyBlocked(result);
   });
 
   it("inherits channel-level dmPolicy when account-level dmPolicy is unset", async () => {
@@ -103,9 +106,6 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
 
     const result = await checkUnauthorizedWorkDmSender();
-
-    expect(result.allowed).toBe(false);
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sendMessageMock).not.toHaveBeenCalled();
+    expectSilentlyBlocked(result);
   });
 });

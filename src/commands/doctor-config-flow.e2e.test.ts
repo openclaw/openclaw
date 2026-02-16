@@ -120,4 +120,113 @@ describe("doctor config flow", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("converts numeric discord ids to strings on repair", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            channels: {
+              discord: {
+                allowFrom: [123],
+                dm: { allowFrom: [456], groupChannels: [789] },
+                execApprovals: { approvers: [321] },
+                guilds: {
+                  "100": {
+                    users: [111],
+                    roles: [222],
+                    channels: {
+                      general: { users: [333], roles: [444] },
+                    },
+                  },
+                },
+                accounts: {
+                  work: {
+                    allowFrom: [555],
+                    dm: { allowFrom: [666], groupChannels: [777] },
+                    execApprovals: { approvers: [888] },
+                    guilds: {
+                      "200": {
+                        users: [999],
+                        roles: [1010],
+                        channels: {
+                          help: { users: [1111], roles: [1212] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const result = await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      const cfg = result.cfg as unknown as {
+        channels: {
+          discord: {
+            allowFrom: string[];
+            dm: { allowFrom: string[]; groupChannels: string[] };
+            execApprovals: { approvers: string[] };
+            guilds: Record<
+              string,
+              {
+                users: string[];
+                roles: string[];
+                channels: Record<string, { users: string[]; roles: string[] }>;
+              }
+            >;
+            accounts: Record<
+              string,
+              {
+                allowFrom: string[];
+                dm: { allowFrom: string[]; groupChannels: string[] };
+                execApprovals: { approvers: string[] };
+                guilds: Record<
+                  string,
+                  {
+                    users: string[];
+                    roles: string[];
+                    channels: Record<string, { users: string[]; roles: string[] }>;
+                  }
+                >;
+              }
+            >;
+          };
+        };
+      };
+
+      expect(cfg.channels.discord.allowFrom).toEqual(["123"]);
+      expect(cfg.channels.discord.dm.allowFrom).toEqual(["456"]);
+      expect(cfg.channels.discord.dm.groupChannels).toEqual(["789"]);
+      expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
+      expect(cfg.channels.discord.guilds["100"].users).toEqual(["111"]);
+      expect(cfg.channels.discord.guilds["100"].roles).toEqual(["222"]);
+      expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
+      expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
+      expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
+      expect(cfg.channels.discord.accounts.work.dm.allowFrom).toEqual(["666"]);
+      expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual(["777"]);
+      expect(cfg.channels.discord.accounts.work.execApprovals.approvers).toEqual(["888"]);
+      expect(cfg.channels.discord.accounts.work.guilds["200"].users).toEqual(["999"]);
+      expect(cfg.channels.discord.accounts.work.guilds["200"].roles).toEqual(["1010"]);
+      expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.users).toEqual([
+        "1111",
+      ]);
+      expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.roles).toEqual([
+        "1212",
+      ]);
+    });
+  });
 });
