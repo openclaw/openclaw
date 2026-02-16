@@ -288,6 +288,12 @@ function resolveDefaultCollections(
   }));
 }
 
+function sanitizeTablePrefix(raw: string | undefined): string {
+  const trimmed = raw?.trim() || "openclaw_memory";
+  // Only allow alphanumeric + underscores to prevent SQL injection.
+  return trimmed.replace(/[^a-zA-Z0-9_]/g, "_") || "openclaw_memory";
+}
+
 function resolvePostgresConfig(
   pgCfg: MemoryPostgresConfig | undefined,
   workspaceDir: string,
@@ -308,7 +314,7 @@ function resolvePostgresConfig(
     user: pgCfg?.user,
     password: pgCfg?.password,
     ssl: pgCfg?.ssl,
-    tablePrefix: pgCfg?.tablePrefix?.trim() || "openclaw_memory",
+    tablePrefix: sanitizeTablePrefix(pgCfg?.tablePrefix),
     embedding: {
       provider: pgCfg?.embedding?.provider ?? "voyage",
       model: pgCfg?.embedding?.model ?? "voyage-3-lite",

@@ -48,7 +48,7 @@ function buildPoolConfig(cfg: ResolvedPostgresConfig): PgPoolConfig {
     database: cfg.database ?? "openclaw",
     user: cfg.user,
     password: cfg.password,
-    ssl: cfg.ssl === true || cfg.ssl === "require" ? { rejectUnauthorized: false } : undefined,
+    ssl: cfg.ssl === true || cfg.ssl === "require" ? { rejectUnauthorized: true } : undefined,
     max: 5,
     idleTimeoutMillis: 30_000,
   };

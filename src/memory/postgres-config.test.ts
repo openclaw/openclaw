@@ -75,4 +75,45 @@ describe("resolveMemoryBackendConfig postgres", () => {
     expect(result.backend).toBe("builtin");
     expect(result.postgres).toBeUndefined();
   });
+
+  it("sanitizes tablePrefix to prevent SQL injection", () => {
+    const result = resolveMemoryBackendConfig({
+      cfg: {
+        memory: {
+          backend: "postgres",
+          postgres: { tablePrefix: "foo; DROP TABLE users; --" },
+        },
+      } as any,
+      agentId: "main",
+    });
+    expect(result.postgres!.tablePrefix).toBe("foo__DROP_TABLE_users____");
+    expect(result.postgres!.tablePrefix).not.toContain(";");
+    expect(result.postgres!.tablePrefix).not.toContain("-");
+  });
+
+  it("allows valid tablePrefix characters", () => {
+    const result = resolveMemoryBackendConfig({
+      cfg: {
+        memory: {
+          backend: "postgres",
+          postgres: { tablePrefix: "my_agent_v2" },
+        },
+      } as any,
+      agentId: "main",
+    });
+    expect(result.postgres!.tablePrefix).toBe("my_agent_v2");
+  });
+
+  it("defaults empty tablePrefix to openclaw_memory", () => {
+    const result = resolveMemoryBackendConfig({
+      cfg: {
+        memory: {
+          backend: "postgres",
+          postgres: { tablePrefix: "   " },
+        },
+      } as any,
+      agentId: "main",
+    });
+    expect(result.postgres!.tablePrefix).toBe("openclaw_memory");
+  });
 });
