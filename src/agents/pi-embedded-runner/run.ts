@@ -547,8 +547,11 @@ export async function runEmbeddedPiAgent(
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
+              // Progressive escalation: each retry gets more aggressive
+              // Attempt 1: 0.4, Attempt 2: 0.25, Attempt 3: 0.1
+              const escalationShare = Math.max(0.1, 0.4 - (overflowCompactionAttempts - 1) * 0.15);
               log.warn(
-                `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
+                `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}, maxHistoryShare=${escalationShare}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
               continue;
             }
@@ -559,16 +562,19 @@ export async function runEmbeddedPiAgent(
               !hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
+              overflowCompactionAttempts++;
+              // Progressive escalation: each retry gets more aggressive
+              // Attempt 1: 0.4, Attempt 2: 0.25, Attempt 3: 0.1
+              const escalationShare = Math.max(0.1, 0.4 - (overflowCompactionAttempts - 1) * 0.15);
               if (log.isEnabled("debug")) {
                 log.debug(
                   `[compaction-diag] decision diagId=${overflowDiagId} branch=compact ` +
                     `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
-                    `attempt=${overflowCompactionAttempts + 1} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
                 );
               }
-              overflowCompactionAttempts++;
               log.warn(
-                `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
+                `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}, maxHistoryShare=${escalationShare}); attempting auto-compaction for ${provider}/${modelId}`,
               );
               const compactResult = await compactEmbeddedPiSessionDirect({
                 sessionId: params.sessionId,
@@ -595,6 +601,7 @@ export async function runEmbeddedPiAgent(
                 diagId: overflowDiagId,
                 attempt: overflowCompactionAttempts,
                 maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                maxHistoryShareOverride: escalationShare,
               });
               if (compactResult.compacted) {
                 autoCompactionCount += 1;

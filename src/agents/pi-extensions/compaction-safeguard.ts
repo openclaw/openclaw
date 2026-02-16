@@ -319,13 +319,41 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       };
     } catch (error) {
       console.warn(
-        `Compaction summarization failed; truncating history: ${
+        `Compaction summarization failed; building structural fallback: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+
+      // Build a structural summary that preserves tool names, message counts,
+      // and file operations so the agent can reorient after failed summarization.
+      const messagesToInspect = [
+        ...preparation.messagesToSummarize,
+        ...preparation.turnPrefixMessages,
+      ];
+      const roleCounts: Record<string, number> = {};
+      const toolNameSet = new Set<string>();
+      for (const msg of messagesToInspect) {
+        if (!msg || typeof msg !== "object") continue;
+        const role = (msg as { role?: unknown }).role;
+        if (typeof role === "string") roleCounts[role] = (roleCounts[role] ?? 0) + 1;
+        const toolName = (msg as { toolName?: unknown }).toolName;
+        if (typeof toolName === "string" && toolName.trim()) toolNameSet.add(toolName.trim());
+      }
+      const roleBreakdown = Object.entries(roleCounts)
+        .map(([r, c]) => `${r}: ${c}`)
+        .join(", ");
+      const toolNames = [...toolNameSet].sort();
+
+      const structuralParts = [
+        `Session contained ${messagesToInspect.length} messages (${roleBreakdown}).`,
+        toolNames.length > 0 ? `Tools used: ${toolNames.join(", ")}` : null,
+        toolFailureSection || null,
+        fileOpsSummary || null,
+      ].filter(Boolean);
+
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: structuralParts.join("\n"),
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },

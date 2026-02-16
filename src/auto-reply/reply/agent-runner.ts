@@ -10,6 +10,8 @@ import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -20,6 +22,7 @@ import {
 } from "../../config/sessions.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
@@ -205,6 +208,33 @@ export async function runReplyAgent(params: {
     storePath,
     isHeartbeat,
   });
+
+  // If memory flush flagged a force compaction (after flush captured context),
+  // reset the session now so the main turn starts fresh.
+  // The post-compaction hook will inject CONTEXT.md + temp_memory.md on bootstrap.
+  if ((activeSessionEntry as any)?.forceCompaction && sessionKey && storePath) {
+    logVerbose(`memory flush: force compaction flagged, resetting session context`);
+    const nextSessionId = crypto.randomUUID();
+    const nextCompactionCount = (activeSessionEntry?.compactionCount ?? 0) + 1;
+    delete (activeSessionEntry as any).forceCompaction;
+    try {
+      const updatedEntry = await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({
+          sessionId: nextSessionId,
+          totalTokens: 0,
+          totalTokensFresh: true,
+          compactionCount: nextCompactionCount,
+        }),
+      });
+      if (updatedEntry) {
+        activeSessionEntry = updatedEntry;
+      }
+    } catch (err) {
+      logVerbose(`force compaction session reset failed: ${String(err)}`);
+    }
+  }
 
   const runFollowupTurn = createFollowupRunner({
     opts,

@@ -146,6 +146,7 @@ async function summarizeChunks(params: {
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
+  contextWindow?: number;
   customInstructions?: string;
   previousSummary?: string;
 }): Promise<string> {
@@ -157,8 +158,34 @@ async function summarizeChunks(params: {
   const safeMessages = stripToolResultDetails(params.messages);
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
+  const skippedChunks: string[] = [];
+
+  // Use contextWindow if provided, otherwise estimate from maxChunkTokens
+  const effectiveContextWindow = params.contextWindow ?? Math.floor(params.maxChunkTokens / BASE_CHUNK_RATIO);
 
   for (const chunk of chunks) {
+    // Pre-flight check: skip chunks that would exceed model context limit
+    const chunkTokens = estimateMessagesTokens(chunk) * SAFETY_MARGIN;
+    if (chunkTokens > effectiveContextWindow * 0.9) {
+      // Chunk is too large for model - filter out oversized messages
+      const filteredChunk = chunk.filter((msg) => !isOversizedForSummary(msg, effectiveContextWindow));
+      if (filteredChunk.length === 0) {
+        // All messages in chunk are oversized - skip entirely
+        skippedChunks.push(`[Chunk with ${chunk.length} oversized messages (~${Math.round(chunkTokens / 1000)}K tokens) omitted]`);
+        continue;
+      }
+      // Summarize filtered chunk
+      summary = await generateSummary(
+        filteredChunk,
+        params.model,
+        params.reserveTokens,
+        params.apiKey,
+        params.signal,
+        params.customInstructions,
+        summary,
+      );
+      continue;
+    }
     summary = await generateSummary(
       chunk,
       params.model,
@@ -168,6 +195,11 @@ async function summarizeChunks(params: {
       params.customInstructions,
       summary,
     );
+  }
+
+  // Append notes about skipped chunks
+  if (skippedChunks.length > 0) {
+    summary = (summary ?? "") + "\n\n" + skippedChunks.join("\n");
   }
 
   return summary ?? DEFAULT_SUMMARY_FALLBACK;

@@ -8,8 +8,10 @@ import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js"
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { isContextOverflowError } from "../../agents/pi-embedded-helpers.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
+  resolveFreshSessionTotalTokens,
   resolveAgentIdFromSessionKey,
   type SessionEntry,
   updateSessionStoreEntry,
@@ -17,6 +19,10 @@ import {
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import {
+  hasHeadroomForFlushTurn,
+  runMechanicalFlush,
+} from "./mechanical-flush.js";
 import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
@@ -82,6 +88,41 @@ export async function runMemoryFlushIfNeeded(params: {
 
   let activeSessionEntry = params.sessionEntry;
   const activeSessionStore = params.sessionStore;
+
+  // Pre-check: do we have enough headroom for an LLM-based flush turn?
+  const flushModelId = params.followupRun.run.model ?? params.defaultModel;
+  const flushContextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    modelId: flushModelId,
+    agentCfgContextTokens: params.agentCfgContextTokens,
+  });
+  const sessionEntry =
+    params.sessionEntry ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  const estimatedTokens = resolveFreshSessionTotalTokens(sessionEntry);
+  const canRunAgentTurn = hasHeadroomForFlushTurn({
+    estimatedTokens,
+    contextWindowTokens: flushContextWindowTokens,
+  });
+
+  // If no headroom, go straight to mechanical fallback
+  if (!canRunAgentTurn) {
+    logVerbose(
+      `memory flush: token estimate ${estimatedTokens}/${flushContextWindowTokens} near limit, using mechanical fallback`,
+    );
+    await runMechanicalFlushWithTracking({
+      workspaceDir: params.followupRun.run.workspaceDir,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+    });
+    // Return a flag or special session entry that triggers compaction
+    return {
+      ...activeSessionEntry,
+      forceCompaction: true, // Custom flag we'll handle in agent-runner.ts
+    } as any;
+  }
+
   const flushRunId = crypto.randomUUID();
   if (params.sessionKey) {
     registerAgentRunContext(flushRunId, {
@@ -103,9 +144,9 @@ export async function runMemoryFlushIfNeeded(params: {
       model: params.followupRun.run.model,
       agentDir: params.followupRun.run.agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(
-        params.followupRun.run.config,
-        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-      ),
+            params.followupRun.run.config,
+            resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
+          ),
       run: (provider, model) => {
         const authProfileId =
           provider === params.followupRun.run.provider
@@ -197,9 +238,77 @@ export async function runMemoryFlushIfNeeded(params: {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
       }
     }
+    // Force compaction after successful flush so no messages sneak in between
+    // (skip if compaction already happened during the flush turn)
+    if (!memoryCompactionCompleted) {
+      return {
+        ...activeSessionEntry,
+        forceCompaction: true,
+      } as any;
+    }
   } catch (err) {
-    logVerbose(`memory flush run failed: ${String(err)}`);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logVerbose(`memory flush run failed: ${errorMessage}`);
+
+    // If it failed due to context overflow, try mechanical fallback
+    if (isContextOverflowError(errorMessage)) {
+      logVerbose(`memory flush: context overflow detected, attempting mechanical fallback`);
+      await runMechanicalFlushWithTracking({
+        workspaceDir: params.followupRun.run.workspaceDir,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+      });
+      return {
+        ...activeSessionEntry,
+        forceCompaction: true,
+      } as any;
+    }
   }
 
   return activeSessionEntry;
+}
+
+/**
+ * Run mechanical flush and update session tracking.
+ * This ensures memoryFlushAt is set so we don't retry.
+ */
+async function runMechanicalFlushWithTracking(params: {
+  workspaceDir: string;
+  sessionKey?: string;
+  storePath?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+}): Promise<void> {
+  const result = await runMechanicalFlush({
+    workspaceDir: params.workspaceDir,
+    sessionKey: params.sessionKey,
+  });
+
+  // Update tracking even if script failed (to prevent retry loops)
+  if (params.storePath && params.sessionKey) {
+    try {
+      const compactionCount =
+        params.sessionEntry?.compactionCount ??
+        params.sessionStore?.[params.sessionKey]?.compactionCount ??
+        0;
+      await updateSessionStoreEntry({
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        update: async () => ({
+          memoryFlushAt: Date.now(),
+          memoryFlushCompactionCount: compactionCount,
+        }),
+      });
+    } catch (err) {
+      logVerbose(`failed to persist mechanical flush metadata: ${String(err)}`);
+    }
+  }
+
+  if (result.success) {
+    logVerbose(`mechanical flush fallback completed`);
+  } else {
+    logVerbose(`mechanical flush fallback failed: ${result.error}`);
+  }
 }

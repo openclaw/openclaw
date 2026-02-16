@@ -58,6 +58,7 @@ import {
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
+import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { buildEmbeddedExtensionPaths } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -116,6 +117,8 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  /** Override maxHistoryShare for progressive compaction escalation. */
+  maxHistoryShareOverride?: number;
 };
 
 type CompactionMessageMetrics = {
@@ -534,6 +537,13 @@ export async function compactEmbeddedPiSessionDirect(
         modelId,
         model,
       });
+
+      // Apply progressive maxHistoryShare override for escalating compaction
+      if (typeof params.maxHistoryShareOverride === "number") {
+        setCompactionSafeguardRuntime(sessionManager, {
+          maxHistoryShare: params.maxHistoryShareOverride,
+        });
+      }
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
