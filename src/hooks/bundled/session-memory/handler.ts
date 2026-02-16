@@ -182,7 +182,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const entry = entryParts.join("\n");
 
     // Write to new memory file
-    await fs.writeFile(memoryFilePath, entry, "utf-8");
+    await fs.writeFile(memoryFilePath, entry, { encoding: "utf-8", mode: 0o600 });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

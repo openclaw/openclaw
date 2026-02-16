@@ -74,6 +74,11 @@ function forkSessionFromParent(params: {
       const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
       if (sessionFile && sessionId) {
+        if (process.platform !== "win32") {
+          try {
+            fs.chmodSync(sessionFile, 0o600);
+          } catch {}
+        }
         return { sessionId, sessionFile };
       }
     }
@@ -89,7 +94,10 @@ function forkSessionFromParent(params: {
       cwd: manager.getCwd(),
       parentSession: parentSessionFile,
     };
-    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
     return { sessionId, sessionFile };
   } catch {
     return null;

@@ -122,6 +122,10 @@ describe("initSessionState thread forking", () => {
       parentSession?: string;
     };
     expect(parsedHeader.parentSession).toBe(parentSessionFile);
+    if (process.platform !== "win32") {
+      const mode = (await fs.stat(newSessionFile)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
     warn.mockRestore();
   });
 
