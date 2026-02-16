@@ -553,6 +553,92 @@ function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
+/**
+ * Scan all channel configs for dmPolicy="open" without allowFrom including "*".
+ * This configuration is rejected by the schema validator but can easily occur when
+ * users (or integrations) set dmPolicy to "open" without realising that an explicit
+ * allowFrom wildcard is also required.
+ */
+function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object") {
+    return { config: cfg, changes: [] };
+  }
+
+  const next = structuredClone(cfg);
+  const changes: string[] = [];
+
+  const ensureWildcard = (
+    channelName: string,
+    account: Record<string, unknown>,
+    prefix: string,
+  ) => {
+    const dmPolicy =
+      (account.dmPolicy as string | undefined) ??
+      ((account.dm as Record<string, unknown> | undefined)?.policy as string | undefined);
+
+    if (dmPolicy !== "open") {
+      return;
+    }
+
+    // Check top-level allowFrom first, then nested dm.allowFrom
+    const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
+    const dm = account.dm as Record<string, unknown> | undefined;
+    const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
+
+    const hasWildcard = (list?: Array<string | number>) =>
+      list?.some((v) => String(v).trim() === "*") ?? false;
+
+    if (hasWildcard(topAllowFrom) || hasWildcard(nestedAllowFrom)) {
+      return;
+    }
+
+    // Prefer setting top-level allowFrom (it takes precedence)
+    if (Array.isArray(topAllowFrom)) {
+      (account.allowFrom as Array<string | number>).push("*");
+      changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
+    } else if (Array.isArray(nestedAllowFrom)) {
+      (dm!.allowFrom as Array<string | number>).push("*");
+      changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
+    } else {
+      account.allowFrom = ["*"];
+      changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
+    }
+  };
+
+  const nextChannels = next.channels as Record<string, Record<string, unknown>>;
+  for (const [channelName, channelConfig] of Object.entries(nextChannels)) {
+    if (!channelConfig || typeof channelConfig !== "object") {
+      continue;
+    }
+
+    // Check the top-level channel config
+    ensureWildcard(channelName, channelConfig, `channels.${channelName}`);
+
+    // Check per-account configs (e.g. channels.discord.accounts.mybot)
+    const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
+    if (accounts && typeof accounts === "object") {
+      for (const [accountName, accountConfig] of Object.entries(accounts)) {
+        if (accountConfig && typeof accountConfig === "object") {
+          ensureWildcard(
+            channelName,
+            accountConfig,
+            `channels.${channelName}.accounts.${accountName}`,
+          );
+        }
+      }
+    }
+  }
+
+  if (changes.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+  return { config: next, changes };
+}
+
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
@@ -699,6 +785,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pendingChanges = true;
       cfg = discordRepair.config;
     }
+
+    const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
+    if (allowFromRepair.changes.length > 0) {
+      note(allowFromRepair.changes.join("\n"), "Doctor changes");
+      candidate = allowFromRepair.config;
+      pendingChanges = true;
+      cfg = allowFromRepair.config;
+    }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
@@ -717,6 +811,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         [
           `- Discord allowlists contain ${discordHits.length} numeric entries (e.g. ${discordHits[0]?.path}=${discordHits[0]?.entry}).`,
           `- Discord IDs must be strings; run "${formatCliCommand("openclaw doctor --fix")}" to convert numeric IDs to quoted strings.`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
+    }
+
+    const allowFromScan = maybeRepairOpenPolicyAllowFrom(candidate);
+    if (allowFromScan.changes.length > 0) {
+      note(
+        [
+          ...allowFromScan.changes,
+          `- Run "${formatCliCommand("openclaw doctor --fix")}" to add missing allowFrom wildcards.`,
         ].join("\n"),
         "Doctor warnings",
       );
