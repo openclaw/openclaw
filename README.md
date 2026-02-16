@@ -262,6 +262,14 @@ ClawHub is a minimal skill registry. With ClawHub enabled, the agent can search 
 
 [ClawHub](https://clawhub.com)
 
+### Example skill: video-quote-finder
+
+Use `skills/video-quote-finder` to locate where a quote appears in a YouTube video and return timestamp links.
+
+Original prompt:
+
+> "OK I want to make a PR with this skill back to openclaw... make a new one that will search for a point on the video and give me the timestamp. For example I want to find the timestamp in this video where peter says 'I think vibe coding is a slur' https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV"
+
 ## Chat commands
 
 Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group commands are owner-only):
