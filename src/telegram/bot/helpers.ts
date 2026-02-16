@@ -130,9 +130,10 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   }
   const normalized = Math.trunc(thread.id);
 
-  // Never send thread_id for DMs (threads don't exist in private chats)
+  // DM topics: pass through thread_id when present (Telegram added "Topics in DMs").
+  // Only omit thread_id for regular DMs without topics.
   if (thread.scope === "dm") {
-    return undefined;
+    return normalized > 0 ? { message_thread_id: normalized } : undefined;
   }
 
   // Telegram rejects message_thread_id=1 for General forum topic

@@ -94,7 +94,7 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
   });
 
-  it("omits message_thread_id for dm threads and clears preview on cleanup", async () => {
+  it("passes message_thread_id for dm topics and clears preview on cleanup", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 17 }),
       editMessageText: vi.fn().mockResolvedValue(true),
@@ -108,7 +108,9 @@ describe("createTelegramDraftStream", () => {
     });
 
     stream.update("Hello");
-    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 1 }),
+    );
     await stream.clear();
 
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
