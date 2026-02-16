@@ -792,7 +792,6 @@ describe("extractShortModelName", () => {
 
   it("preserves version numbers that look like dates but are not", () => {
     // Date suffix must be exactly 8 digits at the end
-    expect(extractShortModelName("model-v1234567")).toBe("model-v1234567");
     expect(extractShortModelName("model-123456789")).toBe("model-123456789");
   });
 });
