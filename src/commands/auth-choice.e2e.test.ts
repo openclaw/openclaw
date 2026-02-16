@@ -45,6 +45,7 @@ describe("applyAuthChoice", () => {
     "PI_CODING_AGENT_DIR",
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
+    "FIREWORKS_API_KEY",
     "HF_TOKEN",
     "HUGGINGFACE_HUB_TOKEN",
     "LITELLM_API_KEY",
@@ -523,6 +524,67 @@ describe("applyAuthChoice", () => {
       profiles?: Record<string, { key?: string }>;
     };
     expect(parsed.profiles?.["xai:default"]?.key).toBe("sk-xai-test");
+  });
+
+  it("uses existing FIREWORKS_API_KEY when selecting fireworks-api-key", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    process.env.FIREWORKS_API_KEY = "fw-test-key";
+
+    const text = vi.fn();
+    const select: WizardPrompter["select"] = vi.fn(
+      async (params) => params.options[0]?.value as never,
+    );
+    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
+    const confirm = vi.fn(async () => true);
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select,
+      multiselect,
+      text,
+      confirm,
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "fireworks-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("FIREWORKS_API_KEY"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["fireworks:default"]).toMatchObject({
+      provider: "fireworks",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe(
+      "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct",
+    );
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
+    expect(parsed.profiles?.["fireworks:default"]?.key).toBe("fw-test-key");
   });
 
   it("sets default model when selecting github-copilot", async () => {
@@ -1305,6 +1367,10 @@ describe("resolvePreferredProviderForAuthChoice", () => {
 
   it("maps qwen-portal to the provider", () => {
     expect(resolvePreferredProviderForAuthChoice("qwen-portal")).toBe("qwen-portal");
+  });
+
+  it("maps fireworks-api-key to the provider", () => {
+    expect(resolvePreferredProviderForAuthChoice("fireworks-api-key")).toBe("fireworks");
   });
 
   it("returns undefined for unknown choices", () => {

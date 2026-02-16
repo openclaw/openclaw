@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
   applyAuthProfileConfig,
+  applyFireworksConfig,
+  applyFireworksProviderConfig,
   applyLitellmProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
@@ -21,6 +23,7 @@ import {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
+  FIREWORKS_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -412,6 +415,57 @@ describe("applyXiaomiConfig", () => {
     expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
       "custom-model",
       "mimo-v2-flash",
+    ]);
+  });
+});
+
+describe("applyFireworksConfig", () => {
+  it("adds Fireworks provider with correct settings", () => {
+    const cfg = applyFireworksConfig({});
+    expect(cfg.models?.providers?.fireworks).toMatchObject({
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      api: "openai-completions",
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe(FIREWORKS_DEFAULT_MODEL_REF);
+  });
+});
+
+describe("applyFireworksProviderConfig", () => {
+  it("adds model alias", () => {
+    const cfg = applyFireworksProviderConfig({});
+    expect(cfg.agents?.defaults?.models?.[FIREWORKS_DEFAULT_MODEL_REF]?.alias).toBe("Fireworks");
+  });
+
+  it("merges Fireworks models and keeps existing provider overrides", () => {
+    const cfg = applyFireworksProviderConfig({
+      models: {
+        providers: {
+          fireworks: {
+            baseUrl: "https://old.example.com",
+            apiKey: "old-key",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.fireworks?.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
+    expect(cfg.models?.providers?.fireworks?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.fireworks?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.fireworks?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "accounts/fireworks/models/llama-v3p1-8b-instruct",
     ]);
   });
 });

@@ -236,6 +236,27 @@ describe("getApiKeyForModel", () => {
     }
   });
 
+  it("resolves Fireworks API key from env", async () => {
+    const previous = process.env.FIREWORKS_API_KEY;
+
+    try {
+      process.env.FIREWORKS_API_KEY = "fireworks-test-key";
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "fireworks",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("fireworks-test-key");
+      expect(resolved.source).toContain("FIREWORKS_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FIREWORKS_API_KEY;
+      } else {
+        process.env.FIREWORKS_API_KEY = previous;
+      }
+    }
+  });
+
   it("resolves Vercel AI Gateway API key from env", async () => {
     const previousGatewayKey = process.env.AI_GATEWAY_API_KEY;
 

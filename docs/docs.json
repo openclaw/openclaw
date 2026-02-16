@@ -96,6 +96,10 @@
       "destination": "/providers/openrouter"
     },
     {
+      "source": "/fireworks",
+      "destination": "/providers/fireworks"
+    },
+    {
       "source": "/opencode",
       "destination": "/providers/opencode"
     },
@@ -1053,6 +1057,7 @@
                   "providers/anthropic",
                   "providers/openai",
                   "providers/openrouter",
+                  "providers/fireworks",
                   "providers/litellm",
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",

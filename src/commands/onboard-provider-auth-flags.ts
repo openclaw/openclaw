@@ -19,6 +19,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
+  | "fireworksApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
 >;
@@ -151,6 +152,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--xai-api-key",
     cliOption: "--xai-api-key <key>",
     description: "xAI API key",
+  },
+  {
+    optionKey: "fireworksApiKey",
+    authChoice: "fireworks-api-key",
+    cliFlag: "--fireworks-api-key",
+    cliOption: "--fireworks-api-key <key>",
+    description: "Fireworks API key",
   },
   {
     optionKey: "litellmApiKey",

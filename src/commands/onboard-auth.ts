@@ -7,6 +7,8 @@ export {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
+  applyFireworksConfig,
+  applyFireworksProviderConfig,
   applyHuggingfaceConfig,
   applyHuggingfaceProviderConfig,
   applyQianfanConfig,
@@ -53,6 +55,7 @@ export {
 } from "./onboard-auth.config-opencode.js";
 export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  FIREWORKS_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
@@ -70,6 +73,7 @@ export {
   setHuggingfaceApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
+  setFireworksApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
   setXaiApiKey,
@@ -82,11 +86,14 @@ export {
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
+  buildFireworksModelDefinition,
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,
   buildZaiModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
+  FIREWORKS_BASE_URL,
+  FIREWORKS_DEFAULT_MODEL_ID,
   MOONSHOT_CN_BASE_URL,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,

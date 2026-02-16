@@ -142,6 +142,12 @@ describe("cli program (smoke)", () => {
         field: "togetherApiKey",
       },
       {
+        authChoice: "fireworks-api-key",
+        flag: "--fireworks-api-key",
+        key: "sk-fireworks-test",
+        field: "fireworksApiKey",
+      },
+      {
         authChoice: "moonshot-api-key-cn",
         flag: "--moonshot-api-key",
         key: "sk-moonshot-cn-test",

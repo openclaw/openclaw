@@ -16,7 +16,7 @@ For the short guide, see [Onboarding Wizard (CLI)](/start/wizard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Moonshot, and AI Gateway options)
+- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus Fireworks, MiniMax, GLM, Moonshot, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
@@ -147,6 +147,10 @@ What you set:
   </Accordion>
   <Accordion title="xAI (Grok) API key">
     Prompts for `XAI_API_KEY` and configures xAI as a model provider.
+  </Accordion>
+  <Accordion title="Fireworks API key">
+    Prompts for `FIREWORKS_API_KEY` and configures Fireworks as a model provider.
+    More detail: [Fireworks AI](/providers/fireworks).
   </Accordion>
   <Accordion title="OpenCode Zen">
     Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`).

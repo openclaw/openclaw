@@ -492,6 +492,38 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("infers Fireworks auth choice from --fireworks-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-fireworks-infer-", async ({ configPath, runtime }) => {
+      await runNonInteractive(
+        {
+          nonInteractive: true,
+          fireworksApiKey: "fireworks-test-key",
+          skipHealth: true,
+          skipChannels: true,
+          skipSkills: true,
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{
+        auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
+        agents?: { defaults?: { model?: { primary?: string } } };
+      }>(configPath);
+
+      expect(cfg.auth?.profiles?.["fireworks:default"]?.provider).toBe("fireworks");
+      expect(cfg.auth?.profiles?.["fireworks:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe(
+        "fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct",
+      );
+      await expectApiKeyProfile({
+        profileId: "fireworks:default",
+        provider: "fireworks",
+        key: "fireworks-test-key",
+      });
+    });
+  }, 60_000);
+
   it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-qianfan-infer-", async ({ configPath, runtime }) => {
       await runNonInteractive(

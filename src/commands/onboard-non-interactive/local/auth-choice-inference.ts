@@ -26,6 +26,7 @@ type AuthChoiceFlagOptions = Pick<
   | "minimaxApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
+  | "fireworksApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
   | "customBaseUrl"

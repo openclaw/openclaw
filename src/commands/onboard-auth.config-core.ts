@@ -29,6 +29,7 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import {
+  FIREWORKS_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -56,9 +57,12 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
+  buildFireworksModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  FIREWORKS_BASE_URL,
+  FIREWORKS_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -374,6 +378,30 @@ export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawCon
 export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyHuggingfaceProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, HUGGINGFACE_DEFAULT_MODEL_REF);
+}
+
+export function applyFireworksProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[FIREWORKS_DEFAULT_MODEL_REF] = {
+    ...models[FIREWORKS_DEFAULT_MODEL_REF],
+    alias: models[FIREWORKS_DEFAULT_MODEL_REF]?.alias ?? "Fireworks",
+  };
+
+  const defaultModel = buildFireworksModelDefinition();
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "fireworks",
+    api: "openai-completions",
+    baseUrl: FIREWORKS_BASE_URL,
+    defaultModel,
+    defaultModelId: FIREWORKS_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyFireworksConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyFireworksProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, FIREWORKS_DEFAULT_MODEL_REF);
 }
 
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

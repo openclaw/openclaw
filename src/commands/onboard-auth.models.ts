@@ -169,6 +169,18 @@ export const XAI_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
+export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/models/llama-v3p1-8b-instruct";
+export const FIREWORKS_DEFAULT_MODEL_REF = `fireworks/${FIREWORKS_DEFAULT_MODEL_ID}`;
+export const FIREWORKS_DEFAULT_CONTEXT_WINDOW = 131072;
+export const FIREWORKS_DEFAULT_MAX_TOKENS = 8192;
+export const FIREWORKS_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export function buildXaiModelDefinition(): ModelDefinitionConfig {
   return {
     id: XAI_DEFAULT_MODEL_ID,
@@ -178,5 +190,17 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
     cost: XAI_DEFAULT_COST,
     contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function buildFireworksModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: FIREWORKS_DEFAULT_MODEL_ID,
+    name: "Llama 3.1 8B Instruct",
+    reasoning: false,
+    input: ["text"],
+    cost: FIREWORKS_DEFAULT_COST,
+    contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
   };
 }

@@ -71,6 +71,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xai-api-key"],
   },
   {
+    value: "fireworks",
+    label: "Fireworks",
+    hint: "API key",
+    choices: ["fireworks-api-key"],
+  },
+  {
     value: "openrouter",
     label: "OpenRouter",
     hint: "API key",
@@ -180,6 +186,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   { value: "openai-api-key", label: "OpenAI API key" },
   { value: "xai-api-key", label: "xAI (Grok) API key" },
+  { value: "fireworks-api-key", label: "Fireworks API key" },
   {
     value: "qianfan-api-key",
     label: "Qianfan API key",

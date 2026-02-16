@@ -12,6 +12,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
+  applyFireworksConfig,
   applyQianfanConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
@@ -32,6 +33,7 @@ import {
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setFireworksApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
@@ -301,6 +303,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXaiConfig(nextConfig);
+  }
+
+  if (authChoice === "fireworks-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "fireworks",
+      cfg: baseConfig,
+      flagValue: opts.fireworksApiKey,
+      flagName: "--fireworks-api-key",
+      envVar: "FIREWORKS_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      setFireworksApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "fireworks:default",
+      provider: "fireworks",
+      mode: "api_key",
+    });
+    return applyFireworksConfig(nextConfig);
   }
 
   if (authChoice === "qianfan-api-key") {

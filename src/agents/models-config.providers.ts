@@ -85,6 +85,17 @@ const XIAOMI_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
+export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/models/llama-v3p1-8b-instruct";
+const FIREWORKS_DEFAULT_CONTEXT_WINDOW = 131072;
+const FIREWORKS_DEFAULT_MAX_TOKENS = 8192;
+const FIREWORKS_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
@@ -536,6 +547,24 @@ export function buildXiaomiProvider(): ProviderConfig {
   };
 }
 
+export function buildFireworksProvider(): ProviderConfig {
+  return {
+    baseUrl: FIREWORKS_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: FIREWORKS_DEFAULT_MODEL_ID,
+        name: "Llama 3.1 8B Instruct",
+        reasoning: false,
+        input: ["text"],
+        cost: FIREWORKS_DEFAULT_COST,
+        contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -714,6 +743,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
+  const fireworksKey =
+    resolveEnvApiKeyVarName("fireworks") ??
+    resolveApiKeyFromProfiles({ provider: "fireworks", store: authStore });
+  if (fireworksKey) {
+    providers.fireworks = { ...buildFireworksProvider(), apiKey: fireworksKey };
   }
 
   const cloudflareProfiles = listProfilesForProvider(authStore, "cloudflare-ai-gateway");

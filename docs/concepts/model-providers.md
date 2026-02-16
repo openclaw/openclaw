@@ -113,6 +113,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
+- Fireworks: `fireworks` (`FIREWORKS_API_KEY`)
+- Example model: `fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct`
 - xAI: `xai` (`XAI_API_KEY`)
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)

@@ -39,6 +39,14 @@ openclaw onboard --non-interactive \
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
 
+Non-interactive Fireworks:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice fireworks-api-key \
+  --fireworks-api-key "$FIREWORKS_API_KEY"
+```
+
 Non-interactive Z.AI endpoint choices:
 
 Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5`).

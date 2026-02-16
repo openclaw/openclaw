@@ -149,6 +149,7 @@ export function registerOnboardCommand(program: Command) {
           huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
           opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
           xaiApiKey: opts.xaiApiKey as string | undefined,
+          fireworksApiKey: opts.fireworksApiKey as string | undefined,
           litellmApiKey: opts.litellmApiKey as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,
           customApiKey: opts.customApiKey as string | undefined,

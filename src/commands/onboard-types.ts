@@ -45,6 +45,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "xai-api-key"
+  | "fireworks-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
   | "skip";
@@ -71,6 +72,7 @@ export type AuthChoiceGroupId =
   | "huggingface"
   | "qianfan"
   | "xai"
+  | "fireworks"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -119,6 +121,7 @@ export type OnboardOptions = {
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
+  fireworksApiKey?: string;
   qianfanApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
