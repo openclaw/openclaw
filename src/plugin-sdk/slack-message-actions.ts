@@ -8,6 +8,27 @@ type SlackActionInvoke = (
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
 
+function readSlackBlocksParam(actionParams: Record<string, unknown>) {
+  const raw = actionParams.blocks;
+  if (raw == null) {
+    return undefined;
+  }
+  const parsed =
+    typeof raw === "string"
+      ? (() => {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            throw new Error("blocks must be valid JSON");
+          }
+        })()
+      : raw;
+  if (!Array.isArray(parsed)) {
+    throw new Error("blocks must be an array");
+  }
+  return parsed as Record<string, unknown>[];
+}
+
 export async function handleSlackMessageAction(params: {
   providerId: string;
   ctx: ChannelMessageActionContext;
@@ -28,18 +49,23 @@ export async function handleSlackMessageAction(params: {
   if (action === "send") {
     const to = readStringParam(actionParams, "to", { required: true });
     const content = readStringParam(actionParams, "message", {
-      required: true,
+      required: false,
       allowEmpty: true,
     });
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
+    const blocks = readSlackBlocksParam(actionParams);
+    if (!content && !mediaUrl && !blocks) {
+      throw new Error("Slack send requires message, blocks, or media.");
+    }
     const threadId = readStringParam(actionParams, "threadId");
     const replyTo = readStringParam(actionParams, "replyTo");
     return await invoke(
       {
         action: "sendMessage",
         to,
-        content,
+        content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
+        blocks,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
       },

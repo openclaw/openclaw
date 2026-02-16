@@ -526,4 +526,71 @@ describe("slack actions adapter", () => {
       limit: 2,
     });
   });
+
+  it("forwards blocks JSON for send", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await actions.handleAction?.({
+      channel: "slack",
+      action: "send",
+      cfg,
+      params: {
+        to: "channel:C1",
+        message: "",
+        blocks: JSON.stringify([{ type: "divider" }]),
+      },
+    });
+
+    const [params] = handleSlackAction.mock.calls[0] ?? [];
+    expect(params).toMatchObject({
+      action: "sendMessage",
+      to: "channel:C1",
+      content: "",
+      blocks: [{ type: "divider" }],
+    });
+  });
+
+  it("forwards blocks arrays for send", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await actions.handleAction?.({
+      channel: "slack",
+      action: "send",
+      cfg,
+      params: {
+        to: "channel:C1",
+        message: "",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "hi" } }],
+      },
+    });
+
+    const [params] = handleSlackAction.mock.calls[0] ?? [];
+    expect(params).toMatchObject({
+      action: "sendMessage",
+      to: "channel:C1",
+      content: "",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "hi" } }],
+    });
+  });
+
+  it("rejects invalid blocks JSON for send", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = createSlackActions("slack");
+
+    await expect(
+      actions.handleAction?.({
+        channel: "slack",
+        action: "send",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "",
+          blocks: "{bad-json",
+        },
+      }),
+    ).rejects.toThrow(/blocks must be valid JSON/i);
+    expect(handleSlackAction).not.toHaveBeenCalled();
+  });
 });
