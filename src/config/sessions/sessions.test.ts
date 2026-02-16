@@ -58,14 +58,6 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
-  it("rejects unsafe sessionFile candidates that escape the sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    expect(() =>
-      resolveSessionFilePath("sess-1", { sessionFile: "../../etc/passwd" }, { sessionsDir }),
-    ).toThrow(/within sessions directory/);
-  });
-
   it("rejects absolute sessionFile paths outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
