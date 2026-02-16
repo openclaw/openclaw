@@ -399,13 +399,17 @@ export const buildTelegramMessageContext = async ({
   let bodyText = rawBody;
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
-  // Preflight audio transcription for mention detection in groups
-  // This allows voice notes to be checked for mentions before being dropped
+  // Preflight audio transcription for:
+  // 1. Mention detection in groups (allows voice notes to be checked for mentions)
+  // 2. All voice messages in DMs (so the agent receives transcribed text, not raw audio)
   let preflightTranscript: string | undefined;
-  const needsPreflightTranscription =
+  // Transcribe audio for mention detection in groups with mention requirements
+  const needsGroupMentionTranscription =
     isGroup && requireMention && hasAudio && !hasUserText && mentionRegexes.length > 0;
+  // Also transcribe all audio in DMs so agent gets text instead of raw audio file
+  const needsDmTranscription = !isGroup && hasAudio;
 
-  if (needsPreflightTranscription) {
+  if (needsGroupMentionTranscription || needsDmTranscription) {
     try {
       const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
       // Build a minimal context for transcription
