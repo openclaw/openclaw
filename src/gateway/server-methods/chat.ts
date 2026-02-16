@@ -20,6 +20,7 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
+import { classifyAbort } from "../../infra/abort-classifier.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
@@ -775,14 +776,25 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
-          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          // Surface a clear message for restart/user aborts instead of the
+          // misleading "API rate limit reached" that the generic path produces.
+          // See: https://github.com/openclaw/openclaw/issues/17589
+          const abortType = classifyAbort(err);
+          const userMessage =
+            abortType === "restart"
+              ? "Gateway restarting. Please retry your message."
+              : abortType === "user"
+                ? "Request cancelled."
+                : String(err);
+
+          const error = errorShape(ErrorCodes.UNAVAILABLE, userMessage);
           context.dedupe.set(`chat:${clientRunId}`, {
             ts: Date.now(),
             ok: false,
             payload: {
               runId: clientRunId,
               status: "error" as const,
-              summary: String(err),
+              summary: userMessage,
             },
             error,
           });
@@ -790,7 +802,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             context,
             runId: clientRunId,
             sessionKey: rawSessionKey,
-            errorMessage: String(err),
+            errorMessage: userMessage,
           });
         })
         .finally(() => {

@@ -23,9 +23,28 @@ let preRestartCheck: (() => number) | null = null;
 let restartCycleToken = 0;
 let emittedRestartToken = 0;
 let consumedRestartToken = 0;
+let gatewayRestarting = false;
 
 function hasUnconsumedRestartSignal(): boolean {
   return emittedRestartToken > consumedRestartToken;
+}
+
+/**
+ * Returns true while a SIGUSR1 restart cycle is in progress.
+ * Used by the abort classifier to distinguish restart-induced AbortErrors
+ * from transient network failures.
+ * See: https://github.com/openclaw/openclaw/issues/17589
+ */
+export function isGatewayRestarting(): boolean {
+  return gatewayRestarting;
+}
+
+/**
+ * Set or clear the gateway-restarting flag.
+ * Called by the run loop when entering/exiting a SIGUSR1 restart cycle.
+ */
+export function setGatewayRestarting(value: boolean): void {
+  gatewayRestarting = value;
 }
 
 /**
@@ -336,5 +355,6 @@ export const __testing = {
     restartCycleToken = 0;
     emittedRestartToken = 0;
     consumedRestartToken = 0;
+    gatewayRestarting = false;
   },
 };

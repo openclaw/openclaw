@@ -1,3 +1,4 @@
+import { isNonRetryableAbort } from "./abort-classifier.js";
 import { sleep } from "../utils.js";
 
 export type RetryConfig = {
@@ -80,6 +81,11 @@ export async function retryAsync<T>(
         return await fn();
       } catch (err) {
         lastErr = err;
+        // Never retry restart/user aborts — rethrow immediately.
+        // See: https://github.com/openclaw/openclaw/issues/17589
+        if (isNonRetryableAbort(err)) {
+          break;
+        }
         if (i === attempts - 1) {
           break;
         }
@@ -108,7 +114,7 @@ export async function retryAsync<T>(
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {
+      if (isNonRetryableAbort(err) || attempt >= maxAttempts || !shouldRetry(err, attempt)) {
         break;
       }
 

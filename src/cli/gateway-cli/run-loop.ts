@@ -6,6 +6,7 @@ import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
+  setGatewayRestarting,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -128,6 +129,7 @@ export async function runGatewayLoop(params: {
       );
       return;
     }
+    setGatewayRestarting(true);
     markGatewaySigusr1RestartHandled();
     request("restart", "SIGUSR1");
   };
@@ -151,6 +153,7 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      setGatewayRestarting(false);
       onIteration();
       server = await params.start();
       await new Promise<void>((resolve) => {
