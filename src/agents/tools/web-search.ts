@@ -140,21 +140,23 @@ type BraveConfig = {
 };
 
 type BraveLlmContextGroundingItem = {
-  type?: string;
   url?: string;
   title?: string;
-  site_name?: string;
-  snippets?: Array<{
-    text?: string;
-    title?: string;
-  }>;
+  snippets?: string[];
 };
 
 type BraveLlmContextResponse = {
   grounding?: {
     generic?: BraveLlmContextGroundingItem[];
   };
-  source_count?: number;
+  sources?: Record<
+    string,
+    {
+      title?: string;
+      hostname?: string;
+      age?: string[];
+    }
+  >;
 };
 
 type PerplexitySearchResponse = {
@@ -622,22 +624,22 @@ async function runBraveLlmContextSearch(params: {
 
   const ctx = params.llmContext;
   if (ctx?.maxTokens != null) {
-    url.searchParams.set("max_tokens", String(ctx.maxTokens));
+    url.searchParams.set("maximum_number_of_tokens", String(ctx.maxTokens));
   }
   if (ctx?.maxUrls != null) {
-    url.searchParams.set("max_urls", String(ctx.maxUrls));
+    url.searchParams.set("maximum_number_of_urls", String(ctx.maxUrls));
   }
   if (ctx?.thresholdMode) {
-    url.searchParams.set("threshold_mode", ctx.thresholdMode);
+    url.searchParams.set("context_threshold_mode", ctx.thresholdMode);
   }
   if (ctx?.maxSnippets != null) {
-    url.searchParams.set("max_snippets", String(ctx.maxSnippets));
+    url.searchParams.set("maximum_number_of_snippets", String(ctx.maxSnippets));
   }
   if (ctx?.maxTokensPerUrl != null) {
-    url.searchParams.set("max_tokens_per_url", String(ctx.maxTokensPerUrl));
+    url.searchParams.set("maximum_number_of_tokens_per_url", String(ctx.maxTokensPerUrl));
   }
   if (ctx?.maxSnippetsPerUrl != null) {
-    url.searchParams.set("max_snippets_per_url", String(ctx.maxSnippetsPerUrl));
+    url.searchParams.set("maximum_number_of_snippets_per_url", String(ctx.maxSnippetsPerUrl));
   }
 
   const res = await fetch(url.toString(), {
@@ -656,18 +658,21 @@ async function runBraveLlmContextSearch(params: {
 
   const data = (await res.json()) as BraveLlmContextResponse;
   const items = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
+  const sources = data.sources ?? {};
   const results = items.map((item) => {
-    const snippetTexts = (item.snippets ?? []).map((s) => s.text ?? "").filter((t) => t.length > 0);
+    const snippetTexts = (item.snippets ?? []).filter((t) => t.length > 0);
     const content = snippetTexts.join("\n\n");
+    const itemUrl = item.url ?? "";
+    const sourceInfo = itemUrl ? sources[itemUrl] : undefined;
     return {
       title: item.title ? wrapWebContent(item.title, "web_search") : "",
-      url: item.url ?? "",
+      url: itemUrl,
       content: content ? wrapWebContent(content) : "",
-      siteName: item.site_name || resolveSiteName(item.url) || undefined,
+      siteName: sourceInfo?.hostname || resolveSiteName(itemUrl) || undefined,
     };
   });
 
-  return { results, sourceCount: data.source_count ?? items.length };
+  return { results, sourceCount: Object.keys(sources).length };
 }
 
 async function runWebSearch(params: {
@@ -721,6 +726,12 @@ async function runWebSearch(params: {
       count: results.length,
       sourceCount,
       tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
       results,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
