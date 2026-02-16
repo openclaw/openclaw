@@ -301,6 +301,20 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("sessionKey" in base) {
+    const sessionKey = base.sessionKey;
+    if (sessionKey === null) {
+      next.sessionKey = null;
+    } else if (typeof sessionKey === "string") {
+      const trimmed = sessionKey.trim();
+      if (trimmed) {
+        next.sessionKey = trimmed;
+      } else {
+        delete next.sessionKey;
+      }
+    }
+  }
+
   if ("enabled" in base) {
     const enabled = base.enabled;
     if (typeof enabled === "boolean") {

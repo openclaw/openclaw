@@ -135,6 +135,7 @@ export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
@@ -164,6 +165,7 @@ export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     description: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
@@ -180,6 +182,7 @@ export const CronJobPatchSchema = Type.Object(
   {
     name: Type.Optional(NonEmptyString),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     description: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
