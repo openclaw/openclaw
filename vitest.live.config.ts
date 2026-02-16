@@ -12,5 +12,7 @@ export default defineConfig({
     maxWorkers: 1,
     include: ["src/**/*.live.test.ts"],
     exclude,
+    reporters: ["./src/test-utils/live-test-reporter.ts"],
+    testTimeout: 30_000,
   },
 });
