@@ -67,6 +67,14 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
   return select.mock.calls[0]?.[0]?.initialValue;
 }
 
+function expectPluginLoadedFromLocalPath(
+  result: Awaited<ReturnType<typeof ensureOnboardingPluginInstalled>>,
+) {
+  const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
+  expect(result.installed).toBe(true);
+  expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
+}
+
 describe("ensureOnboardingPluginInstalled", () => {
   it("installs from npm and enables the plugin", async () => {
     const runtime = makeRuntime();
@@ -115,9 +123,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime,
     });
 
-    const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
-    expect(result.installed).toBe(true);
-    expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
+    expectPluginLoadedFromLocalPath(result);
     expect(result.cfg.plugins?.entries?.zalo?.enabled).toBe(true);
   });
 
@@ -152,9 +158,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime,
     });
 
-    const expectedPath = path.resolve(process.cwd(), "extensions/zalo");
-    expect(result.installed).toBe(true);
-    expect(result.cfg.plugins?.load?.paths).toContain(expectedPath);
+    expectPluginLoadedFromLocalPath(result);
     expect(note).toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
   });

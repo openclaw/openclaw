@@ -235,13 +235,10 @@ describe("applyAuthChoice", () => {
       }
       return "default";
     });
-    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
-    const prompter = createPrompter({
+    const { prompter, runtime } = createApiKeyPromptHarness({
       select: select as WizardPrompter["select"],
-      multiselect,
       text,
     });
-    const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoice({
       authChoice: "zai-api-key",
@@ -265,13 +262,10 @@ describe("applyAuthChoice", () => {
 
     const text = vi.fn().mockResolvedValue("zai-test-key");
     const select = vi.fn(async () => "default");
-    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
-    const prompter = createPrompter({
+    const { prompter, runtime } = createApiKeyPromptHarness({
       select: select as WizardPrompter["select"],
-      multiselect,
       text,
     });
-    const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoice({
       authChoice: "zai-coding-global",

@@ -589,11 +589,11 @@ Max characters per workspace bootstrap file before truncation. Default: `20000`.
 
 ### `agents.defaults.bootstrapTotalMaxChars`
 
-Max total characters injected across all workspace bootstrap files. Default: `24000`.
+Max total characters injected across all workspace bootstrap files. Default: `150000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapTotalMaxChars: 24000 } },
+  agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
 }
 ```
 
@@ -718,6 +718,7 @@ Periodic heartbeat runs.
         target: "last", // last | whatsapp | telegram | discord | ... | none
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
+        suppressToolErrorWarnings: false,
       },
     },
   },
@@ -725,6 +726,7 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m`.
+- `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 

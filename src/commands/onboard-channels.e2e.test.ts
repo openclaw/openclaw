@@ -15,6 +15,17 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   );
 }
 
+function createUnexpectedPromptGuards() {
+  return {
+    multiselect: vi.fn(async () => {
+      throw new Error("unexpected multiselect");
+    }),
+    text: vi.fn(async ({ message }: { message: string }) => {
+      throw new Error(`unexpected text prompt: ${message}`);
+    }) as unknown as WizardPrompter["text"],
+  };
+}
+
 vi.mock("node:fs/promises", () => ({
   default: {
     access: vi.fn(async () => {
@@ -73,18 +84,13 @@ describe("setupChannels", () => {
   it("shows explicit dmScope config command in channel primer", async () => {
     const note = vi.fn(async () => {});
     const select = vi.fn(async () => "__done__");
-    const multiselect = vi.fn(async () => {
-      throw new Error("unexpected multiselect");
-    });
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      throw new Error(`unexpected text prompt: ${message}`);
-    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
 
     const prompter = createPrompter({
       note,
       select,
       multiselect,
-      text: text as unknown as WizardPrompter["text"],
+      text,
     });
 
     const runtime = createExitThrowingRuntime();
@@ -112,17 +118,12 @@ describe("setupChannels", () => {
       }
       throw new Error(`unexpected select prompt: ${message}`);
     });
-    const multiselect = vi.fn(async () => {
-      throw new Error("unexpected multiselect");
-    });
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      throw new Error(`unexpected text prompt: ${message}`);
-    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
 
     const prompter = createPrompter({
       select,
       multiselect,
-      text: text as unknown as WizardPrompter["text"],
+      text,
     });
 
     const runtime = createExitThrowingRuntime();
