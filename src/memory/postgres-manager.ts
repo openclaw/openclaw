@@ -1,5 +1,15 @@
+// Ambient module declaration so TypeScript doesn't error on the dynamic
+// import when @types/pg is not installed.  We define our own minimal
+// interfaces below instead.
+declare module "pg" {
+  export class Pool {
+    constructor(config?: Record<string, unknown>);
+    query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+    end(): Promise<void>;
+  }
+}
+
 import crypto from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
@@ -19,16 +29,33 @@ const log = createSubsystemLogger("memory/postgres");
 
 const SNIPPET_MAX_CHARS = 700;
 
-type PgPool = import("pg").Pool;
-type PgPoolConfig = import("pg").PoolConfig;
+// pg types are pulled dynamically; declare minimal shapes for type-safety
+// without requiring @types/pg at build time.
+interface PgPoolConfig {
+  connectionString?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  password?: string;
+  ssl?: { rejectUnauthorized?: boolean } | undefined;
+  max?: number;
+  idleTimeoutMillis?: number;
+}
+
+interface PgPool {
+  query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+  end(): Promise<void>;
+}
 
 /**
  * Dynamically import the `pg` module.  Returns `null` when `pg` is not
  * installed so callers can produce a clear error message.
  */
-async function importPg(): Promise<typeof import("pg") | null> {
+async function importPg(): Promise<{ Pool: new (config: PgPoolConfig) => PgPool } | null> {
   try {
-    return await import("pg");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return await import(/* webpackIgnore: true */ "pg");
   } catch {
     return null;
   }
@@ -60,6 +87,38 @@ function contentHash(text: string): string {
 
 function extractSnippet(content: string, maxChars: number = SNIPPET_MAX_CHARS): string {
   return content.slice(0, maxChars);
+}
+
+/**
+ * Recursively list files in `dir` matching a simple glob pattern.
+ * Supports `*.md`, `**\/*.md`, and exact filenames.
+ */
+async function walkCollectionDir(dir: string, pattern: string): Promise<string[]> {
+  const results: string[] = [];
+  const recursive = pattern.startsWith("**/");
+  const ext = pattern.replace(/^\*\*\//, "").replace(/^\*/, "");
+
+  async function walk(current: string) {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory() && recursive) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        if (pattern === entry.name || entry.name.endsWith(ext)) {
+          results.push(full);
+        }
+      }
+    }
+  }
+
+  await walk(dir);
+  return results;
 }
 
 export class PostgresMemoryManager implements MemorySearchManager {
@@ -364,8 +423,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
     const fileEntries: Array<{ collection: string; filePath: string; relPath: string }> = [];
     for (const col of collections) {
       try {
-        const { glob } = await import("glob");
-        const files = await glob(col.pattern, { cwd: col.path, absolute: true });
+        const files = await walkCollectionDir(col.path, col.pattern);
         for (const file of files) {
           fileEntries.push({
             collection: col.name,
