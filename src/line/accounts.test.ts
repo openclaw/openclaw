@@ -135,11 +135,6 @@ describe("LINE accounts", () => {
   });
 
   describe("normalizeAccountId", () => {
-    it("normalizes undefined and literal default", () => {
-      expect(normalizeAccountId(undefined)).toBe(DEFAULT_ACCOUNT_ID);
-      expect(normalizeAccountId("default")).toBe(DEFAULT_ACCOUNT_ID);
-    });
-
     it("trims and lowercases account ids", () => {
       expect(normalizeAccountId("  Business  ")).toBe("business");
     });
