@@ -3,6 +3,7 @@ import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.j
 
 vi.mock("../../auto-reply/commands-registry.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
+  const reportCommand = { key: "report", nativeName: "report" };
 
   return {
     buildCommandTextFromArgs: (
@@ -10,16 +11,37 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       args?: { values?: Record<string, unknown> },
     ) => {
       const name = cmd.nativeName ?? cmd.key;
-      const mode = args?.values?.mode;
-      return typeof mode === "string" && mode.trim() ? `/${name} ${mode.trim()}` : `/${name}`;
+      const values = args?.values ?? {};
+      const mode = values.mode;
+      const period = values.period;
+      const selected =
+        typeof mode === "string" && mode.trim()
+          ? mode.trim()
+          : typeof period === "string" && period.trim()
+            ? period.trim()
+            : "";
+      return selected ? `/${name} ${selected}` : `/${name}`;
     },
     findCommandByNativeName: (name: string) => {
-      return name.trim().toLowerCase() === "usage" ? usageCommand : undefined;
+      const normalized = name.trim().toLowerCase();
+      if (normalized === "usage") {
+        return usageCommand;
+      }
+      if (normalized === "report") {
+        return reportCommand;
+      }
+      return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
       {
         name: "usage",
         description: "Usage",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "report",
+        description: "Report",
         acceptsArgs: true,
         args: [],
       },
@@ -29,6 +51,26 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       command?: { key?: string };
       args?: { values?: unknown };
     }) => {
+      if (params.command?.key !== "usage") {
+        if (params.command?.key !== "report") {
+          return null;
+        }
+        const values = (params.args?.values ?? {}) as Record<string, unknown>;
+        if (typeof values.period === "string" && values.period.trim()) {
+          return null;
+        }
+        return {
+          arg: { name: "period", description: "period" },
+          choices: [
+            { value: "day", label: "day" },
+            { value: "week", label: "week" },
+            { value: "month", label: "month" },
+            { value: "quarter", label: "quarter" },
+            { value: "year", label: "year" },
+            { value: "all", label: "all" },
+          ],
+        };
+      }
       if (params.command?.key !== "usage") {
         return null;
       }
@@ -130,6 +172,7 @@ function createArgMenusHarness() {
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
   let usageHandler: (args: unknown) => Promise<void>;
+  let reportHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
 
   beforeAll(async () => {
@@ -141,6 +184,11 @@ describe("Slack native command argument menus", () => {
       throw new Error("Missing /usage handler");
     }
     usageHandler = usage;
+    const report = harness.commands.get("/report");
+    if (!report) {
+      throw new Error("Missing /report handler");
+    }
+    reportHandler = report;
 
     const argMenu = harness.actions.get("openclaw_cmdarg");
     if (!argMenu) {
@@ -174,6 +222,37 @@ describe("Slack native command argument menus", () => {
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
     expect(payload.blocks?.[0]?.type).toBe("section");
     expect(payload.blocks?.[1]?.type).toBe("actions");
+    const elementType = (payload.blocks?.[1] as { elements?: Array<{ type?: string }> } | undefined)
+      ?.elements?.[0]?.type;
+    expect(elementType).toBe("button");
+  });
+
+  it("shows a static_select menu when choices exceed button row size", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    expect(payload.blocks?.[0]?.type).toBe("section");
+    expect(payload.blocks?.[1]?.type).toBe("actions");
+    const element = (
+      payload.blocks?.[1] as { elements?: Array<{ type?: string; action_id?: string }> } | undefined
+    )?.elements?.[0];
+    expect(element?.type).toBe("static_select");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
@@ -194,6 +273,28 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/usage tokens");
+  });
+
+  it("dispatches the command when a static_select option is chosen", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await argMenuHandler({
+      ack: vi.fn().mockResolvedValue(undefined),
+      action: {
+        selected_option: {
+          value: encodeValue({ command: "report", arg: "period", value: "month", userId: "U1" }),
+        },
+      },
+      body: {
+        user: { id: "U1", name: "Ada" },
+        channel: { id: "C1", name: "directmessage" },
+        trigger_id: "t1",
+      },
+      respond,
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+    expect(call.ctx?.Body).toBe("/report month");
   });
 
   it("rejects menu clicks from other users", async () => {

@@ -29,6 +29,8 @@ type SlackBlock = { type: string; [key: string]: unknown };
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
+const SLACK_COMMAND_ARG_BUTTON_ROW_SIZE = 5;
+const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
 
 type CommandsRegistry = typeof import("../../auto-reply/commands-registry.js");
 let commandsRegistry: CommandsRegistry | undefined;
@@ -100,20 +102,43 @@ function buildSlackCommandArgMenuBlocks(params: {
   choices: Array<{ value: string; label: string }>;
   userId: string;
 }) {
-  const rows = chunkItems(params.choices, 5).map((choices) => ({
-    type: "actions",
-    elements: choices.map((choice) => ({
-      type: "button",
-      action_id: SLACK_COMMAND_ARG_ACTION_ID,
-      text: { type: "plain_text", text: choice.label },
-      value: encodeSlackCommandArgValue({
-        command: params.command,
-        arg: params.arg,
-        value: choice.value,
-        userId: params.userId,
-      }),
-    })),
+  const encodedChoices = params.choices.map((choice) => ({
+    label: choice.label,
+    value: encodeSlackCommandArgValue({
+      command: params.command,
+      arg: params.arg,
+      value: choice.value,
+      userId: params.userId,
+    }),
   }));
+  const rows =
+    encodedChoices.length <= SLACK_COMMAND_ARG_BUTTON_ROW_SIZE
+      ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map((choices) => ({
+          type: "actions",
+          elements: choices.map((choice) => ({
+            type: "button",
+            action_id: SLACK_COMMAND_ARG_ACTION_ID,
+            text: { type: "plain_text", text: choice.label },
+            value: choice.value,
+          })),
+        }))
+      : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map((choices, index) => ({
+          type: "actions",
+          elements: [
+            {
+              type: "static_select",
+              action_id: SLACK_COMMAND_ARG_ACTION_ID,
+              placeholder: {
+                type: "plain_text",
+                text: index === 0 ? `Choose ${params.arg}` : `Choose ${params.arg} (${index + 1})`,
+              },
+              options: choices.map((choice) => ({
+                text: { type: "plain_text", text: choice.label.slice(0, 75) },
+                value: choice.value,
+              })),
+            },
+          ],
+        }));
   return [
     {
       type: "section",
@@ -568,7 +593,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
     ).action(actionId, async (args: SlackActionMiddlewareArgs) => {
       const { ack, body, respond } = args;
-      const action = args.action as { value?: string };
+      const action = args.action as { value?: string; selected_option?: { value?: string } };
       await ack();
       const respondFn =
         respond ??
@@ -584,7 +609,8 @@ export async function registerSlackMonitorSlashCommands(params: {
             blocks: payload.blocks,
           });
         });
-      const parsed = parseSlackCommandArgValue(action?.value);
+      const actionValue = action?.value ?? action?.selected_option?.value;
+      const parsed = parseSlackCommandArgValue(actionValue);
       if (!parsed) {
         await respondFn({
           text: "Sorry, that button is no longer valid.",
