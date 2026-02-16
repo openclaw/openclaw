@@ -319,27 +319,6 @@ describe("session store lock (Promise chain mutex)", () => {
     expect(entry.systemPromptOverride).toBe("custom");
   });
 
-  it("continues processing queued tasks after a preceding task throws", async () => {
-    const key = "agent:main:err";
-    const { storePath } = await makeTmpStore({
-      [key]: { sessionId: "s1", updatedAt: 100 },
-    });
-
-    const errorPromise = updateSessionStore(storePath, async () => {
-      throw new Error("boom");
-    });
-
-    const successPromise = updateSessionStore(storePath, async (store) => {
-      store[key] = { ...store[key], modelOverride: "after-error" } as unknown as SessionEntry;
-    });
-
-    await expect(errorPromise).rejects.toThrow("boom");
-    await successPromise;
-
-    const store = loadSessionStore(storePath);
-    expect(store[key]?.modelOverride).toBe("after-error");
-  });
-
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
     const { storePath } = await makeTmpStore({
