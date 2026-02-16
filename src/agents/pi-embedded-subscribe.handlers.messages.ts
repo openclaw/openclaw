@@ -286,7 +286,8 @@ export function handleMessageEnd(
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  const finalizeText = text || ctx.state.lastStreamedAssistantCleaned || "";
+  ctx.finalizeAssistantTexts({ text: finalizeText, addedDuringMessage, chunkerHasBuffered });
 
   const onBlockReply = ctx.params.onBlockReply;
   const shouldEmitReasoning = Boolean(

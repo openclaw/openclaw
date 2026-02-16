@@ -130,4 +130,42 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(subscription.assistantTexts).toEqual(["Response from non-streaming model"]);
   });
+
+  it("preserves streamed assistant text when message_end has no text content", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      blockReplyChunking: { minChars: 50, maxChars: 200 },
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Recovered final answer from fallback",
+      },
+    });
+
+    // Reproduce turns where streamed text is present but message_end only contains tool calls.
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_99",
+            name: "web_fetch",
+            arguments: { url: "https://example.com" },
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(subscription.assistantTexts).toEqual(["Recovered final answer from fallback"]);
+  });
 });

@@ -180,9 +180,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         pushAssistantText(text);
       }
       state.suppressBlockChunks = true;
-    } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
+    } else if (!addedDuringMessage && text && (!chunkerHasBuffered || !params.onBlockReply)) {
       // Non-streaming models (no text_delta): ensure assistantTexts gets the final
       // text when the chunker has nothing buffered to drain.
+      // When block replies are disabled (`onBlockReply` absent), keep final text
+      // even if a chunker buffer exists from streamed deltas.
       pushAssistantText(text);
     }
 
