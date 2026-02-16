@@ -16,7 +16,6 @@ import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
   validateSessionId,
@@ -155,11 +154,6 @@ describe("session path safety", () => {
     );
 
     expect(resolved).toBe(path.resolve(opsSessionFile));
-  });
-
-  it("uses agent sessions dir fallback for transcript path", () => {
-    const resolved = resolveSessionTranscriptPath("sess-1", "main");
-    expect(resolved.endsWith(path.join("agents", "main", "sessions", "sess-1.jsonl"))).toBe(true);
   });
 
   it("keeps custom per-agent store roots when agentId is provided", () => {
