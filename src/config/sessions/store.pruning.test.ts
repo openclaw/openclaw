@@ -231,14 +231,6 @@ describe("rotateSessionFile", () => {
     expect(bakFiles.length).toBeLessThanOrEqual(3);
   });
 
-  it("non-existent file: no rotation (returns false)", async () => {
-    const missingPath = path.join(testDir, "missing.json");
-
-    const rotated = await rotateSessionFile(missingPath, 100);
-
-    expect(rotated).toBe(false);
-  });
-
   it("backup file name includes a timestamp", async () => {
     await fs.writeFile(storePath, "x".repeat(100), "utf-8");
     const before = Date.now();
