@@ -5,9 +5,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=vscode
+User=codespace
 Environment="NODE_ENV=production"
-Environment="PATH=/home/vscode/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/home/codespace/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # NOTE: This unit file is intended for GitHub Codespaces; update the WorkingDirectory if used elsewhere.
 WorkingDirectory=/workspaces/openclaw
 ExecStart=/usr/local/bin/openclaw gateway run --bind loopback --port 18789 --force
@@ -20,9 +20,9 @@ SyslogIdentifier=openclaw-gateway
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/home/vscode/.openclaw
+ReadWritePaths=/home/codespace/.openclaw
 
 [Install]
 WantedBy=default.target
