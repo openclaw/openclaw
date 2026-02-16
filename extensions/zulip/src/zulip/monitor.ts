@@ -203,8 +203,10 @@ async function pollEvents(params: {
 }): Promise<ZulipEventsResponse> {
   // Wrap the parent signal with a per-poll timeout so we don't hang forever
   // if the Zulip server goes unresponsive during long-poll.
-  // REDUCED from 90s to 60s for faster recovery from stuck connections
-  const POLL_TIMEOUT_MS = 60_000;
+  // Must exceed Zulip's server-side long-poll timeout (typically 90s) to avoid
+  // unnecessary client-side aborts that trigger queue re-registration and risk
+  // dropping messages in the gap between old and new queues.
+  const POLL_TIMEOUT_MS = 120_000;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -704,22 +706,38 @@ export async function monitorZulipProvider(
         });
 
       let ok = false;
+      const MAX_DISPATCH_RETRIES = 1;
       try {
-        await core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            disableBlockStreaming: true,
-            onModelSelected,
-          },
-        });
-        ok = true;
-      } catch (err) {
-        ok = false;
-        opts.statusSink?.({ lastError: err instanceof Error ? err.message : String(err) });
-        runtime.error?.(`zulip dispatch failed: ${String(err)}`);
+        for (let attempt = 0; attempt <= MAX_DISPATCH_RETRIES; attempt++) {
+          try {
+            await core.channel.reply.dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions: {
+                ...replyOptions,
+                disableBlockStreaming: true,
+                onModelSelected,
+              },
+            });
+            ok = true;
+            break;
+          } catch (err) {
+            ok = false;
+            const isRetryable =
+              attempt < MAX_DISPATCH_RETRIES &&
+              !(err instanceof Error && err.name === "AbortError");
+            if (isRetryable) {
+              runtime.error?.(
+                `zulip dispatch failed (attempt ${attempt + 1}/${MAX_DISPATCH_RETRIES + 1}, retrying in 2s): ${String(err)}`,
+              );
+              await sleep(2000, abortSignal).catch(() => undefined);
+              continue;
+            }
+            opts.statusSink?.({ lastError: err instanceof Error ? err.message : String(err) });
+            runtime.error?.(`zulip dispatch failed: ${String(err)}`);
+          }
+        }
       } finally {
         markDispatchIdle();
         // Clean up delivery abort controller
@@ -772,7 +790,10 @@ export async function monitorZulipProvider(
       let stage: "register" | "poll" | "handle" = "register";
 
       // Backpressure: limit concurrent message handlers to prevent unbounded pile-up.
-      const MAX_CONCURRENT_HANDLERS = 5;
+      // Set high enough to handle many active topics simultaneously — each handler holds
+      // its slot for the full agent turn (which can take 30-120s with Opus + tools).
+      // A low limit (e.g. 5) causes messages to queue behind long-running turns.
+      const MAX_CONCURRENT_HANDLERS = 20;
       let activeHandlers = 0;
       const handlerWaiters: Array<() => void> = [];
 
