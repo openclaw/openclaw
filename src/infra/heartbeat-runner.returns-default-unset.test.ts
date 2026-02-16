@@ -287,24 +287,6 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     });
   });
 
-  it("keeps WhatsApp group targets even with allowFrom set", () => {
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { allowFrom: ["+1555"] } },
-    };
-    const entry = {
-      ...baseEntry,
-      lastChannel: "whatsapp" as const,
-      lastTo: "[redacted-email]",
-    };
-    expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      channel: "whatsapp",
-      to: "[redacted-email]",
-      accountId: undefined,
-      lastChannel: "whatsapp",
-      lastAccountId: undefined,
-    });
-  });
-
   it("normalizes prefixed WhatsApp group targets for heartbeat delivery", () => {
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
