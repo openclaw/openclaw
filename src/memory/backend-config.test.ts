@@ -31,6 +31,10 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
     expect(resolved.qmd?.update.updateTimeoutMs).toBe(120_000);
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(120_000);
+    const names = new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
+    expect(names.has("memory-root-main")).toBe(true);
+    expect(names.has("memory-alt-main")).toBe(true);
+    expect(names.has("memory-dir-main")).toBe(true);
   });
 
   it("parses quoted qmd command paths", () => {
@@ -71,6 +75,33 @@ describe("resolveMemoryBackendConfig", () => {
     expect(custom).toBeDefined();
     const workspaceRoot = resolveAgentWorkspaceDir(cfg, "main");
     expect(custom?.path).toBe(path.resolve(workspaceRoot, "notes"));
+  });
+
+  it("scopes qmd collection names per agent", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [
+          { id: "main", default: true, workspace: "/workspace/root" },
+          { id: "dev", workspace: "/workspace/dev" },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          paths: [{ path: "notes", name: "workspace", pattern: "**/*.md" }],
+        },
+      },
+    } as OpenClawConfig;
+    const mainResolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const devResolved = resolveMemoryBackendConfig({ cfg, agentId: "dev" });
+    const mainNames = new Set((mainResolved.qmd?.collections ?? []).map((collection) => collection.name));
+    const devNames = new Set((devResolved.qmd?.collections ?? []).map((collection) => collection.name));
+    expect(mainNames.has("memory-dir-main")).toBe(true);
+    expect(devNames.has("memory-dir-dev")).toBe(true);
+    expect(mainNames.has("workspace-main")).toBe(true);
+    expect(devNames.has("workspace-dev")).toBe(true);
   });
 
   it("resolves qmd update timeout overrides", () => {
