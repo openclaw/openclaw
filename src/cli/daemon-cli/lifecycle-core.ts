@@ -259,6 +259,7 @@ export async function runServiceRestart(params: {
   }
 
   // Check for token drift before restart (service token vs config token)
+  const warnings: string[] = [];
   try {
     const command = await params.service.readCommand(process.env);
     const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
@@ -268,10 +269,16 @@ export async function runServiceRestart(params: {
       process.env.OPENCLAW_GATEWAY_TOKEN ||
       process.env.CLAWDBOT_GATEWAY_TOKEN;
     const driftIssue = checkTokenDrift({ serviceToken, configToken });
-    if (driftIssue && !json) {
-      defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
-      if (driftIssue.detail) {
-        defaultRuntime.log(`   ${driftIssue.detail}\n`);
+    if (driftIssue) {
+      const warning = driftIssue.detail
+        ? `${driftIssue.message} ${driftIssue.detail}`
+        : driftIssue.message;
+      warnings.push(warning);
+      if (!json) {
+        defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
+        if (driftIssue.detail) {
+          defaultRuntime.log(`   ${driftIssue.detail}\n`);
+        }
       }
     }
   } catch {
@@ -290,6 +297,7 @@ export async function runServiceRestart(params: {
       ok: true,
       result: "restarted",
       service: buildDaemonServiceSnapshot(params.service, restarted),
+      warnings: warnings.length ? warnings : undefined,
     });
     return true;
   } catch (err) {
