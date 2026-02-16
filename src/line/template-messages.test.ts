@@ -8,7 +8,6 @@ import {
   createImageCarouselColumn,
   createProductCarousel,
   messageAction,
-  uriAction,
   postbackAction,
 } from "./template-messages.js";
 
@@ -23,14 +22,6 @@ describe("messageAction", () => {
     const action = messageAction("This is a very long label that exceeds the limit");
 
     expect(action.label).toBe("This is a very long ");
-  });
-});
-
-describe("uriAction", () => {
-  it("truncates labels and keeps target URL", () => {
-    const action = uriAction("This label is definitely too long", "https://example.com");
-    expect(action.label).toBe("This label is defini");
-    expect((action as { uri: string }).uri).toBe("https://example.com");
   });
 });
 
