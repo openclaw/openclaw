@@ -7,6 +7,9 @@ import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpe
 
 installGatewayTestHooks({ scope: "suite" });
 
+const PNG_1X1_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6z3ioAAAAASUVORK5CYII=";
+
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 
@@ -227,6 +230,64 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const [opts] = agentCommand.mock.calls[0] ?? [];
         expect((opts as { message?: string } | undefined)?.message).toBe("hello\nworld");
         await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "image ok" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "describe this" },
+                {
+                  type: "image_url",
+                  url: {
+                    url: `data:image/png;base64,${PNG_1X1_BASE64}`,
+                  },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(200);
+
+        const [opts] = agentCommand.mock.calls[0] ?? [];
+        const images =
+          (opts as { images?: Array<{ mimeType?: string; data?: string }> } | undefined)?.images ??
+          [];
+        expect(images).toHaveLength(1);
+        expect(images[0]?.mimeType).toBe("image/png");
+        expect(images[0]?.data).toBe(PNG_1X1_BASE64);
+        await res.text();
+      }
+
+      {
+        agentCommand.mockReset();
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "describe this" },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: "data:image/xyz;base64,AAAA",
+                  },
+                },
+              ],
+            },
+          ],
+        });
+        expect(res.status).toBe(400);
+        const invalidImageJson = (await res.json()) as Record<string, unknown>;
+        expect((invalidImageJson.error as Record<string, unknown> | undefined)?.type).toBe(
+          "invalid_request_error",
+        );
+        expect(agentCommand).not.toHaveBeenCalled();
       }
 
       {

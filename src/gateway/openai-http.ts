@@ -4,7 +4,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
+import type { ImageContent } from "../commands/agent/types.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import {
+  DEFAULT_INPUT_IMAGE_MAX_BYTES,
+  DEFAULT_INPUT_IMAGE_MIMES,
+  DEFAULT_INPUT_MAX_REDIRECTS,
+  DEFAULT_INPUT_TIMEOUT_MS,
+  extractImageContentFromSource,
+  normalizeMimeList,
+  type InputImageLimits,
+  type InputImageSource,
+} from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -36,12 +47,118 @@ type OpenAiChatCompletionRequest = {
   user?: unknown;
 };
 
+const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
+
+const OPENAI_CHAT_IMAGE_LIMITS: InputImageLimits = {
+  allowUrl: true,
+  allowedMimes: normalizeMimeList(undefined, DEFAULT_INPUT_IMAGE_MIMES),
+  maxBytes: DEFAULT_INPUT_IMAGE_MAX_BYTES,
+  maxRedirects: DEFAULT_INPUT_MAX_REDIRECTS,
+  timeoutMs: DEFAULT_INPUT_TIMEOUT_MS,
+};
+
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 function asMessages(val: unknown): OpenAiChatMessage[] {
   return Array.isArray(val) ? (val as OpenAiChatMessage[]) : [];
+}
+
+function parseOpenAiDataUrlImageSource(url: unknown): InputImageSource | undefined {
+  if (typeof url !== "string") return undefined;
+  const trimmed = url.trim();
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i.exec(trimmed);
+  if (!match) return undefined;
+  const mediaType = match[1]?.toLowerCase();
+  const data = match[2]?.replace(/\s+/g, "");
+  if (!mediaType || !data) return undefined;
+  return { type: "base64", mediaType, data };
+}
+
+function parseImageSourceFromValue(value: unknown): InputImageSource | undefined {
+  if (typeof value === "string") {
+    const dataUrl = parseOpenAiDataUrlImageSource(value);
+    if (dataUrl) return dataUrl;
+    return { type: "url", url: value };
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+
+  const sourceType = record.type;
+  if (sourceType === "base64" || sourceType === "url") {
+    return {
+      type: sourceType,
+      data: typeof record.data === "string" ? record.data : undefined,
+      url: typeof record.url === "string" ? record.url : undefined,
+      mediaType:
+        typeof record.media_type === "string"
+          ? record.media_type
+          : typeof record.mime_type === "string"
+            ? record.mime_type
+            : undefined,
+    };
+  }
+
+  const nestedUrl = record.url;
+  if (typeof nestedUrl === "string") {
+    const dataUrl = parseOpenAiDataUrlImageSource(nestedUrl);
+    if (dataUrl) return dataUrl;
+    return { type: "url", url: nestedUrl };
+  }
+
+  const data = record.data;
+  if (typeof data === "string") {
+    return {
+      type: "base64",
+      data,
+      mediaType:
+        typeof record.media_type === "string"
+          ? record.media_type
+          : typeof record.mime_type === "string"
+            ? record.mime_type
+            : undefined,
+    };
+  }
+
+  return undefined;
+}
+
+function parseOpenAiImageSource(part: unknown): InputImageSource | undefined {
+  if (!part || typeof part !== "object") return undefined;
+  const record = part as Record<string, unknown>;
+  const partType = typeof record.type === "string" ? record.type : "";
+  const hasImageField =
+    Object.hasOwn(record, "image_url") ||
+    Object.hasOwn(record, "url") ||
+    Object.hasOwn(record, "image") ||
+    Object.hasOwn(record, "source");
+  if (
+    partType !== "image_url" &&
+    partType !== "input_image" &&
+    partType !== "image" &&
+    !hasImageField
+  ) {
+    return undefined;
+  }
+
+  const imageValue = record.image_url ?? record.url ?? record.image ?? record.source;
+  return parseImageSourceFromValue(imageValue);
+}
+
+async function extractOpenAiImages(messagesUnknown: unknown): Promise<ImageContent[]> {
+  const images: ImageContent[] = [];
+  for (const msg of asMessages(messagesUnknown)) {
+    if (!msg || typeof msg !== "object") continue;
+    if (!Array.isArray(msg.content)) continue;
+    for (const part of msg.content) {
+      const source = parseOpenAiImageSource(part);
+      if (!source) continue;
+      const image = await extractImageContentFromSource(source, OPENAI_CHAT_IMAGE_LIMITS);
+      images.push(image);
+    }
+  }
+  return images;
 }
 
 function extractTextContent(content: unknown): string {
@@ -176,7 +293,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
-  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 1024 * 1024);
+  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_BODY_BYTES);
   if (body === undefined) return true;
 
   const payload = coerceRequest(body);
@@ -187,6 +304,18 @@ export async function handleOpenAiHttpRequest(
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
+  let images: ImageContent[] = [];
+  try {
+    images = await extractOpenAiImages(payload.messages);
+  } catch (err) {
+    sendJson(res, 400, {
+      error: {
+        message: String(err),
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
   if (!prompt.message) {
     sendJson(res, 400, {
       error: {
@@ -205,6 +334,7 @@ export async function handleOpenAiHttpRequest(
       const result = await agentCommand(
         {
           message: prompt.message,
+          images: images.length > 0 ? images : undefined,
           extraSystemPrompt: prompt.extraSystemPrompt,
           sessionKey,
           runId,
@@ -312,6 +442,7 @@ export async function handleOpenAiHttpRequest(
       const result = await agentCommand(
         {
           message: prompt.message,
+          images: images.length > 0 ? images : undefined,
           extraSystemPrompt: prompt.extraSystemPrompt,
           sessionKey,
           runId,
