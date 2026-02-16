@@ -50,27 +50,28 @@ const DISCORD_STATUS_DEBOUNCE_MS = 700;
 const DISCORD_STATUS_STALL_SOFT_MS = 10_000;
 const DISCORD_STATUS_STALL_HARD_MS = 30_000;
 
-const CODING_STATUS_TOOL_NAMES = new Set([
+const CODING_STATUS_TOOL_TOKENS = [
   "exec",
   "process",
   "read",
   "write",
   "edit",
   "session_status",
-]);
+  "bash",
+];
 
-const WEB_STATUS_TOOL_NAMES = new Set(["web_search", "web_fetch", "browser"]);
+const WEB_STATUS_TOOL_TOKENS = ["web_search", "web-search", "web_fetch", "web-fetch", "browser"];
 
 function resolveToolStatusEmoji(toolName?: string): string {
   const normalized = toolName?.trim().toLowerCase() ?? "";
   if (!normalized) {
     return DISCORD_STATUS_TOOL_EMOJI;
   }
-  if (CODING_STATUS_TOOL_NAMES.has(normalized)) {
-    return DISCORD_STATUS_CODING_EMOJI;
-  }
-  if (WEB_STATUS_TOOL_NAMES.has(normalized)) {
+  if (WEB_STATUS_TOOL_TOKENS.some((token) => normalized.includes(token))) {
     return DISCORD_STATUS_WEB_EMOJI;
+  }
+  if (CODING_STATUS_TOOL_TOKENS.some((token) => normalized.includes(token))) {
+    return DISCORD_STATUS_CODING_EMOJI;
   }
   return DISCORD_STATUS_TOOL_EMOJI;
 }
@@ -245,6 +246,16 @@ function createDiscordStatusReactionController(params: {
     });
   };
 
+  const restoreInitial = async () => {
+    if (!params.enabled) {
+      return;
+    }
+    finished = true;
+    clearStallTimers();
+    clearPendingDebounce();
+    await requestEmoji(params.initialEmoji, { immediate: true });
+  };
+
   return {
     setQueued: () => {
       scheduleStallTimers();
@@ -255,6 +266,7 @@ function createDiscordStatusReactionController(params: {
     setDone: () => setTerminal(DISCORD_STATUS_DONE_EMOJI),
     setError: () => setTerminal(DISCORD_STATUS_ERROR_EMOJI),
     clear,
+    restoreInitial,
   };
 }
 
@@ -658,6 +670,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           await sleep(dispatchError ? DISCORD_STATUS_ERROR_HOLD_MS : DISCORD_STATUS_DONE_HOLD_MS);
           await statusReactions.clear();
         })();
+      } else {
+        void statusReactions.restoreInitial();
       }
     }
   }

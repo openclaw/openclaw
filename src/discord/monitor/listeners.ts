@@ -218,6 +218,50 @@ async function handleDiscordReactionEvent(params: {
     let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
     let parentName: string | undefined;
     let parentSlug = "";
+    const memberRoleIds = Array.isArray(data.rawMember?.roles)
+      ? data.rawMember.roles.map((roleId: string) => String(roleId))
+      : [];
+    let reactionBase: { baseText: string; contextKey: string } | null = null;
+    const resolveReactionBase = () => {
+      if (reactionBase) {
+        return reactionBase;
+      }
+      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+      const actorLabel = formatDiscordUserTag(user);
+      const guildSlug =
+        guildInfo?.slug ||
+        (data.guild?.name
+          ? normalizeDiscordSlug(data.guild.name)
+          : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
+      const channelLabel = channelSlug
+        ? `#${channelSlug}`
+        : channelName
+          ? `#${normalizeDiscordSlug(channelName)}`
+          : `#${data.channel_id}`;
+      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
+      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`;
+      reactionBase = { baseText, contextKey };
+      return reactionBase;
+    };
+    const emitReaction = (text: string, parentPeerId?: string) => {
+      const { contextKey } = resolveReactionBase();
+      const route = resolveAgentRoute({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId: params.accountId,
+        guildId: data.guild_id ?? undefined,
+        memberRoleIds,
+        peer: {
+          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+          id: isDirectMessage ? user.id : data.channel_id,
+        },
+        parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
+      });
+      enqueueSystemEvent(text, {
+        sessionKey: route.sessionKey,
+        contextKey,
+      });
+    };
 
     // Parallelize async operations for thread channels
     if (isThreadChannel) {
@@ -272,38 +316,8 @@ async function handleDiscordReactionEvent(params: {
           }
         }
 
-        const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-        const actorLabel = formatDiscordUserTag(user);
-        const guildSlug =
-          guildInfo?.slug ||
-          (data.guild?.name
-            ? normalizeDiscordSlug(data.guild.name)
-            : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
-        const channelLabel = channelSlug
-          ? `#${channelSlug}`
-          : channelName
-            ? `#${normalizeDiscordSlug(channelName)}`
-            : `#${data.channel_id}`;
-        const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
-        const memberRoleIds = Array.isArray(data.rawMember?.roles)
-          ? data.rawMember.roles.map((roleId: string) => String(roleId))
-          : [];
-        const route = resolveAgentRoute({
-          cfg: params.cfg,
-          channel: "discord",
-          accountId: params.accountId,
-          guildId: data.guild_id ?? undefined,
-          memberRoleIds,
-          peer: {
-            kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-            id: isDirectMessage ? user.id : data.channel_id,
-          },
-          parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
-        });
-        enqueueSystemEvent(baseText, {
-          sessionKey: route.sessionKey,
-          contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
-        });
+        const { baseText } = resolveReactionBase();
+        emitReaction(baseText, parentId);
         return;
       }
 
@@ -347,40 +361,10 @@ async function handleDiscordReactionEvent(params: {
         return;
       }
 
-      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-      const actorLabel = formatDiscordUserTag(user);
-      const guildSlug =
-        guildInfo?.slug ||
-        (data.guild?.name
-          ? normalizeDiscordSlug(data.guild.name)
-          : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
-      const channelLabel = channelSlug
-        ? `#${channelSlug}`
-        : channelName
-          ? `#${normalizeDiscordSlug(channelName)}`
-          : `#${data.channel_id}`;
+      const { baseText } = resolveReactionBase();
       const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
-      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-      const memberRoleIds = Array.isArray(data.rawMember?.roles)
-        ? data.rawMember.roles.map((roleId: string) => String(roleId))
-        : [];
-      const route = resolveAgentRoute({
-        cfg: params.cfg,
-        channel: "discord",
-        accountId: params.accountId,
-        guildId: data.guild_id ?? undefined,
-        memberRoleIds,
-        peer: {
-          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-          id: isDirectMessage ? user.id : data.channel_id,
-        },
-        parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
-      });
-      enqueueSystemEvent(text, {
-        sessionKey: route.sessionKey,
-        contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
-      });
+      emitReaction(text, parentId);
       return;
     }
 
@@ -423,38 +407,8 @@ async function handleDiscordReactionEvent(params: {
         }
       }
 
-      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-      const actorLabel = formatDiscordUserTag(user);
-      const guildSlug =
-        guildInfo?.slug ||
-        (data.guild?.name
-          ? normalizeDiscordSlug(data.guild.name)
-          : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
-      const channelLabel = channelSlug
-        ? `#${channelSlug}`
-        : channelName
-          ? `#${normalizeDiscordSlug(channelName)}`
-          : `#${data.channel_id}`;
-      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
-      const memberRoleIds = Array.isArray(data.rawMember?.roles)
-        ? data.rawMember.roles.map((roleId: string) => String(roleId))
-        : [];
-      const route = resolveAgentRoute({
-        cfg: params.cfg,
-        channel: "discord",
-        accountId: params.accountId,
-        guildId: data.guild_id ?? undefined,
-        memberRoleIds,
-        peer: {
-          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-          id: isDirectMessage ? user.id : data.channel_id,
-        },
-        parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
-      });
-      enqueueSystemEvent(baseText, {
-        sessionKey: route.sessionKey,
-        contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
-      });
+      const { baseText } = resolveReactionBase();
+      emitReaction(baseText, parentId);
       return;
     }
 
@@ -474,40 +428,10 @@ async function handleDiscordReactionEvent(params: {
       return;
     }
 
-    const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-    const actorLabel = formatDiscordUserTag(user);
-    const guildSlug =
-      guildInfo?.slug ||
-      (data.guild?.name
-        ? normalizeDiscordSlug(data.guild.name)
-        : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
-    const channelLabel = channelSlug
-      ? `#${channelSlug}`
-      : channelName
-        ? `#${normalizeDiscordSlug(channelName)}`
-        : `#${data.channel_id}`;
+    const { baseText } = resolveReactionBase();
     const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
-    const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => String(roleId))
-      : [];
-    const route = resolveAgentRoute({
-      cfg: params.cfg,
-      channel: "discord",
-      accountId: params.accountId,
-      guildId: data.guild_id ?? undefined,
-      memberRoleIds,
-      peer: {
-        kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-        id: isDirectMessage ? user.id : data.channel_id,
-      },
-      parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
-    });
-    enqueueSystemEvent(text, {
-      sessionKey: route.sessionKey,
-      contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
-    });
+    emitReaction(text, parentId);
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
