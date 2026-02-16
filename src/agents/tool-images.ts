@@ -33,6 +33,17 @@ function isTextBlock(block: unknown): block is TextContentBlock {
   return rec.type === "text" && typeof rec.text === "string";
 }
 
+/** Strip a `data:<mime>;base64,` prefix if present, returning raw base64. */
+function stripDataUrlPrefix(raw: string): string {
+  const m = /^data:[^;]+;base64,(.*)$/.exec(raw);
+  return m ? m[1] : raw;
+}
+
+/** Minimal validation: non-empty, length % 4 === 0, only valid base64 chars. */
+function isValidBase64(value: string): boolean {
+  return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
 function inferMimeTypeFromBase64(base64: string): string | undefined {
   const trimmed = base64.trim();
   if (!trimmed) {
@@ -160,11 +171,20 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
 
-    const data = block.data.trim();
+    const data = stripDataUrlPrefix(block.data.trim());
     if (!data) {
       out.push({
         type: "text",
         text: `[${label}] omitted empty image payload`,
+      } satisfies TextContentBlock);
+      continue;
+    }
+
+    if (!isValidBase64(data)) {
+      log.warn("Dropping image block with invalid base64 data", { label });
+      out.push({
+        type: "text",
+        text: `[${label}] omitted image with invalid base64 data`,
       } satisfies TextContentBlock);
       continue;
     }
