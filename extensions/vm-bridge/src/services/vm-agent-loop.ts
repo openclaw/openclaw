@@ -176,7 +176,7 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
       }
 
       const qaOutput = extractResultText(qaResult);
-      const passed = parseQaPassed(qaOutput);
+      const passed = parseQaPassed(qaOutput, full.qa_doc);
 
       if (passed) {
         logEntries.push(`Attempt ${attemptCount}: QA PASSED — ${truncate(qaOutput, 200)}`);
@@ -307,7 +307,58 @@ function buildExecPrompt(
   return parts.join("\n");
 }
 
-function buildQaPrompt(contract: Contract): string {
+type QaCheckItem = { id: string; description: string; nav: string; pass_if: string };
+
+export function parseQaChecklist(qaDoc: string | null | undefined): QaCheckItem[] | null {
+  if (!qaDoc || !qaDoc.trimStart().startsWith("[")) return null;
+  try {
+    const parsed = JSON.parse(qaDoc);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    // Validate shape
+    if (!parsed[0].id || !parsed[0].pass_if) return null;
+    return parsed as QaCheckItem[];
+  } catch {
+    return null;
+  }
+}
+
+export function buildQaPrompt(contract: Contract): string {
+  const checklist = parseQaChecklist(contract.qa_doc);
+
+  if (checklist) {
+    const parts: string[] = [];
+    parts.push(`Verify ALL ${checklist.length} criteria below using the Chrome browser.`);
+    parts.push("Evaluate EACH check independently. Report per-check results.");
+    parts.push("Only report overall PASS if ALL checks pass.");
+    parts.push("");
+
+    checklist.forEach((check, i) => {
+      parts.push(`Check ${i + 1}: ${check.id}`);
+      parts.push(`  What: ${check.description}`);
+      parts.push(`  Navigate: ${check.nav}`);
+      parts.push(`  Pass if: ${check.pass_if}`);
+      parts.push("");
+    });
+
+    parts.push(`Original task: ${contract.intent}`);
+
+    const domain = (contract.system_ref ?? {}).domain as string | undefined;
+    if (domain) {
+      parts.push("");
+      parts.push(`Application URL: https://${domain}`);
+    }
+
+    parts.push("");
+    parts.push("After evaluating ALL checks, report in this exact format:");
+    checklist.forEach((check) => {
+      parts.push(`CHECK ${check.id}: PASS|FAIL - <evidence>`);
+    });
+    parts.push(`OVERALL: PASS|FAIL (n/${checklist.length} passed)`);
+
+    return parts.join("\n");
+  }
+
+  // Legacy: free-text qa_doc
   const parts = [
     "Verify the following QA criteria using the Chrome browser. Report PASS if all criteria are met, or FAIL with details if not.",
     "",
@@ -337,16 +388,28 @@ function extractResultText(result: McpCallResult): string {
   return JSON.stringify(result.result);
 }
 
-function parseQaPassed(qaOutput: string): boolean {
+export function parseQaPassed(qaOutput: string, qaDoc?: string | null): boolean {
+  const checklist = parseQaChecklist(qaDoc);
+
+  if (checklist) {
+    // Structured mode: require every check ID to have a PASS line, none FAIL
+    for (const check of checklist) {
+      const pattern = new RegExp(`CHECK\\s+${check.id}:\\s*(PASS|FAIL)`, "i");
+      const match = qaOutput.match(pattern);
+      if (!match) return false; // Missing check → fail
+      if (match[1].toUpperCase() === "FAIL") return false;
+    }
+    return true;
+  }
+
+  // Legacy: keyword matching
   const upper = qaOutput.toUpperCase();
-  // Explicit PASS/FAIL markers take priority
   if (upper.includes("QA FAIL") || upper.includes("FAIL:") || upper.includes("FAILED")) {
     return false;
   }
   if (upper.includes("PASS") || upper.includes("VERIFIED")) {
     return true;
   }
-  // Default to fail if no clear signal
   return false;
 }
 

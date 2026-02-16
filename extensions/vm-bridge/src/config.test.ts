@@ -13,9 +13,9 @@ describe("vmBridgeConfigSchema", () => {
     expect(result.database.port).toBe(5433);
     expect(result.database.user).toBe("postgres");
     expect(result.database.password).toBe("secret123");
-    expect(result.database.database).toBe("cos");
+    expect(result.database.database).toBe("communications");
     expect(result.polling.intervalMs).toBe(60_000);
-    expect(result.polling.accounts).toEqual(["xcellerate"]);
+    expect(result.polling.accounts).toEqual(["xcellerate", "vvg"]);
     expect(result.polling.zoomEnabled).toBe(true);
     expect(result.bridge.url).toBe("http://127.0.0.1:8585");
     expect(result.bridge.healthCheckMs).toBe(30_000);

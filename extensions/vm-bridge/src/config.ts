@@ -6,20 +6,20 @@ export const vmBridgeConfigSchema = z.object({
     port: z.number().default(5433),
     user: z.string().default("postgres"),
     password: z.string(),
-    database: z.string().default("cos"),
+    database: z.string().default("communications"),
   }),
 
   polling: z.object({
     intervalMs: z.number().default(60_000),
-    accounts: z.array(z.string()).default(["xcellerate"]),
+    accounts: z.array(z.string()).default(["xcellerate", "vvg"]),
     zoomEnabled: z.boolean().default(true),
-    emailDaysBack: z.number().default(1),
+    emailDaysBack: z.number().default(3),
     maxEmailsPerRun: z.number().default(20),
   }).default({
     intervalMs: 60_000,
-    accounts: ["xcellerate"],
+    accounts: ["xcellerate", "vvg"],
     zoomEnabled: true,
-    emailDaysBack: 1,
+    emailDaysBack: 3,
     maxEmailsPerRun: 20,
   }),
 
@@ -40,7 +40,7 @@ export const vmBridgeConfigSchema = z.object({
   }),
 
   checkpoints: z.object({
-    selfEmail: z.string().describe("Email address for checkpoint notifications (e.g. mike@xcellerateeq.ai)"),
+    selfEmail: z.string().describe("Email address for checkpoint notifications (e.g. michaelabdo@vvgtruck.com)"),
     selfAccount: z.string().default("xcellerate").describe("Outlook account to send checkpoint emails from"),
     replyPrefix: z.string().default("CONTRACT:"),
   }),
@@ -52,7 +52,7 @@ export const vmBridgeConfigSchema = z.object({
   })).default({}),
 
   agentLoop: z.object({
-    hostname: z.string().optional().describe("VM hostname — set to enable the agent loop (e.g. vvg-gbp-ec2)"),
+    hostname: z.string().optional().describe("EC2 instance ID — set to enable the agent loop (e.g. i-0eb126d7105e24581)"),
     pollIntervalMs: z.number().default(15_000),
   }).default({
     pollIntervalMs: 15_000,
@@ -93,10 +93,10 @@ export const pluginConfigSchema = {
     "polling.intervalMs": { label: "Poll Interval", help: "Milliseconds between polling ticks (default: 60000)" },
     "polling.accounts": { label: "Accounts", help: "Outlook accounts to poll (e.g. xcellerate, vvg)" },
     "bridge.url": { label: "Bridge URL", help: "VM-Chrome bridge server URL" },
-    "checkpoints.selfEmail": { label: "Checkpoint Email", help: "Email address for checkpoint notifications (e.g. mike@xcellerateeq.ai)" },
+    "checkpoints.selfEmail": { label: "Checkpoint Email", help: "Email address for checkpoint notifications (e.g. michaelabdo@vvgtruck.com)" },
     "checkpoints.selfAccount": { label: "Checkpoint Account", help: "Outlook account to send from (default: xcellerate)" },
     "classifier.model": { label: "Classifier Model", help: "LLM model for message classification" },
-    "agentLoop.hostname": { label: "VM Hostname", help: "Set to enable the agent loop on this VM (e.g. vvg-gbp-ec2)" },
+    "agentLoop.hostname": { label: "EC2 Instance ID", help: "Set to enable the agent loop on this VM (e.g. i-0eb126d7105e24581)" },
     "agentLoop.pollIntervalMs": { label: "Agent Poll Interval", help: "Milliseconds between contract polling ticks (default: 15000)" },
   },
 };

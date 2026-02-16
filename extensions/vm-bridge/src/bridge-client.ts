@@ -58,8 +58,8 @@ export class BridgeClient {
     return this.mcpCall("ingest_emails", { account, days, max_emails: maxEmails });
   }
 
-  async messagesList(platform: string, days = 1, limit = 50) {
-    return this.mcpCall("messages_list", { platform, days, limit });
+  async messagesList(platform: string, days = 1, limit = 50, account?: string) {
+    return this.mcpCall("messages_list", { platform, days, limit, ...(account ? { account } : {}) });
   }
 
   async messagesGet(messageId: string, account: string, platform: string) {
@@ -100,6 +100,32 @@ export class BridgeClient {
 
   async addAttachmentToDraft(draftId: string, filePath: string, account = "xcellerate") {
     return this.mcpCall("add_attachment_to_draft", { draft_id: draftId, file_path: filePath, account });
+  }
+
+  /** Execute a prompt via Claude CLI on the bridge (supports chrome and non-chrome modes). */
+  async task(prompt: string, options: { chrome?: boolean; profile?: string; systemPrompt?: string; timeout?: number } = {}): Promise<McpCallResult> {
+    try {
+      const resp = await fetch(`${this.url}/task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          chrome: options.chrome ?? false,
+          profile: options.profile,
+          system_prompt: options.systemPrompt,
+          timeout: options.timeout ?? 300,
+        }),
+        signal: AbortSignal.timeout((options.timeout ?? 300) * 1000 + 10_000),
+      });
+      const data = await resp.json() as { result: string; status: string; is_error?: boolean };
+      return {
+        success: data.status === "success" && !data.is_error,
+        result: data.result,
+        error: data.is_error ? data.result : undefined,
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** Capture a Chrome tab screenshot via CDP and save to disk. */

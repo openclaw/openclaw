@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { createVmAgentLoop } from "./vm-agent-loop.js";
+import { createVmAgentLoop, buildQaPrompt, parseQaPassed } from "./vm-agent-loop.js";
 import type { Db, Contract } from "../db.js";
 import type { BridgeClient } from "../bridge-client.js";
 
@@ -1251,5 +1251,89 @@ describe("two-step execution: SSH execute + Chrome QA", () => {
     expect(taskCalls[1][1].chrome).toBe(true);
 
     await loop.stop({ logger });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Block 10: Structured QA checklist
+// ---------------------------------------------------------------------------
+
+const STRUCTURED_QA_DOC = JSON.stringify([
+  { id: "user_added", description: "jshearer in recipients list", nav: "customer-response.vtc.systems/admin/settings", pass_if: "jshearer@vvgtruck.com listed as Active" },
+  { id: "correct_scope", description: "Only Service dept locations", nav: "Location Subscriptions tab", pass_if: "Only VTC USA Service locations checked" },
+  { id: "existing_unchanged", description: "cabarca still present", nav: "Recipients tab", pass_if: "cabarca@vvgtruck.com still listed" },
+]);
+
+describe("structured QA checklist", () => {
+  describe("buildQaPrompt", () => {
+    it("renders numbered checklist for structured qa_doc", () => {
+      const contract = makeContract({ qa_doc: STRUCTURED_QA_DOC });
+      const prompt = buildQaPrompt(contract);
+
+      expect(prompt).toContain("Check 1:");
+      expect(prompt).toContain("Check 2:");
+      expect(prompt).toContain("Check 3:");
+      expect(prompt).toContain("ALL 3 criteria");
+      expect(prompt).toContain("jshearer@vvgtruck.com listed as Active");
+      expect(prompt).toContain("Only VTC USA Service locations checked");
+      expect(prompt).toContain("cabarca@vvgtruck.com still listed");
+      // Must include per-check reporting format
+      expect(prompt).toContain("CHECK user_added: PASS");
+      expect(prompt).toContain("OVERALL:");
+    });
+
+    it("passes through legacy qa_doc unchanged", () => {
+      const legacyDoc = "Navigate to GBP listing and verify Sunday hours show 8:00 AM - 5:00 PM";
+      const contract = makeContract({ qa_doc: legacyDoc });
+      const prompt = buildQaPrompt(contract);
+
+      expect(prompt).toContain(legacyDoc);
+      expect(prompt).not.toContain("Check 1:");
+    });
+  });
+
+  describe("parseQaPassed", () => {
+    it("returns true when ALL checks pass (structured)", () => {
+      const output = [
+        "CHECK user_added: PASS - jshearer found in list",
+        "CHECK correct_scope: PASS - only Service locations checked",
+        "CHECK existing_unchanged: PASS - cabarca still present",
+        "OVERALL: PASS (3/3 passed)",
+      ].join("\n");
+
+      expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(true);
+    });
+
+    it("returns false when any check fails (structured)", () => {
+      const output = [
+        "CHECK user_added: PASS - jshearer found",
+        "CHECK correct_scope: FAIL - all locations were checked, not just Service",
+        "CHECK existing_unchanged: PASS - cabarca present",
+        "OVERALL: FAIL (2/3 passed)",
+      ].join("\n");
+
+      expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(false);
+    });
+
+    it("returns false when checks are missing from output", () => {
+      const output = [
+        "CHECK user_added: PASS - found",
+        "OVERALL: PASS (1/1 passed)",
+      ].join("\n");
+
+      // Only 1 of 3 checks reported — should fail
+      expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(false);
+    });
+
+    it("still works with legacy qa_doc (keyword matching)", () => {
+      const legacyDoc = "Verify the hours are updated";
+      expect(parseQaPassed("QA PASS: Hours show correctly", legacyDoc)).toBe(true);
+      expect(parseQaPassed("QA FAIL: Hours still wrong", legacyDoc)).toBe(false);
+    });
+
+    it("falls back to keyword matching when qa_doc is null", () => {
+      expect(parseQaPassed("PASS. Verified.", null)).toBe(true);
+      expect(parseQaPassed("FAILED to verify", null)).toBe(false);
+    });
   });
 });

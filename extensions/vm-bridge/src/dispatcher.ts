@@ -15,7 +15,17 @@ export type DispatchResult = {
   reasoning?: string;
 };
 
-const INTENT_MATCH_PROMPT = `You are a project intent matcher. Given a message and a list of projects with their intents, determine which project and intent best matches the message.
+const INTENT_MATCH_PROMPT = `You are a project intent matcher and rewriter. Given a message and a list of projects with their intents, determine which project best matches, then produce a LOGICALLY COMPLETE intent statement.
+
+A logically complete intent resolves all ambiguity from the original message:
+- WHO: Full names and email addresses of people involved (extract from message body, CC list, and signatures)
+- WHAT: The specific action to take, using precise system terminology from the project's intent descriptions
+- WHERE: Exact location, page, table, or component to modify
+- BOUNDARY: What should NOT change (e.g., "do not remove existing recipients")
+- VERIFICATION: A concrete, pass/fail condition an automated QA agent can check via Chrome browser
+
+Example — raw message: "Can you update VTC USA Service related reviews go to Jason Shearer as well as Chris and Pete"
+Logically complete intent: "Add jshearer@vvgtruck.com (Jason Shearer) to NEGATIVE review notifications for all VTC USA Service department locations. Chris Abarca (cabarca@vvgtruck.com) and Pete Hobbs (phobbs@vvgtruck.com) should already be receiving these — do not remove them."
 
 If no project/intent matches with reasonable confidence, respond with {"matched": false}.
 
@@ -23,11 +33,26 @@ Otherwise respond with:
 {
   "matched": true,
   "project_id": "...",
-  "intent": "one-line description of what the sender wants done",
-  "qa_doc": "step-by-step verification instructions for confirming the work was done correctly (written for a QA agent that will check via Chrome browser)",
+  "intent": "Logically complete statement that an engineer could execute without referring back to the original email. Include names, emails, specific locations/brands, and what NOT to change.",
+  "qa_doc": [
+    {"id": "short_snake_id", "description": "what to verify", "nav": "URL or page location to navigate to", "pass_if": "exact condition that must be true for this check to pass"}
+  ],
   "confidence": 0.0-1.0,
   "reasoning": "one sentence"
-}`;
+}
+
+qa_doc rules:
+- Each check must be independently verifiable via Chrome browser
+- Include at least one check per entity mentioned in the intent
+- Include boundary checks for what should NOT have changed (e.g. existing users still present)
+- Use specific URLs, page elements, or database values in nav and pass_if
+- Example for "Add jshearer to Service dept notifications, keep cabarca and phobbs":
+  [
+    {"id": "user_added", "description": "jshearer in recipients", "nav": "customer-response.vtc.systems/admin/settings > Recipients tab", "pass_if": "jshearer@vvgtruck.com listed as Active"},
+    {"id": "correct_scope", "description": "Scope is Service dept only", "nav": "Location Subscriptions tab for jshearer", "pass_if": "Only VTC USA Service department locations are checked"},
+    {"id": "cabarca_unchanged", "description": "cabarca still present", "nav": "Recipients tab", "pass_if": "cabarca@vvgtruck.com still listed as Active"},
+    {"id": "phobbs_unchanged", "description": "phobbs still present", "nav": "Recipients tab", "pass_if": "phobbs@vvgtruck.com still listed as Active"}
+  ]`;
 
 export async function dispatchMessage(
   senderEmail: string,
@@ -54,32 +79,18 @@ export async function dispatchMessage(
     projectIntents.push({ project, intents });
   }
 
-  // 3. If only one project with clear intents, skip LLM for speed
-  if (projects.length === 1 && projectIntents[0].intents.length <= 1) {
-    const project = projects[0];
-    return {
-      matched: true,
-      project_id: project.id,
-      project,
-      intent: messageSubject ?? messageBody.slice(0, 200),
-      qa_doc: projectIntents[0].intents[0]?.description ?? "Verify the change was applied correctly",
-      confidence: 0.8,
-      reasoning: "Single project match, skipped LLM",
-    };
-  }
-
-  // 4. Use LLM to match
+  // 3. Use LLM to rewrite intent into a logically complete statement
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    // Fallback to first project
+    // Fallback — can't rewrite intent without LLM, pass raw text with low confidence
     const project = projects[0];
     return {
       matched: true,
       project_id: project.id,
       project,
-      intent: messageSubject ?? messageBody.slice(0, 200),
-      confidence: 0.5,
-      reasoning: "No API key, defaulted to first project",
+      intent: `[RAW — needs rewrite] ${messageSubject ?? messageBody.slice(0, 200)}`,
+      confidence: 0.3,
+      reasoning: "No API key — intent not logically resolved, needs human review",
     };
   }
 
@@ -110,7 +121,7 @@ export async function dispatchMessage(
         ],
         response_format: { type: "json_object" },
         temperature: 0.1,
-        max_tokens: 500,
+        max_tokens: 1000,
       }),
       signal: AbortSignal.timeout(15_000),
     });
@@ -130,7 +141,9 @@ export async function dispatchMessage(
       project_id: matchedProject.id,
       project: matchedProject,
       intent: raw.intent ?? messageSubject ?? messageBody.slice(0, 200),
-      qa_doc: raw.qa_doc ?? "Verify the change was applied correctly",
+      qa_doc: raw.qa_doc
+        ? (Array.isArray(raw.qa_doc) ? JSON.stringify(raw.qa_doc) : String(raw.qa_doc))
+        : "Verify the change was applied correctly",
       confidence: raw.confidence ?? 0.7,
       reasoning: raw.reasoning ?? "",
     };
