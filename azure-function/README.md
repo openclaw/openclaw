@@ -4,6 +4,8 @@ This directory contains a standalone Azure Function App that runs OpenClaw as a
 stateless, serverless webhook handler. It is designed for the **lowest possible
 running cost** using the Azure Functions Consumption Plan.
 
+**📖 Full deployment guide:** [Azure Functions Documentation](https://docs.openclaw.ai/install/azure)
+
 ## Architecture
 
 ```
