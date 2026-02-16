@@ -11,6 +11,18 @@ import { resolveMemoryBackendConfig } from "./backend-config.js";
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
 
+/**
+ * Clear the QMD manager cache.  Should be called when the gateway config is
+ * reloaded (e.g. via SIGUSR1) so that scope, collection, and other config
+ * changes take effect without requiring a full process restart.
+ */
+export function clearQmdManagerCache(): void {
+  for (const [key, manager] of QMD_MANAGER_CACHE) {
+    manager.close?.().catch(() => {});
+    QMD_MANAGER_CACHE.delete(key);
+  }
+}
+
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
   error?: string;
