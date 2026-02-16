@@ -1,0 +1,11 @@
+# Keep default gcloud ignores.
+.gcloudignore
+.git
+.gitignore
+
+# Reuse repository ignore patterns for source uploads.
+#!include:.gitignore
+
+# Required by Dockerfile build step:
+#   COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+!pnpm-lock.yaml
