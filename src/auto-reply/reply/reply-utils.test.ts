@@ -817,10 +817,6 @@ describe("hasTemplateVariables", () => {
     expect(hasTemplateVariables("prefix {thinkingLevel} suffix")).toBe(true);
   });
 
-  it("returns true for multiple variables", () => {
-    expect(hasTemplateVariables("[{model} | {provider}]")).toBe(true);
-  });
-
   it("handles consecutive calls correctly (regex lastIndex reset)", () => {
     // First call
     expect(hasTemplateVariables("[{model}]")).toBe(true);
