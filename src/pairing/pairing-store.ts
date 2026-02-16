@@ -7,6 +7,7 @@ import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseJson } from "../utils.js";
 
 const PAIRING_CODE_LENGTH = 8;
@@ -114,22 +115,14 @@ async function readJsonFile<T>(
   }
 }
 
-async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
-  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf-8",
-  });
-  await fs.promises.chmod(tmp, 0o600);
-  await fs.promises.rename(tmp, filePath);
-}
+/** Credentials directories use 0o700 to restrict listing to the owner. */
+const CREDENTIALS_DIR_MODE = 0o700;
 
 async function ensureJsonFile(filePath: string, fallback: unknown) {
   try {
     await fs.promises.access(filePath);
   } catch {
-    await writeJsonFile(filePath, fallback);
+    await writeJsonAtomic(filePath, fallback, { dirMode: CREDENTIALS_DIR_MODE });
   }
 }
 
@@ -274,10 +267,9 @@ async function readAllowFromState(params: {
 }
 
 async function writeAllowFromState(filePath: string, allowFrom: string[]): Promise<void> {
-  await writeJsonFile(filePath, {
-    version: 1,
-    allowFrom,
-  } satisfies AllowFromStore);
+  await writeJsonAtomic(filePath, { version: 1, allowFrom } satisfies AllowFromStore, {
+    dirMode: CREDENTIALS_DIR_MODE,
+  });
 }
 
 async function updateAllowFromStoreEntry(params: {
@@ -397,10 +389,9 @@ export async function listChannelPairingRequests(
         PAIRING_PENDING_MAX,
       );
       if (expiredRemoved || cappedRemoved) {
-        await writeJsonFile(filePath, {
-          version: 1,
-          requests: pruned,
-        } satisfies PairingStore);
+        await writeJsonAtomic(filePath, { version: 1, requests: pruned } satisfies PairingStore, {
+          dirMode: CREDENTIALS_DIR_MODE,
+        });
       }
       const normalizedAccountId = accountId?.trim().toLowerCase() || "";
       const filtered = normalizedAccountId
@@ -487,10 +478,9 @@ export async function upsertChannelPairingRequest(params: {
         };
         reqs[existingIdx] = next;
         const { requests: capped } = pruneExcessRequests(reqs, PAIRING_PENDING_MAX);
-        await writeJsonFile(filePath, {
-          version: 1,
-          requests: capped,
-        } satisfies PairingStore);
+        await writeJsonAtomic(filePath, { version: 1, requests: capped } satisfies PairingStore, {
+          dirMode: CREDENTIALS_DIR_MODE,
+        });
         return { code, created: false };
       }
 
@@ -501,10 +491,9 @@ export async function upsertChannelPairingRequest(params: {
       reqs = capped;
       if (PAIRING_PENDING_MAX > 0 && reqs.length >= PAIRING_PENDING_MAX) {
         if (expiredRemoved || cappedRemoved) {
-          await writeJsonFile(filePath, {
-            version: 1,
-            requests: reqs,
-          } satisfies PairingStore);
+          await writeJsonAtomic(filePath, { version: 1, requests: reqs } satisfies PairingStore, {
+            dirMode: CREDENTIALS_DIR_MODE,
+          });
         }
         return { code: "", created: false };
       }
@@ -516,10 +505,11 @@ export async function upsertChannelPairingRequest(params: {
         lastSeenAt: now,
         ...(meta ? { meta } : {}),
       };
-      await writeJsonFile(filePath, {
-        version: 1,
-        requests: [...reqs, next],
-      } satisfies PairingStore);
+      await writeJsonAtomic(
+        filePath,
+        { version: 1, requests: [...reqs, next] } satisfies PairingStore,
+        { dirMode: CREDENTIALS_DIR_MODE },
+      );
       return { code, created: true };
     },
   );
@@ -565,10 +555,9 @@ export async function approveChannelPairingCode(params: {
       });
       if (idx < 0) {
         if (removed) {
-          await writeJsonFile(filePath, {
-            version: 1,
-            requests: pruned,
-          } satisfies PairingStore);
+          await writeJsonAtomic(filePath, { version: 1, requests: pruned } satisfies PairingStore, {
+            dirMode: CREDENTIALS_DIR_MODE,
+          });
         }
         return null;
       }
@@ -577,10 +566,9 @@ export async function approveChannelPairingCode(params: {
         return null;
       }
       pruned.splice(idx, 1);
-      await writeJsonFile(filePath, {
-        version: 1,
-        requests: pruned,
-      } satisfies PairingStore);
+      await writeJsonAtomic(filePath, { version: 1, requests: pruned } satisfies PairingStore, {
+        dirMode: CREDENTIALS_DIR_MODE,
+      });
       const entryAccountId = String(entry.meta?.accountId ?? "").trim() || undefined;
       await addChannelAllowFromStoreEntry({
         channel: params.channel,
