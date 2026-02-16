@@ -807,6 +807,13 @@ export async function runEmbeddedAttempt(
             timedOutDuringCompaction = true;
           }
           abortRun(true);
+          // BUGFIX: Immediately clear active run on timeout to unblock announce queue.
+          // Previously, clearActiveEmbeddedRun was only called in the outer finally block,
+          // which might not execute for a long time if the session is stuck in compaction
+          // or other blocking operations. This left the session in active state indefinitely,
+          // causing all subsequent cron/heartbeat deliveries to fail with gateway timeout.
+          // See: https://github.com/openclaw/openclaw/issues/18302
+          clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
           if (!abortWarnTimer) {
             abortWarnTimer = setTimeout(() => {
               if (!activeSession.isStreaming) {
@@ -838,6 +845,10 @@ export async function runEmbeddedAttempt(
           timedOutDuringCompaction = true;
         }
         abortRun(timeout, reason);
+        // Also clear active run immediately on external abort timeout (same fix as internal timeout).
+        if (timeout) {
+          clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        }
       };
       if (params.abortSignal) {
         if (params.abortSignal.aborted) {
@@ -1176,6 +1187,8 @@ export async function runEmbeddedAttempt(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
         }
+        // Clear active run in finally block (safe to call multiple times due to handle check).
+        // If timeout occurred, this was already called in the timeout handler, so this is a no-op.
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
