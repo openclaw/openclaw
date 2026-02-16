@@ -60,6 +60,10 @@ type AbortedPartialSnapshot = {
   abortOrigin: AbortOrigin;
 };
 
+const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -79,6 +83,165 @@ export function sanitizeChatSendMessageInput(
     return { ok: false, error: "message must not contain null bytes" };
   }
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
+}
+
+function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
+  if (text.length <= CHAT_HISTORY_TEXT_MAX_CHARS) {
+    return { text, truncated: false };
+  }
+  return {
+    text: `${text.slice(0, CHAT_HISTORY_TEXT_MAX_CHARS)}\n...(truncated)...`,
+    truncated: true,
+  };
+}
+
+function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; changed: boolean } {
+  if (!block || typeof block !== "object") {
+    return { block, changed: false };
+  }
+  const entry = { ...(block as Record<string, unknown>) };
+  let changed = false;
+  if (typeof entry.text === "string") {
+    const res = truncateChatHistoryText(entry.text);
+    entry.text = res.text;
+    changed ||= res.truncated;
+  }
+  if (typeof entry.partialJson === "string") {
+    const res = truncateChatHistoryText(entry.partialJson);
+    entry.partialJson = res.text;
+    changed ||= res.truncated;
+  }
+  if (typeof entry.arguments === "string") {
+    const res = truncateChatHistoryText(entry.arguments);
+    entry.arguments = res.text;
+    changed ||= res.truncated;
+  }
+  if (typeof entry.thinking === "string") {
+    const res = truncateChatHistoryText(entry.thinking);
+    entry.thinking = res.text;
+    changed ||= res.truncated;
+  }
+  if ("thinkingSignature" in entry) {
+    delete entry.thinkingSignature;
+    changed = true;
+  }
+  const type = typeof entry.type === "string" ? entry.type : "";
+  if (type === "image" && typeof entry.data === "string") {
+    const bytes = Buffer.byteLength(entry.data, "utf8");
+    delete entry.data;
+    entry.omitted = true;
+    entry.bytes = bytes;
+    changed = true;
+  }
+  return { block: changed ? entry : block, changed };
+}
+
+function sanitizeChatHistoryMessage(message: unknown): { message: unknown; changed: boolean } {
+  if (!message || typeof message !== "object") {
+    return { message, changed: false };
+  }
+  const entry = { ...(message as Record<string, unknown>) };
+  let changed = false;
+
+  if ("details" in entry) {
+    delete entry.details;
+    changed = true;
+  }
+  if ("usage" in entry) {
+    delete entry.usage;
+    changed = true;
+  }
+  if ("cost" in entry) {
+    delete entry.cost;
+    changed = true;
+  }
+
+  if (typeof entry.content === "string") {
+    const res = truncateChatHistoryText(entry.content);
+    entry.content = res.text;
+    changed ||= res.truncated;
+  } else if (Array.isArray(entry.content)) {
+    const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
+    if (updated.some((item) => item.changed)) {
+      entry.content = updated.map((item) => item.block);
+      changed = true;
+    }
+  }
+
+  if (typeof entry.text === "string") {
+    const res = truncateChatHistoryText(entry.text);
+    entry.text = res.text;
+    changed ||= res.truncated;
+  }
+
+  return { message: changed ? entry : message, changed };
+}
+
+function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  let changed = false;
+  const next = messages.map((message) => {
+    const res = sanitizeChatHistoryMessage(message);
+    changed ||= res.changed;
+    return res.message;
+  });
+  return changed ? next : messages;
+}
+
+function jsonUtf8Bytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return Buffer.byteLength(String(value), "utf8");
+  }
+}
+
+function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+  const role =
+    message &&
+    typeof message === "object" &&
+    typeof (message as { role?: unknown }).role === "string"
+      ? (message as { role: string }).role
+      : "assistant";
+  const timestamp =
+    message &&
+    typeof message === "object" &&
+    typeof (message as { timestamp?: unknown }).timestamp === "number"
+      ? (message as { timestamp: number }).timestamp
+      : Date.now();
+  return {
+    role,
+    timestamp,
+    content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
+    __openclaw: { truncated: true, reason: "oversized" },
+  };
+}
+
+function enforceChatHistoryHardCap(messages: unknown[], maxBytes: number): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  const normalized = messages.map((message) => {
+    if (jsonUtf8Bytes(message) <= CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES) {
+      return message;
+    }
+    return buildOversizedHistoryPlaceholder(message);
+  });
+  const softCapped = capArrayByJsonBytes(normalized, maxBytes).items;
+  if (jsonUtf8Bytes(softCapped) <= maxBytes) {
+    return softCapped;
+  }
+  const last = softCapped.at(-1);
+  if (last && jsonUtf8Bytes([last]) <= maxBytes) {
+    return [last];
+  }
+  const placeholder = buildOversizedHistoryPlaceholder();
+  if (jsonUtf8Bytes([placeholder]) <= maxBytes) {
+    return [placeholder];
+  }
+  return [];
 }
 
 function resolveTranscriptPath(params: {
@@ -408,7 +571,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const max = Math.min(hardMax, requested);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
-    const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
+    const normalized = sanitizeChatHistoryMessages(sanitized);
+    const capped = capArrayByJsonBytes(normalized, getMaxChatHistoryMessagesBytes()).items;
+    const bounded = enforceChatHistoryHardCap(capped, getMaxChatHistoryMessagesBytes());
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
@@ -430,7 +595,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     respond(true, {
       sessionKey,
       sessionId,
-      messages: capped,
+      messages: bounded,
       thinkingLevel,
       verboseLevel,
     });
