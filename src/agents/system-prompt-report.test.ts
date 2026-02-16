@@ -64,6 +64,26 @@ describe("buildSystemPromptReport", () => {
     expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
   });
 
+  it("does not crash when injectedFiles contain entries with undefined path", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [
+        { path: undefined as unknown as string, content: "content" },
+        { path: "", content: "empty" },
+        { path: "/tmp/workspace/AGENTS.md", content: "valid" },
+      ],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("valid".length);
+  });
+
   it("includes both bootstrap caps in the report payload", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = buildSystemPromptReport({
