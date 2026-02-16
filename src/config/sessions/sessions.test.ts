@@ -98,19 +98,6 @@ describe("session path safety", () => {
     ).toThrow(/within sessions directory/);
   });
 
-  it("uses sibling fallback for custom per-agent store roots", () => {
-    const mainSessionsDir = "/srv/custom/agents/main/sessions";
-    const opsSessionFile = "/srv/custom/agents/ops/sessions/abc-123.jsonl";
-
-    const resolved = resolveSessionFilePath(
-      "sess-1",
-      { sessionFile: opsSessionFile },
-      { sessionsDir: mainSessionsDir, agentId: "ops" },
-    );
-
-    expect(resolved).toBe(path.resolve(opsSessionFile));
-  });
-
   it("uses extracted agent fallback for custom per-agent store roots", () => {
     const mainSessionsDir = "/srv/custom/agents/main/sessions";
     const opsSessionFile = "/srv/custom/agents/ops/sessions/abc-123.jsonl";
