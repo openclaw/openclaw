@@ -176,24 +176,17 @@ describe("LINE accounts", () => {
   });
 
   describe("normalizeAccountId", () => {
-    it("normalizes undefined to default", () => {
+    it("normalizes undefined and literal default", () => {
       expect(normalizeAccountId(undefined)).toBe(DEFAULT_ACCOUNT_ID);
-    });
-
-    it("normalizes 'default' to DEFAULT_ACCOUNT_ID", () => {
       expect(normalizeAccountId("default")).toBe(DEFAULT_ACCOUNT_ID);
     });
 
-    it("preserves other account ids", () => {
+    it("preserves non-default account ids", () => {
       expect(normalizeAccountId("business")).toBe("business");
     });
 
-    it("lowercases account ids", () => {
-      expect(normalizeAccountId("Business")).toBe("business");
-    });
-
-    it("trims whitespace", () => {
-      expect(normalizeAccountId("  business  ")).toBe("business");
+    it("trims and lowercases account ids", () => {
+      expect(normalizeAccountId("  Business  ")).toBe("business");
     });
   });
 });
