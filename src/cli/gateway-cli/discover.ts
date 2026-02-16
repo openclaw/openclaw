@@ -22,6 +22,10 @@ export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number
   if (!value) {
     return fallbackMs;
   }
+  // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`invalid --timeout: ${value}`);
+  }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`invalid --timeout: ${value}`);
