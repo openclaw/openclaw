@@ -290,7 +290,22 @@ export async function restartSystemdService({
 export async function isSystemdServiceEnabled(args: {
   env?: Record<string, string | undefined>;
 }): Promise<boolean> {
-  await assertSystemdAvailable();
+  try {
+    await assertSystemdAvailable();
+  } catch (err) {
+    // If systemd user services are unavailable (e.g., missing DBUS_SESSION_BUS_ADDRESS
+    // or XDG_RUNTIME_DIR in SSH sessions, WSL, or certain terminals), the service
+    // cannot be enabled. Log unexpected errors for diagnosability.
+    const msg = err instanceof Error ? err.message : String(err);
+    const expected =
+      msg.includes("not available") ||
+      msg.includes("unavailable") ||
+      msg.includes("Failed to connect");
+    if (!expected) {
+      console.warn(`isSystemdServiceEnabled: unexpected error from assertSystemdAvailable: ${msg}`);
+    }
+    return false;
+  }
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
