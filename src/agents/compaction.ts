@@ -2,7 +2,6 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
-import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
 export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
@@ -12,11 +11,10 @@ const DEFAULT_PARTS = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
+const DEFAULT_CHUNK_SIZE_TOKENS = 8000;
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
-  // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
-  const safe = stripToolResultDetails(messages);
-  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+  return messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
 function normalizeParts(parts: number, messageCount: number): number {
@@ -139,6 +137,18 @@ export function isOversizedForSummary(msg: AgentMessage, contextWindow: number):
   return tokens > contextWindow * 0.5;
 }
 
+/**
+ * Check if chunk size would exceed context budget.
+ */
+function wouldExceedContextBudget(params: {
+  chunkTokens: number;
+  contextWindow: number;
+  reserveTokens: number;
+}): boolean {
+  const budget = params.contextWindow - params.reserveTokens;
+  return params.chunkTokens * SAFETY_MARGIN > budget;
+}
+
 async function summarizeChunks(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
@@ -148,17 +158,31 @@ async function summarizeChunks(params: {
   maxChunkTokens: number;
   customInstructions?: string;
   previousSummary?: string;
+  contextWindow: number;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  // SECURITY: never feed toolResult.details into summarization prompts.
-  const safeMessages = stripToolResultDetails(params.messages);
-  const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
+  const chunks = chunkMessagesByMaxTokens(params.messages, params.maxChunkTokens);
   let summary = params.previousSummary;
 
   for (const chunk of chunks) {
+    const chunkTokens = estimateMessagesTokens(chunk);
+
+    // Check if this chunk would exceed the context budget
+    if (
+      wouldExceedContextBudget({
+        chunkTokens,
+        contextWindow: params.contextWindow,
+        reserveTokens: params.reserveTokens,
+      })
+    ) {
+      throw new Error(
+        `Chunk exceeds context budget: ${chunkTokens} tokens (budget: ${params.contextWindow - params.reserveTokens})`,
+      );
+    }
+
     summary = await generateSummary(
       chunk,
       params.model,
@@ -175,7 +199,7 @@ async function summarizeChunks(params: {
 
 /**
  * Summarize with progressive fallback for handling oversized messages.
- * If full summarization fails, tries partial summarization excluding oversized messages.
+ * If full summarization fails, tries smaller chunks, then partial summarization excluding oversized messages.
  */
 export async function summarizeWithFallback(params: {
   messages: AgentMessage[];
@@ -199,13 +223,30 @@ export async function summarizeWithFallback(params: {
     return await summarizeChunks(params);
   } catch (fullError) {
     console.warn(
-      `Full summarization failed, trying partial: ${
+      `Full summarization failed, trying smaller chunks: ${
         fullError instanceof Error ? fullError.message : String(fullError)
       }`,
     );
   }
 
-  // Fallback 1: Summarize only small messages, note oversized ones
+  // Fallback 1: Try with smaller chunk size
+  const smallerChunkSize = Math.min(DEFAULT_CHUNK_SIZE_TOKENS, params.maxChunkTokens / 2);
+  if (smallerChunkSize > 1000) {
+    try {
+      return await summarizeChunks({
+        ...params,
+        maxChunkTokens: smallerChunkSize,
+      });
+    } catch (smallerError) {
+      console.warn(
+        `Smaller chunk summarization failed, trying partial: ${
+          smallerError instanceof Error ? smallerError.message : String(smallerError)
+        }`,
+      );
+    }
+  }
+
+  // Fallback 2: Summarize only small messages, note oversized ones
   const smallMessages: AgentMessage[] = [];
   const oversizedNotes: string[] = [];
 
@@ -226,6 +267,7 @@ export async function summarizeWithFallback(params: {
       const partialSummary = await summarizeChunks({
         ...params,
         messages: smallMessages,
+        maxChunkTokens: Math.min(DEFAULT_CHUNK_SIZE_TOKENS, params.maxChunkTokens),
       });
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
@@ -238,10 +280,18 @@ export async function summarizeWithFallback(params: {
     }
   }
 
-  // Final fallback: Just note what was there
+  // Final fallback: Create a brief summary noting what was there
+  const totalTokens = estimateMessagesTokens(messages);
+  const userMsgCount = messages.filter((m) => (m as { role?: string }).role === "user").length;
+  const assistantMsgCount = messages.filter(
+    (m) => (m as { role?: string }).role === "assistant",
+  ).length;
+
   return (
-    `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-    `Summary unavailable due to size limits.`
+    `Session contained ${messages.length} messages (${userMsgCount} user, ${assistantMsgCount} assistant) ` +
+    `totaling ~${Math.round(totalTokens / 1000)}K tokens` +
+    (oversizedNotes.length > 0 ? `, including ${oversizedNotes.length} oversized messages` : "") +
+    `. Full summary unavailable due to context size limits.`
   );
 }
 
@@ -267,13 +317,26 @@ export async function summarizeInStages(params: {
   const parts = normalizeParts(params.parts ?? DEFAULT_PARTS, messages.length);
   const totalTokens = estimateMessagesTokens(messages);
 
-  if (parts <= 1 || messages.length < minMessagesForSplit || totalTokens <= params.maxChunkTokens) {
-    return summarizeWithFallback(params);
+  // Use smaller chunk size for very large sessions
+  const effectiveMaxChunkTokens = Math.min(DEFAULT_CHUNK_SIZE_TOKENS, params.maxChunkTokens);
+
+  if (
+    parts <= 1 ||
+    messages.length < minMessagesForSplit ||
+    totalTokens <= effectiveMaxChunkTokens
+  ) {
+    return summarizeWithFallback({
+      ...params,
+      maxChunkTokens: effectiveMaxChunkTokens,
+    });
   }
 
   const splits = splitMessagesByTokenShare(messages, parts).filter((chunk) => chunk.length > 0);
   if (splits.length <= 1) {
-    return summarizeWithFallback(params);
+    return summarizeWithFallback({
+      ...params,
+      maxChunkTokens: effectiveMaxChunkTokens,
+    });
   }
 
   const partialSummaries: string[] = [];
@@ -283,6 +346,7 @@ export async function summarizeInStages(params: {
         ...params,
         messages: chunk,
         previousSummary: undefined,
+        maxChunkTokens: effectiveMaxChunkTokens,
       }),
     );
   }
@@ -305,6 +369,7 @@ export async function summarizeInStages(params: {
     ...params,
     messages: summaryMessages,
     customInstructions: mergeInstructions,
+    maxChunkTokens: effectiveMaxChunkTokens,
   });
 }
 
@@ -338,27 +403,11 @@ export function pruneHistoryForContextShare(params: {
       break;
     }
     const [dropped, ...rest] = chunks;
-    const flatRest = rest.flat();
-
-    // After dropping a chunk, repair tool_use/tool_result pairing to handle
-    // orphaned tool_results (whose tool_use was in the dropped chunk).
-    // repairToolUseResultPairing drops orphaned tool_results, preventing
-    // "unexpected tool_use_id" errors from Anthropic's API.
-    const repairReport = repairToolUseResultPairing(flatRest);
-    const repairedKept = repairReport.messages;
-
-    // Track orphaned tool_results as dropped (they were in kept but their tool_use was dropped)
-    const orphanedCount = repairReport.droppedOrphanCount;
-
     droppedChunks += 1;
-    droppedMessages += dropped.length + orphanedCount;
+    droppedMessages += dropped.length;
     droppedTokens += estimateMessagesTokens(dropped);
-    // Note: We don't have the actual orphaned messages to add to droppedMessagesList
-    // since repairToolUseResultPairing doesn't return them. This is acceptable since
-    // the dropped messages are used for summarization, and orphaned tool_results
-    // without their tool_use context aren't useful for summarization anyway.
     allDroppedMessages.push(...dropped);
-    keptMessages = repairedKept;
+    keptMessages = rest.flat();
   }
 
   return {
