@@ -260,6 +260,11 @@ export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
 }
 
+/** All running sessions including non-backgrounded (for /stop cleanup). */
+export function listAllRunningSessions() {
+  return Array.from(runningSessions.values());
+}
+
 export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
 }
