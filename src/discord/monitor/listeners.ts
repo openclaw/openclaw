@@ -185,6 +185,12 @@ async function handleDiscordReactionEvent(params: {
     if (!user || user.bot) {
       return;
     }
+
+    // Early exit: skip bot's own reactions before expensive network calls
+    if (botUserId && user.id === botUserId) {
+      return;
+    }
+
     const isGuildMessage = Boolean(data.guild_id);
     const guildInfo = isGuildMessage
       ? resolveDiscordGuildEntry({
@@ -212,17 +218,157 @@ async function handleDiscordReactionEvent(params: {
     let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
     let parentName: string | undefined;
     let parentSlug = "";
-    if (isThreadChannel) {
-      if (!parentId) {
-        const channelInfo = await resolveDiscordChannelInfo(client, data.channel_id);
-        parentId = channelInfo?.parentId;
+    const memberRoleIds = Array.isArray(data.rawMember?.roles)
+      ? data.rawMember.roles.map((roleId: string) => String(roleId))
+      : [];
+    let reactionBase: { baseText: string; contextKey: string } | null = null;
+    const resolveReactionBase = () => {
+      if (reactionBase) {
+        return reactionBase;
       }
+      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+      const actorLabel = formatDiscordUserTag(user);
+      const guildSlug =
+        guildInfo?.slug ||
+        (data.guild?.name
+          ? normalizeDiscordSlug(data.guild.name)
+          : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
+      const channelLabel = channelSlug
+        ? `#${channelSlug}`
+        : channelName
+          ? `#${normalizeDiscordSlug(channelName)}`
+          : `#${data.channel_id}`;
+      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
+      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`;
+      reactionBase = { baseText, contextKey };
+      return reactionBase;
+    };
+    const emitReaction = (text: string, parentPeerId?: string) => {
+      const { contextKey } = resolveReactionBase();
+      const route = resolveAgentRoute({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId: params.accountId,
+        guildId: data.guild_id ?? undefined,
+        memberRoleIds,
+        peer: {
+          kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+          id: isDirectMessage ? user.id : data.channel_id,
+        },
+        parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
+      });
+      enqueueSystemEvent(text, {
+        sessionKey: route.sessionKey,
+        contextKey,
+      });
+    };
+
+    // Parallelize async operations for thread channels
+    if (isThreadChannel) {
+      const reactionMode = guildInfo?.reactionNotifications ?? "own";
+
+      // Early exit: skip fetching message if notifications are off
+      if (reactionMode === "off") {
+        return;
+      }
+
+      const channelInfoPromise = parentId
+        ? Promise.resolve({ parentId })
+        : resolveDiscordChannelInfo(client, data.channel_id);
+
+      // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
+      if (reactionMode === "all" || reactionMode === "allowlist") {
+        const channelInfo = await channelInfoPromise;
+        parentId = channelInfo?.parentId;
+
+        if (parentId) {
+          const parentInfo = await resolveDiscordChannelInfo(client, parentId);
+          parentName = parentInfo?.name;
+          parentSlug = parentName ? normalizeDiscordSlug(parentName) : "";
+        }
+
+        const channelConfig = resolveDiscordChannelConfigWithFallback({
+          guildInfo,
+          channelId: data.channel_id,
+          channelName,
+          channelSlug,
+          parentId,
+          parentName,
+          parentSlug,
+          scope: "thread",
+        });
+        if (channelConfig?.allowed === false) {
+          return;
+        }
+
+        // For allowlist mode, check if user is in allowlist first
+        if (reactionMode === "allowlist") {
+          const shouldNotifyAllowlist = shouldEmitDiscordReactionNotification({
+            mode: reactionMode,
+            botId: botUserId,
+            userId: user.id,
+            userName: user.username,
+            userTag: formatDiscordUserTag(user),
+            allowlist: guildInfo?.users,
+          });
+          if (!shouldNotifyAllowlist) {
+            return;
+          }
+        }
+
+        const { baseText } = resolveReactionBase();
+        emitReaction(baseText, parentId);
+        return;
+      }
+
+      // For "own" mode, we need to fetch the message to check the author
+      const messagePromise = data.message.fetch().catch(() => null);
+
+      const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
+      parentId = channelInfo?.parentId;
+
       if (parentId) {
         const parentInfo = await resolveDiscordChannelInfo(client, parentId);
         parentName = parentInfo?.name;
         parentSlug = parentName ? normalizeDiscordSlug(parentName) : "";
       }
+
+      const channelConfig = resolveDiscordChannelConfigWithFallback({
+        guildInfo,
+        channelId: data.channel_id,
+        channelName,
+        channelSlug,
+        parentId,
+        parentName,
+        parentSlug,
+        scope: "thread",
+      });
+      if (channelConfig?.allowed === false) {
+        return;
+      }
+
+      const messageAuthorId = message?.author?.id ?? undefined;
+      const shouldNotify = shouldEmitDiscordReactionNotification({
+        mode: reactionMode,
+        botId: botUserId,
+        messageAuthorId,
+        userId: user.id,
+        userName: user.username,
+        userTag: formatDiscordUserTag(user),
+        allowlist: guildInfo?.users,
+      });
+      if (!shouldNotify) {
+        return;
+      }
+
+      const { baseText } = resolveReactionBase();
+      const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
+      const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
+      emitReaction(text, parentId);
+      return;
     }
+
+    // Non-thread channel path
     const channelConfig = resolveDiscordChannelConfigWithFallback({
       guildInfo,
       channelId: data.channel_id,
@@ -231,17 +377,42 @@ async function handleDiscordReactionEvent(params: {
       parentId,
       parentName,
       parentSlug,
-      scope: isThreadChannel ? "thread" : "channel",
+      scope: "channel",
     });
     if (channelConfig?.allowed === false) {
       return;
     }
 
-    if (botUserId && user.id === botUserId) {
+    const reactionMode = guildInfo?.reactionNotifications ?? "own";
+
+    // Early exit: skip fetching message if notifications are off
+    if (reactionMode === "off") {
       return;
     }
 
-    const reactionMode = guildInfo?.reactionNotifications ?? "own";
+    // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
+    if (reactionMode === "all" || reactionMode === "allowlist") {
+      // For allowlist mode, check if user is in allowlist first
+      if (reactionMode === "allowlist") {
+        const shouldNotifyAllowlist = shouldEmitDiscordReactionNotification({
+          mode: reactionMode,
+          botId: botUserId,
+          userId: user.id,
+          userName: user.username,
+          userTag: formatDiscordUserTag(user),
+          allowlist: guildInfo?.users,
+        });
+        if (!shouldNotifyAllowlist) {
+          return;
+        }
+      }
+
+      const { baseText } = resolveReactionBase();
+      emitReaction(baseText, parentId);
+      return;
+    }
+
+    // For "own" mode, we need to fetch the message to check the author
     const message = await data.message.fetch().catch(() => null);
     const messageAuthorId = message?.author?.id ?? undefined;
     const shouldNotify = shouldEmitDiscordReactionNotification({
@@ -257,40 +428,10 @@ async function handleDiscordReactionEvent(params: {
       return;
     }
 
-    const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-    const actorLabel = formatDiscordUserTag(user);
-    const guildSlug =
-      guildInfo?.slug ||
-      (data.guild?.name
-        ? normalizeDiscordSlug(data.guild.name)
-        : (data.guild_id ?? (isGroupDm ? "group-dm" : "dm")));
-    const channelLabel = channelSlug
-      ? `#${channelSlug}`
-      : channelName
-        ? `#${normalizeDiscordSlug(channelName)}`
-        : `#${data.channel_id}`;
+    const { baseText } = resolveReactionBase();
     const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
-    const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => String(roleId))
-      : [];
-    const route = resolveAgentRoute({
-      cfg: params.cfg,
-      channel: "discord",
-      accountId: params.accountId,
-      guildId: data.guild_id ?? undefined,
-      memberRoleIds,
-      peer: {
-        kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-        id: isDirectMessage ? user.id : data.channel_id,
-      },
-      parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
-    });
-    enqueueSystemEvent(text, {
-      sessionKey: route.sessionKey,
-      contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
-    });
+    emitReaction(text, parentId);
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }

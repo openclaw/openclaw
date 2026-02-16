@@ -352,8 +352,10 @@ export async function runAgentTurnWithFallback(params: {
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
+                  await params.opts?.onToolStart?.({ name, phase });
                 }
               }
               // Track auto-compaction completion
