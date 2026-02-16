@@ -9,14 +9,11 @@ const configMocks = vi.hoisted(() => ({
   writeConfigFile: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-    writeConfigFile: configMocks.writeConfigFile,
-  };
-});
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+  writeConfigFile: configMocks.writeConfigFile,
+}));
 
 import { agentsSetIdentityCommand } from "./agents.js";
 
