@@ -1,4 +1,5 @@
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -10,6 +11,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -38,6 +40,7 @@ import {
   loadSessionEntry,
   readSessionMessages,
   resolveSessionModelRef,
+  resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -624,9 +627,33 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     try {
       const abortController = new AbortController();
+      // Generate a stable sessionId if one doesn't exist - don't use clientRunId
+      // as that changes for each message and would create orphan sessions.
+      const resolvedSessionId = entry?.sessionId ?? randomUUID();
+
+      // If we generated a new sessionId, persist it to the session store so subsequent
+      // messages in the same session reuse the same sessionId.
+      if (!entry?.sessionId && storePath) {
+        const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: rawSessionKey });
+        await updateSessionStore(storePath, (store) => {
+          const existing = store[canonicalKey];
+          store[canonicalKey] = {
+            sessionId: resolvedSessionId,
+            updatedAt: now,
+            thinkingLevel: existing?.thinkingLevel,
+            verboseLevel: existing?.verboseLevel,
+            reasoningLevel: existing?.reasoningLevel,
+            systemSent: existing?.systemSent,
+            sendPolicy: existing?.sendPolicy,
+            lastChannel: existing?.lastChannel,
+            lastTo: existing?.lastTo,
+          };
+        });
+      }
+
       context.chatAbortControllers.set(clientRunId, {
         controller: abortController,
-        sessionId: entry?.sessionId ?? clientRunId,
+        sessionId: resolvedSessionId,
         sessionKey: rawSessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
@@ -737,7 +764,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              // Use stable sessionId - prefer existing sessionId or generate new one,
+              // don't use clientRunId as it changes per message.
+              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? randomUUID();
               const appended = appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
