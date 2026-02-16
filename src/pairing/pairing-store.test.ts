@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
+import { captureEnv } from "../test-utils/env.js";
 import { listChannelPairingRequests, upsertChannelPairingRequest } from "./pairing-store.js";
 
 let fixtureRoot = "";
@@ -20,18 +21,14 @@ afterAll(async () => {
 });
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
-  const previous = process.env.OPENCLAW_STATE_DIR;
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
   await fs.mkdir(dir, { recursive: true });
   process.env.OPENCLAW_STATE_DIR = dir;
   try {
     return await fn(dir);
   } finally {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
+    envSnapshot.restore();
   }
 }
 

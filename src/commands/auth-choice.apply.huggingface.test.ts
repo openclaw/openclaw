@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
 
 const noopAsync = async () => {};
@@ -11,9 +12,7 @@ const noop = () => {};
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
 
 describe("applyAuthChoiceHuggingface", () => {
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousHfToken = process.env.HF_TOKEN;
-  const previousHubToken = process.env.HUGGINGFACE_HUB_TOKEN;
+  const envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"]);
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -21,21 +20,7 @@ describe("applyAuthChoiceHuggingface", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
     }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousHfToken === undefined) {
-      delete process.env.HF_TOKEN;
-    } else {
-      process.env.HF_TOKEN = previousHfToken;
-    }
-    if (previousHubToken === undefined) {
-      delete process.env.HUGGINGFACE_HUB_TOKEN;
-    } else {
-      process.env.HUGGINGFACE_HUB_TOKEN = previousHubToken;
-    }
+    envSnapshot.restore();
   });
 
   it("returns null when authChoice is not huggingface-api-key", async () => {
