@@ -256,7 +256,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
   const startupGraceMs = 0;
-  const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
+  const directTracker = createDirectRoomTracker(client, {
+    log: logVerboseMessage,
+    configuredGroupRoomIds: new Set(
+      roomsConfig ? Object.keys(roomsConfig).filter((k) => k !== "*") : [],
+    ),
+  });
   registerMatrixAutoJoin({ client, cfg, runtime });
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();

@@ -8,12 +8,15 @@ type DirectMessageCheck = {
 
 type DirectRoomTrackerOptions = {
   log?: (message: string) => void;
+  /** Room IDs explicitly configured as groups — never classify these as DMs. */
+  configuredGroupRoomIds?: ReadonlySet<string>;
 };
 
 const DM_CACHE_TTL_MS = 30_000;
 
 export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
+  const configuredGroupRoomIds = opts.configuredGroupRoomIds ?? new Set<string>();
   let lastDmUpdateMs = 0;
   let cachedSelfUserId: string | null = null;
   const memberCountCache = new Map<string, { count: number; ts: number }>();
@@ -76,6 +79,13 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   return {
     isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
       const { roomId, senderId } = params;
+
+      // If the room is explicitly configured as a group, never treat it as a DM.
+      if (configuredGroupRoomIds.has(roomId)) {
+        log(`matrix: dm check skipped — room in groups config room=${roomId}`);
+        return false;
+      }
+
       await refreshDmCache();
 
       if (client.dms.isDm(roomId)) {
