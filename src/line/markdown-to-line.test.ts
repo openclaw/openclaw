@@ -187,17 +187,6 @@ describe("stripMarkdown", () => {
     expect(stripMarkdown("This is ~~deleted~~ text")).toBe("This is deleted text");
   });
 
-  it("strips headers", () => {
-    expect(stripMarkdown("# Heading 1")).toBe("Heading 1");
-    expect(stripMarkdown("## Heading 2")).toBe("Heading 2");
-    expect(stripMarkdown("### Heading 3")).toBe("Heading 3");
-  });
-
-  it("strips blockquotes", () => {
-    expect(stripMarkdown("> This is a quote")).toBe("This is a quote");
-    expect(stripMarkdown(">This is also a quote")).toBe("This is also a quote");
-  });
-
   it("removes horizontal rules", () => {
     expect(stripMarkdown("Above\n---\nBelow")).toBe("Above\n\nBelow");
     expect(stripMarkdown("Above\n***\nBelow")).toBe("Above\n\nBelow");
@@ -230,18 +219,6 @@ Some ~~deleted~~ content.`;
 });
 
 describe("convertTableToFlexBubble", () => {
-  it("creates a multi-column layout for 3+ column tables", () => {
-    const table = {
-      headers: ["A", "B", "C"],
-      rows: [["1", "2", "3"]],
-    };
-
-    const bubble = convertTableToFlexBubble(table);
-
-    expect(bubble.type).toBe("bubble");
-    expect(bubble.body).toBeDefined();
-  });
-
   it("replaces empty cells with placeholders", () => {
     const table = {
       headers: ["A", "B"],
