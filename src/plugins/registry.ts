@@ -618,8 +618,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         // Exclude: source, origin, workspaceDir, error, configSchema, configUiHints, configJsonSchema
         source: "",
         origin: "bundled",
-        enabled: plugin.enabled,
-        status: plugin.status,
         toolNames: [],
         hookNames: [],
         channelIds: [],

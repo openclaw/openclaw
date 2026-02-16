@@ -24,7 +24,6 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { executeSandboxedPlugin } from "./plugin-sandbox.js";
 import { PluginSigner } from "./plugin-signing.js";
-import { PluginSigner } from "./plugin-signing.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";

@@ -99,7 +99,7 @@ export function isPathAllowed(
 ): boolean {
   const allowedPaths = mode === "read" ? permissions.filesystem.read : permissions.filesystem.write;
 
-  if (allowedPaths.length === 0) {
+  if (!allowedPaths || allowedPaths.length === 0) {
     return false;
   }
 
@@ -122,12 +122,12 @@ export function isDomainAllowed(domain: string, permissions: Required<PluginPerm
   const { allowlist, blocklist } = permissions.network;
 
   // If blocklist contains the domain, deny
-  if (blocklist.some((blocked) => domain.includes(blocked))) {
+  if (blocklist && blocklist.some((blocked) => domain.includes(blocked))) {
     return false;
   }
 
-  // If allowlist is empty, allow all (unless blocked)
-  if (allowlist.length === 0) {
+  // If allowlist is empty or undefined, allow all (unless blocked)
+  if (!allowlist || allowlist.length === 0) {
     return true;
   }
 

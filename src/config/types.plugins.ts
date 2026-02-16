@@ -33,4 +33,8 @@ export type PluginsConfig = {
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
   installs?: Record<string, PluginInstallRecord>;
+  /** Require plugins to be signed (default: false) */
+  requireSignature?: boolean;
+  /** Trusted public keys for signature verification */
+  trustedPublicKeys?: string[];
 };

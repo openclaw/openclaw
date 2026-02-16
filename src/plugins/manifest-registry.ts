@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginPermissions } from "./plugin-permissions.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
@@ -23,6 +24,10 @@ export type PluginManifestRecord = {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  /** Whether plugin should run in sandbox (default: true) */
+  sandboxed?: boolean;
+  /** Plugin permissions for sandbox execution */
+  permissions?: PluginPermissions;
 };
 
 export type PluginManifestRegistry = {
