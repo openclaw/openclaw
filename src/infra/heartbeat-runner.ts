@@ -1,3 +1,4 @@
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -31,6 +32,7 @@ import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
   saveSessionStore,
   updateSessionStore,
@@ -350,6 +352,58 @@ async function restoreHeartbeatUpdatedAt(params: {
   });
 }
 
+async function pruneHeartbeatTranscript(params: {
+  entry: { sessionId: string; sessionFile?: string } | undefined;
+  agentId: string;
+  storePath: string;
+  originalEntryCount: number;
+}) {
+  const { entry, agentId, storePath, originalEntryCount } = params;
+  if (!entry?.sessionId) {
+    return;
+  }
+
+  try {
+    const sessionsDir = path.dirname(storePath);
+    const sessionFile = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId,
+      sessionsDir,
+    });
+    if (!sessionFile) {
+      return;
+    }
+
+    const fsSync = await import("node:fs");
+    if (!fsSync.existsSync(sessionFile)) {
+      return;
+    }
+
+    const manager = SessionManager.open(sessionFile);
+    const allEntries = manager.getEntries();
+    if (allEntries.length <= originalEntryCount) {
+      return;
+    }
+
+    // Truncate to original count and rewrite the file
+    const entriesToKeep = allEntries.slice(0, originalEntryCount);
+    const header = manager.getHeader();
+    if (!header) {
+      return;
+    }
+
+    // Build the new file content
+    const lines: string[] = [];
+    lines.push(JSON.stringify(header));
+    for (const e of entriesToKeep) {
+      lines.push(JSON.stringify(e));
+    }
+
+    await fsSync.promises.writeFile(sessionFile, lines.join("\n") + "\n", "utf-8");
+  } catch {
+    // Silently ignore errors - transcript pruning is best-effort
+  }
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
@@ -538,6 +592,27 @@ export async function runHeartbeatOnce(opts: {
     return true;
   };
 
+  // Record original entry count before running heartbeat - used to prune transcript on HEARTBEAT_OK
+  let originalEntryCount = 0;
+  try {
+    if (entry?.sessionId && entry?.sessionFile) {
+      const sessionsDir = path.dirname(storePath);
+      const sessionFile = resolveSessionFilePath(entry.sessionId, entry, {
+        agentId,
+        sessionsDir,
+      });
+      if (sessionFile) {
+        const fsSync = await import("node:fs");
+        if (fsSync.existsSync(sessionFile)) {
+          const manager = SessionManager.open(sessionFile);
+          originalEntryCount = manager.getEntries().length;
+        }
+      }
+    }
+  } catch {
+    // Best-effort - if we can't get entry count, skip transcript pruning
+  }
+
   try {
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const replyOpts = heartbeatModelOverride
@@ -558,6 +633,13 @@ export async function runHeartbeatOnce(opts: {
         storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
+      });
+      // Prune heartbeat messages from transcript since there's no meaningful content
+      await pruneHeartbeatTranscript({
+        entry,
+        agentId,
+        storePath,
+        originalEntryCount,
       });
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
@@ -592,6 +674,13 @@ export async function runHeartbeatOnce(opts: {
         storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
+      });
+      // Prune heartbeat messages from transcript since response is HEARTBEAT_OK
+      await pruneHeartbeatTranscript({
+        entry,
+        agentId,
+        storePath,
+        originalEntryCount,
       });
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
