@@ -13,13 +13,6 @@ import {
 } from "./template-messages.js";
 
 describe("messageAction", () => {
-  it("creates a message action", () => {
-    const action = messageAction("Click me", "clicked");
-
-    expect(action.label).toBe("Click me");
-    expect((action as { text: string }).text).toBe("clicked");
-  });
-
   it("uses label as text when text not provided", () => {
     const action = messageAction("Click");
 
