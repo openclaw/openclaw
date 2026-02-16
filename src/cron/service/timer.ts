@@ -7,7 +7,6 @@ import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
-  recomputeNextRuns,
   recomputeNextRunsForMaintenance,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
@@ -283,7 +282,12 @@ export async function onTimer(state: CronServiceState) {
           }
         }
 
-        recomputeNextRuns(state);
+        // Use maintenance-only recompute to avoid advancing past-due
+        // nextRunAtMs values that became due between findDueJobs and this
+        // locked block.  The full recomputeNextRuns would silently skip
+        // those jobs (advancing nextRunAtMs without execution), causing
+        // daily cron schedules to jump 48 h instead of 24 h (#17852).
+        recomputeNextRunsForMaintenance(state);
         await persist(state);
       });
     }
