@@ -28,6 +28,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
   - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
+- Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
 
 ## Quick start (actionable)
 
@@ -200,10 +201,11 @@ When `delivery.mode = "webhook"`, cron posts the finished event payload to `deli
 
 Behavior details:
 
-- The endpoint must be an HTTP(S) URL.
+- The endpoint must be a valid HTTP(S) URL.
 - No channel delivery is attempted in webhook mode.
 - No main-session summary is posted in webhook mode.
 - If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
+- Deprecated fallback: stored legacy jobs with `notify: true` still post to `cron.webhook` (if configured), with a warning so you can migrate to `delivery.mode = "webhook"`.
 
 ### Model and thinking overrides
 
@@ -347,6 +349,7 @@ Notes:
     enabled: true, // default true
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 1, // default 1
+    webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-webhook-token", // optional bearer token for webhook mode
   },
 }
@@ -355,9 +358,11 @@ Notes:
 Webhook behavior:
 
 - Preferred: set `delivery.mode: "webhook"` with `delivery.to: "https://..."` per job.
+- Webhook URLs must be valid `http://` or `https://` URLs.
 - Payload is the cron finished event JSON.
 - If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
 - If `cron.webhookToken` is not set, no `Authorization` header is sent.
+- Deprecated fallback: stored legacy jobs with `notify: true` still use `cron.webhook` when present.
 
 Disable cron entirely:
 

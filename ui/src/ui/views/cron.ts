@@ -60,6 +60,10 @@ export function renderCron(props: CronProps) {
     props.runsJobId == null ? undefined : props.jobs.find((job) => job.id === props.runsJobId);
   const selectedRunTitle = selectedJob?.name ?? props.runsJobId ?? "(select a job)";
   const orderedRuns = props.runs.toSorted((a, b) => b.ts - a.ts);
+  const supportsAnnounce =
+    props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
+  const selectedDeliveryMode =
+    props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
@@ -202,7 +206,7 @@ export function renderCron(props: CronProps) {
           <label class="field">
             <span>Delivery</span>
             <select
-              .value=${props.form.deliveryMode}
+              .value=${selectedDeliveryMode}
               @change=${(e: Event) =>
                 props.onFormChange({
                   deliveryMode: (e.target as HTMLSelectElement)
@@ -210,7 +214,7 @@ export function renderCron(props: CronProps) {
                 })}
             >
               ${
-                props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn"
+                supportsAnnounce
                   ? html`
                       <option value="announce">Announce summary (default)</option>
                     `
@@ -237,12 +241,12 @@ export function renderCron(props: CronProps) {
               : nothing
           }
           ${
-            props.form.deliveryMode !== "none"
+            selectedDeliveryMode !== "none"
               ? html`
                   <label class="field">
-                    <span>${props.form.deliveryMode === "webhook" ? "Webhook URL" : "Channel"}</span>
+                    <span>${selectedDeliveryMode === "webhook" ? "Webhook URL" : "Channel"}</span>
                     ${
-                      props.form.deliveryMode === "webhook"
+                      selectedDeliveryMode === "webhook"
                         ? html`
                             <input
                               .value=${props.form.deliveryTo}
@@ -272,7 +276,7 @@ export function renderCron(props: CronProps) {
                     }
                   </label>
                   ${
-                    props.form.deliveryMode === "announce"
+                    selectedDeliveryMode === "announce"
                       ? html`
                           <label class="field">
                             <span>To</span>

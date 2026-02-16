@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
@@ -352,11 +353,25 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
             const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
             const mode = modeRaw.trim().toLowerCase();
+            if (mode === "webhook") {
+              const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
+              if (!webhookUrl) {
+                throw new Error(
+                  'delivery.mode="webhook" requires delivery.to to be a valid http(s) URL',
+                );
+              }
+              if (delivery) {
+                delivery.to = webhookUrl;
+              }
+            }
+
             const hasTarget =
               (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
               (typeof delivery?.to === "string" && delivery.to.trim());
             const shouldInfer =
-              (deliveryValue == null || delivery) && mode !== "none" && !hasTarget;
+              (deliveryValue == null || delivery) &&
+              (mode === "" || mode === "announce") &&
+              !hasTarget;
             if (shouldInfer) {
               const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
               if (inferred) {

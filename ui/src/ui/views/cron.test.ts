@@ -176,6 +176,31 @@ describe("cron view", () => {
     expect(options).toContain("Webhook POST");
   });
 
+  it("normalizes stale announce selection in the form when unsupported", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          form: {
+            ...DEFAULT_CRON_FORM,
+            sessionTarget: "main",
+            payloadKind: "systemEvent",
+            deliveryMode: "announce",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const options = Array.from(container.querySelectorAll("option")).map((opt) =>
+      (opt.textContent ?? "").trim(),
+    );
+    expect(options).not.toContain("Announce summary (default)");
+    expect(options).toContain("Webhook POST");
+    expect(options).toContain("None (internal)");
+    expect(container.querySelector('input[placeholder="https://example.invalid/cron"]')).toBeNull();
+  });
+
   it("shows webhook delivery details for jobs", () => {
     const container = document.createElement("div");
     const job = {

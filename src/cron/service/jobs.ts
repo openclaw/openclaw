@@ -11,6 +11,7 @@ import type {
 import type { CronServiceState } from "./state.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
+import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
   normalizeOptionalText,
@@ -45,10 +46,11 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     return;
   }
   if (job.delivery.mode === "webhook") {
-    const target = typeof job.delivery.to === "string" ? job.delivery.to.trim() : "";
+    const target = normalizeHttpWebhookUrl(job.delivery.to);
     if (!target) {
-      throw new Error("cron webhook delivery requires non-empty delivery.to");
+      throw new Error("cron webhook delivery requires delivery.to to be a valid http(s) URL");
     }
+    job.delivery.to = target;
     return;
   }
   if (job.sessionTarget !== "isolated") {

@@ -67,26 +67,51 @@ export const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
 ]);
 
-const CronDeliveryBaseProperties = {
+const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-  to: Type.Optional(Type.String()),
   bestEffort: Type.Optional(Type.Boolean()),
 };
 
-export const CronDeliverySchema = Type.Object(
+const CronDeliveryNoopSchema = Type.Object(
   {
-    mode: Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
-    ...CronDeliveryBaseProperties,
+    mode: Type.Literal("none"),
+    ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
+
+const CronDeliveryAnnounceSchema = Type.Object(
+  {
+    mode: Type.Literal("announce"),
+    ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const CronDeliveryWebhookSchema = Type.Object(
+  {
+    mode: Type.Literal("webhook"),
+    ...CronDeliverySharedProperties,
+    to: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const CronDeliverySchema = Type.Union([
+  CronDeliveryNoopSchema,
+  CronDeliveryAnnounceSchema,
+  CronDeliveryWebhookSchema,
+]);
 
 export const CronDeliveryPatchSchema = Type.Object(
   {
     mode: Type.Optional(
       Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
     ),
-    ...CronDeliveryBaseProperties,
+    ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
