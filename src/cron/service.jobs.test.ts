@@ -100,4 +100,24 @@ describe("applyJobPatch", () => {
       bestEffort: undefined,
     });
   });
+
+  it("updates notify via patch", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-4",
+      name: "job-4",
+      enabled: true,
+      notify: false,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it" },
+      state: {},
+    };
+
+    expect(() => applyJobPatch(job, { notify: true })).not.toThrow();
+    expect(job.notify).toBe(true);
+  });
 });

@@ -158,4 +158,50 @@ describe("cron view", () => {
     expect(summaries[0]).toBe("newer run");
     expect(summaries[1]).toBe("older run");
   });
+
+  it("forwards notify checkbox updates from the form", () => {
+    const container = document.createElement("div");
+    const onFormChange = vi.fn();
+    render(
+      renderCron(
+        createProps({
+          onFormChange,
+        }),
+      ),
+      container,
+    );
+
+    const notifyLabel = Array.from(container.querySelectorAll("label.field.checkbox")).find(
+      (label) => label.querySelector("span")?.textContent?.trim() === "Notify webhook",
+    );
+    const notifyInput =
+      notifyLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]') ?? null;
+    expect(notifyInput).not.toBeNull();
+
+    if (!notifyInput) {
+      return;
+    }
+    notifyInput.checked = true;
+    notifyInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onFormChange).toHaveBeenCalledWith({ notify: true });
+  });
+
+  it("shows notify chip for webhook-enabled jobs", () => {
+    const container = document.createElement("div");
+    const job = { ...createJob("job-2"), notify: true };
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+        }),
+      ),
+      container,
+    );
+
+    const chips = Array.from(container.querySelectorAll(".chip")).map((el) =>
+      (el.textContent ?? "").trim(),
+    );
+    expect(chips).toContain("notify");
+  });
 });
