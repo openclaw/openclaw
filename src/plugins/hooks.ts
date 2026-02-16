@@ -288,11 +288,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   /**
    * Run before_message_dispatch hook.
    * Allows plugins to block inbound messages before agent/LLM processing.
-   * Runs sequentially so handlers can short-circuit processing.
    *
+   * All registered handlers run sequentially and their results are merged.
    * If any handler returns `{ block: true }`, the message will not be
-   * dispatched to the agent. Optionally, the handler can provide a
-   * `response` to send directly to the user.
+   * dispatched to the agent (blocking is applied at the call site after
+   * all handlers complete). Optionally, a handler can provide a `response`
+   * to send directly to the user.
    */
   async function runBeforeMessageDispatch(
     event: PluginHookBeforeMessageDispatchEvent,

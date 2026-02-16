@@ -253,13 +253,8 @@ export async function dispatchReplyFromConfig(params: {
         return { queuedFinal, counts: dispatcher.getQueuedCounts() };
       }
 
-      // If hook provided context, store it for downstream use
-      // (Note: ctx is readonly in strict mode, so this requires FinalizedMsgContext
-      // to have an optional hookContext field, or we pass it another way)
-      if (dispatchResult?.context) {
-        // Attach hook context to metadata for downstream access
-        (ctx as { HookContext?: Record<string, unknown> }).HookContext = dispatchResult.context;
-      }
+      // Note: dispatchResult.context is available for future use if needed.
+      // To use it, add an optional HookContext field to MsgContext/FinalizedMsgContext.
     } catch (err) {
       logVerbose(`dispatch-from-config: before_message_dispatch hook failed: ${String(err)}`);
       // Continue processing on hook failure - don't block messages due to hook errors
