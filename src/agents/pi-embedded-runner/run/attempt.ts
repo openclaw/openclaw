@@ -550,6 +550,13 @@ export async function runEmbeddedAttempt(
         minReserveTokens: effectiveReserve,
       });
 
+      // Isolated cron sessions are single-use: compaction is wasteful and can
+      // push the run past its timeout, killing the task before results are
+      // delivered.  Disable SDK auto-compaction entirely for these sessions.
+      if (isCronSessionKey(params.sessionKey)) {
+        settingsManager.applyOverrides({ compaction: { enabled: false } });
+      }
+
       // Call for side effects (sets compaction/pruning/memory-context runtime state)
       // AND collect extension paths so Pi loads them via ResourceLoader.
       const embeddedExtPaths = await buildEmbeddedExtensionPaths({

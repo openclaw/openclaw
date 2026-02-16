@@ -97,10 +97,20 @@ function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
  * Per-session cache for memory-context resources.
  * Avoids re-creating WarmStore / KnowledgeStore / embedding on every message.
  */
-const memoryContextCache = new Map<
-  string,
-  { rawStore: WarmStore; knowledgeStore: KnowledgeStore; embedding: EmbeddingProvider }
->();
+type MemoryContextCacheEntry = {
+  rawStore: WarmStore;
+  knowledgeStore: KnowledgeStore;
+  embedding: EmbeddingProvider;
+  /** Timestamp of last embedding upgrade probe (ms). */
+  lastUpgradeProbeAt?: number;
+};
+const memoryContextCache = new Map<string, MemoryContextCacheEntry>();
+
+/** Minimum interval (ms) between embedding upgrade probes per session. */
+const EMBEDDING_UPGRADE_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Hash/fallback dim threshold — anything at or below this is considered degraded. */
+const FALLBACK_DIM_THRESHOLD = 384;
 
 export async function buildEmbeddedExtensionPaths(params: {
   cfg: OpenClawConfig | undefined;
@@ -164,7 +174,7 @@ export async function buildEmbeddedExtensionPaths(params: {
       //   gemini/auto → openai → voyage → local → transformer → noop (BM25)
       const embedding: EmbeddingProvider = await createEmbeddingProvider(
         params.cfg,
-        (config.embeddingModel as "gemini" | "transformer" | "hash" | "auto") ?? "auto",
+        config.embeddingModel ?? "auto",
         { warn: (msg) => console.warn(msg), info: (msg) => console.info(msg) },
       );
       const rawStore = new WarmStore({
@@ -187,6 +197,64 @@ export async function buildEmbeddedExtensionPaths(params: {
       console.info(`[memory-context] created new WarmStore for session=${sessionId}`);
     } else {
       console.info(`[memory-context] reusing cached WarmStore for session=${sessionId}`);
+
+      // Embedding upgrade probe: if the cached embedding is a fallback (hash/low-dim),
+      // periodically re-probe the real provider. If it recovered (e.g. Gemini came back),
+      // rebuild WarmStore with the better embedding so vector search works again.
+      const isFallback =
+        cached.embedding.dim <= FALLBACK_DIM_THRESHOLD ||
+        cached.embedding.name === "hash" ||
+        cached.embedding.name === "none";
+      const now = Date.now();
+      const probeAllowed =
+        !cached.lastUpgradeProbeAt ||
+        now - cached.lastUpgradeProbeAt >= EMBEDDING_UPGRADE_PROBE_INTERVAL_MS;
+
+      if (isFallback && probeAllowed) {
+        cached.lastUpgradeProbeAt = now;
+        try {
+          const upgraded = await createEmbeddingProvider(
+            params.cfg,
+            config.embeddingModel ?? "auto",
+            { warn: (msg) => console.warn(msg), info: (msg) => console.info(msg) },
+          );
+          if (
+            upgraded.dim > FALLBACK_DIM_THRESHOLD &&
+            upgraded.name !== "hash" &&
+            upgraded.name !== "none"
+          ) {
+            // Provider recovered — rebuild WarmStore with the better embedding.
+            // WarmStore constructor handles the upgrade path: re-embeds old segments
+            // with the new provider and persists the new vectors.
+            console.info(
+              `[memory-context] embedding upgraded: ${cached.embedding.name}(${cached.embedding.dim}-dim) → ${upgraded.name}(${upgraded.dim}-dim) for session=${sessionId}`,
+            );
+            const rawStore = new WarmStore({
+              sessionId,
+              embedding: upgraded,
+              coldStore: { path: resolvedPath },
+              maxSegments: config.maxSegments,
+              crossSession: config.crossSession,
+              eviction: {
+                enabled: config.evictionDays > 0,
+                maxAgeDays: config.evictionDays,
+              },
+              vectorPersist: true,
+            });
+            const knowledgeStore = new KnowledgeStore(resolvedPath);
+            cached = { rawStore, knowledgeStore, embedding: upgraded };
+            memoryContextCache.set(sessionId, cached);
+          } else {
+            console.info(
+              `[memory-context] embedding upgrade probe: still fallback (${upgraded.name}/${upgraded.dim}-dim) for session=${sessionId}`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[memory-context] embedding upgrade probe failed for session=${sessionId}: ${String(err)}`,
+          );
+        }
+      }
     }
     const { rawStore, knowledgeStore } = cached;
 
