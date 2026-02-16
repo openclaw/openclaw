@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoice } from "./auth-choice.js";
 import {
+  createAuthTestLifecycle,
   createExitThrowingRuntime,
   createWizardPrompter,
   readAuthProfilesForAgent,
@@ -16,17 +15,16 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
 }
 
 describe("applyAuthChoice (moonshot)", () => {
-  const envSnapshot = captureEnv([
+  const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "MOONSHOT_API_KEY",
   ]);
-  let tempStateDir: string | null = null;
 
   async function setupTempState() {
     const env = await setupAuthTestEnv("openclaw-auth-");
-    tempStateDir = env.stateDir;
+    lifecycle.setStateDir(env.stateDir);
     delete process.env.MOONSHOT_API_KEY;
   }
 
@@ -37,11 +35,7 @@ describe("applyAuthChoice (moonshot)", () => {
   }
 
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    envSnapshot.restore();
+    await lifecycle.cleanup();
   });
 
   it("keeps the .cn baseUrl when setDefaultModel is false", async () => {

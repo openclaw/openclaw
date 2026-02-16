@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { AuthChoice } from "./onboard-types.js";
-import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
   MINIMAX_CN_API_BASE_URL,
@@ -11,6 +10,7 @@ import {
 } from "./onboard-auth.js";
 import {
   authProfilePathForAgent,
+  createAuthTestLifecycle,
   createExitThrowingRuntime,
   createWizardPrompter,
   readAuthProfilesForAgent,
@@ -43,7 +43,7 @@ type StoredAuthProfile = {
 };
 
 describe("applyAuthChoice", () => {
-  const envSnapshot = captureEnv([
+  const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
@@ -57,10 +57,9 @@ describe("applyAuthChoice", () => {
     "SSH_TTY",
     "CHUTES_CLIENT_ID",
   ]);
-  let tempStateDir: string | null = null;
   async function setupTempState() {
     const env = await setupAuthTestEnv("openclaw-auth-");
-    tempStateDir = env.stateDir;
+    lifecycle.setStateDir(env.stateDir);
   }
   function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
     return createWizardPrompter(overrides, { defaultSelect: "" });
@@ -102,11 +101,7 @@ describe("applyAuthChoice", () => {
     resolvePluginProviders.mockReset();
     loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    envSnapshot.restore();
+    await lifecycle.cleanup();
   });
 
   it("does not throw when openai-codex oauth fails", async () => {
