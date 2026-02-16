@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
@@ -76,8 +77,9 @@ function resolvePathFromAgentSessionsDir(
   agentSessionsDir: string,
   candidateAbsPath: string,
 ): string | undefined {
-  const agentBase = path.resolve(agentSessionsDir);
-  const relative = path.relative(agentBase, candidateAbsPath);
+  const agentBase = safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
+  const realCandidate = safeRealpathSync(candidateAbsPath) ?? candidateAbsPath;
+  const relative = path.relative(agentBase, realCandidate);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     return undefined;
   }
@@ -112,6 +114,15 @@ function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string
   return agentId || undefined;
 }
 
+/** Resolve symlinks, returning undefined if the path does not exist. */
+function safeRealpathSync(p: string): string | undefined {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return undefined;
+  }
+}
+
 function resolvePathWithinSessionsDir(
   sessionsDir: string,
   candidate: string,
@@ -125,18 +136,22 @@ function resolvePathWithinSessionsDir(
   // Normalize absolute paths that are within the sessions directory.
   // Older versions stored absolute sessionFile paths in sessions.json;
   // convert them to relative so the containment check passes.
-  const normalized = path.isAbsolute(trimmed) ? path.relative(resolvedBase, trimmed) : trimmed;
-  if (normalized.startsWith("..") && path.isAbsolute(trimmed)) {
+  // Resolve symlinks on both sides so that e.g. a legacy .clawdbot symlink
+  // pointing to .openclaw doesn't cause a spurious path-escape failure.
+  const realBase = safeRealpathSync(resolvedBase) ?? resolvedBase;
+  const realTrimmed = path.isAbsolute(trimmed) ? (safeRealpathSync(trimmed) ?? trimmed) : trimmed;
+  const normalized = path.isAbsolute(realTrimmed) ? path.relative(realBase, realTrimmed) : realTrimmed;
+  if (normalized.startsWith("..") && path.isAbsolute(realTrimmed)) {
     const tryAgentFallback = (agentId: string): string | undefined => {
       const normalizedAgentId = normalizeAgentId(agentId);
-      const siblingSessionsDir = resolveSiblingAgentSessionsDir(resolvedBase, normalizedAgentId);
+      const siblingSessionsDir = resolveSiblingAgentSessionsDir(realBase, normalizedAgentId);
       if (siblingSessionsDir) {
-        const siblingResolved = resolvePathFromAgentSessionsDir(siblingSessionsDir, trimmed);
+        const siblingResolved = resolvePathFromAgentSessionsDir(siblingSessionsDir, realTrimmed);
         if (siblingResolved) {
           return siblingResolved;
         }
       }
-      return resolvePathFromAgentSessionsDir(resolveAgentSessionsDir(normalizedAgentId), trimmed);
+      return resolvePathFromAgentSessionsDir(resolveAgentSessionsDir(normalizedAgentId), realTrimmed);
     };
 
     const explicitAgentId = opts?.agentId?.trim();
@@ -146,7 +161,7 @@ function resolvePathWithinSessionsDir(
         return resolvedFromAgent;
       }
     }
-    const extractedAgentId = extractAgentIdFromAbsoluteSessionPath(trimmed);
+    const extractedAgentId = extractAgentIdFromAbsoluteSessionPath(realTrimmed);
     if (extractedAgentId) {
       const resolvedFromPath = tryAgentFallback(extractedAgentId);
       if (resolvedFromPath) {
@@ -157,7 +172,7 @@ function resolvePathWithinSessionsDir(
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {
     throw new Error("Session file path must be within sessions directory");
   }
-  return path.resolve(resolvedBase, normalized);
+  return path.resolve(realBase, normalized);
 }
 
 export function resolveSessionTranscriptPathInDir(
