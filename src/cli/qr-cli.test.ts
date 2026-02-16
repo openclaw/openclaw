@@ -183,6 +183,24 @@ describe("registerQrCli", () => {
     expect(payload.urlSource).toBe("gateway.remote.url");
   });
 
+  it("errors when --remote is set but no remote URL is configured", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.local",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    const program = new Command();
+    registerQrCli(program);
+
+    await expect(program.parseAsync(["qr", "--remote"], { from: "user" })).rejects.toThrow("exit");
+
+    const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(output).toContain("qr --remote requires");
+  });
+
   it("prefers gateway.remote.url over tailscale when --remote is set", async () => {
     loadConfig.mockReturnValue({
       gateway: {
