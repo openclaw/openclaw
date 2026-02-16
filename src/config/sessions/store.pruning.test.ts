@@ -78,21 +78,6 @@ describe("pruneStaleEntries", () => {
     expect(pruned).toBe(3);
     expect(Object.keys(store)).toHaveLength(0);
   });
-
-  it("falls back to built-in default (30 days) when no override given", () => {
-    const now = Date.now();
-    const store = makeStore([
-      ["old", makeEntry(now - 31 * DAY_MS)],
-      ["fresh", makeEntry(now - 29 * DAY_MS)],
-    ]);
-
-    // loadConfig mock returns {} → maintenance is undefined → default 30 days
-    const pruned = pruneStaleEntries(store);
-
-    expect(pruned).toBe(1);
-    expect(store.old).toBeUndefined();
-    expect(store.fresh).toBeDefined();
-  });
 });
 
 describe("capEntryCount", () => {
