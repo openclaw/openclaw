@@ -503,3 +503,10 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - For forum topics, use `-100…:topic:<id>` so it’s explicit and unambiguous.
 - If you see `telegram:...` prefixes in logs or stored “last route” targets, that’s normal;
   cron delivery accepts them and still parses topic IDs correctly.
+
+### Subagent announce delivery retries
+
+- When a subagent run completes, the gateway announces the result to the requester session.
+- If the announce flow returns `false` (e.g. requester session is busy), the gateway retries up to 3 times with tracking via `announceRetryCount`.
+- Announces older than 5 minutes past `endedAt` are force-expired to prevent stale entries from looping indefinitely.
+- If you see repeated announce deliveries in logs, check the subagent registry for entries with high `announceRetryCount` values.
