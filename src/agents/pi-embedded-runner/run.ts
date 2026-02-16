@@ -485,14 +485,9 @@ export async function runEmbeddedPiAgent(
             enforceFinalTag: params.enforceFinalTag,
           });
 
-          const {
-            aborted,
-            promptError,
-            timedOut,
-            timedOutDuringCompaction,
-            sessionIdUsed,
-            lastAssistant,
-          } = attempt;
+          const { aborted, promptError, timedOut, timedOutDuringCompaction, sessionIdUsed } =
+            attempt;
+          let lastAssistant = attempt.lastAssistant;
           const recoverableUnhandledStopReason =
             !aborted &&
             Boolean(promptError) &&
