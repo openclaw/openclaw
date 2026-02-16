@@ -36,6 +36,17 @@ describe("runBootOnce", () => {
     sendMessageIMessage: vi.fn(),
   });
 
+  const mockAgentUpdatesMainSession = (storePath: string, sessionKey: string) => {
+    agentCommand.mockImplementation(async (opts: { sessionId?: string }) => {
+      const current = loadSessionStore(storePath, { skipCache: true });
+      current[sessionKey] = {
+        sessionId: String(opts.sessionId),
+        updatedAt: Date.now(),
+      };
+      await saveSessionStore(storePath, current);
+    });
+  };
+
   it("skips when BOOT.md is missing", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-"));
     await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
@@ -149,14 +160,7 @@ describe("runBootOnce", () => {
       },
     });
 
-    agentCommand.mockImplementation(async (opts: { sessionId?: string }) => {
-      const current = loadSessionStore(storePath, { skipCache: true });
-      current[sessionKey] = {
-        sessionId: String(opts.sessionId),
-        updatedAt: Date.now(),
-      };
-      await saveSessionStore(storePath, current);
-    });
+    mockAgentUpdatesMainSession(storePath, sessionKey);
     await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
       status: "ran",
     });
@@ -174,14 +178,7 @@ describe("runBootOnce", () => {
     const cfg = {};
     const { sessionKey, storePath } = resolveMainStore(cfg);
 
-    agentCommand.mockImplementation(async (opts: { sessionId?: string }) => {
-      const current = loadSessionStore(storePath, { skipCache: true });
-      current[sessionKey] = {
-        sessionId: String(opts.sessionId),
-        updatedAt: Date.now(),
-      };
-      await saveSessionStore(storePath, current);
-    });
+    mockAgentUpdatesMainSession(storePath, sessionKey);
 
     await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
       status: "ran",

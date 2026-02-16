@@ -23,6 +23,38 @@ describe("pw-tools-core", () => {
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
   });
 
+  async function waitForImplicitDownloadOutput(params: {
+    downloadUrl: string;
+    suggestedFilename: string;
+  }) {
+    let downloadHandler: ((download: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
+      if (event === "download") {
+        downloadHandler = handler;
+      }
+    });
+    const off = vi.fn();
+    const saveAs = vi.fn(async () => {});
+    setPwToolsCoreCurrentPage({ on, off });
+
+    const p = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    downloadHandler?.({
+      url: () => params.downloadUrl,
+      suggestedFilename: () => params.suggestedFilename,
+      saveAs,
+    });
+
+    const res = await p;
+    const outPath = vi.mocked(saveAs).mock.calls[0]?.[0];
+    return { res, outPath };
+  }
+
   it("waits for the next download and saves it", async () => {
     let downloadHandler: ((download: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
@@ -98,35 +130,11 @@ describe("pw-tools-core", () => {
     expect(res.path).toBe(targetPath);
   });
   it("uses preferred tmp dir when waiting for download without explicit path", async () => {
-    let downloadHandler: ((download: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") {
-        downloadHandler = handler;
-      }
-    });
-    const off = vi.fn();
-
-    const saveAs = vi.fn(async () => {});
-    const download = {
-      url: () => "https://example.com/file.bin",
-      suggestedFilename: () => "file.bin",
-      saveAs,
-    };
-
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
-    setPwToolsCoreCurrentPage({ on, off });
-
-    const p = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      timeoutMs: 1000,
+    const { res, outPath } = await waitForImplicitDownloadOutput({
+      downloadUrl: "https://example.com/file.bin",
+      suggestedFilename: "file.bin",
     });
-
-    await Promise.resolve();
-    downloadHandler?.(download);
-
-    const res = await p;
-    const outPath = vi.mocked(saveAs).mock.calls[0]?.[0];
     expect(typeof outPath).toBe("string");
     const expectedRootedDownloadsDir = path.join(
       path.sep,
@@ -142,35 +150,11 @@ describe("pw-tools-core", () => {
   });
 
   it("sanitizes suggested download filenames to prevent traversal escapes", async () => {
-    let downloadHandler: ((download: unknown) => void) | undefined;
-    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") {
-        downloadHandler = handler;
-      }
-    });
-    const off = vi.fn();
-
-    const saveAs = vi.fn(async () => {});
-    const download = {
-      url: () => "https://example.com/evil",
-      suggestedFilename: () => "../../../../etc/passwd",
-      saveAs,
-    };
-
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw-preferred");
-    setPwToolsCoreCurrentPage({ on, off });
-
-    const p = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      timeoutMs: 1000,
+    const { res, outPath } = await waitForImplicitDownloadOutput({
+      downloadUrl: "https://example.com/evil",
+      suggestedFilename: "../../../../etc/passwd",
     });
-
-    await Promise.resolve();
-    downloadHandler?.(download);
-
-    const res = await p;
-    const outPath = vi.mocked(saveAs).mock.calls[0]?.[0];
     expect(typeof outPath).toBe("string");
     expect(path.dirname(String(outPath))).toBe(
       path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),

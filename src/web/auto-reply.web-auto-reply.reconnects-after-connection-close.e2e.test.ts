@@ -9,6 +9,40 @@ import {
 
 installWebAutoReplyTestHomeHooks();
 
+function createRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
+function startMonitorWebChannel(params: {
+  monitorWebChannelFn: (...args: unknown[]) => Promise<unknown>;
+  listenerFactory: (...args: unknown[]) => Promise<unknown>;
+  sleep: ReturnType<typeof vi.fn>;
+  signal?: AbortSignal;
+  reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+}) {
+  const runtime = createRuntime();
+  const controller = new AbortController();
+  const run = params.monitorWebChannelFn(
+    false,
+    params.listenerFactory as never,
+    true,
+    async () => ({ text: "ok" }),
+    runtime as never,
+    params.signal ?? controller.signal,
+    {
+      heartbeatSeconds: 1,
+      reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      sleep: params.sleep,
+    },
+  );
+
+  return { runtime, controller, run };
+}
+
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks();
 
@@ -34,25 +68,11 @@ describe("web auto-reply", () => {
       });
       return { close: vi.fn(), onClose };
     });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    const controller = new AbortController();
-    const run = monitorWebChannel(
-      false,
+    const { runtime, controller, run } = startMonitorWebChannel({
+      monitorWebChannelFn: monitorWebChannel as never,
       listenerFactory,
-      true,
-      async () => ({ text: "ok" }),
-      runtime as never,
-      controller.signal,
-      {
-        heartbeatSeconds: 1,
-        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-        sleep,
-      },
-    );
+      sleep,
+    });
 
     await Promise.resolve();
     expect(listenerFactory).toHaveBeenCalledTimes(1);
@@ -98,25 +118,11 @@ describe("web auto-reply", () => {
           };
         },
       );
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      const controller = new AbortController();
-      const run = monitorWebChannel(
-        false,
+      const { controller, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
         listenerFactory,
-        true,
-        async () => ({ text: "ok" }),
-        runtime as never,
-        controller.signal,
-        {
-          heartbeatSeconds: 1,
-          reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
-          sleep,
-        },
-      );
+        sleep,
+      });
 
       await Promise.resolve();
       expect(listenerFactory).toHaveBeenCalledTimes(1);

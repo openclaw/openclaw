@@ -7,6 +7,7 @@ import {
   readStringParam,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
+import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 
@@ -74,16 +75,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     );
   },
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
+    return extractToolSend(args, "sendMessage");
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {

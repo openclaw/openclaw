@@ -1,25 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  connectOk,
-  installGatewayTestHooks,
-  rpcReq,
-  startServerWithClient,
-} from "./test-helpers.js";
+import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import { withServer } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-
-async function withServer<T>(
-  run: (ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"]) => Promise<T>,
-) {
-  const { server, ws, envSnapshot } = await startServerWithClient("secret");
-  try {
-    return await run(ws);
-  } finally {
-    ws.close();
-    await server.close();
-    envSnapshot.restore();
-  }
-}
 
 describe("gateway talk.config", () => {
   it("returns redacted talk config for read scope", async () => {
