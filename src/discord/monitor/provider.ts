@@ -91,6 +91,25 @@ function mergeGuildChannelEntries(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function dedupeSkillCommandsForDiscord(
+  skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+) {
+  const seen = new Set<string>();
+  const deduped: ReturnType<typeof listSkillCommandsForAgents> = [];
+  for (const command of skillCommands) {
+    const key = command.skillName.trim().toLowerCase();
+    if (!key) {
+      deduped.push(command);
+      continue;
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(command);
+  }
+  return deduped;
+}
 async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
@@ -430,7 +449,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const maxDiscordCommands = 100;
   let skillCommands =
-    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
+    nativeEnabled && nativeSkillsEnabled
+      ? dedupeSkillCommandsForDiscord(listSkillCommandsForAgents({ cfg }))
+      : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
@@ -735,4 +756,5 @@ async function clearDiscordNativeCommands(params: {
 
 export const __testing = {
   createDiscordGatewayPlugin,
+  dedupeSkillCommandsForDiscord,
 };
