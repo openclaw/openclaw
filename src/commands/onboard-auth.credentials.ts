@@ -251,6 +251,18 @@ export async function setHuggingfaceApiKey(key: string, agentDir?: string) {
   });
 }
 
+export function setAisaApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "aisa:default",
+    credential: {
+      type: "api_key",
+      provider: "aisa",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export function setQianfanApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
     profileId: "qianfan:default",

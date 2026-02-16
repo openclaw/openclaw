@@ -6,8 +6,10 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildAisaProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
+  AISA_DEFAULT_MODEL_ID,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
@@ -59,6 +61,8 @@ import {
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  AISA_BASE_URL,
+  AISA_DEFAULT_MODEL_REF,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -445,6 +449,93 @@ export function applyAuthProfileConfig(
       ...cfg.auth,
       profiles,
       ...(order ? { order } : {}),
+    },
+  };
+}
+
+export function applyAisaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[AISA_DEFAULT_MODEL_REF] = {
+    ...models[AISA_DEFAULT_MODEL_REF],
+    alias: models[AISA_DEFAULT_MODEL_REF]?.alias ?? "AIsa",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.aisa;
+  const defaultProvider = buildAisaProvider();
+
+  // Add all AIsa provider models (built-in defaults + any user-configured)
+  // to the allowlist so users can switch between them at runtime
+  // (e.g. /model aisa/deepseek-v3.1).
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  for (const model of [...defaultProvider.models, ...existingModels]) {
+    const ref = `aisa/${model.id}`;
+    if (!models[ref]) {
+      models[ref] = {};
+    }
+  }
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === AISA_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
+  const {
+    apiKey: existingApiKey,
+    baseUrl: existingBaseUrl,
+    api: existingApi,
+    ...existingProviderRest
+  } = (existingProvider ?? {}) as Record<string, unknown> as {
+    apiKey?: string;
+    baseUrl?: string;
+    api?: ModelApi;
+  };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.aisa = {
+    ...existingProviderRest,
+    baseUrl: existingBaseUrl ?? AISA_BASE_URL,
+    api: existingApi ?? "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyAisaConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyAisaProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: AISA_DEFAULT_MODEL_REF,
+        },
+      },
     },
   };
 }

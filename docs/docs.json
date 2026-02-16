@@ -104,6 +104,10 @@
       "destination": "/providers/qianfan"
     },
     {
+      "source": "/aisa",
+      "destination": "/providers/aisa"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -1062,7 +1066,8 @@
                   "providers/glm",
                   "providers/zai",
                   "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/qianfan",
+                  "providers/aisa"
                 ]
               }
             ]
@@ -1578,7 +1583,8 @@
                   "zh-CN/providers/glm",
                   "zh-CN/providers/zai",
                   "zh-CN/providers/synthetic",
-                  "zh-CN/providers/qianfan"
+                  "zh-CN/providers/qianfan",
+                  "zh-CN/providers/aisa"
                 ]
               }
             ]

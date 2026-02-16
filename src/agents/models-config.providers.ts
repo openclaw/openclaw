@@ -150,6 +150,17 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const AISA_BASE_URL = "https://api.aisa.one/v1";
+export const AISA_DEFAULT_MODEL_ID = "qwen3-max";
+const AISA_DEFAULT_CONTEXT_WINDOW = 256000;
+const AISA_DEFAULT_MAX_TOKENS = 32768;
+const AISA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -656,6 +667,45 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+export function buildAisaProvider(): ProviderConfig {
+  return {
+    baseUrl: AISA_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: AISA_DEFAULT_MODEL_ID,
+        name: "Qwen3 Max",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: AISA_DEFAULT_COST,
+        contextWindow: AISA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AISA_DEFAULT_MAX_TOKENS,
+        compat: { supportsDeveloperRole: false },
+      },
+      {
+        id: "deepseek-v3.1",
+        name: "DeepSeek V3.1",
+        reasoning: true,
+        input: ["text"],
+        cost: AISA_DEFAULT_COST,
+        contextWindow: 128000,
+        maxTokens: AISA_DEFAULT_MAX_TOKENS,
+        compat: { supportsDeveloperRole: false },
+      },
+      {
+        id: "kimi-k2.5",
+        name: "Kimi K2.5",
+        reasoning: true,
+        input: ["text"],
+        cost: AISA_DEFAULT_COST,
+        contextWindow: AISA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AISA_DEFAULT_MAX_TOKENS,
+        compat: { supportsDeveloperRole: false },
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -805,6 +855,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const aisaKey =
+    resolveEnvApiKeyVarName("aisa") ??
+    resolveApiKeyFromProfiles({ provider: "aisa", store: authStore });
+  if (aisaKey) {
+    providers.aisa = { ...buildAisaProvider(), apiKey: aisaKey };
   }
 
   return providers;
