@@ -46,10 +46,11 @@ export class MemoryIndexManager implements MemorySearchManager {
   private readonly agentId: string;
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
-  private provider: EmbeddingProvider;
+  private provider: EmbeddingProvider | null;
   private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
   private fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
   private fallbackReason?: string;
+  private readonly providerUnavailableReason?: string;
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
   private voyage?: VoyageEmbeddingClient;
@@ -154,6 +155,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.requestedProvider = params.providerResult.requestedProvider;
     this.fallbackFrom = params.providerResult.fallbackFrom;
     this.fallbackReason = params.providerResult.fallbackReason;
+    this.providerUnavailableReason = params.providerResult.providerUnavailableReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
@@ -225,6 +227,16 @@ export class MemoryIndexManager implements MemorySearchManager {
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
 
+    // FTS-only mode: no embedding provider available
+    if (!this.provider) {
+      if (!this.fts.enabled || !this.fts.available) {
+        log.warn("memory search: no provider and FTS unavailable");
+        return [];
+      }
+      const ftsResults = await this.searchKeyword(cleaned, candidates).catch(() => []);
+      return ftsResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    }
+
     const keywordResults = hybrid.enabled
       ? await this.searchKeyword(cleaned, candidates).catch(() => [])
       : [];
@@ -253,6 +265,10 @@ export class MemoryIndexManager implements MemorySearchManager {
     queryVec: number[],
     limit: number,
   ): Promise<Array<MemorySearchResult & { id: string }>> {
+    // This method should never be called without a provider
+    if (!this.provider) {
+      return [];
+    }
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
@@ -279,10 +295,12 @@ export class MemoryIndexManager implements MemorySearchManager {
       return [];
     }
     const sourceFilter = this.buildSourceFilter();
+    // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
+    const providerModel = this.provider?.model;
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
-      providerModel: this.provider.model,
+      providerModel,
       query,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
@@ -446,6 +464,13 @@ export class MemoryIndexManager implements MemorySearchManager {
       }
       return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
     })();
+
+    // Determine search mode: "fts-only" if no provider, "hybrid" otherwise
+    const searchMode = this.provider ? "hybrid" : "fts-only";
+    const providerInfo = this.provider
+      ? { provider: this.provider.id, model: this.provider.model }
+      : { provider: "none", model: undefined };
+
     return {
       backend: "builtin",
       files: files?.c ?? 0,
@@ -453,8 +478,8 @@ export class MemoryIndexManager implements MemorySearchManager {
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
-      provider: this.provider.id,
-      model: this.provider.model,
+      provider: providerInfo.provider,
+      model: providerInfo.model,
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
@@ -497,10 +522,18 @@ export class MemoryIndexManager implements MemorySearchManager {
         lastError: this.batchFailureLastError,
         lastProvider: this.batchFailureLastProvider,
       },
+      custom: {
+        searchMode,
+        providerUnavailableReason: this.providerUnavailableReason,
+      },
     };
   }
 
   async probeVectorAvailability(): Promise<boolean> {
+    // FTS-only mode: vector search not available
+    if (!this.provider) {
+      return false;
+    }
     if (!this.vector.enabled) {
       return false;
     }
@@ -508,6 +541,13 @@ export class MemoryIndexManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    // FTS-only mode: embeddings not available but search still works
+    if (!this.provider) {
+      return {
+        ok: false,
+        error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
+      };
+    }
     try {
       await this.embedBatchWithRetry(["ping"]);
       return { ok: true };

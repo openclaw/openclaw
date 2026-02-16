@@ -432,3 +432,63 @@ describe("local embedding normalization", () => {
     }
   });
 });
+
+describe("FTS-only fallback when no provider available", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns null provider with reason when auto mode finds no providers", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
+      new Error('No API key found for provider "openai"'),
+    );
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "",
+      fallback: "none",
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.requestedProvider).toBe("auto");
+    expect(result.providerUnavailableReason).toBeDefined();
+    expect(result.providerUnavailableReason).toContain("No API key");
+  });
+
+  it("returns null provider when explicit provider fails with missing API key", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
+      new Error('No API key found for provider "openai"'),
+    );
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.requestedProvider).toBe("openai");
+    expect(result.providerUnavailableReason).toBeDefined();
+  });
+
+  it("returns null provider when both primary and fallback fail with missing API keys", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
+      new Error("No API key found for provider"),
+    );
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      fallback: "gemini",
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.requestedProvider).toBe("openai");
+    expect(result.fallbackFrom).toBe("openai");
+    expect(result.providerUnavailableReason).toContain("Fallback to gemini failed");
+  });
+});
