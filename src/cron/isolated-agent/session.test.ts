@@ -150,12 +150,8 @@ describe("resolveCronSession", () => {
         "webhook:stable-key": {
           updatedAt: Date.now() - 1000,
           modelOverride: "some-model",
-        } as unknown as {
-          sessionId: string;
-          updatedAt: number;
-          modelOverride?: string;
         },
-      });
+      } as ReturnType<typeof loadSessionStore>);
       vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
 
       const result = resolveCronSession({
