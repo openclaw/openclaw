@@ -815,23 +815,14 @@ final class TalkModeManager: NSObject {
     private func subscribeChatIfNeeded(sessionKey: String) async {
         let key = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        guard let gateway else { return }
         guard !self.chatSubscribedSessionKeys.contains(key) else { return }
 
-        let payload = "{\"sessionKey\":\"\(key)\"}"
-        await gateway.sendEvent(event: "chat.subscribe", payloadJSON: payload)
+        // Operator clients receive chat events without node-style subscriptions.
         self.chatSubscribedSessionKeys.insert(key)
-        self.logger.info("chat.subscribe ok sessionKey=\(key, privacy: .public)")
     }
 
     private func unsubscribeAllChats() async {
-        guard let gateway else { return }
-        let keys = self.chatSubscribedSessionKeys
         self.chatSubscribedSessionKeys.removeAll()
-        for key in keys {
-            let payload = "{\"sessionKey\":\"\(key)\"}"
-            await gateway.sendEvent(event: "chat.unsubscribe", payloadJSON: payload)
-        }
     }
 
     private func buildPrompt(transcript: String) -> String {
