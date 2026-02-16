@@ -1018,8 +1018,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         // Windows doesn't reliably support atomic replace via rename when dest exists.
         if (code === "EPERM" || code === "EEXIST") {
           await deps.fs.promises.copyFile(tmp, configPath);
-          await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
-            // best-effort
+          await deps.fs.promises.chmod(configPath, 0o600).catch((chmodErr) => {
+            deps.logger?.warn?.(
+              `config write: chmod 600 failed for ${configPath}: ${String(chmodErr)}. File may have overly permissive permissions.`,
+            );
           });
           await deps.fs.promises.unlink(tmp).catch(() => {
             // best-effort
