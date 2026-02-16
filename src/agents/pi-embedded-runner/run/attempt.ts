@@ -49,7 +49,7 @@ import {
   resolveCompactionReserveTokensFloor,
 } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools } from "../../pi-tools.js";
+import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -544,6 +544,10 @@ export async function runEmbeddedAttempt(
 
       // Add client tools (OpenResponses hosted tools) to customTools
       let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      const clientToolLoopDetection = resolveToolLoopDetectionConfig({
+        cfg: params.config,
+        agentId: sessionAgentId,
+      });
       const clientToolDefs = params.clientTools
         ? toClientToolDefinitions(
             params.clientTools,
@@ -553,6 +557,7 @@ export async function runEmbeddedAttempt(
             {
               agentId: sessionAgentId,
               sessionKey: params.sessionKey,
+              loopDetection: clientToolLoopDetection,
             },
           )
         : [];
