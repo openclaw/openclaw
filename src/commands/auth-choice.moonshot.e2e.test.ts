@@ -1,20 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { captureEnv } from "../test-utils/env.js";
 import { applyAuthChoice } from "./auth-choice.js";
-import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
-
-const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
-const requireAgentDir = () => {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
-};
+import {
+  createExitThrowingRuntime,
+  createWizardPrompter,
+  readAuthProfilesForAgent,
+  requireOpenClawAgentDir,
+  setupAuthTestEnv,
+} from "./test-wizard-helpers.js";
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(overrides, { defaultSelect: "" });
@@ -30,11 +25,15 @@ describe("applyAuthChoice (moonshot)", () => {
   let tempStateDir: string | null = null;
 
   async function setupTempState() {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    const env = await setupAuthTestEnv("openclaw-auth-");
+    tempStateDir = env.stateDir;
     delete process.env.MOONSHOT_API_KEY;
+  }
+
+  async function readAuthProfiles() {
+    return await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string }>;
+    }>(requireOpenClawAgentDir());
   }
 
   afterEach(async () => {
@@ -73,11 +72,7 @@ describe("applyAuthChoice (moonshot)", () => {
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.agentModelOverride).toBe("moonshot/kimi-k2.5");
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, { key?: string }>;
-    };
+    const parsed = await readAuthProfiles();
     expect(parsed.profiles?.["moonshot:default"]?.key).toBe("sk-moonshot-cn-test");
   });
 
@@ -100,11 +95,7 @@ describe("applyAuthChoice (moonshot)", () => {
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.agentModelOverride).toBeUndefined();
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, { key?: string }>;
-    };
+    const parsed = await readAuthProfiles();
     expect(parsed.profiles?.["moonshot:default"]?.key).toBe("sk-moonshot-cn-test");
   });
 });
