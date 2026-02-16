@@ -219,4 +219,27 @@ describe("monitorTelegramProvider (grammY)", () => {
     );
     expect(runSpy).not.toHaveBeenCalled();
   });
+
+  it("falls back to configured webhookSecret when not passed explicitly", async () => {
+    await monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      config: {
+        agents: { defaults: { maxConcurrent: 2 } },
+        channels: {
+          telegram: {
+            webhookSecret: "secret-from-config",
+          },
+        },
+      },
+    });
+
+    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        secret: "secret-from-config",
+      }),
+    );
+    expect(runSpy).not.toHaveBeenCalled();
+  });
 });
