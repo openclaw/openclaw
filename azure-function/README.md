@@ -61,13 +61,13 @@ curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://func-openclaw-d
 
 ## Environment Variables
 
-| Variable | Description | Source |
-|----------|-------------|--------|
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token | App Settings |
-| `TELEGRAM_WEBHOOK_SECRET` | Secret for webhook validation | App Settings |
-| `GITHUB_TOKEN` | GitHub Copilot API token | Key Vault reference |
-| `AZURE_STORAGE_CONNECTION_STRING` | Storage account connection | Auto-set by Bicep |
-| `OPENCLAW_AGENT_ID` | Agent identifier | App Settings (default: `"default"`) |
+| Variable                          | Description                   | Source                              |
+| --------------------------------- | ----------------------------- | ----------------------------------- |
+| `TELEGRAM_BOT_TOKEN`              | Telegram Bot API token        | App Settings                        |
+| `TELEGRAM_WEBHOOK_SECRET`         | Secret for webhook validation | App Settings                        |
+| `GITHUB_TOKEN`                    | GitHub Copilot API token      | Key Vault reference                 |
+| `AZURE_STORAGE_CONNECTION_STRING` | Storage account connection    | Auto-set by Bicep                   |
+| `OPENCLAW_AGENT_ID`               | Agent identifier              | App Settings (default: `"default"`) |
 
 ## Project Structure
 

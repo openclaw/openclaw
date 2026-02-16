@@ -7,11 +7,8 @@
   "main": "dist/src/functions/*.js",
   "scripts": {
     "build": "tsc",
-    "start": "func start",
-    "prestart": "npm run build"
-  },
-  "engines": {
-    "node": ">=22.0.0"
+    "prestart": "npm run build",
+    "start": "func start"
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.0",
@@ -21,7 +18,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0",
-    "azure-functions-core-tools": "^4.0.0"
+    "azure-functions-core-tools": "^4.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

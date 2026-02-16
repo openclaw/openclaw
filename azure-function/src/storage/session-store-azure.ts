@@ -9,11 +9,7 @@
  *   AZURE_STORAGE_CONNECTION_STRING – connection string for the storage account.
  */
 
-import {
-  BlobServiceClient,
-  type ContainerClient,
-  type BlockBlobClient,
-} from "@azure/storage-blob";
+import { BlobServiceClient, type ContainerClient } from "@azure/storage-blob";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -67,7 +63,9 @@ export class AzureBlobSessionStore {
       const body = await streamToString(response.readableStreamBody);
       return JSON.parse(body) as T;
     } catch (err: unknown) {
-      if (isBlobNotFound(err)) return undefined;
+      if (isBlobNotFound(err)) {
+        return undefined;
+      }
       throw err;
     }
   }
@@ -114,10 +112,10 @@ export class AzureBlobSessionStore {
 // Stream helper
 // ---------------------------------------------------------------------------
 
-async function streamToString(
-  stream: NodeJS.ReadableStream | undefined,
-): Promise<string> {
-  if (!stream) return "";
+async function streamToString(stream: NodeJS.ReadableStream | undefined): Promise<string> {
+  if (!stream) {
+    return "";
+  }
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
     chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);

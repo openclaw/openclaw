@@ -128,6 +128,8 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
     "@aws-sdk/client-bedrock": "^3.990.0",
+    "@azure/data-tables": "13.3.2",
+    "@azure/storage-blob": "12.31.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.1",
     "@grammyjs/runner": "^2.0.3",

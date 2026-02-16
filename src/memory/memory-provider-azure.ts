@@ -94,7 +94,9 @@ function scoreChunk(text: string, queryTokens: string[]): number {
   const lower = text.toLowerCase();
   let hits = 0;
   for (const t of queryTokens) {
-    if (lower.includes(t)) hits++;
+    if (lower.includes(t)) {
+      hits++;
+    }
   }
   return queryTokens.length > 0 ? hits / queryTokens.length : 0;
 }
@@ -144,7 +146,9 @@ export class AzureTableMemoryProvider implements MemorySearchManager {
       .toLowerCase()
       .split(/\s+/)
       .filter((t) => t.length > 0);
-    if (tokens.length === 0) return [];
+    if (tokens.length === 0) {
+      return [];
+    }
 
     const results: MemorySearchResult[] = [];
 
@@ -161,7 +165,7 @@ export class AzureTableMemoryProvider implements MemorySearchManager {
           endLine: entity.endLine ?? 0,
           score,
           snippet: (entity.text ?? "").slice(0, 500),
-          source: (entity.source as MemorySource) ?? "memory",
+          source: entity.source ?? "memory",
         });
       }
     }
@@ -178,7 +182,6 @@ export class AzureTableMemoryProvider implements MemorySearchManager {
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
-    const rowKey = encodeRowKey(params.relPath);
     const chunks: string[] = [];
 
     const iter = this.chunksClient.listEntities<ChunkEntity>({
@@ -306,10 +309,7 @@ export class AzureTableMemoryProvider implements MemorySearchManager {
 
   async getMeta(key: string): Promise<string | undefined> {
     try {
-      const entity = await this.metaClient.getEntity<MetaEntity>(
-        this.agentId,
-        encodeRowKey(key),
-      );
+      const entity = await this.metaClient.getEntity<MetaEntity>(this.agentId, encodeRowKey(key));
       return entity.value;
     } catch {
       return undefined;

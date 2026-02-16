@@ -16,8 +16,13 @@
  *   OPENCLAW_AGENT_ID        – agent identifier (default: "default")
  */
 
-import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } from "@azure/functions";
-import { Bot, webhookCallback } from "grammy";
+import {
+  app,
+  type HttpRequest,
+  type HttpResponseInit,
+  type InvocationContext,
+} from "@azure/functions";
+import { Bot } from "grammy";
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -38,14 +43,15 @@ function requireEnv(name: string): string {
 let _bot: Bot | undefined;
 
 function getTelegramBot(): Bot {
-  if (_bot) return _bot;
+  if (_bot) {
+    return _bot;
+  }
 
   const token = requireEnv("TELEGRAM_BOT_TOKEN");
   _bot = new Bot(token);
 
   // Minimal echo handler – replace with full OpenClaw reply pipeline as needed.
   _bot.on("message:text", async (ctx) => {
-    const userMessage = ctx.message.text;
     const agentId = process.env.OPENCLAW_AGENT_ID ?? "default";
 
     // Acknowledge receipt while the model thinks.
