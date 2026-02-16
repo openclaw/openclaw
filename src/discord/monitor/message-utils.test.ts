@@ -16,9 +16,8 @@ vi.mock("../../globals.js", () => ({
   logVerbose: () => {},
 }));
 
-const { resolveDiscordMessageChannelId, resolveForwardedMediaList } = await import(
-  "./message-utils.js",
-);
+const { resolveDiscordMessageChannelId, resolveForwardedMediaList } =
+  await import("./message-utils.js");
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as Message;
