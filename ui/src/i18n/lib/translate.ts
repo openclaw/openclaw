@@ -34,7 +34,7 @@ class I18nManager {
 
   public async setLocale(locale: Locale) {
     if (this.locale === locale) return;
-    
+
     // Lazy load translations if needed
     if (!this.translations[locale]) {
       try {

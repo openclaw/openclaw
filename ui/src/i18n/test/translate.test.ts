@@ -21,10 +21,10 @@ describe("i18n", () => {
   });
 
   it("should fallback to English if key is missing in another locale", async () => {
-    // We haven't registered other locales in the test environment yet, 
+    // We haven't registered other locales in the test environment yet,
     // but the logic should fallback to 'en' map which is always there.
     await i18n.setLocale("zh-CN");
-    // Since we don't mock the import, it might fail to load zh-CN, 
+    // Since we don't mock the import, it might fail to load zh-CN,
     // but let's assume it falls back to English for now.
     expect(t("common.health")).toBeDefined();
   });
