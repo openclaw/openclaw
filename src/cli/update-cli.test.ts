@@ -13,6 +13,9 @@ const isCancel = (value: unknown) => value === "cancel";
 const readPackageName = vi.fn();
 const readPackageVersion = vi.fn();
 const resolveGlobalManager = vi.fn();
+const serviceLoaded = vi.fn();
+const prepareRestartScript = vi.fn();
+const runRestartScript = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -73,6 +76,17 @@ vi.mock("./update-cli/shared.js", async (importOriginal) => {
     resolveGlobalManager,
   };
 });
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: vi.fn(() => ({
+    isLoaded: (...args: unknown[]) => serviceLoaded(...args),
+  })),
+}));
+
+vi.mock("./update-cli/restart-helper.js", () => ({
+  prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
+  runRestartScript: (...args: unknown[]) => runRestartScript(...args),
+}));
 
 // Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
@@ -192,6 +206,9 @@ describe("update-cli", () => {
     readPackageName.mockReset();
     readPackageVersion.mockReset();
     resolveGlobalManager.mockReset();
+    serviceLoaded.mockReset();
+    prepareRestartScript.mockReset();
+    runRestartScript.mockReset();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -237,6 +254,9 @@ describe("update-cli", () => {
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
+    serviceLoaded.mockResolvedValue(false);
+    prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
+    runRestartScript.mockResolvedValue(undefined);
     setTty(false);
     setStdoutTty(false);
   });
