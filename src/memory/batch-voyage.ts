@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
+import { buildBatchHeaders, normalizeBatchBaseUrl, splitBatchRequests } from "./batch-utils.js";
 import { hashText, runWithConcurrency } from "./internal.js";
 
 /**
@@ -39,43 +40,12 @@ export const VOYAGE_BATCH_ENDPOINT = "/v1/embeddings";
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 
-function getVoyageBaseUrl(client: VoyageEmbeddingClient): string {
-  return client.baseUrl?.replace(/\/$/, "") ?? "";
-}
-
-function getVoyageHeaders(
-  client: VoyageEmbeddingClient,
-  params: { json: boolean },
-): Record<string, string> {
-  const headers = client.headers ? { ...client.headers } : {};
-  if (params.json) {
-    if (!headers["Content-Type"] && !headers["content-type"]) {
-      headers["Content-Type"] = "application/json";
-    }
-  } else {
-    delete headers["Content-Type"];
-    delete headers["content-type"];
-  }
-  return headers;
-}
-
-function splitVoyageBatchRequests(requests: VoyageBatchRequest[]): VoyageBatchRequest[][] {
-  if (requests.length <= VOYAGE_BATCH_MAX_REQUESTS) {
-    return [requests];
-  }
-  const groups: VoyageBatchRequest[][] = [];
-  for (let i = 0; i < requests.length; i += VOYAGE_BATCH_MAX_REQUESTS) {
-    groups.push(requests.slice(i, i + VOYAGE_BATCH_MAX_REQUESTS));
-  }
-  return groups;
-}
-
 async function submitVoyageBatch(params: {
   client: VoyageEmbeddingClient;
   requests: VoyageBatchRequest[];
   agentId: string;
 }): Promise<VoyageBatchStatus> {
-  const baseUrl = getVoyageBaseUrl(params.client);
+  const baseUrl = normalizeBatchBaseUrl(params.client);
   const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
   const form = new FormData();
   form.append("purpose", "batch");
@@ -88,7 +58,7 @@ async function submitVoyageBatch(params: {
   // 1. Upload file using Voyage Files API
   const fileRes = await fetch(`${baseUrl}/files`, {
     method: "POST",
-    headers: getVoyageHeaders(params.client, { json: false }),
+    headers: buildBatchHeaders(params.client, { json: false }),
     body: form,
   });
   if (!fileRes.ok) {
@@ -103,7 +73,7 @@ async function submitVoyageBatch(params: {
   // 2. Create batch job using Voyage Batches API
   return await postJsonWithRetry<VoyageBatchStatus>({
     url: `${baseUrl}/batches`,
-    headers: getVoyageHeaders(params.client, { json: true }),
+    headers: buildBatchHeaders(params.client, { json: true }),
     body: {
       input_file_id: filePayload.id,
       endpoint: VOYAGE_BATCH_ENDPOINT,
@@ -125,9 +95,9 @@ async function fetchVoyageBatchStatus(params: {
   client: VoyageEmbeddingClient;
   batchId: string;
 }): Promise<VoyageBatchStatus> {
-  const baseUrl = getVoyageBaseUrl(params.client);
+  const baseUrl = normalizeBatchBaseUrl(params.client);
   const res = await fetch(`${baseUrl}/batches/${params.batchId}`, {
-    headers: getVoyageHeaders(params.client, { json: true }),
+    headers: buildBatchHeaders(params.client, { json: true }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -141,9 +111,9 @@ async function readVoyageBatchError(params: {
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
-    const baseUrl = getVoyageBaseUrl(params.client);
+    const baseUrl = normalizeBatchBaseUrl(params.client);
     const res = await fetch(`${baseUrl}/files/${params.errorFileId}/content`, {
-      headers: getVoyageHeaders(params.client, { json: true }),
+      headers: buildBatchHeaders(params.client, { json: true }),
     });
     if (!res.ok) {
       const text = await res.text();
@@ -231,7 +201,7 @@ export async function runVoyageEmbeddingBatches(params: {
   if (params.requests.length === 0) {
     return new Map();
   }
-  const groups = splitVoyageBatchRequests(params.requests);
+  const groups = splitBatchRequests(params.requests, VOYAGE_BATCH_MAX_REQUESTS);
   const byCustomId = new Map<string, number[]>();
 
   const tasks = groups.map((group, groupIndex) => async () => {
@@ -277,9 +247,9 @@ export async function runVoyageEmbeddingBatches(params: {
       throw new Error(`voyage batch ${batchInfo.id} completed without output file`);
     }
 
-    const baseUrl = getVoyageBaseUrl(params.client);
+    const baseUrl = normalizeBatchBaseUrl(params.client);
     const contentRes = await fetch(`${baseUrl}/files/${completed.outputFileId}/content`, {
-      headers: getVoyageHeaders(params.client, { json: true }),
+      headers: buildBatchHeaders(params.client, { json: true }),
     });
     if (!contentRes.ok) {
       const text = await contentRes.text();
