@@ -519,6 +519,10 @@ export async function runEmbeddedPiAgent(
             provider,
             modelId,
             model,
+            copilotGitHubToken:
+              model.provider === "github-copilot"
+                ? (apiKeyInfo as { apiKey?: string } | null)?.apiKey
+                : undefined,
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,

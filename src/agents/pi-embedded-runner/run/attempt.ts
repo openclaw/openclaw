@@ -626,13 +626,17 @@ export async function runEmbeddedAttempt(
         // backoff, retry-after header parsing) at the HTTP transport layer.
         const { createCopilotSdkStreamFn } =
           await import("../../../providers/copilot-sdk-stream.js");
+        // Use the raw GitHub token threaded from run.ts (already resolved
+        // from auth profiles or env). Falls back to env vars / useLoggedInUser.
         const githubToken =
+          params.copilotGitHubToken ||
           (
             process.env.COPILOT_GITHUB_TOKEN ??
             process.env.GH_TOKEN ??
             process.env.GITHUB_TOKEN ??
             ""
-          ).trim() || undefined;
+          ).trim() ||
+          undefined;
         activeSession.agent.streamFn = createCopilotSdkStreamFn(githubToken);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
