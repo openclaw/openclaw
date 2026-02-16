@@ -83,15 +83,18 @@ export const pt_BR: TranslationMap = {
       title: "Notas",
       subtitle: "Lembretes rápidos para configurações de controle remoto.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText: "Prefira o modo serve para manter o gateway em loopback com autenticação tailnet.",
+      tailscaleText:
+        "Prefira o modo serve para manter o gateway em loopback com autenticação tailnet.",
       sessionTitle: "Higiene de sessão",
       sessionText: "Use /new ou sessions.patch para redefinir o contexto.",
       cronTitle: "Lembretes de Cron",
       cronText: "Use sessões isoladas para execuções recorrentes.",
     },
     auth: {
-      required: "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
-      failed: "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
+      required:
+        "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
+      failed:
+        "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
     },
     insecure: {
       hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
