@@ -35,4 +35,6 @@ export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
   };
 }
 
-export { logWebSelfId } from "../web/auth-store.js";
+export function logWebSelfId(..._args: unknown[]): void {
+  // Stub: web auth store removed with channel integrations.
+}
