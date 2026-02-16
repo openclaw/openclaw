@@ -71,6 +71,29 @@ describe("buildInlineKeyboard", () => {
     });
   });
 
+  it("passes through button style", () => {
+    const result = buildInlineKeyboard([
+      [
+        {
+          text: "Option A",
+          callback_data: "cmd:a",
+          style: "primary",
+        },
+      ],
+    ]);
+    expect(result).toEqual({
+      inline_keyboard: [
+        [
+          {
+            text: "Option A",
+            callback_data: "cmd:a",
+            style: "primary",
+          },
+        ],
+      ],
+    });
+  });
+
   it("filters invalid buttons and empty rows", () => {
     const result = buildInlineKeyboard([
       [

@@ -505,6 +505,46 @@ describe("handleTelegramAction", () => {
       }),
     );
   });
+
+  it("forwards optional button style", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", capabilities: { inlineButtons: "all" } },
+      },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Choose",
+        buttons: [
+          [
+            {
+              text: "Option A",
+              callback_data: "cmd:a",
+              style: "primary",
+            },
+          ],
+        ],
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Choose",
+      expect.objectContaining({
+        buttons: [
+          [
+            {
+              text: "Option A",
+              callback_data: "cmd:a",
+              style: "primary",
+            },
+          ],
+        ],
+      }),
+    );
+  });
 });
 
 describe("readTelegramButtons", () => {
@@ -513,5 +553,36 @@ describe("readTelegramButtons", () => {
       buttons: [[{ text: "  Option A ", callback_data: " cmd:a " }]],
     });
     expect(result).toEqual([[{ text: "Option A", callback_data: "cmd:a" }]]);
+  });
+
+  it("normalizes optional style", () => {
+    const result = readTelegramButtons({
+      buttons: [
+        [
+          {
+            text: "Option A",
+            callback_data: "cmd:a",
+            style: " PRIMARY ",
+          },
+        ],
+      ],
+    });
+    expect(result).toEqual([
+      [
+        {
+          text: "Option A",
+          callback_data: "cmd:a",
+          style: "primary",
+        },
+      ],
+    ]);
+  });
+
+  it("rejects unsupported button style", () => {
+    expect(() =>
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "cmd:a", style: "secondary" }]],
+      }),
+    ).toThrow(/style must be one of danger, success, primary/i);
   });
 });

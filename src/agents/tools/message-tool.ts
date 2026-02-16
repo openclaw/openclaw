@@ -84,6 +84,7 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
           Type.Object({
             text: Type.String(),
             callback_data: Type.String(),
+            style: Type.Optional(stringEnum(["danger", "success", "primary"])),
           }),
         ),
         {
