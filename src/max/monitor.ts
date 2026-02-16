@@ -1,4 +1,3 @@
-import type { Update } from "@maxhub/max-bot-api/types";
 import { Bot } from "@maxhub/max-bot-api";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../plugins/runtime/types.js";

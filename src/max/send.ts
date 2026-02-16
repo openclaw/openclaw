@@ -105,7 +105,8 @@ export async function sendMessageMax(
   const message = json.message as Record<string, unknown> | undefined;
 
   return {
-    messageId: String(message?.mid ?? json.mid ?? ""),
+    messageId:
+      typeof message?.mid === "string" ? message.mid : String(message?.mid ?? json.mid ?? ""),
     chatId: String(chatId),
   };
 }
@@ -191,7 +192,8 @@ export async function sendMediaMax(
   const message = msgJson.message as Record<string, unknown> | undefined;
 
   return {
-    messageId: String(message?.mid ?? msgJson.mid ?? ""),
+    messageId:
+      typeof message?.mid === "string" ? message.mid : String(message?.mid ?? msgJson.mid ?? ""),
     chatId: String(chatId),
   };
 }
