@@ -147,6 +147,36 @@ function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
   );
 }
 
+function formatInteractionSelectionLabel(params: {
+  actionId: string;
+  summary: Omit<InteractionSummary, "actionId" | "blockId">;
+  buttonText?: string;
+}): string {
+  if (params.summary.actionType === "button" && params.buttonText?.trim()) {
+    return params.buttonText.trim();
+  }
+  if (params.summary.selectedLabels?.length) {
+    if (params.summary.selectedLabels.length <= 3) {
+      return params.summary.selectedLabels.join(", ");
+    }
+    return `${params.summary.selectedLabels.slice(0, 3).join(", ")} +${
+      params.summary.selectedLabels.length - 3
+    }`;
+  }
+  if (params.summary.selectedValues?.length) {
+    if (params.summary.selectedValues.length <= 3) {
+      return params.summary.selectedValues.join(", ");
+    }
+    return `${params.summary.selectedValues.slice(0, 3).join(", ")} +${
+      params.summary.selectedValues.length - 3
+    }`;
+  }
+  if (params.summary.value?.trim()) {
+    return params.summary.value.trim();
+  }
+  return params.actionId;
+}
+
 function summarizeViewState(values: unknown): ModalInputSummary[] {
   if (!values || typeof values !== "object") {
     return [];
@@ -274,17 +304,21 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         return;
       }
 
-      if (typedAction.type !== "button") {
+      if (!blockId) {
         return;
       }
 
-      const buttonText = typedAction.text?.text ?? actionId;
+      const selectedLabel = formatInteractionSelectionLabel({
+        actionId,
+        summary: actionSummary,
+        buttonText: typedAction.text?.text,
+      });
       let updatedBlocks = originalBlocks.map((block) => {
         const typedBlock = block as InteractionMessageBlock;
         if (typedBlock.type === "actions" && typedBlock.block_id === blockId) {
           return {
             type: "context",
-            elements: [{ type: "mrkdwn", text: `:white_check_mark: *${buttonText}* selected` }],
+            elements: [{ type: "mrkdwn", text: `:white_check_mark: *${selectedLabel}* selected` }],
           };
         }
         return block;
