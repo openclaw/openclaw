@@ -49,19 +49,23 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  // Cron operates at second granularity, so floor nowMs to the start of the
-  // current second.  We ask croner for the next occurrence strictly *after*
-  // nowSecondMs so that a job whose schedule matches the current second is
-  // never re-scheduled into the same (already-elapsed) second.
+  // Ask croner for the next occurrence starting from the NEXT second.
+  // This prevents re-scheduling into the current second when a job fires
+  // at 13:00:00.014 and completes at 13:00:00.021 — without this fix,
+  // croner could return 13:00:00.000 (same second) causing a spin loop
+  // where the job fires hundreds of times per second (see #17821).
   //
-  // Previous code used `nowSecondMs - 1` which caused croner to return the
-  // current second as a valid next-run, leading to rapid duplicate fires when
-  // multiple jobs triggered simultaneously (see #14164).
-  const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
-  const next = cron.nextRun(new Date(nowSecondMs));
+  // By asking from the next second (e.g., 13:00:01.000), we ensure croner
+  // returns the following day's occurrence (e.g., 13:00:00.000 tomorrow).
+  //
+  // This also correctly handles the "before match" case: if nowMs is
+  // 11:59:59.500, we ask from 12:00:00.000, and croner returns 12:00:00.000
+  // (today's match) since it uses >= semantics for the start time.
+  const askFromNextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+  const next = cron.nextRun(new Date(askFromNextSecondMs));
   if (!next) {
     return undefined;
   }
   const nextMs = next.getTime();
-  return Number.isFinite(nextMs) && nextMs > nowSecondMs ? nextMs : undefined;
+  return Number.isFinite(nextMs) ? nextMs : undefined;
 }
