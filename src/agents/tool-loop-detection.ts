@@ -55,7 +55,7 @@ type ResolvedLoopDetectionConfig = {
 };
 
 function asPositiveInt(value: number | undefined, fallback: number): number {
-  if (!Number.isInteger(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     return fallback;
   }
   return value;
