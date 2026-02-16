@@ -113,4 +113,39 @@ describe("createTelegramDraftStream", () => {
 
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
   });
+
+  it("creates new message after forceNewMessage is called", async () => {
+    const api = {
+      sendMessage: vi
+        .fn()
+        .mockResolvedValueOnce({ message_id: 17 })
+        .mockResolvedValueOnce({ message_id: 42 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const stream = createTelegramDraftStream({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      api: api as any,
+      chatId: 123,
+    });
+
+    // First message
+    stream.update("Hello");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Normal edit (same message)
+    stream.update("Hello edited");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello edited");
+
+    // Force new message (e.g. after thinking block ends)
+    stream.forceNewMessage();
+    stream.update("After thinking");
+    await stream.flush();
+
+    // Should have sent a second new message, not edited the first
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After thinking", undefined);
+  });
 });
