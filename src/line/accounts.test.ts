@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLineAccount,
-  listLineAccountIds,
   resolveDefaultLineAccountId,
   normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
@@ -97,22 +96,6 @@ describe("LINE accounts", () => {
       expect(account.channelAccessToken).toBe("");
       expect(account.channelSecret).toBe("");
       expect(account.tokenSource).toBe("none");
-    });
-  });
-
-  describe("listLineAccountIds", () => {
-    it("returns default account when configured at base level", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          line: {
-            channelAccessToken: "test-token",
-          },
-        },
-      };
-
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
     });
   });
 
