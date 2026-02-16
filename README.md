@@ -273,7 +273,7 @@ Original prompt:
 > want to find the timestamp in this video where Peter says 'I think vibe coding
 > is a slur'"
 >
-> Video: <https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV>
+> Video: [https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV](https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV)
 
 ## Chat commands
 
