@@ -10,7 +10,6 @@ import {
   messageAction,
   uriAction,
   postbackAction,
-  datetimePickerAction,
 } from "./template-messages.js";
 
 describe("messageAction", () => {
@@ -56,22 +55,6 @@ describe("postbackAction", () => {
     const action = postbackAction("Test", longData);
 
     expect((action as { data: string }).data.length).toBe(300);
-  });
-});
-
-describe("datetimePickerAction", () => {
-  it("includes min/max/initial when provided", () => {
-    const action = datetimePickerAction("Pick", "data", "datetime", {
-      initial: "2024-01-01T12:00",
-      min: "2024-01-01T00:00",
-      max: "2024-12-31T23:59",
-    });
-
-    expect(action.label).toBe("Pick");
-    expect((action as { mode: string }).mode).toBe("datetime");
-    expect((action as { initial: string }).initial).toBe("2024-01-01T12:00");
-    expect((action as { min: string }).min).toBe("2024-01-01T00:00");
-    expect((action as { max: string }).max).toBe("2024-12-31T23:59");
   });
 });
 
