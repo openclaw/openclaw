@@ -117,6 +117,12 @@ Dispatch CI parity gate (same command used by blocking CI):
 pnpm dispatch:test:ci
 ```
 
+UI tests (Playwright): if UI tests fail due to missing browser binaries, run:
+
+```bash
+pnpm exec playwright install
+```
+
 Dispatch gate passing criteria:
 
 - TAP output includes `dispatch/tests/001_init_migration.node.test.mjs`.
