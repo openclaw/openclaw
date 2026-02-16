@@ -35,11 +35,18 @@ public struct WakeWordGateMatch: Sendable, Equatable {
     public let triggerEndTime: TimeInterval
     public let postGap: TimeInterval
     public let command: String
+    public let trigger: String?
 
-    public init(triggerEndTime: TimeInterval, postGap: TimeInterval, command: String) {
+    public init(
+        triggerEndTime: TimeInterval,
+        postGap: TimeInterval,
+        command: String,
+        trigger: String? = nil)
+    {
         self.triggerEndTime = triggerEndTime
         self.postGap = postGap
         self.command = command
+        self.trigger = trigger
     }
 }
 
@@ -53,6 +60,7 @@ public enum WakeWordGate {
     }
 
     private struct TriggerTokens {
+        let source: String
         let tokens: [String]
     }
 
@@ -60,6 +68,7 @@ public enum WakeWordGate {
         let index: Int
         let triggerEnd: TimeInterval
         let gap: TimeInterval
+        let trigger: String
     }
 
     public static func match(
@@ -89,7 +98,7 @@ public enum WakeWordGate {
 
                 if let best, i <= best.index { continue }
 
-                best = MatchCandidate(index: i, triggerEnd: triggerEnd, gap: gap)
+                best = MatchCandidate(index: i, triggerEnd: triggerEnd, gap: gap, trigger: trigger.source)
             }
         }
 
@@ -97,7 +106,11 @@ public enum WakeWordGate {
         let command = commandText(transcript: transcript, segments: segments, triggerEndTime: best.triggerEnd)
             .trimmingCharacters(in: Self.whitespaceAndPunctuation)
         guard command.count >= config.minCommandLength else { return nil }
-        return WakeWordGateMatch(triggerEndTime: best.triggerEnd, postGap: best.gap, command: command)
+        return WakeWordGateMatch(
+            triggerEndTime: best.triggerEnd,
+            postGap: best.gap,
+            command: command,
+            trigger: best.trigger)
     }
 
     public static func commandText(
@@ -151,7 +164,7 @@ public enum WakeWordGate {
                 .map { normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             if tokens.isEmpty { continue }
-            output.append(TriggerTokens(tokens: tokens))
+            output.append(TriggerTokens(source: tokens.joined(separator: " "), tokens: tokens))
         }
         return output
     }

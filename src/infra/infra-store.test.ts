@@ -15,6 +15,12 @@ import {
 } from "./diagnostic-events.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
+  loadVoiceWakeRoutingConfig,
+  normalizeVoiceWakeTriggerWord,
+  resolveVoiceWakeRouteByTrigger,
+  setVoiceWakeRoutingConfig,
+} from "./voicewake-routing.js";
+import {
   defaultVoiceWakeTriggers,
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
@@ -94,6 +100,50 @@ describe("infra store", () => {
         expect(loaded.triggers).toEqual(["wake"]);
         expect(loaded.updatedAtMs).toBe(0);
       });
+    });
+  });
+
+  describe("voicewake routing store", () => {
+    it("returns defaults when missing", async () => {
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-routing-"));
+      const cfg = await loadVoiceWakeRoutingConfig(baseDir);
+      expect(cfg.version).toBe(1);
+      expect(cfg.defaultTarget).toEqual({ mode: "current" });
+      expect(cfg.routes).toEqual([]);
+      expect(cfg.updatedAtMs).toBe(0);
+    });
+
+    it("normalizes and persists routing config", async () => {
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-routing-"));
+      const saved = await setVoiceWakeRoutingConfig(
+        {
+          defaultTarget: { mode: "current" },
+          routes: [
+            { trigger: "  Hello   Bot  ", target: { agentId: "main" } },
+            { trigger: "", target: { sessionKey: "agent:main:main" } },
+          ],
+        },
+        baseDir,
+      );
+      expect(saved.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
+      expect(saved.updatedAtMs).toBeGreaterThan(0);
+
+      const loaded = await loadVoiceWakeRoutingConfig(baseDir);
+      expect(loaded.routes).toEqual([{ trigger: "hello bot", target: { agentId: "main" } }]);
+    });
+
+    it("resolves routes by normalized trigger", () => {
+      const result = resolveVoiceWakeRouteByTrigger({
+        trigger: "  HELLO   BOT ",
+        config: {
+          version: 1,
+          defaultTarget: { mode: "current" },
+          routes: [{ trigger: "hello bot", target: { sessionKey: "agent:main:main" } }],
+          updatedAtMs: 0,
+        },
+      });
+      expect(result).toEqual({ sessionKey: "agent:main:main" });
+      expect(normalizeVoiceWakeTriggerWord("  X  Y ")).toBe("x y");
     });
   });
 
