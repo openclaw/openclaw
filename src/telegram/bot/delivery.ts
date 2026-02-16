@@ -26,6 +26,7 @@ import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramThreadParams,
+  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   type TelegramThreadSpec,
 } from "./helpers.js";
@@ -309,6 +310,16 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
+  const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
+    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const fetched = await fetchRemoteMedia({
+      url,
+      fetchImpl,
+      filePathHint: filePath,
+    });
+    const originalName = fetched.fileName ?? filePath;
+    return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
+  };
 
   // Handle stickers separately - only static stickers (WEBP) are supported
   if (msg.sticker) {
@@ -333,20 +344,7 @@ export async function resolveMedia(
         logVerbose("telegram: fetch not available for sticker download");
         return null;
       }
-      const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-      const fetched = await fetchRemoteMedia({
-        url,
-        fetchImpl,
-        filePathHint: file.file_path,
-      });
-      const originalName = fetched.fileName ?? file.file_path;
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        maxBytes,
-        originalName,
-      );
+      const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
 
       // Check sticker cache for existing description
       const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
@@ -431,30 +429,8 @@ export async function resolveMedia(
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const fetched = await fetchRemoteMedia({
-    url,
-    fetchImpl,
-    filePathHint: file.file_path,
-  });
-  const originalName = fetched.fileName ?? file.file_path;
-  const saved = await saveMediaBuffer(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    maxBytes,
-    originalName,
-  );
-  let placeholder = "<media:document>";
-  if (msg.photo) {
-    placeholder = "<media:image>";
-  } else if (msg.video) {
-    placeholder = "<media:video>";
-  } else if (msg.video_note) {
-    placeholder = "<media:video>";
-  } else if (msg.audio || msg.voice) {
-    placeholder = "<media:audio>";
-  }
+  const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+  const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
 

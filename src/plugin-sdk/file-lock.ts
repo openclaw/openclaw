@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPidAlive } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
   retries: {
@@ -37,18 +38,6 @@ function resolveHeldLocks(): Map<string, HeldLock> {
 
 const HELD_LOCKS = resolveHeldLocks();
 
-function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function computeDelayMs(retries: FileLockOptions["retries"], attempt: number): number {
   const base = Math.min(
     retries.maxTimeout,
@@ -85,7 +74,7 @@ async function resolveNormalizedFilePath(filePath: string): Promise<string> {
 
 async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
   const payload = await readLockPayload(lockPath);
-  if (payload?.pid && !isAlive(payload.pid)) {
+  if (payload?.pid && !isPidAlive(payload.pid)) {
     return true;
   }
   if (payload?.createdAt) {
