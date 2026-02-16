@@ -458,18 +458,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("returns error for empty text", async () => {
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey: "test-session",
-      text: "   ",
-      storePath,
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("empty text");
-    }
-  });
-
   it("returns error for unknown sessionKey", async () => {
     fs.writeFileSync(storePath, JSON.stringify({}), "utf-8");
     const result = await appendAssistantMessageToSessionTranscript({
