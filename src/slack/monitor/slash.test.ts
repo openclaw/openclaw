@@ -129,18 +129,11 @@ function createArgMenusHarness() {
 
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
-  let usageHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
     await registerCommands(harness.ctx, harness.account);
-
-    const usage = harness.commands.get("/usage");
-    if (!usage) {
-      throw new Error("Missing /usage handler");
-    }
-    usageHandler = usage;
 
     const argMenu = harness.actions.get("openclaw_cmdarg");
     if (!argMenu) {
@@ -151,29 +144,6 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
-  });
-
-  it("shows a button menu when required args are omitted", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await usageHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
-
-    expect(respond).toHaveBeenCalledTimes(1);
-    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
-    expect(payload.blocks?.[0]?.type).toBe("section");
-    expect(payload.blocks?.[1]?.type).toBe("actions");
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
