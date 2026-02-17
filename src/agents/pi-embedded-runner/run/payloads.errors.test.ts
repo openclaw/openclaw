@@ -291,6 +291,22 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it("does not suppress non-messageId react input errors", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "message",
+        meta: "react · to=group:123",
+        error: "emoji required",
+        mutatingAction: true,
+        actionFingerprint: "tool=message|action=react|to=group:123",
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("emoji required");
+  });
+
   it("shows mutating tool errors even when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
