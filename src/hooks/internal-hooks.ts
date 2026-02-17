@@ -32,6 +32,7 @@ export type MessageReceivedHookEvent = InternalHookEvent & {
     channel: string;
     senderId: string;
     channelId: string;
+    messageId?: string;
     messageText: string;
   };
 };

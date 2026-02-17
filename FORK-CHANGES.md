@@ -122,7 +122,7 @@ Operational checklist when running this fork with [OpenClaw-Foundry](https://git
 
 - **Typing on message receive** — The Discord monitor now sends a typing indicator as soon as a non-empty message is accepted for processing (in addition to the existing typing on reply start). Implemented in `src/discord/monitor/message-handler.process.ts` via `sendTyping({ client, channelId: message.channelId })` right after the empty-text check.
 - **Internal hook events `message:received` and `message:sent`** — New event type `"message"` added to the internal hook system (`src/hooks/internal-hooks.ts`) with:
-  - **`message:received`**: fired at the start of Discord message processing with context `channel`, `senderId`, `channelId`, `messageText`.
+  - **`message:received`**: fired at the start of Discord message processing with context `channel`, `senderId`, `channelId`, `messageId`, `messageText`. `messageId` is required so downstream hooks (e.g. `discord-thinking-start`) can pass the Discord message id into reply/follow-up calls; omitting it caused Discord API to reject replies with HTTP 400 Bad Request. Set in `src/discord/monitor/message-handler.process.ts`; `MessageReceivedHookEvent` context type in `src/hooks/internal-hooks.ts` includes optional `messageId`.
   - **`message:sent`**: fired after each Discord reply is delivered with context `channel`, `sessionId`, `replyText`.
   - Handlers can register for `"message"`, `"message:received"`, or `"message:sent"` as with other hook types. Telegram can be wired similarly in `src/telegram/bot-message-dispatch.ts` and delivery if needed.
 
