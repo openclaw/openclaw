@@ -16,19 +16,14 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import {
-  DEFAULT_INPUT_FILE_MAX_BYTES,
-  DEFAULT_INPUT_FILE_MAX_CHARS,
-  DEFAULT_INPUT_FILE_MIMES,
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,
   DEFAULT_INPUT_MAX_REDIRECTS,
-  DEFAULT_INPUT_PDF_MAX_PAGES,
-  DEFAULT_INPUT_PDF_MAX_PIXELS,
-  DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
   DEFAULT_INPUT_TIMEOUT_MS,
   extractFileContentFromSource,
   extractImageContentFromSource,
   normalizeMimeList,
+  resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
   type InputImageSource,
@@ -109,6 +104,7 @@ function resolveResponsesLimits(
 ): ResolvedResponsesLimits {
   const files = config?.files;
   const images = config?.images;
+  const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
     maxUrlParts:
@@ -116,18 +112,8 @@ function resolveResponsesLimits(
         ? Math.max(0, Math.floor(config.maxUrlParts))
         : DEFAULT_MAX_URL_PARTS,
     files: {
-      allowUrl: files?.allowUrl ?? true,
+      ...fileLimits,
       urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
-      allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
-      maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
-      maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
-      maxRedirects: files?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
-      timeoutMs: files?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
-      pdf: {
-        maxPages: files?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
-        maxPixels: files?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
-        minTextChars: files?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
-      },
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
