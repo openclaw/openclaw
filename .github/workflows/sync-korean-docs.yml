@@ -1,0 +1,161 @@
+name: Sync Korean Docs
+
+# Triggers:
+# 1. After fork sync — when main gets updated from upstream
+# 2. Manual trigger — for on-demand sync
+# 3. Scheduled — daily check for upstream changes
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**/*.md", "docs/**/*.mdx"]
+  workflow_dispatch:
+    inputs:
+      max_files:
+        description: "Max files to process (0 = unlimited)"
+        default: "0"
+        type: string
+      model:
+        description: "Claude model to use"
+        default: "claude-sonnet-4-5-20250929"
+        type: string
+  schedule:
+    # Daily at 09:00 UTC — sync upstream then translate
+    - cron: "0 9 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Step 1: Sync fork's main with upstream (for scheduled runs)
+  sync-fork:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync fork with upstream
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream main
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          LOCAL_SHA=$(git rev-parse HEAD)
+          if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ]; then
+            echo "Already up to date."
+            echo "CHANGED=false" >> "$GITHUB_ENV"
+          else
+            git merge upstream/main --no-edit
+            git push origin main
+            echo "CHANGED=true" >> "$GITHUB_ENV"
+          fi
+    outputs:
+      changed: ${{ env.CHANGED }}
+
+  # Step 2: Translate changed docs
+  translate:
+    runs-on: ubuntu-latest
+    needs: [sync-fork]
+    # Run if: push event, manual trigger, or scheduled sync had changes
+    if: |
+      always() &&
+      (github.event_name == 'push' ||
+       github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'schedule' && needs.sync-fork.outputs.changed == 'true'))
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: korean
+          fetch-depth: 0  # need full history for diff
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch main branch
+        run: git fetch origin main
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Check for docs changes
+        id: check
+        run: |
+          # Read last sync SHA from state file
+          if [ -f docs/.i18n/sync-state.ko-KR.json ]; then
+            BASE_SHA=$(bun -e "console.log(JSON.parse(require('fs').readFileSync('docs/.i18n/sync-state.ko-KR.json','utf-8')).last_sync_sha)")
+          else
+            BASE_SHA=$(git merge-base origin/main korean)
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA"..origin/main -- 'docs/**/*.md' 'docs/**/*.mdx' | grep -v '/zh-CN/' | grep -v '/ko-KR/' | grep -v '/.i18n/' | wc -l | tr -d ' ')
+          echo "changed_count=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Found $CHANGED changed doc files since $BASE_SHA"
+
+      - name: Run translation sync
+        if: steps.check.outputs.changed_count != '0'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          MAX_ARG=""
+          MODEL_ARG=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.max_files }}" != "0" ]; then
+            MAX_ARG="--max ${{ inputs.max_files }}"
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.model }}" ]; then
+            MODEL_ARG="--model ${{ inputs.model }}"
+          fi
+
+          bun scripts/docs-sync-korean.ts --no-pr --verbose $MAX_ARG $MODEL_ARG
+
+      - name: Create PR
+        if: steps.check.outputs.changed_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MAIN_SHA=$(git rev-parse origin/main)
+          SHORT_SHA=${MAIN_SHA:0:10}
+          DATE=$(date +%Y-%m-%d)
+          BRANCH="sync/korean-${DATE}-${SHORT_SHA:0:7}"
+
+          # Check if there are actual changes to commit
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add docs/
+          git commit -m "docs(i18n): sync Korean translations to ${SHORT_SHA}
+
+          Automated sync of Korean translations with latest English doc changes.
+          Base: ${{ steps.check.outputs.base_sha }} → ${MAIN_SHA}"
+
+          git push -u origin "$BRANCH"
+
+          # Count changes by type
+          BASE="${{ steps.check.outputs.base_sha }}"
+          ADDED=$(git diff --diff-filter=A --name-only "$BASE"..origin/main -- 'docs/**/*.md' | grep -v '/zh-CN/' | grep -v '/ko-KR/' | grep -v '/.i18n/' | wc -l | tr -d ' ')
+          MODIFIED=$(git diff --diff-filter=M --name-only "$BASE"..origin/main -- 'docs/**/*.md' | grep -v '/zh-CN/' | grep -v '/ko-KR/' | grep -v '/.i18n/' | wc -l | tr -d ' ')
+          DELETED=$(git diff --diff-filter=D --name-only "$BASE"..origin/main -- 'docs/**/*.md' | grep -v '/zh-CN/' | grep -v '/ko-KR/' | grep -v '/.i18n/' | wc -l | tr -d ' ')
+
+          gh pr create \
+            --base korean \
+            --title "docs(i18n): sync Korean translations (${DATE})" \
+            --body "$(cat <<EOF
+          ## Summary
+          - Synced Korean doc translations with English changes from main
+          - Base SHA: \`${{ steps.check.outputs.base_sha }}\` → \`${MAIN_SHA}\`
+          - Files: ${ADDED} added, ${MODIFIED} modified, ${DELETED} deleted
+
+          ## Review checklist
+          - [ ] Spot-check translated content for accuracy
+          - [ ] Verify code blocks and links are preserved
+          - [ ] Check frontmatter values are correctly translated
+
+          🤖 Generated by \`scripts/docs-sync-korean.ts\` via GitHub Actions
+          EOF
+          )"
