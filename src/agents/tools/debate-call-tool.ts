@@ -10,13 +10,13 @@
  * - EmergentMind critique & revision synthesis
  */
 
-import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import type { AnyAgentTool } from "./common.js";
+import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, readNumberParam } from "./common.js";
 import { extractAssistantText } from "./sessions-helpers.js";
 import {
