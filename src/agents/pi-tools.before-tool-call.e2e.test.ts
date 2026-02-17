@@ -177,7 +177,13 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     const withAbort = wrapToolWithAbortSignal(wrapped, abortController.signal);
     const [def] = toToolDefinitions([withAbort]);
 
-    await def.execute("call-abort-dedup", { command: "ls" }, undefined, undefined, undefined);
+    await def.execute(
+      "call-abort-dedup",
+      { command: "ls" },
+      undefined,
+      undefined,
+      {} as Parameters<typeof def.execute>[4],
+    );
 
     expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(1);
   });
