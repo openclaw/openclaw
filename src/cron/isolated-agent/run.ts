@@ -589,7 +589,10 @@ export async function runCronIsolatedAgentTurn(params: {
     // identity, or structured content, prefer direct outbound delivery to send
     // the actual cron output without summarization.
     const hasExplicitDeliveryTarget = Boolean(deliveryPlan.to);
-    if (resolvedDelivery.to && (deliveryPayloadHasStructuredContent || identity || hasExplicitDeliveryTarget)) {
+    if (
+      resolvedDelivery.to &&
+      (deliveryPayloadHasStructuredContent || identity || hasExplicitDeliveryTarget)
+    ) {
       try {
         const payloadsForDelivery =
           deliveryPayloadHasStructuredContent && deliveryPayloads.length > 0

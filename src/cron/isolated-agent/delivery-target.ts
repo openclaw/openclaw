@@ -1,5 +1,5 @@
-import type { ChannelId } from "../../channels/plugins/types.js";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -72,7 +72,7 @@ export async function resolveDeliveryTarget(
       if (!getChannelPlugin(preliminary.channel)) {
         const alt = listChannelPlugins().find((p) => p.outbound);
         if (alt) {
-          fallbackChannel = alt.id as Exclude<OutboundChannel, "none">;
+          fallbackChannel = alt.id;
         }
       }
     }

@@ -1,7 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CliDeps } from "../cli/deps.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -16,6 +16,7 @@ function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     sendMessageWhatsApp: vi.fn(),
     sendMessageTelegram: vi.fn(),
     sendMessageDiscord: vi.fn(),
+    sendMessageSlack: vi.fn(),
     sendMessageSignal: vi.fn(),
     sendMessageIMessage: vi.fn(),
     ...overrides,

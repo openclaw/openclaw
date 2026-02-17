@@ -1,7 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
-import type { CronEvent } from "./service.js";
+import type { CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
 
@@ -157,7 +156,7 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       fsState.entries.delete(absInMock(p));
     },
-  } satisfies typeof actual.promises;
+  } as unknown as typeof actual.promises;
 
   const wrapped = { ...actual, promises };
   return { ...wrapped, default: wrapped };
@@ -192,50 +191,8 @@ beforeEach(() => {
   ensureDir(fixturesRoot);
 });
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-function createCronEventHarness() {
-  const events: CronEvent[] = [];
-  const waiters: Array<{
-    predicate: (evt: CronEvent) => boolean;
-    deferred: ReturnType<typeof createDeferred<CronEvent>>;
-  }> = [];
-
-  const onEvent = (evt: CronEvent) => {
-    events.push(evt);
-    for (let i = waiters.length - 1; i >= 0; i -= 1) {
-      const waiter = waiters[i];
-      if (waiter && waiter.predicate(evt)) {
-        waiters.splice(i, 1);
-        waiter.deferred.resolve(evt);
-      }
-    }
-  };
-
-  const waitFor = (predicate: (evt: CronEvent) => boolean) => {
-    for (const evt of events) {
-      if (predicate(evt)) {
-        return Promise.resolve(evt);
-      }
-    }
-    const deferred = createDeferred<CronEvent>();
-    waiters.push({ predicate, deferred });
-    return deferred.promise;
-  };
-
-  return { onEvent, waitFor, events };
-}
-
 async function createWakeModeNowMainHarness(options: {
-  runHeartbeatOnce: ReturnType<typeof vi.fn>;
+  runHeartbeatOnce: NonNullable<CronServiceDeps["runHeartbeatOnce"]>;
 }) {
   ensureDir(fixturesRoot);
   const store = await makeStorePath();
@@ -274,9 +231,7 @@ async function addWakeModeNowMainSystemEventJob(
 
 describe("CronService – non-default agent main-session jobs", () => {
   it("runs main-session system-event job for default agent via heartbeat", async () => {
-    const runHeartbeatOnce = vi.fn(
-      async () => ({ status: "ran" as const, durationMs: 1 }),
-    );
+    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     const { store, cron, enqueueSystemEvent } = await createWakeModeNowMainHarness({
       runHeartbeatOnce,
     });
@@ -298,13 +253,10 @@ describe("CronService – non-default agent main-session jobs", () => {
   });
 
   it("runs heartbeat for non-default agent when cron bypasses disabled check", async () => {
-    const runHeartbeatOnce = vi.fn(
-      async () => ({ status: "ran" as const, durationMs: 1 }),
-    );
-    const { store, cron, enqueueSystemEvent } =
-      await createWakeModeNowMainHarness({
-        runHeartbeatOnce,
-      });
+    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    const { store, cron, enqueueSystemEvent } = await createWakeModeNowMainHarness({
+      runHeartbeatOnce,
+    });
     const job = await addWakeModeNowMainSystemEventJob(cron, {
       name: "non-default agent cron bypass",
       agentId: "docalist",
@@ -313,9 +265,7 @@ describe("CronService – non-default agent main-session jobs", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expect(runHeartbeatOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "docalist" }),
-    );
+    expect(runHeartbeatOnce).toHaveBeenCalledWith(expect.objectContaining({ agentId: "docalist" }));
     // System event must be enqueued
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "hello",
@@ -330,9 +280,7 @@ describe("CronService – non-default agent main-session jobs", () => {
   });
 
   it("runs main-session system-event job for non-default agent when heartbeat returns ran", async () => {
-    const runHeartbeatOnce = vi.fn(
-      async () => ({ status: "ran" as const, durationMs: 1 }),
-    );
+    const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     const { store, cron, enqueueSystemEvent } = await createWakeModeNowMainHarness({
       runHeartbeatOnce,
     });
