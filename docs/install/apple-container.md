@@ -67,13 +67,9 @@ Additional requirements:
 
 ## Quick start (recommended)
 
-**Before you start:** Install Apple Container (Apple's official container runtime):
+**Before you start:** Install Apple Container (Apple's official container runtime) as mentioned in the official [Apple Container github repo](https://github.com/apple/container).
 
-```bash
-brew install container
-```
-
-The script will automatically detect the `container` command and use it. From the repository root:
+The below script will automatically detect the `container` command and use it. From the repository root:
 
 ```bash
 ./apple-container-setup.sh
