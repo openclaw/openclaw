@@ -1,6 +1,6 @@
 ---
 name: mindgardener
-description: Persistent memory layer for AI agents — wiki-style knowledge graph with surprise-driven consolidation.
+description: Long-term memory for AI agents. Reads chat logs and builds a wiki of people, projects & events. No database — just text files.
 homepage: https://github.com/widingmarcus-cyber/mindgardener
 metadata:
   {
@@ -24,9 +24,9 @@ metadata:
 
 # MindGardener
 
-Persistent memory for AI agents. Extracts entities from daily logs, builds a wiki-style knowledge graph, and uses surprise scoring to decide what's worth remembering.
+Long-term memory for AI agents. Reads your agent's daily logs and automatically builds a wiki of everyone and everything it encounters. No database needed — just text files.
 
-"Memory isn't a hard drive — it's a garden."
+"Your agent forgets everything between sessions. MindGardener fixes that."
 
 ## Setup
 
