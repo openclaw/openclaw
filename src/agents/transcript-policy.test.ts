@@ -39,4 +39,33 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
   });
+
+  it("enables repairToolUseResultPairing for direct MiniMax provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax",
+      modelId: "MiniMax-M2.5",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.repairToolUseResultPairing).toBe(true);
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+
+  it("enables repairToolUseResultPairing for MiniMax model behind a proxy", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "unleashed-openai",
+      modelId: "minimax-m2.5-free",
+      modelApi: "openai-responses",
+    });
+    expect(policy.repairToolUseResultPairing).toBe(true);
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
+
+  it("enables repairToolUseResultPairing for MiniMax-CN provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "minimax-cn",
+      modelId: "MiniMax-M2.5",
+    });
+    expect(policy.repairToolUseResultPairing).toBe(true);
+    expect(policy.allowSyntheticToolResults).toBe(true);
+  });
 });
