@@ -75,13 +75,13 @@ describe("heartbeat transcript pruning", () => {
       });
 
       // Run heartbeat
-      const cfg: OpenClawConfig = {
+      const cfg = {
         version: 1,
         model: "test-model",
         agent: { workspace: tmpDir },
         sessionStore: storePath,
-        channels: { telegram: { showOk: true, showAlerts: true } },
-      };
+        channels: { telegram: {} },
+      } as unknown as OpenClawConfig;
 
       await runHeartbeatOnce({
         agentId: undefined,
@@ -123,13 +123,13 @@ describe("heartbeat transcript pruning", () => {
       });
 
       // Run heartbeat
-      const cfg: OpenClawConfig = {
+      const cfg = {
         version: 1,
         model: "test-model",
         agent: { workspace: tmpDir },
         sessionStore: storePath,
-        channels: { telegram: { showOk: true, showAlerts: true } },
-      };
+        channels: { telegram: {} },
+      } as unknown as OpenClawConfig;
 
       await runHeartbeatOnce({
         agentId: undefined,

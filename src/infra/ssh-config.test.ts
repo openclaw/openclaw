@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
@@ -64,13 +64,15 @@ describe("ssh-config", () => {
   });
 
   it("returns null when ssh -G fails", async () => {
-    spawnMock.mockImplementationOnce(() => {
-      const { child } = createMockSpawnChild();
-      process.nextTick(() => {
-        child.emit("exit", 1);
-      });
-      return child;
-    });
+    spawnMock.mockImplementationOnce(
+      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+        const { child } = createMockSpawnChild();
+        process.nextTick(() => {
+          child.emit("exit", 1);
+        });
+        return child as unknown as ChildProcess;
+      },
+    );
 
     const { resolveSshConfig } = await import("./ssh-config.js");
     const config = await resolveSshConfig({ user: "me", host: "bad-host", port: 22 });
