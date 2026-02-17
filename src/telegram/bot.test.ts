@@ -110,7 +110,7 @@ describe("createTelegramBot", () => {
     }>;
     const skillCommands = resolveSkillCommands(config);
     const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
-      command: command.name,
+      command: command.name.replace(/-/g, "_"),
       description: command.description,
     }));
     const nativeStatus = native.find((command) => command.command === "status");
