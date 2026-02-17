@@ -57,7 +57,7 @@ describe("resolveDiscordUserAllowlist", () => {
     });
   });
 
-  it("returns unresolved with note when guild lookup fails for usernames", async () => {
+  it("returns unresolved when guild lookup fails for usernames", async () => {
     const results = await resolveDiscordUserAllowlist({
       token: "bad-token",
       entries: ["tonic_1"],
@@ -67,7 +67,6 @@ describe("resolveDiscordUserAllowlist", () => {
     expect(results[0]).toMatchObject({
       input: "tonic_1",
       resolved: false,
-      note: "guild lookup failed",
     });
   });
 

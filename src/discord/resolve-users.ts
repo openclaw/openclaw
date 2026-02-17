@@ -112,9 +112,8 @@ export async function resolveDiscordUserAllowlist(params: {
       try {
         guilds = await listGuilds(token, fetcher);
       } catch {
-        // API unreachable or token invalid — mark remaining username entries as unresolved
-        results.push({ input, resolved: false, note: "guild lookup failed" });
-        continue;
+        // API unreachable or token invalid — set empty sentinel to skip further attempts
+        guilds = [];
       }
     }
 
