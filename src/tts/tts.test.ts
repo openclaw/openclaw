@@ -1,7 +1,8 @@
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -54,12 +55,36 @@ const {
   resolveEdgeOutputFormat,
 } = _test;
 
+const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
+  role: "assistant",
+  content,
+  api: "openai-completions",
+  provider: "openai",
+  model: "gpt-4o-mini",
+  usage: {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  },
+  stopReason: "stop",
+  timestamp: Date.now(),
+});
+
 describe("tts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Summary" }],
-    });
+    vi.mocked(completeSimple).mockResolvedValue(
+      mockAssistantMessage([{ type: "text", text: "Summary" }]),
+    );
   });
 
   describe("isValidVoiceId", () => {
@@ -165,7 +190,7 @@ describe("tts", () => {
   });
 
   describe("resolveEdgeOutputFormat", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -223,7 +248,7 @@ describe("tts", () => {
   });
 
   describe("summarizeText", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -231,9 +256,9 @@ describe("tts", () => {
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue({
-        content: [{ type: "text", text: mockSummary }],
-      });
+      vi.mocked(completeSimple).mockResolvedValue(
+        mockAssistantMessage([{ type: "text", text: mockSummary }]),
+      );
 
       const longText = "A".repeat(2000);
       const result = await summarizeText({
@@ -268,7 +293,7 @@ describe("tts", () => {
     });
 
     it("uses summaryModel override when configured", async () => {
-      const cfg = {
+      const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
@@ -330,9 +355,7 @@ describe("tts", () => {
     });
 
     it("throws error when no summary is returned", async () => {
-      vi.mocked(completeSimple).mockResolvedValue({
-        content: [],
-      });
+      vi.mocked(completeSimple).mockResolvedValue(mockAssistantMessage([]));
 
       await expect(
         summarizeText({
@@ -346,9 +369,9 @@ describe("tts", () => {
     });
 
     it("throws error when summary content is empty", async () => {
-      vi.mocked(completeSimple).mockResolvedValue({
-        content: [{ type: "text", text: "   " }],
-      });
+      vi.mocked(completeSimple).mockResolvedValue(
+        mockAssistantMessage([{ type: "text", text: "   " }]),
+      );
 
       await expect(
         summarizeText({
@@ -363,7 +386,7 @@ describe("tts", () => {
   });
 
   describe("getTtsProvider", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -415,7 +438,7 @@ describe("tts", () => {
   });
 
   describe("maybeApplyTtsToPayload", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {
         tts: {
@@ -445,11 +468,11 @@ describe("tts", () => {
       }
     };
 
-    const taggedCfg = {
+    const taggedCfg: OpenClawConfig = {
       ...baseCfg,
       messages: {
-        ...baseCfg.messages,
-        tts: { ...baseCfg.messages.tts, auto: "tagged" },
+        ...baseCfg.messages!,
+        tts: { ...baseCfg.messages!.tts, auto: "tagged" },
       },
     };
 
