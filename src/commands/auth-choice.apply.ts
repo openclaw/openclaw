@@ -13,7 +13,7 @@ import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
 import { applyAuthChoiceVllm } from "./auth-choice.apply.vllm.js";
 import { applyAuthChoiceXAI } from "./auth-choice.apply.xai.js";
-import type { AuthChoice } from "./onboard-types.js";
+import type { AuthChoice, StepfunEndpoint } from "./onboard-types.js";
 
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;
@@ -29,6 +29,7 @@ export type ApplyAuthChoiceParams = {
     cloudflareAiGatewayAccountId?: string;
     cloudflareAiGatewayGatewayId?: string;
     cloudflareAiGatewayApiKey?: string;
+    stepfunEndpoint?: StepfunEndpoint;
     xaiApiKey?: string;
   };
 };
