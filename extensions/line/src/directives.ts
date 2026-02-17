@@ -1,4 +1,4 @@
-import type { LineChannelData, LineFlexMessagePayload } from "./types.js";
+import type { LineChannelData } from "openclaw/plugin-sdk";
 
 /**
  * Parses embedded directives like [[quick_replies: ...]] from the text.
