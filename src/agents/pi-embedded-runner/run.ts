@@ -979,6 +979,7 @@ export async function runEmbeddedPiAgent(
             toolResultFormat: resolvedToolResultFormat,
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
+            isHeartbeat: params.isHeartbeat,
           });
 
           // Timeout aborts can leave the run without any assistant payloads.

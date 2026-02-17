@@ -1,9 +1,14 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../../../auto-reply/tokens.js";
+import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -12,7 +17,6 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -20,8 +24,8 @@ import {
 } from "../../pi-embedded-utils.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
-type ToolMetaEntry = { toolName: string; meta?: string };
-type LastToolError = {
+export type ToolMetaEntry = { toolName: string; meta?: string };
+export type LastToolError = {
   toolName: string;
   meta?: string;
   error?: string;
@@ -77,6 +81,7 @@ export function buildEmbeddedRunPayloads(params: {
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
+  isHeartbeat?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -257,7 +262,13 @@ export function buildEmbeddedRunPayloads(params: {
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
-    if (shouldShowToolError) {
+    //
+    // However, if this is a heartbeat run and the agent explicitly signaled HEARTBEAT_OK,
+    // we trust the agent's decision that no attention is needed, even if a tool failed.
+    const isHeartbeatOk =
+      params.isHeartbeat && replyItems.some((item) => item.text?.includes(HEARTBEAT_TOKEN));
+
+    if (shouldShowToolError && !isHeartbeatOk) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,

@@ -380,6 +380,7 @@ export async function runAgentTurnWithFallback(params: {
                 : undefined,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
+            isHeartbeat: params.isHeartbeat,
             onToolResult: onToolResult
               ? (payload) => {
                   // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
