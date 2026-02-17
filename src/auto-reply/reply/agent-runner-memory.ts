@@ -16,7 +16,12 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import {
+  buildEmbeddedContextFromTemplate,
+  buildTemplateSenderContext,
+  resolveEnforceFinalTag,
+  resolveRunAuthProfile,
+} from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
@@ -107,28 +112,16 @@ export async function runMemoryFlushIfNeeded(params: {
         resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
       ),
       run: (provider, model) => {
-        const authProfileId =
-          provider === params.followupRun.run.provider
-            ? params.followupRun.run.authProfileId
-            : undefined;
+        const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
+        const embeddedContext = buildEmbeddedContextFromTemplate({
+          run: params.followupRun.run,
+          sessionCtx: params.sessionCtx,
+          hasRepliedRef: params.opts?.hasRepliedRef,
+        });
+        const senderContext = buildTemplateSenderContext(params.sessionCtx);
         return runEmbeddedPiAgent({
-          sessionId: params.followupRun.run.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.followupRun.run.agentId,
-          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-          agentAccountId: params.sessionCtx.AccountId,
-          messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-          messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
-          // Provider threading context for tool auto-injection
-          ...buildThreadingToolContext({
-            sessionCtx: params.sessionCtx,
-            config: params.followupRun.run.config,
-            hasRepliedRef: params.opts?.hasRepliedRef,
-          }),
-          senderId: params.sessionCtx.SenderId?.trim() || undefined,
-          senderName: params.sessionCtx.SenderName?.trim() || undefined,
-          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
+          ...embeddedContext,
+          ...senderContext,
           sessionFile: params.followupRun.run.sessionFile,
           workspaceDir: params.followupRun.run.workspaceDir,
           agentDir: params.followupRun.run.agentDir,
@@ -143,10 +136,7 @@ export async function runMemoryFlushIfNeeded(params: {
           enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
           provider,
           model,
-          authProfileId,
-          authProfileIdSource: authProfileId
-            ? params.followupRun.run.authProfileIdSource
-            : undefined,
+          ...authProfile,
           thinkLevel: params.followupRun.run.thinkLevel,
           verboseLevel: params.followupRun.run.verboseLevel,
           reasoningLevel: params.followupRun.run.reasoningLevel,

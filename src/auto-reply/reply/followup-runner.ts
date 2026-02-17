@@ -15,6 +15,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -135,8 +136,7 @@ export function createFollowupRunner(params: {
             resolveAgentIdFromSessionKey(queued.run.sessionKey),
           ),
           run: (provider, model) => {
-            const authProfileId =
-              provider === queued.run.provider ? queued.run.authProfileId : undefined;
+            const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
@@ -162,8 +162,7 @@ export function createFollowupRunner(params: {
               enforceFinalTag: queued.run.enforceFinalTag,
               provider,
               model,
-              authProfileId,
-              authProfileIdSource: authProfileId ? queued.run.authProfileIdSource : undefined,
+              ...authProfile,
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
