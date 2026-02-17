@@ -283,7 +283,7 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(true);
   });
 
-  it("falls back to stale totals when freshness is missing to avoid skipping flush", () => {
+ it("falls back to stale totals when totalTokensFresh is explicitly false", () => {
     expect(
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 1 },
