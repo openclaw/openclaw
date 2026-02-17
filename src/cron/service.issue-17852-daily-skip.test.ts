@@ -25,10 +25,16 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
       running: false,
       timer: null,
       storeLoadedAtMs: nowMs,
+      storeFileMtimeMs: null,
+      op: Promise.resolve(),
+      warnedDisabled: false,
       deps: {
         storePath: "/mock/path",
         cronEnabled: true,
         nowMs: () => nowMs,
+        enqueueSystemEvent: () => {},
+        requestHeartbeatNow: () => {},
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
         log: {
           debug: () => {},
           info: () => {},
@@ -47,6 +53,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
       schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "daily task" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: threeAM - DAY_MS,
       updatedAtMs: threeAM - DAY_MS,
       state: {
