@@ -9,9 +9,39 @@ vi.mock("../agent-scope.js", () => ({
   resolveSessionAgentId: () => "agent-123",
 }));
 
+import {
+  validateCronAddParams,
+  validateCronListParams,
+  validateCronRemoveParams,
+  validateCronRunParams,
+  validateCronRunsParams,
+  validateCronStatusParams,
+  validateCronUpdateParams,
+  validateWakeParams,
+} from "../../gateway/protocol/index.js";
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  function readGatewayCall(index = 0) {
+    return callGatewayMock.mock.calls[index]?.[0] as {
+      method?: string;
+      params?: unknown;
+    };
+  }
+
+  function assertValid(
+    validator: { (data: unknown): boolean; errors?: Array<{ message?: string }> | null },
+    data: unknown,
+  ) {
+    const ok = validator(data);
+    if (!ok) {
+      const message = (validator.errors ?? [])
+        .map((entry) => entry?.message ?? "unknown")
+        .join("; ");
+      throw new Error(`validator rejected params: ${message}`);
+    }
+  }
+
   async function executeAddAndReadDelivery(params: {
     callId: string;
     agentSessionKey: string;
@@ -42,13 +72,13 @@ describe("cron tool", () => {
   it.each([
     [
       "update",
-      { action: "update", jobId: "job-1", patch: { foo: "bar" } },
-      { id: "job-1", patch: { foo: "bar" } },
+      { action: "update", jobId: "job-1", patch: { enabled: false } },
+      { id: "job-1", patch: { enabled: false } },
     ],
     [
       "update",
-      { action: "update", id: "job-2", patch: { foo: "bar" } },
-      { id: "job-2", patch: { foo: "bar" } },
+      { action: "update", id: "job-2", patch: { enabled: false } },
+      { id: "job-2", patch: { enabled: false } },
     ],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
@@ -310,6 +340,107 @@ describe("cron tool", () => {
     expect(call.params?.agentId).toBeNull();
   });
 
+  it("routes implicit systemEvent reminders to the current non-main session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    await tool.execute("call-implicit-current-session", {
+      action: "add",
+      job: {
+        name: "reminder-current-session",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "10 秒后提醒我开会" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: {
+        sessionTarget?: string;
+        payload?: { kind?: string; message?: string; text?: string };
+        delivery?: { mode?: string; channel?: string; to?: string };
+      };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.sessionTarget).toBe("isolated");
+    expect(call.params?.payload?.kind).toBe("agentTurn");
+    expect(call.params?.payload?.message).toContain("10 秒后提醒我开会");
+    expect(call.params?.payload?.text).toBeUndefined();
+    expect(call.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "buddy",
+    });
+    assertValid(validateCronAddParams, call.params);
+  });
+
+  it("rewrites explicit main systemEvent reminders to current non-main session delivery", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    await tool.execute("call-explicit-main", {
+      action: "add",
+      job: {
+        name: "reminder-main",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "still main" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: {
+        sessionTarget?: string;
+        payload?: { kind?: string; text?: string; message?: string };
+        delivery?: unknown;
+      };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.sessionTarget).toBe("isolated");
+    expect(call.params?.payload?.kind).toBe("agentTurn");
+    expect(call.params?.payload?.message).toContain("still main");
+    expect(call.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "buddy",
+    });
+    assertValid(validateCronAddParams, call.params);
+  });
+
+  it("keeps explicit webhook main/systemEvent jobs in non-main sessions", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    await tool.execute("call-explicit-main-webhook", {
+      action: "add",
+      job: {
+        name: "reminder-main-webhook",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "still main webhook" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: {
+        sessionTarget?: string;
+        payload?: { kind?: string; text?: string };
+        delivery?: { mode?: string; to?: string };
+      };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.sessionTarget).toBe("main");
+    expect(call.params?.payload).toEqual({ kind: "systemEvent", text: "still main webhook" });
+    expect(call.params?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+    assertValid(validateCronAddParams, call.params);
+  });
+
   it("infers delivery from threaded session keys", async () => {
     expect(
       await executeAddAndReadDelivery({
@@ -495,6 +626,51 @@ describe("cron tool", () => {
     });
   });
 
+  it("drops non-webhook delivery for main/systemEvent jobs", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-main-drop-delivery", {
+      action: "add",
+      job: {
+        name: "main-reminder",
+        schedule: { kind: "at", at: new Date(123).toISOString() },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "hello" },
+        delivery: { mode: "none", channel: "last", to: "target" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: unknown };
+    };
+    expect(call?.params?.delivery).toBeUndefined();
+  });
+
+  it("keeps webhook delivery for main/systemEvent jobs", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-main-webhook", {
+      action: "add",
+      job: {
+        name: "main-webhook",
+        schedule: { kind: "at", at: new Date(123).toISOString() },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "hello" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: unknown };
+    };
+    expect(call?.params?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+  });
+
   it("fails fast when webhook mode is missing delivery.to", async () => {
     const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
 
@@ -527,5 +703,389 @@ describe("cron tool", () => {
       }),
     ).rejects.toThrow('delivery.mode="webhook" requires delivery.to to be a valid http(s) URL');
     expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("sanitizes mixed schedule/payload fields before cron.add", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    const at = new Date(123).toISOString();
+    await tool.execute("call-sanitize-add", {
+      action: "add",
+      job: {
+        name: "sanitize-add",
+        schedule: {
+          kind: "at",
+          at,
+          everyMs: 60_000,
+          anchorMs: 1,
+          expr: "* * * * *",
+          tz: "UTC",
+        },
+        sessionTarget: "main",
+        payload: {
+          kind: "systemEvent",
+          text: "wake up",
+          message: "ignore me",
+          model: "gpt-test",
+          thinking: "high",
+          timeoutSeconds: 7,
+          allowUnsafeExternalContent: true,
+        },
+        delivery: {
+          mode: "announce",
+          channel: " last ",
+          to: " target ",
+          bestEffort: true,
+        },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: {
+        schedule?: unknown;
+        payload?: unknown;
+        delivery?: unknown;
+      };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.schedule).toEqual({ kind: "at", at });
+    expect(call.params?.payload).toEqual({ kind: "systemEvent", text: "wake up" });
+    expect(call.params?.delivery).toBeUndefined();
+  });
+
+  it("maps agentTurn payload text fallback to message", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-agentturn-fallback", {
+      action: "add",
+      job: {
+        name: "agentturn-fallback",
+        schedule: { kind: "at", at: new Date(456).toISOString(), everyMs: 5 },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          text: "do it",
+          model: "  gpt-5.2  ",
+          timeoutSeconds: 3.8,
+          allowUnsafeExternalContent: true,
+        },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: {
+        payload?: {
+          kind?: string;
+          message?: string;
+          text?: string;
+          model?: string;
+          timeoutSeconds?: number;
+          allowUnsafeExternalContent?: boolean;
+        };
+      };
+    };
+    expect(call.params?.payload).toEqual({
+      kind: "agentTurn",
+      message: "do it",
+      model: "gpt-5.2",
+      timeoutSeconds: 3,
+      allowUnsafeExternalContent: true,
+    });
+    expect(call.params?.payload?.text).toBeUndefined();
+  });
+
+  it("sanitizes update patch schedule/payload by kind and drops unknown keys", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-update-sanitize", {
+      action: "update",
+      jobId: "job-update",
+      patch: {
+        foo: "bar",
+        sessionTarget: " Main ",
+        wakeMode: "NOW",
+        schedule: {
+          kind: "cron",
+          expr: " 0 9 * * * ",
+          at: new Date(123).toISOString(),
+          everyMs: 10,
+          anchorMs: 2,
+          tz: " Asia/Shanghai ",
+        },
+        payload: {
+          kind: "systemEvent",
+          text: "  summarize  ",
+          message: "ignore",
+          model: "unused",
+        },
+        delivery: {
+          mode: "announce",
+          channel: " last ",
+          to: " room-1 ",
+          bestEffort: true,
+        },
+        state: {
+          nextRunAtMs: 100.8,
+          lastStatus: "ok",
+          lastError: "none",
+          consecutiveErrors: 2.4,
+          scheduleErrorCount: 99,
+        },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: {
+        patch?: Record<string, unknown>;
+      };
+    };
+    const patch = call.params?.patch as Record<string, unknown>;
+    expect("foo" in patch).toBe(false);
+    expect(patch.sessionTarget).toBe("main");
+    expect(patch.wakeMode).toBe("now");
+    expect(patch.schedule).toEqual({ kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" });
+    expect(patch.payload).toEqual({ kind: "systemEvent", text: "summarize" });
+    expect(patch.delivery).toEqual({
+      mode: "announce",
+      channel: "last",
+      to: "room-1",
+      bestEffort: true,
+    });
+    expect(patch.state).toEqual({
+      nextRunAtMs: 100,
+      lastStatus: "ok",
+      lastError: "none",
+      consecutiveErrors: 2,
+    });
+  });
+
+  it.each([
+    [
+      "at + systemEvent",
+      {
+        name: "at-system",
+        schedule: {
+          kind: "at",
+          at: new Date(111).toISOString(),
+          everyMs: 60_000,
+          expr: "* * * * *",
+        },
+        sessionTarget: "main",
+        wakeMode: "NOW",
+        payload: {
+          kind: "systemEvent",
+          text: "wake up",
+          message: "ignore me",
+          model: "unused",
+        },
+        extraField: "drop-me",
+      },
+    ],
+    [
+      "every + inferred main/systemEvent",
+      {
+        name: "every-system",
+        schedule: {
+          kind: "every",
+          everyMs: 901.7,
+          anchorMs: 50.4,
+          at: new Date(222).toISOString(),
+        },
+        payload: {
+          text: "tick",
+        },
+      },
+    ],
+    [
+      "cron + isolated/agentTurn",
+      {
+        name: "cron-agent",
+        schedule: {
+          kind: "cron",
+          expr: " */5 * * * * ",
+          tz: " UTC ",
+          at: new Date(333).toISOString(),
+        },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          text: "  summarize  ",
+          model: " gpt-5.2 ",
+          timeoutSeconds: 9.9,
+          allowUnsafeExternalContent: true,
+          channel: " telegram ",
+          to: " 123 ",
+          bestEffortDeliver: true,
+        },
+        delivery: {
+          mode: "announce",
+          channel: " last ",
+          to: " room ",
+          bestEffort: true,
+        },
+      },
+    ],
+  ])("emits gateway-valid cron.add params for %s", async (_label, job) => {
+    const tool = createCronTool();
+    await tool.execute("call-add-validator", {
+      action: "add",
+      job,
+    });
+
+    const call = readGatewayCall(0);
+    expect(call.method).toBe("cron.add");
+    assertValid(validateCronAddParams, call.params);
+  });
+
+  it.each([
+    [
+      "schedule+systemEvent patch",
+      {
+        schedule: {
+          kind: "cron",
+          expr: " 0 9 * * * ",
+          at: new Date(444).toISOString(),
+          everyMs: 5,
+          tz: " Asia/Shanghai ",
+        },
+        payload: {
+          kind: "systemEvent",
+          text: "  remind  ",
+          message: "ignore",
+        },
+        delivery: {
+          mode: "announce",
+          channel: " last ",
+          to: " room ",
+          bestEffort: true,
+        },
+        foo: "drop-me",
+      },
+    ],
+    [
+      "agentTurn model-only patch",
+      {
+        payload: {
+          kind: "agentTurn",
+          model: " gpt-5.2 ",
+          thinking: " high ",
+          timeoutSeconds: 8.8,
+        },
+      },
+    ],
+    [
+      "state-only patch",
+      {
+        state: {
+          nextRunAtMs: 100.9,
+          lastStatus: "ok",
+          lastError: "none",
+          consecutiveErrors: 3.2,
+          unknown: "drop-me",
+        },
+      },
+    ],
+  ])("emits gateway-valid cron.update params for %s", async (_label, patch) => {
+    const tool = createCronTool();
+    await tool.execute("call-update-validator", {
+      action: "update",
+      jobId: "job-validator",
+      patch,
+    });
+
+    const call = readGatewayCall(0);
+    expect(call.method).toBe("cron.update");
+    assertValid(validateCronUpdateParams, call.params);
+  });
+
+  it("emits gateway-valid params for status/list/remove/run/runs/wake", async () => {
+    const tool = createCronTool();
+
+    await tool.execute("call-status", { action: "status" });
+    assertValid(validateCronStatusParams, readGatewayCall(0).params);
+
+    await tool.execute("call-list", { action: "list", includeDisabled: true });
+    assertValid(validateCronListParams, readGatewayCall(1).params);
+
+    await tool.execute("call-remove", { action: "remove", jobId: "job-rm" });
+    assertValid(validateCronRemoveParams, readGatewayCall(2).params);
+
+    await tool.execute("call-run", { action: "run", jobId: "job-run", runMode: "due" });
+    assertValid(validateCronRunParams, readGatewayCall(3).params);
+
+    await tool.execute("call-runs", { action: "runs", id: "job-runs" });
+    assertValid(validateCronRunsParams, readGatewayCall(4).params);
+
+    await tool.execute("call-wake", { action: "wake", text: "wake up", mode: "now" });
+    assertValid(validateWakeParams, readGatewayCall(5).params);
+  });
+
+  it("falls back to default gateway timeout when timeoutMs is too small", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-timeout-default", {
+      action: "status",
+      timeoutMs: 0,
+    });
+
+    const call = readGatewayCall(0) as { timeoutMs?: number };
+    expect(call.timeoutMs).toBe(60_000);
+  });
+
+  it("uses explicit gateway timeout when timeoutMs is valid", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-timeout-explicit", {
+      action: "status",
+      timeoutMs: 5_000,
+    });
+
+    const call = readGatewayCall(0) as { timeoutMs?: number };
+    expect(call.timeoutMs).toBe(5_000);
+  });
+
+  it("exposes structured add-job schema to guide tool-call generation", () => {
+    const tool = createCronTool();
+    const properties =
+      (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+    const job = properties.job as
+      | {
+          type?: string;
+          required?: string[];
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+
+    expect(job?.type).toBe("object");
+    expect(job?.required ?? []).toEqual(
+      expect.arrayContaining(["name", "schedule", "sessionTarget", "payload"]),
+    );
+
+    const jobProps = job?.properties ?? {};
+    expect(jobProps.schedule).toBeDefined();
+    expect(jobProps.payload).toBeDefined();
+  });
+
+  it("keeps flat recovery fields in schema for non-frontier models", () => {
+    const tool = createCronTool();
+    const properties =
+      (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+
+    expect(properties.name).toBeDefined();
+    expect(properties.schedule).toBeDefined();
+    expect(properties.sessionTarget).toBeDefined();
+    expect(properties.payload).toBeDefined();
+    expect(properties.message).toBeDefined();
+    expect(properties.text).toBeDefined();
+  });
+
+  it("keeps provider-safe schema keywords", () => {
+    const tool = createCronTool();
+    const raw = JSON.stringify(tool.parameters);
+    expect(raw).not.toContain('"anyOf"');
+    expect(raw).not.toContain('"oneOf"');
+    expect(raw).not.toContain('"allOf"');
   });
 });
