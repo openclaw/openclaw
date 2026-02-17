@@ -185,9 +185,7 @@ describe("web session", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(inFlight).toBe(1);
 
-    if (typeof release === "function") {
-      release();
-    }
+    (release as (() => void) | null)?.();
 
     // let both queued saves complete
     await new Promise<void>((resolve) => setImmediate(resolve));

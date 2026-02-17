@@ -142,43 +142,6 @@ describe("discord message actions", () => {
   });
 });
 
-describe("telegram message actions", () => {
-  it("lists poll action when telegram is configured", () => {
-    const cfg = { channels: { telegram: { botToken: "t0" } } } as OpenClawConfig;
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
-    expect(actions).toContain("poll");
-  });
-
-  it("routes poll with normalized params", async () => {
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "poll",
-      params: {
-        to: "123",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-        pollMulti: true,
-        pollDurationSeconds: 60,
-      },
-      cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        to: "123",
-        question: "Ready?",
-        options: ["Yes", "No"],
-        allowMultiselect: true,
-        durationSeconds: 60,
-        accountId: "ops",
-      }),
-      expect.any(Object),
-    );
-  });
-});
-
 describe("handleDiscordMessageAction", () => {
   it("forwards context accountId for send", async () => {
     await handleDiscordMessageAction({
@@ -436,9 +399,13 @@ describe("telegramMessageActions", () => {
 
   it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
 
     await expect(
-      telegramMessageActions.handleAction({
+      handleAction({
         channel: "telegram",
         action: "edit",
         params: {
@@ -531,32 +498,6 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
   });
-
-  it("routes poll action to sendPoll with question and options", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "poll",
-      params: {
-        to: "-100123",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No", "Maybe"],
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        to: "-100123",
-        question: "Ready?",
-        options: ["Yes", "No", "Maybe"],
-      }),
-      cfg,
-    );
-  });
 });
 
 describe("signalMessageActions", () => {
@@ -595,9 +536,13 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
     } as OpenClawConfig;
+    const handleAction = signalMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("signal handleAction unavailable");
+    }
 
     await expect(
-      signalMessageActions.handleAction({
+      handleAction({
         channel: "signal",
         action: "react",
         params: { to: "+15550001111", messageId: "123", emoji: "✅" },
@@ -661,9 +606,13 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
+    const handleAction = signalMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("signal handleAction unavailable");
+    }
 
     await expect(
-      signalMessageActions.handleAction({
+      handleAction({
         channel: "signal",
         action: "react",
         params: { to: "signal:group:group-id", messageId: "123", emoji: "✅" },

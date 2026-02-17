@@ -558,6 +558,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
     });
   });
@@ -575,6 +578,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "note.ogg"));
     });
   });
@@ -808,6 +814,24 @@ describe("runMessageAction components parsing", () => {
     expect(result.kind).toBe("send");
     expect(handleAction).toHaveBeenCalled();
     expect(result.payload).toMatchObject({ ok: true, components });
+  });
+
+  it("throws on invalid components JSON strings", async () => {
+    await expect(
+      runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "discord",
+          target: "channel:123",
+          message: "hi",
+          components: "{not-json}",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/--components must be valid JSON/);
+
+    expect(handleAction).not.toHaveBeenCalled();
   });
 });
 

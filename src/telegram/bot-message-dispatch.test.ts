@@ -343,6 +343,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalled();
   });
 
+  it("does not force new message in partial mode when assistant message restarts", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "First response" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "After tool call" });
+        await dispatcherOptions.deliver({ text: "After tool call" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
   it("does not force new message on first assistant message start", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -388,6 +407,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     // Should force new message when reasoning ends
     expect(draftStream.forceNewMessage).toHaveBeenCalled();
+  });
+
+  it("does not force new message in partial mode when reasoning ends", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Let me check" });
+        await replyOptions?.onReasoningEnd?.();
+        await replyOptions?.onPartialReply?.({ text: "Here's the answer" });
+        await dispatcherOptions.deliver({ text: "Here's the answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
   it("does not force new message on reasoning end without previous output", async () => {

@@ -264,7 +264,7 @@ describe("createOllamaStreamFn", () => {
     try {
       const streamFn = createOllamaStreamFn("http://ollama-host:11434/v1/");
       const signal = new AbortController().signal;
-      const stream = streamFn(
+      const stream = await streamFn(
         {
           id: "qwen3:32b",
           api: "ollama",
@@ -321,7 +321,7 @@ describe("createOllamaStreamFn", () => {
 
     try {
       const streamFn = createOllamaStreamFn("http://ollama-host:11434");
-      const stream = streamFn(
+      const stream = await streamFn(
         {
           id: "qwen3:32b",
           api: "ollama",
