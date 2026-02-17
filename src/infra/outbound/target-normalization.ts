@@ -12,6 +12,10 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   const providerId = normalizeChannelId(provider);
   const plugin = providerId ? getChannelPlugin(providerId) : undefined;
   const normalized = plugin?.messaging?.normalizeTarget?.(raw) ?? (raw.trim() || undefined);
+  // unwrap { to } object if plugin returned it
+  if (normalized && typeof normalized === "object" && "to" in normalized) {
+    return (normalized as { to?: string }).to || undefined;
+  }
   return normalized || undefined;
 }
 
