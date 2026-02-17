@@ -17,6 +17,7 @@ import { defaultRuntime } from "../runtime.js";
 import { requiresMcpApproval, getMcpApprovalManager } from "./approvals.js";
 import type {
   McpJsonSchema,
+  McpServerConfig,
   McpServerConnection,
   McpToolCallResult,
   McpToolContent,
