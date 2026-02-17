@@ -6,12 +6,18 @@ import type {
 } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
-export const createTestRegistry = (channels: PluginRegistry["channels"] = []): PluginRegistry => ({
+type TestChannelRegistration = {
+  pluginId: string;
+  plugin: unknown;
+  source: string;
+};
+
+export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],
   typedHooks: [],
-  channels,
+  channels: channels as unknown as PluginRegistry["channels"],
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
