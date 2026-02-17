@@ -2,7 +2,7 @@
 /// Registers tools, hooks, CLI commands, and services for syncing with IC canisters.
 
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { parseConfig, icStorageConfigSchema, type IcStorageConfig } from "./config.js";
 import { IcClient } from "./ic-client.js";
 import {
@@ -104,7 +104,7 @@ const icStoragePlugin = {
             };
           }
         },
-      },
+      } as AnyAgentTool,
       { name: "vault_sync" },
     );
 
@@ -187,7 +187,7 @@ const icStoragePlugin = {
             };
           }
         },
-      },
+      } as AnyAgentTool,
       { name: "vault_recall" },
     );
 
@@ -227,7 +227,7 @@ const icStoragePlugin = {
             };
           }
         },
-      },
+      } as AnyAgentTool,
       { name: "vault_restore" },
     );
 
@@ -272,7 +272,7 @@ const icStoragePlugin = {
             };
           }
         },
-      },
+      } as AnyAgentTool,
       { name: "vault_status" },
     );
 
@@ -334,7 +334,7 @@ const icStoragePlugin = {
             };
           }
         },
-      },
+      } as AnyAgentTool,
       { name: "vault_audit" },
     );
 
@@ -387,8 +387,8 @@ const icStoragePlugin = {
         if (!cfg.canisterId) return;
         // Phase 2: wire to MemorySearchManager to pull session memories and sync.
         // No-op for now -- sync must be triggered manually via vault_sync tool or CLI.
-        api.logger.debug(
-          "IC Memory Vault: session_end hook registered (sync wiring pending Phase 2)",
+        api.logger.info?.(
+          "IC Memory Vault: session_end hook fired (sync wiring pending Phase 2)",
         );
       });
     }
@@ -414,8 +414,8 @@ const icStoragePlugin = {
       // Phase 2: wire to MemorySearchManager to pull conversation memories and sync.
       // No-op for now -- sync must be triggered manually via vault_sync tool or CLI.
       if (cfg.canisterId && cfg.syncOnAgentEnd) {
-        api.logger.debug(
-          "IC Memory Vault: agent_end hook registered (sync wiring pending Phase 2)",
+        api.logger.info?.(
+          "IC Memory Vault: agent_end hook fired (sync wiring pending Phase 2)",
         );
       }
     });

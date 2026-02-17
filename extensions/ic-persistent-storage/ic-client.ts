@@ -112,7 +112,8 @@ const ResultOkPrincipal = IDL.Variant({
 
 // -- IDL factories --
 
-const userVaultIdlFactory = ({ IDL: _IDL }: { IDL: typeof IDL }) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- InterfaceFactory param type from @dfinity/candid
+const userVaultIdlFactory = ({ IDL: _IDL }: any) => {
   return IDL.Service({
     store: IDL.Func([IDL.Text, IDL.Text, IDL.Vec(IDL.Nat8), IDL.Text], [ResultOkUnit], []),
     delete: IDL.Func([IDL.Text], [ResultOkUnit], []),
@@ -134,7 +135,8 @@ const userVaultIdlFactory = ({ IDL: _IDL }: { IDL: typeof IDL }) => {
   });
 };
 
-const factoryIdlFactory = ({ IDL: _IDL }: { IDL: typeof IDL }) => {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- InterfaceFactory param type from @dfinity/candid
+const factoryIdlFactory = ({ IDL: _IDL }: any) => {
   return IDL.Service({
     createVault: IDL.Func([], [ResultOkPrincipal], []),
     getVault: IDL.Func([], [IDL.Opt(IDL.Principal)], ["query"]),
@@ -344,7 +346,7 @@ export class IcClient {
     });
 
     const result = (await factory.getVault()) as [] | [Principal];
-    return result.length > 0 ? result[0] : null;
+    return result.length > 0 ? (result[0] ?? null) : null;
   }
 
   // -- Vault methods --
@@ -369,7 +371,7 @@ export class IcClient {
   async recall(key: string): Promise<MemoryEntryData | null> {
     const actor = await this.getVaultActor();
     const result = (await actor.recall(key)) as [] | [MemoryEntryData];
-    return result.length > 0 ? result[0] : null;
+    return result.length > 0 ? (result[0] ?? null) : null;
   }
 
   /// Delete a memory.
@@ -482,7 +484,8 @@ export class IcClient {
     return this.initAuthenticatedAgent();
   }
 
-  private async getVaultActor(): Promise<ReturnType<typeof Actor.createActor>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Actor.createActor returns untyped actor; methods accessed dynamically
+  private async getVaultActor(): Promise<any> {
     if (!this.config.canisterId) {
       throw new Error("Vault canister ID not configured. Run /vault-setup first.");
     }
