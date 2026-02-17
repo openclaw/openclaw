@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-import type { SessionFileEntry } from "./session-files.js";
-import type { MemorySource } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
@@ -20,6 +18,8 @@ import {
   type MemoryFileEntry,
 } from "./internal.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import type { SessionFileEntry } from "./session-files.js";
+import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -40,7 +40,12 @@ const vectorToBlob = (embedding: number[]): Buffer =>
 
 const log = createSubsystemLogger("memory");
 
-export class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+  protected abstract batchFailureCount: number;
+  protected abstract batchFailureLastError?: string;
+  protected abstract batchFailureLastProvider?: string;
+  protected abstract batchFailureLock: Promise<void>;
+
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
@@ -337,13 +342,13 @@ export class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: MemoryChunk[];
     source: MemorySource;
   }): {
-    agentId: string | undefined;
+    agentId: string;
     requests: TRequest[];
     wait: boolean;
     concurrency: number;
     pollIntervalMs: number;
     timeoutMs: number;
-    debug: (message: string, data: Record<string, unknown>) => void;
+    debug: (message: string, data?: Record<string, unknown>) => void;
   } {
     const { requests, chunks, source } = params;
     return {
@@ -353,7 +358,11 @@ export class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       concurrency: this.batch.concurrency,
       pollIntervalMs: this.batch.pollIntervalMs,
       timeoutMs: this.batch.timeoutMs,
-      debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+      debug: (message, data) =>
+        log.debug(
+          message,
+          data ? { ...data, source, chunks: chunks.length } : { source, chunks: chunks.length },
+        ),
     };
   }
 
