@@ -232,9 +232,20 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
 
     getContactId: async (displayName: string): Promise<string | null> => {
       try {
-        const resp = (await sendCommand("/contacts")) as { resp?: { contacts?: unknown[] } };
-        // Parse contacts response to find matching display name
-        return displayName; // Simplified — contact lookup by display name
+        const resp = (await sendCommand("/contacts")) as {
+          resp?: {
+            contacts?: Array<{
+              localDisplayName?: string;
+              displayName?: string;
+              contactId?: number | string;
+            }>;
+          };
+        };
+        const contacts = resp.resp?.contacts ?? [];
+        const match = contacts.find(
+          (c) => c.localDisplayName === displayName || c.displayName === displayName,
+        );
+        return match?.contactId != null ? String(match.contactId) : null;
       } catch {
         return null;
       }
