@@ -41,9 +41,14 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
   if (isActionEnabled("memberInfo")) {
     actions.add("member-info");
   }
-  if (isActionEnabled("emojiList")) {
+if (isActionEnabled("emojiList")) {
     actions.add("emoji-list");
   }
+
+  if (isActionEnabled("canvas")) {
+    actions.add("read-canvas");
+  }
+
   return Array.from(actions);
 }
 
