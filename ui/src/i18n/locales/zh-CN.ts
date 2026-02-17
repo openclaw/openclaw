@@ -61,6 +61,7 @@ export const zh_CN: TranslationMap = {
       sessionKey: "默认会话密钥",
       language: "语言",
       connectHint: "点击连接以应用连接更改。",
+      trustedProxy: "通过受信任代理认证。",
     },
     snapshot: {
       title: "快照",
