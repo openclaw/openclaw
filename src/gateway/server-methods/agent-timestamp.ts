@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../../config/types.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
-import { formatZonedTimestamp } from "../../auto-reply/envelope.js";
+import type { OpenClawConfig } from "../../config/types.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 
 /**
  * Cron jobs inject "Current time: ..." into their messages.
@@ -56,7 +56,7 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   const now = opts?.now ?? new Date();
   const timezone = opts?.timezone ?? "UTC";
 
-  const formatted = formatZonedTimestamp(now, timezone);
+  const formatted = formatZonedTimestamp(now, { timeZone: timezone });
   if (!formatted) {
     return message;
   }

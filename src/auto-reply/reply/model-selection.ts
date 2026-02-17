@@ -1,5 +1,3 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ThinkLevel } from "./directives.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -12,9 +10,11 @@ import {
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
+import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -93,7 +93,7 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
   return dist;
 }
 
-type StoredModelOverride = {
+export type StoredModelOverride = {
   provider?: string;
   model: string;
   source: "session" | "parent";
@@ -126,7 +126,7 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
-function resolveStoredModelOverride(params: {
+export function resolveStoredModelOverride(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -271,6 +271,9 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
+  /** True when heartbeat.model was explicitly resolved for this run.
+   *  In that case, skip session-stored overrides so the heartbeat selection wins. */
+  hasResolvedHeartbeatModelOverride?: boolean;
 }): Promise<ModelSelectionState> {
   const {
     cfg,
@@ -343,7 +346,11 @@ export async function createModelSelectionState(params: {
     sessionKey,
     parentSessionKey,
   });
-  if (storedOverride?.model) {
+  // Skip stored session model override only when an explicit heartbeat.model
+  // was resolved. Heartbeat runs without heartbeat.model should still inherit
+  // the regular session/parent model override behavior.
+  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  if (storedOverride?.model && !skipStoredOverride) {
     const candidateProvider = storedOverride.provider || defaultProvider;
     const key = modelKey(candidateProvider, storedOverride.model);
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {

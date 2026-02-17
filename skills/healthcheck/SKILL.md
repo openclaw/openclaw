@@ -18,7 +18,7 @@ Assess and harden the host running OpenClaw, then align it to a user-defined ris
 - Never claim OpenClaw changes the host firewall, SSH, or OS updates; it does not.
 - If role/identity is unknown, provide recommendations only.
 - Formatting: every set of user choices must be numbered so the user can reply with a single digit.
-- Ensure backups are enabled. Ask the user what backup system they use, check status, and (with explicit approval) offer to enable or configure backups appropriate to the OS.
+- System-level backups are recommended; try to verify status.
 
 ## Workflow (follow in order)
 
@@ -55,9 +55,11 @@ If you must ask, use non-technical prompts:
 - “Is disk encryption turned on (FileVault/BitLocker/LUKS)?”
 - “Are automatic security updates enabled?”
 - “How do you use this machine?”
-  1. Personal/workstation (mostly local dev)
-  2. Headless server (always on, accessed remotely)
-  3. Something else?
+  Examples:
+  - Personal machine shared with the assistant
+  - Dedicated local machine for the assistant
+  - Dedicated remote machine/server accessed remotely (always on)
+  - Something else?
 
 Only ask for the risk profile after system context is known.
 
@@ -74,7 +76,7 @@ If the user grants read-only permission, run the OS-appropriate checks by defaul
 
 ### 2) Run OpenClaw security audits (read-only)
 
-As part of the default read-only checks, run `openclaw security audit --deep` without a separate permission prompt. Only offer alternatives if the user requests them:
+As part of the default read-only checks, run `openclaw security audit --deep`. Only offer alternatives if the user requests them:
 
 1. `openclaw security audit` (faster, non-probing)
 2. `openclaw security audit --json` (structured output)
@@ -89,9 +91,7 @@ If browser control is enabled, recommend that 2FA be enabled on all important ac
 
 ### 3) Check OpenClaw version/update status (read-only)
 
-If the user grants permission, run `openclaw update status` by default. Otherwise, offer it (numbered):
-
-1. `openclaw update status`
+As part of the default read-only checks, run `openclaw update status`.
 
 Report the current channel and whether an update is available.
 
@@ -188,6 +188,14 @@ If the user says yes, ask for:
 - cadence (daily/weekly), preferred time window, and output location
 - whether to also schedule `openclaw update status`
 
+Use a stable cron job name so updates are deterministic. Prefer exact names:
+
+- `healthcheck:security-audit`
+- `healthcheck:update-status`
+
+Before creating, `openclaw cron list` and match on exact `name`. If found, `openclaw cron edit <id> ...`.
+If not found, `openclaw cron add --name <name> ...`.
+
 Also offer a periodic version check so the user can decide when to update (numbered):
 
 1. `openclaw update status` (preferred for source checkouts and channels)
@@ -216,15 +224,20 @@ Record:
 
 Redact secrets. Never log tokens or full credential contents.
 
-## Memory writes (required)
+## Memory writes (conditional)
+
+Only write to memory files when the user explicitly opts in and the session is a private/local workspace
+(per `docs/reference/templates/AGENTS.md`). Otherwise provide a redacted, paste-ready summary the user can
+decide to save elsewhere.
 
 Follow the durable-memory prompt format used by OpenClaw compaction:
 
 - Write lasting notes to `memory/YYYY-MM-DD.md`.
 
-After each audit/hardening run, append a short, dated summary to `memory/YYYY-MM-DD.md`
+After each audit/hardening run, if opted-in, append a short, dated summary to `memory/YYYY-MM-DD.md`
 (what was checked, key findings, actions taken, any scheduled cron jobs, key decisions,
 and all commands executed). Append-only: never overwrite existing entries.
+Redact sensitive host details (usernames, hostnames, IPs, serials, service names, tokens).
 If there are durable preferences or decisions (risk posture, allowed ports, update policy),
 also update `MEMORY.md` (long-term memory is optional and only used in private sessions).
 

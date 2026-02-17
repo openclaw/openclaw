@@ -1,5 +1,9 @@
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { escapeRegExp } from "../utils.js";
+import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -12,9 +16,6 @@ import type {
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
 
 export type {
   ChatCommandDefinition,
@@ -66,10 +67,6 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
   cachedTextAliasMap = map;
   cachedTextAliasCommands = commands;
   return map;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatCommandDefinition[] {

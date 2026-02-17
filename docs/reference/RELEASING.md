@@ -1,4 +1,5 @@
 ---
+title: "Release Checklist"
 summary: "Step-by-step release checklist for npm + macOS app"
 read_when:
   - Cutting a new npm release
@@ -106,6 +107,7 @@ Current npm plugin list (update as needed):
 - @openclaw/bluebubbles
 - @openclaw/diagnostics-otel
 - @openclaw/discord
+- @openclaw/feishu
 - @openclaw/lobster
 - @openclaw/matrix
 - @openclaw/msteams

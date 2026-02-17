@@ -1,5 +1,5 @@
-import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types";
-import { formatAgo, formatDurationMs, formatMs } from "./format";
+import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
+import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
 export function formatPresenceSummary(entry: PresenceEntry): string {
   const host = entry.host ?? "unknown";
@@ -11,14 +11,14 @@ export function formatPresenceSummary(entry: PresenceEntry): string {
 
 export function formatPresenceAge(entry: PresenceEntry): string {
   const ts = entry.ts ?? null;
-  return ts ? formatAgo(ts) : "n/a";
+  return ts ? formatRelativeTimestamp(ts) : "n/a";
 }
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
     return "n/a";
   }
-  return `${formatMs(ms)} (${formatAgo(ms)})`;
+  return `${formatMs(ms)} (${formatRelativeTimestamp(ms)})`;
 }
 
 export function formatSessionTokens(row: GatewaySessionRow) {
@@ -53,10 +53,11 @@ export function formatCronState(job: CronJob) {
 export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
-    return `At ${formatMs(s.atMs)}`;
+    const atMs = Date.parse(s.at);
+    return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
   }
   if (s.kind === "every") {
-    return `Every ${formatDurationMs(s.everyMs)}`;
+    return `Every ${formatDurationHuman(s.everyMs)}`;
   }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }
@@ -66,5 +67,18 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
   }
-  return `Agent: ${p.message}`;
+  const base = `Agent: ${p.message}`;
+  const delivery = job.delivery;
+  if (delivery && delivery.mode !== "none") {
+    const target =
+      delivery.mode === "webhook"
+        ? delivery.to
+          ? ` (${delivery.to})`
+          : ""
+        : delivery.channel || delivery.to
+          ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
+          : "";
+    return `${base} · ${delivery.mode}${target}`;
+  }
+  return base;
 }

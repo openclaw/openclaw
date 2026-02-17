@@ -1,4 +1,5 @@
 ---
+title: "BOOTSTRAP.md Template"
 summary: "First-run ritual for new agents"
 read_when:
   - Bootstrapping a workspace manually
@@ -41,16 +42,6 @@ Then open `SOUL.md` together and talk about:
 - Any boundaries or preferences
 
 Write it down. Make it real.
-
-## One-time system admin check
-
-Since this is a new install, run the recommended host healthcheck using the `healthcheck` skill.
-At minimum, run:
-
-- `openclaw security audit --deep`
-- `openclaw update status`
-
-Offer to set up an OpenClaw cron job for ongoing monitoring.
 
 ## Connect (Optional)
 

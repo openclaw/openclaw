@@ -1,16 +1,17 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { AssistantIdentity } from "../assistant-identity";
-import type { MessageGroup } from "../types/chat-types";
-import { toSanitizedMarkdownHtml } from "../markdown";
-import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
+import type { AssistantIdentity } from "../assistant-identity.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { detectTextDirection } from "../text-direction.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
+import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
-} from "./message-extract";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
-import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
+} from "./message-extract.ts";
+import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
   url: string;
@@ -272,7 +273,7 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

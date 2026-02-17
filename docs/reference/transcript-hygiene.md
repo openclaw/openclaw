@@ -24,6 +24,7 @@ Scope includes:
 - Turn validation / ordering
 - Thought signature cleanup
 - Image payload sanitization
+- User-input provenance tagging (for inter-session routed prompts)
 
 If you need transcript storage details, see:
 
@@ -72,12 +73,29 @@ Implementation:
 
 ---
 
+## Global rule: inter-session input provenance
+
+When an agent sends a prompt into another session via `sessions_send` (including
+agent-to-agent reply/announce steps), OpenClaw persists the created user turn with:
+
+- `message.provenance.kind = "inter_session"`
+
+This metadata is written at transcript append time and does not change role
+(`role: "user"` remains for provider compatibility). Transcript readers can use
+this to avoid treating routed internal prompts as end-user-authored instructions.
+
+During context rebuild, OpenClaw also prepends a short `[Inter-session message]`
+marker to those user turns in-memory so the model can distinguish them from
+external end-user instructions.
+
+---
+
 ## Provider matrix (current behavior)
 
 **OpenAI / OpenAI Codex**
 
 - Image sanitization only.
-- On model switch into OpenAI Responses/Codex, drop orphaned reasoning signatures (standalone reasoning items without a following content block).
+- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
 - No tool call id sanitization.
 - No tool result pairing repair.
 - No turn validation or reordering.

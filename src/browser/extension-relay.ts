@@ -1,10 +1,14 @@
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-import { randomBytes } from "node:crypto";
-import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
+import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const logService = createSubsystemLogger("browser").child("relay");
 
 type CdpCommand = {
   id: number;
@@ -101,38 +105,6 @@ export type ChromeExtensionRelayServer = {
   stop: () => Promise<void>;
 };
 
-function isLoopbackHost(host: string) {
-  const h = host.trim().toLowerCase();
-  return (
-    h === "localhost" ||
-    h === "127.0.0.1" ||
-    h === "0.0.0.0" ||
-    h === "[::1]" ||
-    h === "::1" ||
-    h === "[::]" ||
-    h === "::"
-  );
-}
-
-function isLoopbackAddress(ip: string | undefined): boolean {
-  if (!ip) {
-    return false;
-  }
-  if (ip === "127.0.0.1") {
-    return true;
-  }
-  if (ip.startsWith("127.")) {
-    return true;
-  }
-  if (ip === "::1") {
-    return true;
-  }
-  if (ip.startsWith("::ffff:127.")) {
-    return true;
-  }
-  return false;
-}
-
 function parseBaseUrl(raw: string): {
   host: string;
   port: number;
@@ -175,6 +147,8 @@ function rejectUpgrade(socket: Duplex, status: number, bodyText: string) {
 
 const serversByPort = new Map<number, ChromeExtensionRelayServer>();
 const relayAuthByPort = new Map<number, string>();
+// Track original requested port -> relay when fallback occurs (EADDRINUSE)
+const relayByOriginalPort = new Map<number, ChromeExtensionRelayServer>();
 
 function relayAuthTokenForUrl(url: string): string | null {
   try {
@@ -213,7 +187,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     throw new Error(`extension relay requires loopback cdpUrl host (got ${info.host})`);
   }
 
-  const existing = serversByPort.get(info.port);
+  const existing = serversByPort.get(info.port) ?? relayByOriginalPort.get(info.port);
   if (existing) {
     return existing;
   }
@@ -734,10 +708,37 @@ export async function ensureChromeExtensionRelayServer(opts: {
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.listen(info.port, info.host, () => resolve());
-    server.once("error", reject);
-  });
+  // Try to bind to the requested port, with automatic fallback on EADDRINUSE.
+  let boundPort = info.port;
+  const maxRetries = 10;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: Error) => {
+          server.removeListener("listening", resolve);
+          reject(err);
+        };
+        const onListening = () => {
+          server.removeListener("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(boundPort, info.host);
+      });
+      // Successfully bound
+      break;
+    } catch (err) {
+      const isAddrInUse = (err as { code?: string }).code === "EADDRINUSE";
+      if (isAddrInUse && attempt < maxRetries - 1) {
+        // Try a random port in the dynamic range (49152-65535)
+        boundPort = Math.floor(Math.random() * (65535 - 49152 + 1)) + 49152;
+        logService.warn(`Port ${info.port} is in use, trying alternative port ${boundPort}...`);
+      } else {
+        throw err;
+      }
+    }
+  }
 
   const addr = server.address() as AddressInfo | null;
   const port = addr?.port ?? info.port;
@@ -753,6 +754,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
     stop: async () => {
       serversByPort.delete(port);
       relayAuthByPort.delete(port);
+      // Also clean up original port mapping if this was a fallback
+      relayByOriginalPort.delete(info.port);
       try {
         extensionWs?.close(1001, "server stopping");
       } catch {
@@ -775,16 +778,21 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
   relayAuthByPort.set(port, relayAuthToken);
   serversByPort.set(port, relay);
+  // If we fell back to a different port, also map the original requested port
+  if (port !== info.port) {
+    relayByOriginalPort.set(info.port, relay);
+  }
   return relay;
 }
 
 export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): Promise<boolean> {
   const info = parseBaseUrl(opts.cdpUrl);
-  const existing = serversByPort.get(info.port);
+  const existing = serversByPort.get(info.port) ?? relayByOriginalPort.get(info.port);
   if (!existing) {
     return false;
   }
   await existing.stop();
-  relayAuthByPort.delete(info.port);
+  // Note: stop() cleans up both serversByPort and relayByOriginalPort
+  relayAuthByPort.delete(existing.port);
   return true;
 }

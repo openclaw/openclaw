@@ -27,6 +27,12 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    responsePrefix: z.string().optional(),
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+      })
+      .optional(),
   })
   .strict();
 

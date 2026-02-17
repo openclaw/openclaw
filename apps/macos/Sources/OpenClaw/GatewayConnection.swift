@@ -1,7 +1,7 @@
+import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
 import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category: "gateway.connection")
@@ -24,9 +24,13 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
         self = GatewayAgentChannel(rawValue: normalized) ?? .last
     }
 
-    var isDeliverable: Bool { self != .webchat }
+    var isDeliverable: Bool {
+        self != .webchat
+    }
 
-    func shouldDeliver(_ deliver: Bool) -> Bool { deliver && self.isDeliverable }
+    func shouldDeliver(_ deliver: Bool) -> Bool {
+        deliver && self.isDeliverable
+    }
 }
 
 struct GatewayAgentInvocation: Sendable {
@@ -64,6 +68,7 @@ actor GatewayConnection {
         case wizardNext = "wizard.next"
         case wizardCancel = "wizard.cancel"
         case wizardStatus = "wizard.status"
+        case talkConfig = "talk.config"
         case talkMode = "talk.mode"
         case webLoginStart = "web.login.start"
         case webLoginWait = "web.login.wait"

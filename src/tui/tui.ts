@@ -6,13 +6,6 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
-import type {
-  AgentSummary,
-  SessionInfo,
-  SessionScope,
-  TuiOptions,
-  TuiStateAccess,
-} from "./tui-types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -32,6 +25,13 @@ import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import type {
+  AgentSummary,
+  SessionInfo,
+  SessionScope,
+  TuiOptions,
+  TuiStateAccess,
+} from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
@@ -77,6 +77,124 @@ export function createEditorSubmitHandler(params: {
   };
 }
 
+export function shouldEnableWindowsGitBashPasteFallback(params?: {
+  platform?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const platform = params?.platform ?? process.platform;
+  if (platform !== "win32") {
+    return false;
+  }
+  const env = params?.env ?? process.env;
+  const msystem = (env.MSYSTEM ?? "").toUpperCase();
+  const shell = env.SHELL ?? "";
+  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
+  if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
+    return true;
+  }
+  if (shell.toLowerCase().includes("bash")) {
+    return true;
+  }
+  return termProgram.includes("mintty");
+}
+
+export function createSubmitBurstCoalescer(params: {
+  submit: (value: string) => void;
+  enabled: boolean;
+  burstWindowMs?: number;
+  now?: () => number;
+  setTimer?: typeof setTimeout;
+  clearTimer?: typeof clearTimeout;
+}) {
+  const windowMs = Math.max(1, params.burstWindowMs ?? 50);
+  const now = params.now ?? (() => Date.now());
+  const setTimer = params.setTimer ?? setTimeout;
+  const clearTimer = params.clearTimer ?? clearTimeout;
+  let pending: string | null = null;
+  let pendingAt = 0;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearFlushTimer = () => {
+    if (!flushTimer) {
+      return;
+    }
+    clearTimer(flushTimer);
+    flushTimer = null;
+  };
+
+  const flushPending = () => {
+    if (pending === null) {
+      return;
+    }
+    const value = pending;
+    pending = null;
+    pendingAt = 0;
+    clearFlushTimer();
+    params.submit(value);
+  };
+
+  const scheduleFlush = () => {
+    clearFlushTimer();
+    flushTimer = setTimer(() => {
+      flushPending();
+    }, windowMs);
+  };
+
+  return (value: string) => {
+    if (!params.enabled) {
+      params.submit(value);
+      return;
+    }
+    if (value.includes("\n")) {
+      flushPending();
+      params.submit(value);
+      return;
+    }
+    const ts = now();
+    if (pending === null) {
+      pending = value;
+      pendingAt = ts;
+      scheduleFlush();
+      return;
+    }
+    if (ts - pendingAt <= windowMs) {
+      pending = `${pending}\n${value}`;
+      pendingAt = ts;
+      scheduleFlush();
+      return;
+    }
+    flushPending();
+    pending = value;
+    pendingAt = ts;
+    scheduleFlush();
+  };
+}
+
+export function resolveTuiSessionKey(params: {
+  raw?: string;
+  sessionScope: SessionScope;
+  currentAgentId: string;
+  sessionMainKey: string;
+}) {
+  const trimmed = (params.raw ?? "").trim();
+  if (!trimmed) {
+    if (params.sessionScope === "global") {
+      return "global";
+    }
+    return buildAgentMainSessionKey({
+      agentId: params.currentAgentId,
+      mainKey: params.sessionMainKey,
+    });
+  }
+  if (trimmed === "global" || trimmed === "unknown") {
+    return trimmed;
+  }
+  if (trimmed.startsWith("agent:")) {
+    return trimmed;
+  }
+  return `agent:${params.currentAgentId}:${trimmed}`;
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -95,6 +213,7 @@ export async function runTui(opts: TuiOptions) {
   let wasDisconnected = false;
   let toolsExpanded = false;
   let showThinking = false;
+  const localRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
@@ -225,6 +344,29 @@ export async function runTui(opts: TuiOptions) {
     },
   };
 
+  const noteLocalRunId = (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    localRunIds.add(runId);
+    if (localRunIds.size > 200) {
+      const [first] = localRunIds;
+      if (first) {
+        localRunIds.delete(first);
+      }
+    }
+  };
+
+  const forgetLocalRunId = (runId: string) => {
+    localRunIds.delete(runId);
+  };
+
+  const isLocalRunId = (runId: string) => localRunIds.has(runId);
+
+  const clearLocalRunIds = () => {
+    localRunIds.clear();
+  };
+
   const client = new GatewayChatClient({
     url: opts.url,
     token: opts.token,
@@ -274,23 +416,12 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const resolveSessionKey = (raw?: string) => {
-    const trimmed = (raw ?? "").trim();
-    if (sessionScope === "global") {
-      return "global";
-    }
-    if (!trimmed) {
-      return buildAgentMainSessionKey({
-        agentId: currentAgentId,
-        mainKey: sessionMainKey,
-      });
-    }
-    if (trimmed === "global" || trimmed === "unknown") {
-      return trimmed;
-    }
-    if (trimmed.startsWith("agent:")) {
-      return trimmed;
-    }
-    return `agent:${currentAgentId}:${trimmed}`;
+    return resolveTuiSessionKey({
+      raw,
+      sessionScope,
+      currentAgentId,
+      sessionMainKey,
+    });
   };
 
   currentSessionKey = resolveSessionKey(initialSessionInput);
@@ -522,9 +653,16 @@ export async function runTui(opts: TuiOptions) {
     updateFooter,
     updateAutocompleteProvider,
     setActivityStatus,
+    clearLocalRunIds,
   });
-  const { refreshAgents, refreshSessionInfo, loadHistory, setSession, abortActive } =
-    sessionActions;
+  const {
+    refreshAgents,
+    refreshSessionInfo,
+    applySessionInfoFromPatch,
+    loadHistory,
+    setSession,
+    abortActive,
+  } = sessionActions;
 
   const { handleChatEvent, handleAgentEvent } = createEventHandlers({
     chatLog,
@@ -532,6 +670,10 @@ export async function runTui(opts: TuiOptions) {
     state,
     setActivityStatus,
     refreshSessionInfo,
+    loadHistory,
+    isLocalRunId,
+    forgetLocalRunId,
+    clearLocalRunIds,
   });
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
@@ -545,12 +687,15 @@ export async function runTui(opts: TuiOptions) {
       openOverlay,
       closeOverlay,
       refreshSessionInfo,
+      applySessionInfoFromPatch,
       loadHistory,
       setSession,
       refreshAgents,
       abortActive,
       setActivityStatus,
       formatSessionKey,
+      noteLocalRunId,
+      forgetLocalRunId,
     });
 
   const { runLocalShellLine } = createLocalShellRunner({
@@ -560,11 +705,15 @@ export async function runTui(opts: TuiOptions) {
     closeOverlay,
   });
   updateAutocompleteProvider();
-  editor.onSubmit = createEditorSubmitHandler({
+  const submitHandler = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine: runLocalShellLine,
+  });
+  editor.onSubmit = createSubmitBurstCoalescer({
+    submit: submitHandler,
+    enabled: shouldEnableWindowsGitBashPasteFallback(),
   });
 
   editor.onEscape = () => {
@@ -662,4 +811,10 @@ export async function runTui(opts: TuiOptions) {
   updateFooter();
   tui.start();
   client.start();
+  await new Promise<void>((resolve) => {
+    const finish = () => resolve();
+    process.once("exit", finish);
+    process.once("SIGINT", finish);
+    process.once("SIGTERM", finish);
+  });
 }

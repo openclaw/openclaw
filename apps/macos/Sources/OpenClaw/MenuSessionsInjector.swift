@@ -159,7 +159,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 extension MenuSessionsInjector {
     // MARK: - Injection
 
-    private var mainSessionKey: String { WorkActivityStore.shared.mainSessionKey }
+    private var mainSessionKey: String {
+        WorkActivityStore.shared.mainSessionKey
+    }
 
     private func inject(into menu: NSMenu) {
         self.cancelPreviewTasks()
@@ -585,34 +587,38 @@ extension MenuSessionsInjector {
         let item = NSMenuItem()
         item.tag = self.tag
         item.isEnabled = false
-        let view = AnyView(SessionMenuPreviewView(
-            width: width,
-            maxLines: maxLines,
-            title: title,
-            items: [],
-            status: .loading))
-        let hosting = NSHostingView(rootView: view)
-        hosting.frame.size.width = max(1, width)
-        let size = hosting.fittingSize
-        hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: size.height))
-        item.view = hosting
+        let view = AnyView(
+            SessionMenuPreviewView(
+                width: width,
+                maxLines: maxLines,
+                title: title,
+                items: [],
+                status: .loading)
+                .environment(\.isEnabled, true))
+        let hosted = HighlightedMenuItemHostView(rootView: view, width: width)
+        item.view = hosted
 
-        let task = Task { [weak hosting] in
+        let task = Task { [weak hosted, weak item] in
             let snapshot = await SessionMenuPreviewLoader.load(sessionKey: sessionKey, maxItems: 10)
             guard !Task.isCancelled else { return }
+
             await MainActor.run {
-                guard let hosting else { return }
-                let nextView = AnyView(SessionMenuPreviewView(
-                    width: width,
-                    maxLines: maxLines,
-                    title: title,
-                    items: snapshot.items,
-                    status: snapshot.status))
-                hosting.rootView = nextView
-                hosting.invalidateIntrinsicContentSize()
-                hosting.frame.size.width = max(1, width)
-                let size = hosting.fittingSize
-                hosting.frame.size.height = size.height
+                let nextView = AnyView(
+                    SessionMenuPreviewView(
+                        width: width,
+                        maxLines: maxLines,
+                        title: title,
+                        items: snapshot.items,
+                        status: snapshot.status)
+                        .environment(\.isEnabled, true))
+
+                if let item {
+                    item.view = HighlightedMenuItemHostView(rootView: nextView, width: width)
+                    return
+                }
+
+                guard let hosted else { return }
+                hosted.update(rootView: nextView, width: width)
             }
         }
         self.previewTasks.append(task)
@@ -1171,8 +1177,7 @@ extension MenuSessionsInjector {
 
     private func makeHostedView(rootView: AnyView, width: CGFloat, highlighted: Bool) -> NSView {
         if highlighted {
-            let container = HighlightedMenuItemHostView(rootView: rootView, width: width)
-            return container
+            return HighlightedMenuItemHostView(rootView: rootView, width: width)
         }
 
         let hosting = NSHostingView(rootView: rootView)

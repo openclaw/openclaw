@@ -237,62 +237,6 @@ func extractContentText(content json.RawMessage) (string, error) {
 	return strings.Join(parts, ""), nil
 }
 
-func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string {
-	srcLabel := srcLang
-	tgtLabel := tgtLang
-	if strings.EqualFold(srcLang, "en") {
-		srcLabel = "English"
-	}
-	if strings.EqualFold(tgtLang, "zh-CN") {
-		tgtLabel = "Simplified Chinese"
-	}
-	glossaryBlock := buildGlossaryPrompt(glossary)
-	return strings.TrimSpace(fmt.Sprintf(`You are a translation function, not a chat assistant.
-Translate from %s to %s.
-
-Rules:
-- Output ONLY the translated text. No preamble, no questions, no commentary.
-- Translate all English prose; do not leave English unless it is code, a URL, or a product name.
-- All prose must be Chinese. If any English sentence remains outside code/URLs/product names, it is wrong.
-- If the input contains <frontmatter> and <body> tags, keep them exactly and output exactly one of each.
-- Translate only the contents inside those tags.
-- Preserve YAML structure inside <frontmatter>; translate only values.
-- Preserve all [[[FM_*]]] markers exactly and translate only the text between each START/END pair.
-- Translate headings/labels like "Exit codes" and "Optional scripts".
-- Preserve Markdown syntax exactly (headings, lists, tables, emphasis).
-- Preserve HTML tags and attributes exactly.
-- Do not translate code spans/blocks, config keys, CLI flags, or env vars.
-- Do not alter URLs or anchors.
-- Preserve placeholders exactly: __OC_I18N_####__.
-- Do not remove, reorder, or summarize content.
-- Use fluent, idiomatic technical Chinese; avoid slang or jokes.
-- Use neutral documentation tone; prefer “你/你的”, avoid “您/您的”.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
-- For the OpenClaw Gateway, use “Gateway网关”.
-- Keep these terms in English: Skills, local loopback, Tailscale.
-- Never output an empty response; if unsure, return the source text unchanged.
-
-%s
-
-If the input is empty, output empty.
-If the input contains only placeholders, output it unchanged.`, srcLabel, tgtLabel, glossaryBlock))
-}
-
-func buildGlossaryPrompt(glossary []GlossaryEntry) string {
-	if len(glossary) == 0 {
-		return ""
-	}
-	var lines []string
-	lines = append(lines, "Preferred translations (use when natural):")
-	for _, entry := range glossary {
-		if entry.Source == "" || entry.Target == "" {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("- %s -> %s", entry.Source, entry.Target))
-	}
-	return strings.Join(lines, "\n")
-}
-
 func normalizeThinking(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "low", "high":
