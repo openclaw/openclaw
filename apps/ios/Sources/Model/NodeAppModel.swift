@@ -1626,6 +1626,10 @@ private extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
+                if !self.gatewayAutoReconnectEnabled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
                 if await self.isOperatorConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1705,6 +1709,10 @@ private extension NodeAppModel {
 
             while !Task.isCancelled {
                 if self.gatewayPairingPaused {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
+                if !self.gatewayAutoReconnectEnabled {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
@@ -1795,10 +1803,18 @@ private extension NodeAppModel {
                     }
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
 
+                    // If auth is missing/rejected, pause reconnect churn until the user intervenes.
+                    // Reconnect loops only spam the same failing handshake and make onboarding noisy.
+                    let lower = error.localizedDescription.lowercased()
+                    if lower.contains("unauthorized") || lower.contains("gateway token missing") {
+                        await MainActor.run {
+                            self.gatewayAutoReconnectEnabled = false
+                        }
+                    }
+
                     // If pairing is required, stop reconnect churn. The user must approve the request
                     // on the gateway before another connect attempt will succeed, and retry loops can
                     // generate multiple pending requests.
-                    let lower = error.localizedDescription.lowercased()
                     if lower.contains("not_paired") || lower.contains("pairing required") {
                         let requestId: String? = {
                             // GatewayResponseError for connect decorates the message with `(requestId: ...)`.

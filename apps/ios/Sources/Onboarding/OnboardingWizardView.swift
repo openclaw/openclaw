@@ -818,7 +818,7 @@ struct OnboardingWizardView: View {
 
     private func retryLastAttempt() async {
         self.connectingGatewayID = "retry"
-        self.issue = .none
+        // Keep current auth/pairing issue sticky while retrying to avoid Step 3 UI flip-flop.
         self.connectMessage = "Retrying…"
         self.statusLine = "Retrying last connection…"
         defer { self.connectingGatewayID = nil }
