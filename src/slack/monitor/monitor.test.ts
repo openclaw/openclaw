@@ -84,6 +84,7 @@ const baseParams = () => ({
   useAccessGroups: false,
   reactionMode: "off" as const,
   reactionAllowlist: [],
+  reactionDelivery: "deferred" as const,
   replyToMode: "off" as const,
   slashCommand: {
     enabled: false,

@@ -43,6 +43,8 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
         channelType,
       });
 
+      const contextKey = `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`;
+
       if (ctx.reactionDelivery === "immediate") {
         try {
           const { getReactionDebouncer } =
@@ -94,7 +96,7 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
           // Fallback to deferred on dispatch failure
           enqueueSystemEvent(text, {
             sessionKey,
-            contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
+            contextKey,
           });
         }
       } else {

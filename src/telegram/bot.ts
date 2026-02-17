@@ -1,6 +1,6 @@
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import { type Message, type UserFromGetMe } from "@grammyjs/types";
+import { type Message, type ReactionTypeEmoji, type UserFromGetMe } from "@grammyjs/types";
 import type { ApiClientOptions } from "grammy";
 import { Bot, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -21,8 +21,10 @@ import {
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
@@ -36,10 +38,12 @@ import {
 } from "./bot-updates.js";
 import {
   buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -490,7 +494,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
     }
   });
-
 
   registerTelegramHandlers({
     cfg,
