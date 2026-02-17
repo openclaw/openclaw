@@ -38,6 +38,14 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
+    // Extract provider and model from the primary model config (e.g. "litellm/claude-opus-4-6")
+    // so the embedded agent routes through the correct provider instead of attempting
+    // a direct Anthropic call (which fails without an API key).
+    const primaryModel = params.cfg?.agents?.defaults?.model?.primary ?? "";
+    const slashIdx = primaryModel.indexOf("/");
+    const slugProvider = slashIdx > 0 ? primaryModel.slice(0, slashIdx) : undefined;
+    const slugModelId = slashIdx > 0 ? primaryModel.slice(slashIdx + 1) : undefined;
+
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
@@ -47,6 +55,8 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       agentDir,
       config: params.cfg,
       prompt,
+      provider: slugProvider,
+      model: slugModelId,
       timeoutMs: 15_000, // 15 second timeout
       runId: `slug-gen-${Date.now()}`,
     });
