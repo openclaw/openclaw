@@ -165,6 +165,7 @@ async function importDocument(
   content: string,
   mediaMaxBytes: number,
   folderToken?: string,
+  domain?: string,
   _docType?: "docx" | "doc",
 ) {
   // Step 1: Create empty document
@@ -185,11 +186,19 @@ async function importDocument(
   // This ensures proper structure preservation using the writeDoc function
   const writeResult = await writeDoc(client, docId, content, mediaMaxBytes);
 
+  const normalizedDomain = (domain ?? "").toLowerCase();
+  const docsBaseUrl =
+    normalizedDomain === "lark" ||
+    normalizedDomain.includes("larksuite") ||
+    normalizedDomain.includes("open.lark")
+      ? "https://larksuite.com"
+      : "https://feishu.cn";
+
   return {
     success: true,
     document_id: docId,
     title: title,
-    url: `https://feishu.cn/docx/${docId}`,
+    url: `${docsBaseUrl}/docx/${docId}`,
     import_method: "create_and_write",
     blocks_added: writeResult.blocks_added,
     images_processed: writeResult.images_processed,
@@ -250,6 +259,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                       p.content,
                       mediaMaxBytes,
                       p.folder_token,
+                      account.domain,
                       (p as any).doc_type || "docx",
                     ),
                   );

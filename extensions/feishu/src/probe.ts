@@ -73,13 +73,13 @@ function setCachedResult(creds: FeishuClientCredentials, result: FeishuProbeResu
 }
 
 /**
- * Clear the probe cache for a specific account or all accounts.
+ * Clear the probe cache for a specific appId or all accounts.
  */
-export function clearProbeCache(accountId?: string): void {
-  if (accountId) {
-    // Find and delete entries matching the accountId
-    for (const [key, entry] of probeCache.entries()) {
-      if (key.startsWith(`${accountId}:`)) {
+export function clearProbeCache(appId?: string): void {
+  if (appId) {
+    // Cache keys are stored as `${appId}:${domain}`.
+    for (const [key] of probeCache.entries()) {
+      if (key.startsWith(`${appId}:`)) {
         probeCache.delete(key);
       }
     }
