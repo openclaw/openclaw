@@ -224,7 +224,6 @@ export function renderChat(props: ChatProps) {
       ${virtualize({
         items: buildChatItems(props),
         keyFunction: (item) => item.key,
-        scroller: true,
         renderItem: (item) => {
           if (item.kind === "divider") {
             return html`
