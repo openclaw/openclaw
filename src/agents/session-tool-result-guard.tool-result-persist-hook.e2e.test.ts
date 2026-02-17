@@ -129,3 +129,51 @@ describe("tool_result_persist hook", () => {
     expect(toolResult.details).toBeTruthy();
   });
 });
+
+describe("before_message_write hook", () => {
+  it("continues persistence when a before_message_write hook throws", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-before-write-"));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const plugin = writeTempPlugin({
+      dir: tmp,
+      id: "before-write-throws",
+      body: `export default { id: "before-write-throws", register(api) {
+  api.on("before_message_write", () => {
+    throw new Error("boom");
+  }, { priority: 10 });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [plugin] },
+          allow: ["before-write-throws"],
+        },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe("user");
+  });
+});
