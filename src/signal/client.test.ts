@@ -53,6 +53,31 @@ describe("signal client backend compatibility", () => {
     expect(String(fetchMock.mock.calls[3]?.[0])).toBe("http://signal-rest:8080/v1/accounts");
   });
 
+  it("skips /v1/accounts during REST health checks when account is configured", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+      .mockResolvedValueOnce(jsonResponse({ versions: ["v1", "v2"], version: "0.97" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    resolveFetchMock.mockReturnValue(fetchMock);
+
+    const res = await signalCheck("http://signal-rest-accounted:8080", 1000, {
+      account: "+15551110000",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe(204);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[2]?.[0])).toBe(
+      "http://signal-rest-accounted:8080/v1/health",
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        (call) => String(call[0]) === "http://signal-rest-accounted:8080/v1/accounts",
+      ),
+    ).toBe(false);
+  });
+
   it("reports REST health as not ready when no accounts are registered", async () => {
     const fetchMock = vi
       .fn()
@@ -67,6 +92,29 @@ describe("signal client backend compatibility", () => {
     expect(res.ok).toBe(false);
     expect(res.status).toBe(204);
     expect(res.error).toContain("no account is registered");
+  });
+
+  it("deduplicates concurrent REST account checks during health probes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+      .mockResolvedValueOnce(jsonResponse({ versions: ["v1", "v2"], version: "0.97" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse(["+15551110000"]));
+    resolveFetchMock.mockReturnValue(fetchMock);
+
+    const [first, second] = await Promise.all([
+      signalCheck("http://signal-rest-concurrent:8080", 1000),
+      signalCheck("http://signal-rest-concurrent:8080", 1000),
+    ]);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    const accountCalls = fetchMock.mock.calls.filter(
+      (call) => String(call[0]) === "http://signal-rest-concurrent:8080/v1/accounts",
+    );
+    expect(accountCalls).toHaveLength(1);
   });
 
   it("returns REST about payload for version requests", async () => {
@@ -175,7 +223,7 @@ describe("signal client backend compatibility", () => {
     const payload = JSON.parse(received[0]?.data ?? "{}") as Record<string, unknown>;
     expect(payload["envelope"]).toBeTruthy();
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
-      "http://signal-rest-receive:8080/v1/receive/%2B15559990000?timeout=5",
+      "http://signal-rest-receive:8080/v1/receive/%2B15559990000?timeout=10",
     );
   });
 
@@ -202,7 +250,7 @@ describe("signal client backend compatibility", () => {
           baseUrl: "http://signal-rest-send-timeout:8080",
         },
       ),
-    ).rejects.toThrow("Signal REST send timed out after 30000ms (/v2/send)");
+    ).rejects.toThrow("Signal REST send timed out after 90000ms (/v2/send)");
   });
 
   it("respects explicit timeout overrides for REST send timeout errors", async () => {

@@ -28,10 +28,14 @@ export type SignalSseEvent = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const SIGNAL_REST_SEND_TIMEOUT_MS = 30_000;
+// Keep send timeout comfortably above receive poll/lock windows on signal-cli-rest-api.
+const SIGNAL_REST_SEND_TIMEOUT_MS = 90_000;
 const SIGNAL_BACKEND_DETECT_TIMEOUT_MS = 2_000;
-const SIGNAL_REST_POLL_TIMEOUT_SECONDS = 5;
+// Balance CPU usage and reply latency; long polls can delay outbound sends on signal-cli locks.
+const SIGNAL_REST_POLL_TIMEOUT_SECONDS = 10;
 const SIGNAL_REST_ACCOUNT_RETRY_DELAY_MS = 5_000;
+const SIGNAL_REST_ACCOUNT_HEALTH_CACHE_OK_MS = 300_000;
+const SIGNAL_REST_ACCOUNT_HEALTH_CACHE_ERROR_MS = 5_000;
 
 type SignalRestAbout = {
   versions?: unknown;
@@ -49,6 +53,15 @@ type SignalBackend =
     };
 
 const signalBackendCache = new Map<string, Promise<SignalBackend>>();
+type SignalRestAccountHealth = {
+  ok: boolean;
+  error: string | null;
+};
+const signalRestAccountHealthCache = new Map<
+  string,
+  { checkedAt: number; health: SignalRestAccountHealth }
+>();
+const signalRestAccountHealthInFlight = new Map<string, Promise<SignalRestAccountHealth>>();
 
 function trimString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -66,9 +79,7 @@ function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .map((entry) => trimString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  return value.map((entry) => trimString(entry)).filter((entry): entry is string => Boolean(entry));
 }
 
 function parseSignalRestAccountEntry(entry: unknown): string | null {
@@ -211,7 +222,7 @@ async function fetchSignalRestAbout(baseUrl: string, timeoutMs: number): Promise
     const parsed = (await res.json()) as SignalRestAbout;
     return parsed;
   } catch (err) {
-    throw new Error(`Signal REST about returned invalid JSON: ${String(err)}`);
+    throw new Error(`Signal REST about returned invalid JSON: ${String(err)}`, { cause: err });
   }
 }
 
@@ -238,6 +249,60 @@ async function listSignalRestAccounts(baseUrl: string, timeoutMs: number): Promi
   }
 }
 
+function getSignalRestAccountHealthCacheTtlMs(health: SignalRestAccountHealth): number {
+  return health.ok
+    ? SIGNAL_REST_ACCOUNT_HEALTH_CACHE_OK_MS
+    : SIGNAL_REST_ACCOUNT_HEALTH_CACHE_ERROR_MS;
+}
+
+async function getSignalRestAccountHealth(
+  baseUrl: string,
+  timeoutMs: number,
+): Promise<SignalRestAccountHealth> {
+  const cached = signalRestAccountHealthCache.get(baseUrl);
+  if (cached) {
+    const ageMs = Date.now() - cached.checkedAt;
+    if (ageMs >= 0 && ageMs < getSignalRestAccountHealthCacheTtlMs(cached.health)) {
+      return cached.health;
+    }
+  }
+
+  const inFlight = signalRestAccountHealthInFlight.get(baseUrl);
+  if (inFlight) {
+    return await inFlight;
+  }
+
+  const pending = (async () => {
+    const accounts = await listSignalRestAccounts(baseUrl, timeoutMs);
+    if (accounts.length === 0) {
+      return {
+        ok: false,
+        error:
+          "Signal REST is reachable, but no account is registered yet. Link a device first (for example via /v1/qrcodelink).",
+      } as const;
+    }
+    if (accounts.length > 1) {
+      return {
+        ok: false,
+        error: "Signal REST has multiple accounts; set channels.signal.account to choose one.",
+      } as const;
+    }
+    return { ok: true, error: null } as const;
+  })();
+
+  signalRestAccountHealthInFlight.set(baseUrl, pending);
+  try {
+    const health = await pending;
+    signalRestAccountHealthCache.set(baseUrl, {
+      checkedAt: Date.now(),
+      health,
+    });
+    return health;
+  } finally {
+    signalRestAccountHealthInFlight.delete(baseUrl);
+  }
+}
+
 async function resolveSignalRestAccount(params: {
   baseUrl: string;
   account?: string;
@@ -249,7 +314,7 @@ async function resolveSignalRestAccount(params: {
   }
   const accounts = await listSignalRestAccounts(params.baseUrl, params.timeoutMs);
   if (accounts.length === 1) {
-    return accounts[0]!;
+    return accounts[0];
   }
   if (accounts.length === 0) {
     throw new Error(
@@ -402,6 +467,7 @@ async function signalRestSendRequest(params: {
       if (isAbortError(err)) {
         throw new Error(
           `Signal REST send timed out after ${params.timeoutMs}ms (${path}). Consider increasing timeoutMs.`,
+          { cause: err },
         );
       }
       throw err;
@@ -620,6 +686,7 @@ export async function signalRpcRequest<T = unknown>(
 export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  opts: { account?: string } = {},
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
   try {
@@ -651,20 +718,17 @@ export async function signalCheck(
         error: details ? `HTTP ${res.status}: ${details}` : `HTTP ${res.status}`,
       };
     }
-    const accounts = await listSignalRestAccounts(normalized, timeoutMs);
-    if (accounts.length === 0) {
-      return {
-        ok: false,
-        status: res.status,
-        error:
-          "Signal REST is reachable, but no account is registered yet. Link a device first (for example via /v1/qrcodelink).",
-      };
+    // If a specific account is configured, avoid probing /v1/accounts here.
+    // That endpoint contends on signal-cli locks and can stall send/receive paths.
+    if (trimString(opts.account)) {
+      return { ok: true, status: res.status, error: null };
     }
-    if (accounts.length > 1) {
+    const accountHealth = await getSignalRestAccountHealth(normalized, timeoutMs);
+    if (!accountHealth.ok) {
       return {
         ok: false,
         status: res.status,
-        error: "Signal REST has multiple accounts; set channels.signal.account to choose one.",
+        error: accountHealth.error,
       };
     }
     return { ok: true, status: res.status, error: null };
@@ -739,7 +803,7 @@ export async function streamSignalEvents(params: {
     try {
       parsed = JSON.parse(text) as unknown;
     } catch (err) {
-      throw new Error(`Signal receive returned non-JSON payload: ${String(err)}`);
+      throw new Error(`Signal receive returned non-JSON payload: ${String(err)}`, { cause: err });
     }
 
     const events = Array.isArray(parsed) ? parsed : [parsed];
