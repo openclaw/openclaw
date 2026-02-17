@@ -189,13 +189,7 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
  */
 function isLocalProvider(providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
-  const localProviders = [
-    'ollama',
-    'vllm', 
-    'local-ai',
-    'text-generation-webui',
-    'koboldcpp'
-  ];
+  const localProviders = ["ollama", "vllm", "local-ai", "text-generation-webui", "koboldcpp"];
   return localProviders.includes(normalized);
 }
 
@@ -314,7 +308,7 @@ function computeNextProfileUsageStats(params: {
       // Local providers: shorter exponential backoff, max 5 minutes
       const localBackoffMs = Math.min(
         5 * 60 * 1000, // 5 minutes max
-        30 * 1000 * Math.pow(2, Math.min(nextErrorCount - 1, 4)) // 30s, 1m, 2m, 4m, 5m
+        30 * 1000 * Math.pow(2, Math.min(nextErrorCount - 1, 4)), // 30s, 1m, 2m, 4m, 5m
       );
       updatedStats.cooldownUntil = params.now + localBackoffMs;
     } else {
