@@ -351,7 +351,8 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
       persistSubagentRuns();
       continue;
     }
-    resumedRuns.delete(runId);
+    // Don't delete from resumedRuns here — bypasses duplicate prevention
+    // in resumeSubagentRun(), causing infinite retry loops (#18150).
     resumeSubagentRun(runId);
   }
 }
