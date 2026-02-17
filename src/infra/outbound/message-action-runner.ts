@@ -744,6 +744,7 @@ export async function runMessageAction(
   applyTargetToParams({ action, args: params });
 
   if (action === "react") {
+    const rawMessageId = readStringParam(params, "messageId");
     const resolvedMessageId = readCurrentMessageIdAlias({
       args: params,
       key: "messageId",
@@ -751,6 +752,10 @@ export async function runMessageAction(
     });
     if (resolvedMessageId) {
       params.messageId = resolvedMessageId;
+    } else if (rawMessageId?.trim().toLowerCase() === "current") {
+      throw new Error(
+        "Cannot resolve 'current' — no triggering message ID available in this context",
+      );
     }
   }
 

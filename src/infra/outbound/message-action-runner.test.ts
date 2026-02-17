@@ -882,4 +882,24 @@ describe("runMessageAction react current message alias", () => {
     const ctx = handleAction.mock.calls[0]?.[0] as { params: Record<string, unknown> };
     expect(ctx.params.messageId).toBe("987654321");
   });
+
+  it("throws when messageId=current cannot be resolved", async () => {
+    await expect(
+      runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "discord",
+          target: "channel:123",
+          messageId: "current",
+          emoji: "✅",
+        },
+        toolContext: {
+          currentChannelId: "channel:123",
+          currentChannelProvider: "discord",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow("Cannot resolve 'current'");
+  });
 });
