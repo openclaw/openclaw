@@ -242,7 +242,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Kill daemon after this many ms of inactivity (default: 900000 / 15 min; 0 = never).",
   "memory.qmd.daemon.coldStartTimeoutMs":
     "Timeout for first query while models load (default: 30000).",
-  "memory.qmd.daemon.warmTimeoutMs": "Timeout for queries when daemon is warm (default: 10000).",
+  "memory.qmd.daemon.warmTimeoutMs": "Timeout for queries when daemon is warm (default: 15000).",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":

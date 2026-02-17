@@ -281,7 +281,7 @@ function resolveDaemonConfig(raw?: MemoryQmdConfig["daemon"]): ResolvedQmdDaemon
     warmTimeoutMs:
       typeof raw?.warmTimeoutMs === "number" && raw.warmTimeoutMs >= 1000
         ? raw.warmTimeoutMs
-        : 10_000,
+        : 15_000,
   };
 }
 
