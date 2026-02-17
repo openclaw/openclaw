@@ -1,22 +1,13 @@
-import {
-  isEmbeddedPiRunActive,
-  runEmbeddedPiAgent,
-} from "../../agents/pi-embedded.js";
+import crypto from "node:crypto";
 import { resolveAgentDir, resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions.js";
+import { isEmbeddedPiRunActive, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
-import {
-  resolveMemoryFlushPromptForRun,
-  resolveMemoryFlushSettings,
-} from "./memory-flush.js";
-import crypto from "node:crypto";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { resolveMemoryFlushPromptForRun, resolveMemoryFlushSettings } from "./memory-flush.js";
 
 const SAVE_PROMPT = [
   "Manual memory save requested by user.",
@@ -78,7 +69,8 @@ export async function runMemorySave(params: {
     prompt: params.prompt ?? memoryFlushSettings?.prompt ?? SAVE_PROMPT,
     cfg: params.cfg,
   });
-  const systemPrompt = params.systemPrompt ?? memoryFlushSettings?.systemPrompt ?? SAVE_SYSTEM_PROMPT;
+  const systemPrompt =
+    params.systemPrompt ?? memoryFlushSettings?.systemPrompt ?? SAVE_SYSTEM_PROMPT;
 
   const runId = crypto.randomUUID();
   registerAgentRunContext(runId, {
@@ -103,10 +95,7 @@ export async function runMemorySave(params: {
       provider: params.provider,
       model: params.model,
       agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(
-        params.cfg,
-        params.agentId ?? "main",
-      ),
+      fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, params.agentId ?? "main"),
       run: async (provider, model) => {
         return runEmbeddedPiAgent({
           sessionId,
@@ -148,7 +137,9 @@ export async function runMemorySave(params: {
 /**
  * Run a pre-reset memory flush. Uses a reset-specific prompt.
  */
-export async function runPreResetMemoryFlush(params: Parameters<typeof runMemorySave>[0]): Promise<{ ok: boolean; error?: string }> {
+export async function runPreResetMemoryFlush(
+  params: Parameters<typeof runMemorySave>[0],
+): Promise<{ ok: boolean; error?: string }> {
   return runMemorySave({
     ...params,
     prompt: RESET_FLUSH_PROMPT,

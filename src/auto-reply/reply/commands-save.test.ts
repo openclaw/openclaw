@@ -22,9 +22,11 @@ vi.mock("../../agents/agent-scope.js", async () => {
 });
 
 vi.mock("../../agents/model-fallback.js", () => ({
-  runWithModelFallback: vi.fn(async (params: { run: (p: string, m: string) => Promise<unknown> }) => {
-    return params.run("test-provider", "test-model");
-  }),
+  runWithModelFallback: vi.fn(
+    async (params: { run: (p: string, m: string) => Promise<unknown> }) => {
+      return params.run("test-provider", "test-model");
+    },
+  ),
 }));
 
 vi.mock("../../config/sessions.js", async () => {
