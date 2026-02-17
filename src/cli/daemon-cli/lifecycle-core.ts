@@ -1,5 +1,7 @@
-import type { GatewayService } from "../../daemon/service.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
+import { checkTokenDrift } from "../../daemon/service-audit.js";
+import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isWSL } from "../../infra/wsl.js";
@@ -34,6 +36,7 @@ function createActionIO(params: { action: DaemonAction; json: boolean }) {
     message?: string;
     error?: string;
     hints?: string[];
+    warnings?: string[];
     service?: {
       label: string;
       loaded: boolean;
@@ -55,6 +58,30 @@ function createActionIO(params: { action: DaemonAction; json: boolean }) {
     defaultRuntime.exit(1);
   };
   return { stdout, emit, fail };
+}
+
+async function handleServiceNotLoaded(params: {
+  serviceNoun: string;
+  service: GatewayService;
+  loaded: boolean;
+  renderStartHints: () => string[];
+  json: boolean;
+  emit: ReturnType<typeof createActionIO>["emit"];
+}) {
+  const hints = await maybeAugmentSystemdHints(params.renderStartHints());
+  params.emit({
+    ok: true,
+    result: "not-loaded",
+    message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
+    hints,
+    service: buildDaemonServiceSnapshot(params.service, params.loaded),
+  });
+  if (!params.json) {
+    defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
+    for (const hint of hints) {
+      defaultRuntime.log(`Start with: ${hint}`);
+    }
+  }
 }
 
 export async function runServiceUninstall(params: {
@@ -126,20 +153,14 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
-    const hints = await maybeAugmentSystemdHints(params.renderStartHints());
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(params.service, loaded),
+    await handleServiceNotLoaded({
+      serviceNoun: params.serviceNoun,
+      service: params.service,
+      loaded,
+      renderStartHints: params.renderStartHints,
+      json,
+      emit,
     });
-    if (!json) {
-      defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
     return;
   }
   try {
@@ -227,22 +248,44 @@ export async function runServiceRestart(params: {
     return false;
   }
   if (!loaded) {
-    const hints = await maybeAugmentSystemdHints(params.renderStartHints());
-    emit({
-      ok: true,
-      result: "not-loaded",
-      message: `${params.serviceNoun} service ${params.service.notLoadedText}.`,
-      hints,
-      service: buildDaemonServiceSnapshot(params.service, loaded),
+    await handleServiceNotLoaded({
+      serviceNoun: params.serviceNoun,
+      service: params.service,
+      loaded,
+      renderStartHints: params.renderStartHints,
+      json,
+      emit,
     });
-    if (!json) {
-      defaultRuntime.log(`${params.serviceNoun} service ${params.service.notLoadedText}.`);
-      for (const hint of hints) {
-        defaultRuntime.log(`Start with: ${hint}`);
-      }
-    }
     return false;
   }
+
+  // Check for token drift before restart (service token vs config token)
+  const warnings: string[] = [];
+  try {
+    const command = await params.service.readCommand(process.env);
+    const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
+    const cfg = loadConfig();
+    const configToken =
+      cfg.gateway?.auth?.token ||
+      process.env.OPENCLAW_GATEWAY_TOKEN ||
+      process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const driftIssue = checkTokenDrift({ serviceToken, configToken });
+    if (driftIssue) {
+      const warning = driftIssue.detail
+        ? `${driftIssue.message} ${driftIssue.detail}`
+        : driftIssue.message;
+      warnings.push(warning);
+      if (!json) {
+        defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
+        if (driftIssue.detail) {
+          defaultRuntime.log(`   ${driftIssue.detail}\n`);
+        }
+      }
+    }
+  } catch {
+    // Non-fatal: token drift check is best-effort
+  }
+
   try {
     await params.service.restart({ env: process.env, stdout });
     let restarted = true;
@@ -255,6 +298,7 @@ export async function runServiceRestart(params: {
       ok: true,
       result: "restarted",
       service: buildDaemonServiceSnapshot(params.service, restarted),
+      warnings: warnings.length ? warnings : undefined,
     });
     return true;
   } catch (err) {

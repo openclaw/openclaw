@@ -1,8 +1,4 @@
-// @ts-nocheck
-// oxlint-disable eslint/no-unused-vars, typescript/no-explicit-any
 import fs from "node:fs/promises";
-import type { SessionFileEntry } from "./session-files.js";
-import type { MemorySource } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
@@ -21,6 +17,9 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./internal.js";
+import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import type { SessionFileEntry } from "./session-files.js";
+import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -41,8 +40,12 @@ const vectorToBlob = (embedding: number[]): Buffer =>
 
 const log = createSubsystemLogger("memory");
 
-class MemoryManagerEmbeddingOps {
-  [key: string]: any;
+export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+  protected abstract batchFailureCount: number;
+  protected abstract batchFailureLastError?: string;
+  protected abstract batchFailureLastProvider?: string;
+  protected abstract batchFailureLock: Promise<void>;
+
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
@@ -72,7 +75,7 @@ class MemoryManagerEmbeddingOps {
   }
 
   private loadEmbeddingCache(hashes: string[]): Map<string, number[]> {
-    if (!this.cache.enabled) {
+    if (!this.cache.enabled || !this.provider) {
       return new Map();
     }
     if (hashes.length === 0) {
@@ -114,7 +117,7 @@ class MemoryManagerEmbeddingOps {
   }
 
   private upsertEmbeddingCache(entries: Array<{ hash: string; embedding: number[] }>): void {
-    if (!this.cache.enabled) {
+    if (!this.cache.enabled || !this.provider) {
       return;
     }
     if (entries.length === 0) {
@@ -143,7 +146,7 @@ class MemoryManagerEmbeddingOps {
     }
   }
 
-  private pruneEmbeddingCacheIfNeeded(): void {
+  protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
       return;
     }
@@ -175,19 +178,7 @@ class MemoryManagerEmbeddingOps {
     if (chunks.length === 0) {
       return [];
     }
-    const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
-    const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
-    const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
-
-    for (let i = 0; i < chunks.length; i += 1) {
-      const chunk = chunks[i];
-      const hit = chunk?.hash ? cached.get(chunk.hash) : undefined;
-      if (hit && hit.length > 0) {
-        embeddings[i] = hit;
-      } else if (chunk) {
-        missing.push({ index: i, chunk });
-      }
-    }
+    const { embeddings, missing } = this.collectCachedEmbeddings(chunks);
 
     if (missing.length === 0) {
       return embeddings;
@@ -213,7 +204,11 @@ class MemoryManagerEmbeddingOps {
     return embeddings;
   }
 
-  private computeProviderKey(): string {
+  protected computeProviderKey(): string {
+    // FTS-only mode: no provider, use a constant key
+    if (!this.provider) {
+      return hashText(JSON.stringify({ provider: "none", model: "fts-only" }));
+    }
     if (this.provider.id === "openai" && this.openAi) {
       const entries = Object.entries(this.openAi.headers)
         .filter(([key]) => key.toLowerCase() !== "authorization")
@@ -253,6 +248,9 @@ class MemoryManagerEmbeddingOps {
     entry: MemoryFileEntry | SessionFileEntry,
     source: MemorySource,
   ): Promise<number[][]> {
+    if (!this.provider) {
+      return this.embedChunksInBatches(chunks);
+    }
     if (this.provider.id === "openai" && this.openAi) {
       return this.embedChunksWithOpenAiBatch(chunks, entry, source);
     }
@@ -339,6 +337,35 @@ class MemoryManagerEmbeddingOps {
     this.upsertEmbeddingCache(toCache);
   }
 
+  private buildEmbeddingBatchRunnerOptions<TRequest>(params: {
+    requests: TRequest[];
+    chunks: MemoryChunk[];
+    source: MemorySource;
+  }): {
+    agentId: string;
+    requests: TRequest[];
+    wait: boolean;
+    concurrency: number;
+    pollIntervalMs: number;
+    timeoutMs: number;
+    debug: (message: string, data?: Record<string, unknown>) => void;
+  } {
+    const { requests, chunks, source } = params;
+    return {
+      agentId: this.agentId,
+      requests,
+      wait: this.batch.wait,
+      concurrency: this.batch.concurrency,
+      pollIntervalMs: this.batch.pollIntervalMs,
+      timeoutMs: this.batch.timeoutMs,
+      debug: (message, data) =>
+        log.debug(
+          message,
+          data ? { ...data, source, chunks: chunks.length } : { source, chunks: chunks.length },
+        ),
+    };
+  }
+
   private async embedChunksWithVoyageBatch(
     chunks: MemoryChunk[],
     entry: MemoryFileEntry | SessionFileEntry,
@@ -364,18 +391,13 @@ class MemoryManagerEmbeddingOps {
         body: { input: chunk.text },
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
     const batchResult = await this.runBatchWithFallback({
       provider: "voyage",
       run: async () =>
         await runVoyageEmbeddingBatches({
           client: voyage,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -411,23 +433,18 @@ class MemoryManagerEmbeddingOps {
         method: "POST",
         url: OPENAI_BATCH_ENDPOINT,
         body: {
-          model: this.openAi?.model ?? this.provider.model,
+          model: this.openAi?.model ?? this.provider?.model ?? "text-embedding-3-small",
           input: chunk.text,
         },
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
     const batchResult = await this.runBatchWithFallback({
       provider: "openai",
       run: async () =>
         await runOpenAiEmbeddingBatches({
           openAi,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -464,19 +481,14 @@ class MemoryManagerEmbeddingOps {
         taskType: "RETRIEVAL_DOCUMENT",
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
 
     const batchResult = await this.runBatchWithFallback({
       provider: "gemini",
       run: async () =>
         await runGeminiEmbeddingBatches({
           gemini,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -487,9 +499,12 @@ class MemoryManagerEmbeddingOps {
     return embeddings;
   }
 
-  private async embedBatchWithRetry(texts: string[]): Promise<number[][]> {
+  protected async embedBatchWithRetry(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) {
       return [];
+    }
+    if (!this.provider) {
+      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
     let attempt = 0;
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
@@ -530,14 +545,17 @@ class MemoryManagerEmbeddingOps {
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
-    const isLocal = this.provider.id === "local";
+    const isLocal = this.provider?.id === "local";
     if (kind === "query") {
       return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
     }
     return isLocal ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
   }
 
-  private async embedQueryWithTimeout(text: string): Promise<number[]> {
+  protected async embedQueryWithTimeout(text: string): Promise<number[]> {
+    if (!this.provider) {
+      throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
+    }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(
@@ -547,7 +565,7 @@ class MemoryManagerEmbeddingOps {
     );
   }
 
-  private async withTimeout<T>(
+  protected async withTimeout<T>(
     promise: Promise<T>,
     timeoutMs: number,
     message: string,
@@ -675,14 +693,23 @@ class MemoryManagerEmbeddingOps {
     }
   }
 
-  private getIndexConcurrency(): number {
+  protected getIndexConcurrency(): number {
     return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
   }
 
-  private async indexFile(
+  protected async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
+    // FTS-only mode: skip indexing if no provider
+    if (!this.provider) {
+      log.debug("Skipping embedding indexing in FTS-only mode", {
+        path: entry.path,
+        source: options.source,
+      });
+      return;
+    }
+
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
     const chunks = enforceEmbeddingMaxInputTokens(
       this.provider,
@@ -784,5 +811,3 @@ class MemoryManagerEmbeddingOps {
       .run(entry.path, options.source, entry.hash, entry.mtimeMs, entry.size);
   }
 }
-
-export const memoryManagerEmbeddingOps = MemoryManagerEmbeddingOps.prototype;

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 const { watchMock } = vi.hoisted(() => ({
@@ -72,17 +73,20 @@ describe("memory watcher config", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    };
+    } as OpenClawConfig;
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
+    manager = result.manager as unknown as MemoryIndexManager;
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls[0] as [string[], Record<string, unknown>];
+    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      Record<string, unknown>,
+    ];
     expect(watchedPaths).toEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),

@@ -1,5 +1,5 @@
-import type { Skill } from "@mariozechner/pi-coding-agent";
 import crypto from "node:crypto";
+import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -144,6 +144,8 @@ export type GroupKeyResolution = {
 export type SessionSkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string }>;
+  /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
+  skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
 };
@@ -157,6 +159,7 @@ export type SessionSystemPromptReport = {
   model?: string;
   workspaceDir?: string;
   bootstrapMaxChars?: number;
+  bootstrapTotalMaxChars?: number;
   sandbox?: {
     mode?: string;
     sandboxed?: boolean;

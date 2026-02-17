@@ -3,20 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import "./test-runtime-mocks.js";
 
 let embedBatchCalls = 0;
-
-// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
-vi.mock("chokidar", () => ({
-  default: {
-    watch: () => ({ on: () => {}, close: async () => {} }),
-  },
-  watch: () => ({ on: () => {}, close: async () => {} }),
-}));
-
-vi.mock("./sqlite-vec.js", () => ({
-  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
-}));
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -46,10 +35,8 @@ describe("memory index", () => {
   let workspaceDir = "";
   let memoryDir = "";
   let extraDir = "";
-  let indexBasicPath = "";
-  let indexCachePath = "";
-  let indexHybridPath = "";
   let indexVectorPath = "";
+  let indexMainPath = "";
   let indexExtraPath = "";
 
   // Perf: keep managers open across tests, but only reset the one a test uses.
@@ -61,13 +48,15 @@ describe("memory index", () => {
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
     extraDir = path.join(workspaceDir, "extra");
-    indexBasicPath = path.join(workspaceDir, "index-basic.sqlite");
-    indexCachePath = path.join(workspaceDir, "index-cache.sqlite");
-    indexHybridPath = path.join(workspaceDir, "index-hybrid.sqlite");
+    indexMainPath = path.join(workspaceDir, "index-main.sqlite");
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
     indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
 
     await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "# Log\nAlpha memory line.\nZebra memory line.",
+    );
   });
 
   afterAll(async () => {
@@ -83,10 +72,6 @@ describe("memory index", () => {
 
     // Keep the workspace stable to allow manager reuse across tests.
     await fs.mkdir(memoryDir, { recursive: true });
-    await fs.writeFile(
-      path.join(memoryDir, "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.",
-    );
 
     // Clean additional paths that may have been created by earlier cases.
     await fs.rm(extraDir, { recursive: true, force: true });
@@ -104,6 +89,38 @@ describe("memory index", () => {
   }
 
   type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];
+
+  function createCfg(params: {
+    storePath: string;
+    extraPaths?: string[];
+    model?: string;
+    vectorEnabled?: boolean;
+    cacheEnabled?: boolean;
+    hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+  }): TestCfg {
+    return {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: params.model ?? "mock-embed",
+            store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
+            // Perf: keep test indexes to a single chunk to reduce sqlite work.
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: {
+              minScore: 0,
+              hybrid: params.hybrid ?? { enabled: false },
+            },
+            cache: params.cacheEnabled ? { enabled: true } : undefined,
+            extraPaths: params.extraPaths,
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+  }
 
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
     const storePath = cfg.agents?.defaults?.memorySearch?.store?.path;
@@ -128,24 +145,14 @@ describe("memory index", () => {
     return manager;
   }
 
-  it("indexes memory files and searches by vector", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexBasicPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0, hybrid: { enabled: false } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+  it("indexes memory files and searches", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
+    expect(embedBatchCalls).toBeGreaterThan(0);
     const results = await manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
@@ -162,26 +169,8 @@ describe("memory index", () => {
   });
 
   it("keeps dirty false in status-only manager after prior indexing", async () => {
-    const indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
-    await fs.rm(indexStatusPath, { force: true });
-    await fs.rm(`${indexStatusPath}-shm`, { force: true });
-    await fs.rm(`${indexStatusPath}-wal`, { force: true });
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexStatusPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0, hybrid: { enabled: false } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const indexStatusPath = path.join(workspaceDir, `index-status-${Date.now()}.sqlite`);
+    const cfg = createCfg({ storePath: indexStatusPath });
 
     const first = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(first.manager).not.toBeNull();
@@ -207,35 +196,21 @@ describe("memory index", () => {
   });
 
   it("reindexes when the embedding model changes", async () => {
-    const indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
-    await fs.rm(indexModelPath, { force: true });
-    await fs.rm(`${indexModelPath}-shm`, { force: true });
-    await fs.rm(`${indexModelPath}-wal`, { force: true });
-
-    const base = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            store: { path: indexModelPath },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0, hybrid: { enabled: false } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const indexModelPath = path.join(workspaceDir, `index-model-change-${Date.now()}.sqlite`);
+    const base = createCfg({ storePath: indexModelPath });
+    const baseAgents = base.agents!;
+    const baseDefaults = baseAgents.defaults!;
+    const baseMemorySearch = baseDefaults.memorySearch!;
 
     const first = await getMemorySearchManager({
       cfg: {
         ...base,
         agents: {
-          ...base.agents,
+          ...baseAgents,
           defaults: {
-            ...base.agents.defaults,
+            ...baseDefaults,
             memorySearch: {
-              ...base.agents.defaults.memorySearch,
+              ...baseMemorySearch,
               model: "mock-embed-v1",
             },
           },
@@ -247,19 +222,19 @@ describe("memory index", () => {
     if (!first.manager) {
       throw new Error("manager missing");
     }
-    await first.manager.sync({ reason: "test" });
+    await first.manager.sync?.({ reason: "test" });
     const callsAfterFirstSync = embedBatchCalls;
-    await first.manager.close();
+    await first.manager.close?.();
 
     const second = await getMemorySearchManager({
       cfg: {
         ...base,
         agents: {
-          ...base.agents,
+          ...baseAgents,
           defaults: {
-            ...base.agents.defaults,
+            ...baseDefaults,
             memorySearch: {
-              ...base.agents.defaults.memorySearch,
+              ...baseMemorySearch,
               model: "mock-embed-v2",
             },
           },
@@ -271,32 +246,19 @@ describe("memory index", () => {
     if (!second.manager) {
       throw new Error("manager missing");
     }
-    await second.manager.sync({ reason: "test" });
+    await second.manager.sync?.({ reason: "test" });
     expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
     const status = second.manager.status();
     expect(status.files).toBeGreaterThan(0);
-    await second.manager.close();
+    await second.manager.close?.();
   });
 
   it("reuses cached embeddings on forced reindex", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexCachePath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            cache: { enabled: true },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const cfg = createCfg({ storePath: indexMainPath, cacheEnabled: true });
     const manager = await getPersistentManager(cfg);
-    await manager.sync({ force: true });
+    // Seed the embedding cache once, then ensure a forced reindex doesn't
+    // re-embed when the cache is enabled.
+    await manager.sync({ reason: "test" });
     const afterFirst = embedBatchCalls;
     expect(afterFirst).toBeGreaterThan(0);
 
@@ -305,24 +267,10 @@ describe("memory index", () => {
   });
 
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexHybridPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: {
-              minScore: 0,
-              hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
-            },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
     const manager = await getPersistentManager(cfg);
 
     const status = manager.status();
@@ -337,20 +285,7 @@ describe("memory index", () => {
   });
 
   it("reports vector availability after probe", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexVectorPath, vector: { enabled: true } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const cfg = createCfg({ storePath: indexVectorPath, vectorEnabled: true });
     const manager = await getPersistentManager(cfg);
     const available = await manager.probeVectorAvailability();
     const status = manager.status();
@@ -360,21 +295,7 @@ describe("memory index", () => {
   });
 
   it("rejects reading non-memory paths", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexBasicPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0, hybrid: { enabled: false } },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const cfg = createCfg({ storePath: indexMainPath });
     const manager = await getPersistentManager(cfg);
     await expect(manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
   });
@@ -383,22 +304,7 @@ describe("memory index", () => {
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "extra.md"), "Extra content.");
 
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexExtraPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: true },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            extraPaths: [extraDir],
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
+    const cfg = createCfg({ storePath: indexExtraPath, extraPaths: [extraDir] });
     const manager = await getPersistentManager(cfg);
     await expect(manager.readFile({ relPath: "extra/extra.md" })).resolves.toEqual({
       path: "extra/extra.md",
