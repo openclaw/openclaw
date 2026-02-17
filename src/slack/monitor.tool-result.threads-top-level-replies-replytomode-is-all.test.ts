@@ -220,20 +220,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    const controller = new AbortController();
-    const run = monitorSlackProvider({
-      botToken: "bot-token",
-      appToken: "app-token",
-      abortSignal: controller.signal,
-    });
-
-    await waitForSlackEvent("message");
-    const handler = getSlackHandlers()?.get("message");
-    if (!handler) {
-      throw new Error("Slack message handler not registered");
-    }
-
-    await handler({
+    await runSlackMessageOnce(monitorSlackProvider, {
       event: {
         type: "message",
         user: "U1",
@@ -245,10 +232,6 @@ describe("monitorSlackProvider tool results", () => {
       },
     });
 
-    await flush();
-    controller.abort();
-    await run;
-
     expect(replyMock).toHaveBeenCalledTimes(1);
     const ctx = replyMock.mock.calls[0]?.[0] as {
       SessionKey?: string;
@@ -256,6 +239,7 @@ describe("monitorSlackProvider tool results", () => {
     };
     expect(ctx.SessionKey).toBe("agent:main:slack:channel:c1:thread:111.222");
     expect(ctx.ParentSessionKey).toBeUndefined();
+  });
   });
 
   it("keeps replies in channel root when message is not threaded (replyToMode off)", async () => {
