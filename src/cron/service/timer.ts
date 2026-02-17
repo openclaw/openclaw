@@ -89,11 +89,16 @@ function applyJobResult(
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      // One-shot jobs are always disabled after ANY terminal status
-      // (ok, error, or skipped). This prevents tight-loop rescheduling
-      // when computeJobNextRunAtMs returns the past atMs value (#11452).
-      job.enabled = false;
-      job.state.nextRunAtMs = undefined;
+      if (result.status === "skipped") {
+        // Temporary skip (e.g. race condition, resource unavailable) — leave
+        // enabled so the job can retry on the next tick (#18917).
+      } else {
+        // Terminal status (ok without deleteAfterRun, or error) — disable
+        // to prevent tight-loop rescheduling when computeJobNextRunAtMs
+        // returns the past atMs value (#11452).
+        job.enabled = false;
+        job.state.nextRunAtMs = undefined;
+      }
       if (result.status === "error") {
         state.deps.log.warn(
           {
