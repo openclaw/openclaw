@@ -102,7 +102,7 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
-import { detectAndLoadPromptImages } from "./images.js";
+import { detectAndLoadPromptImages, modelSupportsImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export function injectHistoryImagesIntoMessages(
@@ -264,6 +264,8 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      provider: params.provider,
+      modelId: params.modelId,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -284,7 +286,7 @@ export async function runEmbeddedAttempt(
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
     // Check if the model supports native image input
-    const modelHasVision = params.model.input?.includes("image") ?? false;
+    const modelHasVision = modelSupportsImages(params.model);
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -553,6 +555,8 @@ export async function runEmbeddedAttempt(
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
+        provider: params.provider,
+        modelId: params.modelId,
       });
       const clientToolDefs = params.clientTools
         ? toClientToolDefinitions(

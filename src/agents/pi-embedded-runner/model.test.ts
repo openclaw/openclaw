@@ -302,6 +302,22 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds a default zai forward-compat fallback for glm-5 when no template exists", () => {
+    const result = resolveModel("zai", "glm-5", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "zai",
+      id: "glm-5",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      contextWindow: 204800,
+      maxTokens: 131072,
+    });
+    expect(result.model?.input).toEqual(expect.arrayContaining(["text", "image"]));
+  });
+
   it("keeps unknown-model errors when no antigravity thinking template exists", () => {
     expectUnknownModelError("google-antigravity", "claude-opus-4-6-thinking");
   });

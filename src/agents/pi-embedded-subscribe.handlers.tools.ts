@@ -23,6 +23,10 @@ import { normalizeToolName } from "./tool-policy.js";
 /** Track tool execution start times and args for after_tool_call hook */
 const toolStartData = new Map<string, { startTime: number; args: unknown }>();
 
+function buildToolStartDataKey(runId: string, toolCallId: string): string {
+  return `${runId}::${toolCallId}`;
+}
+
 function isCronAddAction(args: unknown): boolean {
   if (!args || typeof args !== "object") {
     return false;
@@ -142,9 +146,10 @@ export async function handleToolExecutionStart(
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
+  const toolStartDataKey = buildToolStartDataKey(ctx.params.runId, toolCallId);
 
   // Track start time and args for after_tool_call hook
-  toolStartData.set(toolCallId, { startTime: Date.now(), args });
+  toolStartData.set(toolStartDataKey, { startTime: Date.now(), args });
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -264,10 +269,11 @@ export async function handleToolExecutionEnd(
   const toolCallId = String(evt.toolCallId);
   const isError = Boolean(evt.isError);
   const result = evt.result;
+  const toolStartDataKey = buildToolStartDataKey(ctx.params.runId, toolCallId);
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
-  const startData = toolStartData.get(toolCallId);
-  toolStartData.delete(toolCallId);
+  const startData = toolStartData.get(toolStartDataKey);
+  toolStartData.delete(toolStartDataKey);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
@@ -326,6 +332,7 @@ export async function handleToolExecutionEnd(
       : {};
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
+    Boolean(pendingText || pendingTarget) ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
   if (!isToolError && isMessagingSend) {
     const committedMediaUrls = [
@@ -333,7 +340,15 @@ export async function handleToolExecutionEnd(
       ...collectMessagingMediaUrlsFromToolResult(result),
     ];
     if (committedMediaUrls.length > 0) {
-      ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
+      const seenMediaUrls = new Set<string>();
+      for (const mediaUrl of committedMediaUrls) {
+        const normalizedMediaUrl = mediaUrl.trim();
+        if (!normalizedMediaUrl || seenMediaUrls.has(normalizedMediaUrl)) {
+          continue;
+        }
+        seenMediaUrls.add(normalizedMediaUrl);
+        ctx.state.messagingToolSentMediaUrls.push(normalizedMediaUrl);
+      }
       ctx.trimMessagingToolSent();
     }
   }

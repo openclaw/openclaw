@@ -63,6 +63,38 @@ function isOpenAIProvider(provider?: string) {
   return normalized === "openai" || normalized === "openai-codex";
 }
 
+function normalizeLoopDetectionProviderId(provider?: string): string {
+  const normalized = provider?.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "z.ai" || normalized === "z-ai") {
+    return "zai";
+  }
+  return normalized;
+}
+
+function isZaiGlmModel(params: { provider?: string; modelId?: string }): boolean {
+  if (normalizeLoopDetectionProviderId(params.provider) !== "zai") {
+    return false;
+  }
+  const modelId = params.modelId?.trim().toLowerCase();
+  return Boolean(modelId && modelId.startsWith("glm-"));
+}
+
+const ZAI_GLM_TOOL_LOOP_DEFAULTS: ToolLoopDetectionConfig = {
+  enabled: true,
+  historySize: 24,
+  warningThreshold: 6,
+  criticalThreshold: 10,
+  globalCircuitBreakerThreshold: 14,
+  detectors: {
+    genericRepeat: true,
+    knownPollNoProgress: true,
+    pingPong: true,
+  },
+};
+
 function isApplyPatchAllowedForModel(params: {
   modelProvider?: string;
   modelId?: string;
@@ -128,6 +160,8 @@ function resolveFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
 export function resolveToolLoopDetectionConfig(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
+  provider?: string;
+  modelId?: string;
 }): ToolLoopDetectionConfig | undefined {
   const global = params.cfg?.tools?.loopDetection;
   const agent =
@@ -135,19 +169,47 @@ export function resolveToolLoopDetectionConfig(params: {
       ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.loopDetection
       : undefined;
 
-  if (!agent) {
-    return global;
+  const merged = (() => {
+    if (!agent) {
+      return global;
+    }
+    if (!global) {
+      return agent;
+    }
+    return {
+      ...global,
+      ...agent,
+      detectors: {
+        ...global.detectors,
+        ...agent.detectors,
+      },
+    };
+  })();
+
+  // Keep loop safeguards active for Z.AI GLM tool-use sessions by default.
+  if (!isZaiGlmModel({ provider: params.provider, modelId: params.modelId })) {
+    return merged;
   }
-  if (!global) {
-    return agent;
+  if (!merged) {
+    return {
+      ...ZAI_GLM_TOOL_LOOP_DEFAULTS,
+      detectors: { ...ZAI_GLM_TOOL_LOOP_DEFAULTS.detectors },
+    };
   }
 
   return {
-    ...global,
-    ...agent,
+    ...ZAI_GLM_TOOL_LOOP_DEFAULTS,
+    ...merged,
+    enabled: merged.enabled ?? ZAI_GLM_TOOL_LOOP_DEFAULTS.enabled,
+    historySize: merged.historySize ?? ZAI_GLM_TOOL_LOOP_DEFAULTS.historySize,
+    warningThreshold: merged.warningThreshold ?? ZAI_GLM_TOOL_LOOP_DEFAULTS.warningThreshold,
+    criticalThreshold: merged.criticalThreshold ?? ZAI_GLM_TOOL_LOOP_DEFAULTS.criticalThreshold,
+    globalCircuitBreakerThreshold:
+      merged.globalCircuitBreakerThreshold ??
+      ZAI_GLM_TOOL_LOOP_DEFAULTS.globalCircuitBreakerThreshold,
     detectors: {
-      ...global.detectors,
-      ...agent.detectors,
+      ...ZAI_GLM_TOOL_LOOP_DEFAULTS.detectors,
+      ...merged.detectors,
     },
   };
 }
@@ -482,7 +544,12 @@ export function createOpenClawCodingTools(options?: {
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       sessionKey: options?.sessionKey,
-      loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: options?.config,
+        agentId,
+        provider: options?.modelProvider,
+        modelId: options?.modelId,
+      }),
     }),
   );
   const withAbort = options?.abortSignal

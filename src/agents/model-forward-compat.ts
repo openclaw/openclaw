@@ -12,7 +12,15 @@ const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 
 const ZAI_GLM5_MODEL_ID = "glm-5";
-const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
+const ZAI_GLM5_TEMPLATE_MODEL_IDS = [
+  "glm-5",
+  "glm-4.7",
+  "glm-4.7-flash",
+  "glm-4.7-flashx",
+] as const;
+const ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/paas/v4";
+const ZAI_DEFAULT_CONTEXT_TOKENS = 204800;
+const ZAI_DEFAULT_MAX_TOKENS = 131072;
 
 const ANTIGRAVITY_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTIGRAVITY_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -173,11 +181,12 @@ function resolveZaiGlm5ForwardCompatModel(
     name: trimmed,
     api: "openai-completions",
     provider: "zai",
+    baseUrl: ZAI_DEFAULT_BASE_URL,
     reasoning: true,
-    input: ["text"],
+    input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    contextWindow: ZAI_DEFAULT_CONTEXT_TOKENS,
+    maxTokens: ZAI_DEFAULT_MAX_TOKENS,
   } as Model<Api>);
 }
 

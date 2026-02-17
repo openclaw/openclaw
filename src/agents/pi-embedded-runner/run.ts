@@ -40,6 +40,7 @@ import {
   parseImageDimensionError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
+  normalizeThinkLevelForProvider,
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
@@ -321,7 +322,10 @@ export async function runEmbeddedPiAgent(
           : [undefined];
       let profileIndex = 0;
 
-      const initialThinkLevel = params.thinkLevel ?? "off";
+      const initialThinkLevel = normalizeThinkLevelForProvider({
+        provider,
+        thinkLevel: params.thinkLevel ?? "off",
+      });
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
@@ -649,14 +653,17 @@ export async function runEmbeddedPiAgent(
                 attempt: overflowCompactionAttempts,
                 maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
               });
-              if (compactResult.compacted) {
+              if (!compactResult) {
+                log.warn(`auto-compaction failed for ${provider}/${modelId}: no result returned`);
+              } else if (compactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
+              } else {
+                log.warn(
+                  `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+                );
               }
-              log.warn(
-                `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
-              );
             }
             // Fallback: try truncating oversized tool results in the session.
             // This handles the case where a single tool result exceeds the

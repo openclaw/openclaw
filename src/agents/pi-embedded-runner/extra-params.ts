@@ -12,6 +12,7 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
+const ZAI_TOOL_STREAM_DEFAULT_MODEL_PREFIXES = ["glm-5"] as const;
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -136,6 +137,49 @@ function shouldForceResponsesStore(model: {
   return isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
+function isZaiProvider(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "zai" || normalized === "z-ai" || normalized === "z.ai";
+}
+
+function parseBooleanLike(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function isZaiToolStreamDefaultModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return ZAI_TOOL_STREAM_DEFAULT_MODEL_PREFIXES.some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
+  );
+}
+
+function resolveZaiToolStreamEnabled(
+  modelId: string,
+  extraParams: Record<string, unknown> | undefined,
+): boolean {
+  const explicit = parseBooleanLike(extraParams?.tool_stream);
+  if (typeof explicit === "boolean") {
+    return explicit;
+  }
+  return isZaiToolStreamDefaultModel(modelId);
+}
+
 function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -243,12 +287,14 @@ export function applyExtraParamsToAgent(
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
-  // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
-  if (provider === "zai" || provider === "z-ai") {
-    const toolStreamEnabled = merged?.tool_stream !== false;
+  // Default is enabled for GLM-5. For other models, keep default off unless explicitly enabled.
+  if (isZaiProvider(provider)) {
+    const toolStreamEnabled = resolveZaiToolStreamEnabled(modelId, merged);
     if (toolStreamEnabled) {
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
+    } else if (merged && "tool_stream" in merged) {
+      log.debug(`disabling Z.AI tool_stream for ${provider}/${modelId} (explicit override)`);
     }
   }
 

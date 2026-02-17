@@ -77,6 +77,8 @@ const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
+const ZAI_GLM_MAX_SKILLS_IN_PROMPT = 80;
+const ZAI_GLM_MAX_SKILLS_PROMPT_CHARS = 16_000;
 
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = raw
@@ -115,14 +117,39 @@ type ResolvedSkillsLimits = {
   maxSkillFileBytes: number;
 };
 
-function resolveSkillsLimits(config?: OpenClawConfig): ResolvedSkillsLimits {
+function isZaiGlmModel(params?: { provider?: string; modelId?: string }): boolean {
+  const provider = params?.provider?.trim().toLowerCase();
+  if (!provider || (provider !== "zai" && provider !== "z-ai" && provider !== "z.ai")) {
+    return false;
+  }
+  const modelId = params?.modelId?.trim().toLowerCase();
+  if (!modelId) {
+    return false;
+  }
+  return modelId.startsWith("glm-");
+}
+
+function resolveSkillsLimits(
+  config?: OpenClawConfig,
+  params?: { provider?: string; modelId?: string },
+): ResolvedSkillsLimits {
   const limits = config?.skills?.limits;
+  const isZaiGlm = isZaiGlmModel(params);
+
+  // Keep GLM prompts more compact by default; callers can still override via config.
+  const defaultMaxSkillsInPrompt = isZaiGlm
+    ? ZAI_GLM_MAX_SKILLS_IN_PROMPT
+    : DEFAULT_MAX_SKILLS_IN_PROMPT;
+  const defaultMaxSkillsPromptChars = isZaiGlm
+    ? ZAI_GLM_MAX_SKILLS_PROMPT_CHARS
+    : DEFAULT_MAX_SKILLS_PROMPT_CHARS;
+
   return {
     maxCandidatesPerRoot: limits?.maxCandidatesPerRoot ?? DEFAULT_MAX_CANDIDATES_PER_ROOT,
     maxSkillsLoadedPerSource:
       limits?.maxSkillsLoadedPerSource ?? DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE,
-    maxSkillsInPrompt: limits?.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT,
-    maxSkillsPromptChars: limits?.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS,
+    maxSkillsInPrompt: limits?.maxSkillsInPrompt ?? defaultMaxSkillsInPrompt,
+    maxSkillsPromptChars: limits?.maxSkillsPromptChars ?? defaultMaxSkillsPromptChars,
     maxSkillFileBytes: limits?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES,
   };
 }
@@ -385,12 +412,20 @@ function loadSkillEntries(
   return skillEntries;
 }
 
-function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
+function applySkillsPromptLimits(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  provider?: string;
+  modelId?: string;
+}): {
   skillsForPrompt: Skill[];
   truncated: boolean;
   truncatedReason: "count" | "chars" | null;
 } {
-  const limits = resolveSkillsLimits(params.config);
+  const limits = resolveSkillsLimits(params.config, {
+    provider: params.provider,
+    modelId: params.modelId,
+  });
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
@@ -432,6 +467,10 @@ export function buildWorkspaceSkillSnapshot(
     entries?: SkillEntry[];
     /** If provided, only include skills with these names */
     skillFilter?: string[];
+    /** Optional model context for provider-aware prompt limiting. */
+    provider?: string;
+    /** Optional model context for provider-aware prompt limiting. */
+    modelId?: string;
     eligibility?: SkillEligibilityContext;
     snapshotVersion?: number;
   },
@@ -452,6 +491,8 @@ export function buildWorkspaceSkillSnapshot(
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
+    provider: opts?.provider,
+    modelId: opts?.modelId,
   });
 
   const truncationNote = truncated
@@ -483,6 +524,10 @@ export function buildWorkspaceSkillsPrompt(
     entries?: SkillEntry[];
     /** If provided, only include skills with these names */
     skillFilter?: string[];
+    /** Optional model context for provider-aware prompt limiting. */
+    provider?: string;
+    /** Optional model context for provider-aware prompt limiting. */
+    modelId?: string;
     eligibility?: SkillEligibilityContext;
   },
 ): string {
@@ -501,6 +546,8 @@ export function buildWorkspaceSkillsPrompt(
   const { skillsForPrompt, truncated } = applySkillsPromptLimits({
     skills: resolvedSkills,
     config: opts?.config,
+    provider: opts?.provider,
+    modelId: opts?.modelId,
   });
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
@@ -515,7 +562,33 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  provider?: string;
+  modelId?: string;
 }): string {
+  const shouldRebuildForModel =
+    isZaiGlmModel({ provider: params.provider, modelId: params.modelId }) &&
+    Array.isArray(params.skillsSnapshot?.resolvedSkills) &&
+    (params.skillsSnapshot?.resolvedSkills?.length ?? 0) > 0;
+
+  if (shouldRebuildForModel) {
+    const resolvedSkills = params.skillsSnapshot?.resolvedSkills ?? [];
+    const { skillsForPrompt, truncated } = applySkillsPromptLimits({
+      skills: resolvedSkills,
+      config: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+    });
+    const truncationNote = truncated
+      ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
+      : "";
+    const rebuilt = [truncationNote, formatSkillsForPrompt(skillsForPrompt)]
+      .filter(Boolean)
+      .join("\n");
+    if (rebuilt.trim()) {
+      return rebuilt;
+    }
+  }
+
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
@@ -524,6 +597,8 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
     });
     return prompt.trim() ? prompt : "";
   }

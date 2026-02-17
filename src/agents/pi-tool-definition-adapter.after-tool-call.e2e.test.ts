@@ -140,6 +140,41 @@ describe("pi tool definition adapter after_tool_call", () => {
     );
   });
 
+  it("uses adjusted params for after_tool_call payload on adapter error", async () => {
+    enableAfterToolCallHook();
+    hookMocks.runBeforeToolCallHook.mockResolvedValue({
+      blocked: false,
+      params: { cmd: "ls", mode: "safe" },
+    });
+    const tool = {
+      name: "bash",
+      label: "Bash",
+      description: "throws",
+      parameters: {},
+      execute: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    } satisfies AgentTool<unknown, unknown>;
+
+    const defs = toToolDefinitions([tool]);
+    const result = await defs[0].execute("call-err-adjusted", { cmd: "ls" }, undefined, undefined);
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      tool: "exec",
+      error: "boom",
+    });
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { cmd: "ls", mode: "safe" },
+        error: "boom",
+      },
+      { toolName: "exec" },
+    );
+  });
+
   it("does not break execution when after_tool_call hook throws", async () => {
     enableAfterToolCallHook();
     hookMocks.runner.runAfterToolCall.mockRejectedValue(new Error("hook failed"));

@@ -45,4 +45,28 @@ describe("normalizeModelCompat", () => {
       (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
     ).toBe(false);
   });
+
+  it("marks glm-5 as image-capable for runtime feature gating", () => {
+    const model = {
+      ...baseModel(),
+      id: "glm-5",
+      name: "GLM-5",
+      input: ["text"] as Array<"text" | "image">,
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.input).toEqual(expect.arrayContaining(["text", "image"]));
+  });
+
+  it("keeps explicit compat false and still enables glm-5 image input", () => {
+    const model = {
+      ...baseModel(),
+      id: "glm-5",
+      name: "GLM-5",
+      input: ["text"] as Array<"text" | "image">,
+      compat: { supportsDeveloperRole: false },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+    expect(normalized.input).toEqual(expect.arrayContaining(["image"]));
+  });
 });
