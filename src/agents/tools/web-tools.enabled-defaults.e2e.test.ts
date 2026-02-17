@@ -111,11 +111,32 @@ describe("web_search country and language parameters", () => {
   it.each([
     { key: "country", value: "DE" },
     { key: "search_lang", value: "de" },
-    { key: "ui_lang", value: "de" },
     { key: "freshness", value: "pw" },
   ])("passes $key parameter to Brave API", async ({ key, value }) => {
     const url = await runBraveSearchAndGetUrl({ [key]: value });
     expect(url.searchParams.get(key)).toBe(value);
+  });
+
+  it("normalizes ui_lang short language codes to valid Brave locales", async () => {
+    const urlFromEnglish = await runBraveSearchAndGetUrl({ ui_lang: "en" });
+    expect(urlFromEnglish.searchParams.get("ui_lang")).toBe("en-US");
+
+    const urlFromGerman = await runBraveSearchAndGetUrl({ ui_lang: "de" });
+    expect(urlFromGerman.searchParams.get("ui_lang")).toBe("de-DE");
+  });
+
+  it("preserves already-valid ui_lang locales", async () => {
+    const url = await runBraveSearchAndGetUrl({ ui_lang: "en-GB" });
+    expect(url.searchParams.get("ui_lang")).toBe("en-GB");
+  });
+
+  it("rejects unsupported ui_lang locale values", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    const result = await tool?.execute?.("call-1", { query: "test", ui_lang: "not-a-locale" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "invalid_ui_lang" });
   });
 
   it("rejects invalid freshness values", async () => {

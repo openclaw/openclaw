@@ -1,9 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,
@@ -35,6 +35,70 @@ const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
+const BRAVE_UI_LANGS = [
+  "es-AR",
+  "en-AU",
+  "de-AT",
+  "nl-BE",
+  "fr-BE",
+  "pt-BR",
+  "en-CA",
+  "fr-CA",
+  "es-CL",
+  "da-DK",
+  "fi-FI",
+  "fr-FR",
+  "de-DE",
+  "el-GR",
+  "zh-HK",
+  "en-IN",
+  "en-ID",
+  "it-IT",
+  "ja-JP",
+  "ko-KR",
+  "en-MY",
+  "es-MX",
+  "nl-NL",
+  "en-NZ",
+  "no-NO",
+  "zh-CN",
+  "pl-PL",
+  "en-PH",
+  "ru-RU",
+  "en-ZA",
+  "es-ES",
+  "sv-SE",
+  "fr-CH",
+  "de-CH",
+  "zh-TW",
+  "tr-TR",
+  "en-GB",
+  "en-US",
+  "es-US",
+] as const;
+const BRAVE_UI_LANG_CANONICAL = new Map(
+  BRAVE_UI_LANGS.map((locale) => [locale.toLowerCase(), locale] as const),
+);
+const BRAVE_UI_LANG_DEFAULTS_BY_LANGUAGE = {
+  da: "da-DK",
+  de: "de-DE",
+  el: "el-GR",
+  en: "en-US",
+  es: "es-ES",
+  fi: "fi-FI",
+  fr: "fr-FR",
+  it: "it-IT",
+  ja: "ja-JP",
+  ko: "ko-KR",
+  nl: "nl-NL",
+  no: "no-NO",
+  pl: "pl-PL",
+  pt: "pt-BR",
+  ru: "ru-RU",
+  sv: "sv-SE",
+  tr: "tr-TR",
+  zh: "zh-CN",
+} as const satisfies Record<string, (typeof BRAVE_UI_LANGS)[number]>;
 
 const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
@@ -58,7 +122,8 @@ const WebSearchSchema = Type.Object({
   ),
   ui_lang: Type.Optional(
     Type.String({
-      description: "ISO language code for UI elements.",
+      description:
+        "UI locale code (e.g., 'en-US'). Brave-compatible short language codes (e.g., 'en', 'fr') are normalized when possible.",
     }),
   ),
   freshness: Type.Optional(
@@ -401,6 +466,36 @@ function normalizeFreshness(value: string | undefined): string | undefined {
   }
 
   return `${start}to${end}`;
+}
+
+function normalizeBraveUiLang(value: string | undefined, country?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalizedInput = value.trim().replace(/_/g, "-");
+  if (!normalizedInput) {
+    return undefined;
+  }
+
+  const lower = normalizedInput.toLowerCase();
+  const canonical = BRAVE_UI_LANG_CANONICAL.get(lower);
+  if (canonical) {
+    return canonical;
+  }
+
+  if (!/^[a-z]{2}$/.test(lower)) {
+    return undefined;
+  }
+
+  const normalizedCountry = country?.trim().toUpperCase();
+  if (normalizedCountry) {
+    const byCountry = BRAVE_UI_LANG_CANONICAL.get(`${lower}-${normalizedCountry}`.toLowerCase());
+    if (byCountry) {
+      return byCountry;
+    }
+  }
+
+  return BRAVE_UI_LANG_DEFAULTS_BY_LANGUAGE[lower];
 }
 
 /**
@@ -749,7 +844,16 @@ export function createWebSearchTool(options?: {
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
       const country = readStringParam(params, "country");
       const search_lang = readStringParam(params, "search_lang");
-      const ui_lang = readStringParam(params, "ui_lang");
+      const rawUiLang = readStringParam(params, "ui_lang");
+      const ui_lang = provider === "brave" ? normalizeBraveUiLang(rawUiLang, country) : rawUiLang;
+      if (provider === "brave" && rawUiLang && !ui_lang) {
+        return jsonResult({
+          error: "invalid_ui_lang",
+          message:
+            "ui_lang must be a supported Brave locale code (for example: en-US, en-GB, de-DE, fr-FR).",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const rawFreshness = readStringParam(params, "freshness");
       if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
