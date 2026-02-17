@@ -131,10 +131,7 @@ describe("gateway update.run", () => {
           },
         }),
       );
-      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
+      const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
       expect(res.ok).toBe(true);
 
       await waitForSignal(() => sigusr1.mock.calls.length > 0);
@@ -173,10 +170,7 @@ describe("gateway update.run", () => {
           },
         }),
       );
-      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
+      const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
       expect(res.ok).toBe(true);
       expect(updateMock).toHaveBeenCalledOnce();
     } finally {

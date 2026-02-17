@@ -51,7 +51,7 @@ describe("pw-tools-core", () => {
     });
 
     const res = await p;
-    const outPath = vi.mocked(saveAs).mock.calls[0]?.[0];
+    const outPath = (vi.mocked(saveAs).mock.calls as unknown as Array<[string]>)[0]?.[0];
     return { res, outPath };
   }
 

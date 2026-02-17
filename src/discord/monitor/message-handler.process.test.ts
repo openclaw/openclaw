@@ -3,7 +3,13 @@ import { createBaseDiscordMessageContext } from "./message-handler.test-harness.
 
 const reactMessageDiscord = vi.fn(async () => {});
 const removeReactionDiscord = vi.fn(async () => {});
-const dispatchInboundMessage = vi.fn(async () => ({
+type DispatchInboundParams = {
+  replyOptions?: {
+    onReasoningStream?: () => Promise<void> | void;
+    onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+  };
+};
+const dispatchInboundMessage = vi.fn(async (_params?: DispatchInboundParams) => ({
   queuedFinal: false,
   counts: { final: 0, tool: 0, block: 0 },
 }));
@@ -114,25 +120,20 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
-    dispatchInboundMessage.mockImplementationOnce(
-      async (params: {
-        replyOptions?: {
-          onReasoningStream?: () => Promise<void> | void;
-          onToolStart?: (payload: { name?: string }) => Promise<void> | void;
-        };
-      }) => {
-        await params.replyOptions?.onReasoningStream?.();
-        await params.replyOptions?.onToolStart?.({ name: "exec" });
-        return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
-      },
-    );
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onToolStart?.({ name: "exec" });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
 
     const ctx = await createBaseContext();
 
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    const emojis = reactMessageDiscord.mock.calls.map((call) => call[2]);
+    const emojis = (
+      reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+    ).map((call) => call[2]);
     expect(emojis).toContain("👀");
     expect(emojis).toContain("✅");
     expect(emojis).not.toContain("🧠");
@@ -161,7 +162,9 @@ describe("processDiscordMessage ack reactions", () => {
     }
 
     await runPromise;
-    const emojis = reactMessageDiscord.mock.calls.map((call) => call[2]);
+    const emojis = (
+      reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+    ).map((call) => call[2]);
     expect(emojis).toContain("⏳");
     expect(emojis).toContain("⚠️");
     expect(emojis).toContain("✅");
