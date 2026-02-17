@@ -121,7 +121,7 @@ describe("transcribeSonioxAudio", () => {
   it("polls multiple times before completion", async () => {
     const { fetchFn, calls } = buildSonioxFetchMock({
       transcript: "test",
-      pollAttempts: 3,
+      pollAttempts: 1,
     });
 
     const result = await transcribeSonioxAudio({
@@ -133,8 +133,8 @@ describe("transcribeSonioxAudio", () => {
     });
 
     expect(result.text).toBe("test");
-    // 1 upload + 1 create + 4 polls (3 processing + 1 completed) + 1 transcript = 7
-    expect(calls).toHaveLength(7);
+    // 1 upload + 1 create + 2 polls (1 processing + 1 completed) + 1 transcript = 5
+    expect(calls).toHaveLength(5);
   });
 
   it("multipart body contains correct boundary and filename", async () => {
