@@ -4,12 +4,12 @@ Provider plugin for **BlockRun** — smart LLM routing with x402 micropayments.
 
 ## Features
 
-| Feature | Benefit |
-|---------|---------|
-| **Smart Routing** | Auto-selects the best model for each request |
-| **30+ Models** | OpenAI, Anthropic, Google, DeepSeek, xAI — all through one integration |
-| **No API Keys** | Pay-per-request with USDC micropayments (x402 protocol) |
-| **Free Tier** | NVIDIA GPT-OSS-120B at $0 for simple queries |
+| Feature           | Benefit                                                                |
+| ----------------- | ---------------------------------------------------------------------- |
+| **Smart Routing** | Auto-selects the best model for each request                           |
+| **30+ Models**    | OpenAI, Anthropic, Google, DeepSeek, xAI — all through one integration |
+| **No API Keys**   | Pay-per-request with USDC micropayments (x402 protocol)                |
+| **Free Tier**     | NVIDIA GPT-OSS-120B at $0 for simple queries                           |
 
 ## Enable
 

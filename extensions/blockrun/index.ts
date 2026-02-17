@@ -92,7 +92,10 @@ function buildModelDefinition(params: {
     name: params.name,
     api: "openai-completions" as const,
     reasoning: false,
-    input: params.vision !== false ? (["text", "image"] as Array<"text" | "image">) : (["text"] as Array<"text">),
+    input:
+      params.vision !== false
+        ? (["text", "image"] as Array<"text" | "image">)
+        : (["text"] as Array<"text">),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: params.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: params.maxOutput ?? DEFAULT_MAX_TOKENS,

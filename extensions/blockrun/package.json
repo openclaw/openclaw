@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw BlockRun provider plugin with smart LLM routing and x402 micropayments",
   "type": "module",
-  "dependencies": {
-    "@blockrun/clawrouter": "^0.9.14"
-  },
   "devDependencies": {
     "openclaw": "workspace:*"
   },
