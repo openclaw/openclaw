@@ -107,15 +107,16 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
         return entry;
       }
     },
-    notifyApproval: async ({ id }) => {
-      const bus = activeBuses.get(DEFAULT_ACCOUNT_ID);
+    notifyApproval: async ({ id, accountId }) => {
+      const effectiveAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const bus = activeBuses.get(effectiveAccountId);
       if (!bus) {
-        throw new Error(`XMTP bus not running for account ${DEFAULT_ACCOUNT_ID}`);
+        throw new Error(`XMTP bus not running for account ${effectiveAccountId}`);
       }
       await bus.sendText(id, PAIRING_APPROVED_MESSAGE);
       getXmtpRuntime().channel.activity.record({
         channel: "xmtp",
-        accountId: DEFAULT_ACCOUNT_ID,
+        accountId: effectiveAccountId,
         direction: "outbound",
       });
     },
