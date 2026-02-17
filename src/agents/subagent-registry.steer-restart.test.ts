@@ -105,6 +105,37 @@ describe("subagent registry steer restarts", () => {
     expect(announce.childRunId).toBe("run-new");
   });
 
+  it("clears announce retry state when replacing after steer restart", () => {
+    mod.registerSubagentRun({
+      runId: "run-retry-reset-old",
+      childSessionKey: "agent:main:subagent:retry-reset",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry reset",
+      cleanup: "keep",
+    });
+
+    const previous = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(previous?.runId).toBe("run-retry-reset-old");
+    if (previous) {
+      previous.announceRetryCount = 2;
+      previous.lastAnnounceRetryAt = Date.now();
+    }
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-retry-reset-old",
+      nextRunId: "run-retry-reset-new",
+      fallback: previous,
+    });
+    expect(replaced).toBe(true);
+
+    const runs = mod.listSubagentRunsForRequester("agent:main:main");
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe("run-retry-reset-new");
+    expect(runs[0].announceRetryCount).toBeUndefined();
+    expect(runs[0].lastAnnounceRetryAt).toBeUndefined();
+  });
+
   it("restores announce for a finished run when steer replacement dispatch fails", async () => {
     mod.registerSubagentRun({
       runId: "run-failed-restart",
