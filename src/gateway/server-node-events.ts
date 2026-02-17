@@ -76,7 +76,10 @@ function shouldDropDuplicateVoiceTranscript(params: {
   ) {
     return true;
   }
-  recentVoiceTranscripts.set(params.sessionKey, { fingerprint: params.fingerprint, ts: params.now });
+  recentVoiceTranscripts.set(params.sessionKey, {
+    fingerprint: params.fingerprint,
+    ts: params.now,
+  });
 
   if (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
     const cutoff = params.now - VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS * 2;
