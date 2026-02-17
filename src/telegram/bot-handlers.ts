@@ -138,13 +138,16 @@ export const registerTelegramHandlers = ({
     debounceMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
+      const text = entry.msg.text ?? entry.msg.caption ?? "";
       if (entry.isForward) {
+        if (text.trim() && hasControlCommand(text, cfg, { botUsername: entry.botUsername })) {
+          return false;
+        }
         return true;
       }
       if (entry.allMedia.length > 0) {
         return false;
       }
-      const text = entry.msg.text ?? entry.msg.caption ?? "";
       if (!text.trim()) {
         return false;
       }
