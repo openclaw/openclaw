@@ -189,9 +189,14 @@ describe("memory plugin e2e", () => {
     const { detectCategory } = await import("./index.js");
 
     expect(detectCategory("I prefer dark mode")).toBe("preference");
+    expect(detectCategory("我喜欢深色模式")).toBe("preference");
     expect(detectCategory("We decided to use React")).toBe("decision");
+    expect(detectCategory("我决定以后都用 TypeScript")).toBe("decision");
     expect(detectCategory("My email is test@example.com")).toBe("entity");
+    expect(detectCategory("我是张三")).toBe("entity");
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
+    expect(detectCategory("我们有 3 台服务器")).toBe("fact");
+    expect(detectCategory("我有问题吗？")).toBe("other");
     expect(detectCategory("Random note")).toBe("other");
   });
 });

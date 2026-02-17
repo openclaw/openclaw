@@ -272,13 +272,26 @@ export function detectCategory(text: string): MemoryCategory {
   if (/prefer|radši|like|love|hate|want/i.test(lower)) {
     return "preference";
   }
+  if (/我喜欢|我偏好|我讨厌|我不喜欢|我爱|我想要|我需要/.test(text)) {
+    return "preference";
+  }
   if (/rozhodli|decided|will use|budeme/i.test(lower)) {
+    return "decision";
+  }
+  if (/我决定|我们决定|就这么定|以后都|以后用/.test(text)) {
     return "decision";
   }
   if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) {
     return "entity";
   }
-  if (/is|are|has|have|je|má|jsou/i.test(lower)) {
+  if (/我叫|我是|我的.+是|是我的/.test(text)) {
+    return "entity";
+  }
+  if (/is|are|has|have|je|má|jsou|事实|信息|状态|版本|配置|地址|端口/.test(lower)) {
+    return "fact";
+  }
+  // Avoid broad CJK copulas ("是/有"), which often appear in questions.
+  if (!/[?？]/.test(text) && /我有|我们有|具备|包含|属于/.test(text)) {
     return "fact";
   }
   return "other";
