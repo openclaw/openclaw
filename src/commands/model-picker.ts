@@ -424,6 +424,7 @@ export async function promptModelAllowlist(params: {
     message: params.message ?? "Models in /model picker (multi-select)",
     options,
     initialValues: initialKeys.length > 0 ? initialKeys : undefined,
+    searchable: true,
   });
   const selected = normalizeModelKeys(selection.map((value) => String(value)));
   if (selected.length > 0) {

@@ -142,8 +142,10 @@ describe("promptModelAllowlist", () => {
 
     await promptModelAllowlist({ config, prompter });
 
-    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    const call = multiselect.mock.calls[0]?.[0];
+    const options = call?.options ?? [];
     expectRouterModelFiltering(options as Array<{ value: string }>);
+    expect(call?.searchable).toBe(true);
   });
 
   it("filters to allowed keys when provided", async () => {
