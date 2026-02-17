@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { STATE_DIR } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
@@ -13,6 +11,7 @@ import {
   optimizeImageToPng,
   resizeToJpeg,
 } from "../media/image-ops.js";
+import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -35,13 +34,7 @@ type WebMediaOptions = {
 };
 
 export function getDefaultLocalRoots(): readonly string[] {
-  return [
-    os.tmpdir(),
-    path.join(STATE_DIR, "media"),
-    path.join(STATE_DIR, "agents"),
-    path.join(STATE_DIR, "workspace"),
-    path.join(STATE_DIR, "sandboxes"),
-  ];
+  return getDefaultMediaLocalRoots();
 }
 
 async function assertLocalMediaAllowed(
@@ -58,6 +51,24 @@ async function assertLocalMediaAllowed(
     resolved = await fs.realpath(mediaPath);
   } catch {
     resolved = path.resolve(mediaPath);
+  }
+
+  // Hardening: the default allowlist includes `os.tmpdir()`, and tests/CI may
+  // override the state dir into tmp. Avoid accidentally allowing per-agent
+  // `workspace-*` state roots via the tmpdir prefix match; require explicit
+  // localRoots for those.
+  if (localRoots === undefined) {
+    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
+    if (workspaceRoot) {
+      const stateDir = path.dirname(workspaceRoot);
+      const rel = path.relative(stateDir, resolved);
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+        const firstSegment = rel.split(path.sep)[0] ?? "";
+        if (firstSegment.startsWith("workspace-")) {
+          throw new Error(`Local media path is not under an allowed directory: ${mediaPath}`);
+        }
+      }
+    }
   }
   for (const root of roots) {
     let resolvedRoot: string;

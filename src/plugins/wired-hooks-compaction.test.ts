@@ -47,8 +47,11 @@ describe("compaction hook wiring", () => {
 
     expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
 
-    const [event] = hookMocks.runner.runBeforeCompaction.mock.calls[0];
-    expect(event.messageCount).toBe(3);
+    const beforeCalls = hookMocks.runner.runBeforeCompaction.mock.calls as unknown as Array<
+      [unknown]
+    >;
+    const event = beforeCalls[0]?.[0] as { messageCount?: number } | undefined;
+    expect(event?.messageCount).toBe(3);
   });
 
   it("calls runAfterCompaction when willRetry is false", async () => {
@@ -75,9 +78,14 @@ describe("compaction hook wiring", () => {
 
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
 
-    const [event] = hookMocks.runner.runAfterCompaction.mock.calls[0];
-    expect(event.messageCount).toBe(2);
-    expect(event.compactedCount).toBe(1);
+    const afterCalls = hookMocks.runner.runAfterCompaction.mock.calls as unknown as Array<
+      [unknown]
+    >;
+    const event = afterCalls[0]?.[0] as
+      | { messageCount?: number; compactedCount?: number }
+      | undefined;
+    expect(event?.messageCount).toBe(2);
+    expect(event?.compactedCount).toBe(1);
   });
 
   it("does not call runAfterCompaction when willRetry is true", async () => {

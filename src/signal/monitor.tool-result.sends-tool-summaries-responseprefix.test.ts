@@ -25,36 +25,100 @@ const {
   waitForTransportReadyMock,
 } = getSignalToolResultTestMocks();
 
+const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
+
+function createMonitorRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: ((code: number): never => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never,
+  };
+}
+
+function setSignalAutoStartConfig(overrides: Record<string, unknown> = {}) {
+  setSignalToolResultTestConfig(createSignalConfig(overrides));
+}
+
+function createSignalConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const base = config as OpenClawConfig;
+  const channels = (base.channels ?? {}) as Record<string, unknown>;
+  const signal = (channels.signal ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    channels: {
+      ...channels,
+      signal: {
+        ...signal,
+        autoStart: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...overrides,
+      },
+    },
+  };
+}
+
+function createAutoAbortController() {
+  const abortController = new AbortController();
+  streamMock.mockImplementation(async () => {
+    abortController.abort();
+    return;
+  });
+  return abortController;
+}
+
 async function runMonitorWithMocks(
   opts: Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0],
 ) {
   const { monitorSignalProvider } = await import("./monitor.js");
   return monitorSignalProvider(opts);
 }
+
+async function receiveSignalPayloads(params: {
+  payloads: unknown[];
+  opts?: Partial<Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0]>;
+}) {
+  const abortController = new AbortController();
+  streamMock.mockImplementation(async ({ onEvent }) => {
+    for (const payload of params.payloads) {
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+    }
+    abortController.abort();
+  });
+
+  await runMonitorWithMocks({
+    autoStart: false,
+    baseUrl: SIGNAL_BASE_URL,
+    abortSignal: abortController.signal,
+    ...params.opts,
+  });
+
+  await flush();
+}
+
+function getDirectSignalEventsFor(sender: string) {
+  const route = resolveAgentRoute({
+    cfg: config as OpenClawConfig,
+    channel: "signal",
+    accountId: "default",
+    peer: { kind: "direct", id: normalizeE164(sender) },
+  });
+  return peekSystemEvents(route.sessionKey);
+}
+
 describe("monitorSignalProvider tool results", () => {
   it("uses bounded readiness checks when auto-starting the daemon", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: ((code: number): never => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
-    setSignalToolResultTestConfig({
-      ...config,
-      channels: {
-        ...config.channels,
-        signal: { autoStart: true, dmPolicy: "open", allowFrom: ["*"] },
-      },
-    });
-    const abortController = new AbortController();
-    streamMock.mockImplementation(async () => {
-      abortController.abort();
-      return;
-    });
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = createAutoAbortController();
     await runMonitorWithMocks({
       autoStart: true,
-      baseUrl: "http://127.0.0.1:8080",
+      baseUrl: SIGNAL_BASE_URL,
       abortSignal: abortController.signal,
       runtime,
     });
@@ -74,34 +138,13 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("uses startupTimeoutMs override when provided", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: ((code: number): never => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
-    setSignalToolResultTestConfig({
-      ...config,
-      channels: {
-        ...config.channels,
-        signal: {
-          autoStart: true,
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          startupTimeoutMs: 60_000,
-        },
-      },
-    });
-    const abortController = new AbortController();
-    streamMock.mockImplementation(async () => {
-      abortController.abort();
-      return;
-    });
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig({ startupTimeoutMs: 60_000 });
+    const abortController = createAutoAbortController();
 
     await runMonitorWithMocks({
       autoStart: true,
-      baseUrl: "http://127.0.0.1:8080",
+      baseUrl: SIGNAL_BASE_URL,
       abortSignal: abortController.signal,
       runtime,
       startupTimeoutMs: 90_000,
@@ -116,34 +159,13 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("caps startupTimeoutMs at 2 minutes", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: ((code: number): never => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
-    setSignalToolResultTestConfig({
-      ...config,
-      channels: {
-        ...config.channels,
-        signal: {
-          autoStart: true,
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          startupTimeoutMs: 180_000,
-        },
-      },
-    });
-    const abortController = new AbortController();
-    streamMock.mockImplementation(async () => {
-      abortController.abort();
-      return;
-    });
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig({ startupTimeoutMs: 180_000 });
+    const abortController = createAutoAbortController();
 
     await runMonitorWithMocks({
       autoStart: true,
-      baseUrl: "http://127.0.0.1:8080",
+      baseUrl: SIGNAL_BASE_URL,
       abortSignal: abortController.signal,
       runtime,
     });
@@ -157,79 +179,45 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("skips tool summaries with responsePrefix", async () => {
-    const abortController = new AbortController();
     replyMock.mockResolvedValue({ text: "final reply" });
 
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          dataMessage: {
-            message: "hello",
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: {
+              message: "hello",
+            },
           },
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      abortController.abort();
+      ],
     });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
-    setSignalToolResultTestConfig({
-      ...config,
-      channels: {
-        ...config.channels,
-        signal: {
-          ...config.channels?.signal,
-          autoStart: false,
-          dmPolicy: "pairing",
-          allowFrom: [],
-        },
-      },
-    });
-    const abortController = new AbortController();
-
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          dataMessage: {
-            message: "hello",
+    setSignalToolResultTestConfig(
+      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+    );
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: {
+              message: "hello",
+            },
           },
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      abortController.abort();
+      ],
     });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
@@ -239,35 +227,22 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("ignores reaction-only messages", async () => {
-    const abortController = new AbortController();
-
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          reactionMessage: {
-            emoji: "👍",
-            targetAuthor: "+15550002222",
-            targetSentTimestamp: 2,
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            reactionMessage: {
+              emoji: "👍",
+              targetAuthor: "+15550002222",
+              targetSentTimestamp: 2,
+            },
           },
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      abortController.abort();
+      ],
     });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
@@ -275,38 +250,25 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("ignores reaction-only dataMessage.reaction events (don’t treat as broken attachments)", async () => {
-    const abortController = new AbortController();
-
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          dataMessage: {
-            reaction: {
-              emoji: "👍",
-              targetAuthor: "+15550002222",
-              targetSentTimestamp: 2,
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: {
+              reaction: {
+                emoji: "👍",
+                targetAuthor: "+15550002222",
+                targetSentTimestamp: 2,
+              },
+              attachments: [{}],
             },
-            attachments: [{}],
           },
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      abortController.abort();
+      ],
     });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
@@ -314,204 +276,121 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("enqueues system events for reaction notifications", async () => {
-    setSignalToolResultTestConfig({
-      ...config,
-      channels: {
-        ...config.channels,
-        signal: {
-          ...config.channels?.signal,
-          autoStart: false,
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          reactionNotifications: "all",
-        },
-      },
-    });
-    const abortController = new AbortController();
-
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          reactionMessage: {
-            emoji: "✅",
-            targetAuthor: "+15550002222",
-            targetSentTimestamp: 2,
+    setSignalToolResultTestConfig(
+      createSignalConfig({
+        autoStart: false,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        reactionNotifications: "all",
+      }),
+    );
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            reactionMessage: {
+              emoji: "✅",
+              targetAuthor: "+15550002222",
+              targetSentTimestamp: 2,
+            },
           },
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      abortController.abort();
+      ],
     });
 
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
-
-    const route = resolveAgentRoute({
-      cfg: config as OpenClawConfig,
-      channel: "signal",
-      accountId: "default",
-      peer: { kind: "direct", id: normalizeE164("+15550001111") },
-    });
-    const events = peekSystemEvents(route.sessionKey);
+    const events = getDirectSignalEventsFor("+15550001111");
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
   it("notifies on own reactions when target includes uuid + phone", async () => {
-    setSignalToolResultTestConfig({
-      ...config,
-      channels: {
-        ...config.channels,
-        signal: {
-          ...config.channels?.signal,
-          autoStart: false,
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          account: "+15550002222",
-          reactionNotifications: "own",
-        },
-      },
-    });
-    const abortController = new AbortController();
-
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          reactionMessage: {
-            emoji: "✅",
-            targetAuthor: "+15550002222",
-            targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
-            targetSentTimestamp: 2,
+    setSignalToolResultTestConfig(
+      createSignalConfig({
+        autoStart: false,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        account: "+15550002222",
+        reactionNotifications: "own",
+      }),
+    );
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            reactionMessage: {
+              emoji: "✅",
+              targetAuthor: "+15550002222",
+              targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
+              targetSentTimestamp: 2,
+            },
           },
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      abortController.abort();
+      ],
     });
 
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
-
-    const route = resolveAgentRoute({
-      cfg: config as OpenClawConfig,
-      channel: "signal",
-      accountId: "default",
-      peer: { kind: "direct", id: normalizeE164("+15550001111") },
-    });
-    const events = peekSystemEvents(route.sessionKey);
+    const events = getDirectSignalEventsFor("+15550001111");
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
   it("processes messages when reaction metadata is present", async () => {
-    const abortController = new AbortController();
     replyMock.mockResolvedValue({ text: "pong" });
 
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          reactionMessage: {
-            emoji: "👍",
-            targetAuthor: "+15550002222",
-            targetSentTimestamp: 2,
-          },
-          dataMessage: {
-            message: "ping",
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            reactionMessage: {
+              emoji: "👍",
+              targetAuthor: "+15550002222",
+              targetSentTimestamp: 2,
+            },
+            dataMessage: {
+              message: "ping",
+            },
           },
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      abortController.abort();
+      ],
     });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(updateLastRouteMock).toHaveBeenCalled();
   });
 
   it("does not resend pairing code when a request is already pending", async () => {
-    setSignalToolResultTestConfig({
-      ...config,
-      channels: {
-        ...config.channels,
-        signal: {
-          ...config.channels?.signal,
-          autoStart: false,
-          dmPolicy: "pairing",
-          allowFrom: [],
-        },
-      },
-    });
-    const abortController = new AbortController();
+    setSignalToolResultTestConfig(
+      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+    );
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      const payload = {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          dataMessage: {
-            message: "hello",
-          },
+    const payload = {
+      envelope: {
+        sourceNumber: "+15550001111",
+        sourceName: "Ada",
+        timestamp: 1,
+        dataMessage: {
+          message: "hello",
         },
-      };
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify(payload),
-      });
-      await onEvent({
-        event: "receive",
-        data: JSON.stringify({
+      },
+    };
+    await receiveSignalPayloads({
+      payloads: [
+        payload,
+        {
           ...payload,
           envelope: { ...payload.envelope, timestamp: 2 },
-        }),
-      });
-      abortController.abort();
+        },
+      ],
     });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: "http://127.0.0.1:8080",
-      abortSignal: abortController.signal,
-    });
-
-    await flush();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
   });

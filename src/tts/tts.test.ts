@@ -1,7 +1,9 @@
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", () => ({
@@ -53,12 +55,36 @@ const {
   resolveEdgeOutputFormat,
 } = _test;
 
+const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
+  role: "assistant",
+  content,
+  api: "openai-completions",
+  provider: "openai",
+  model: "gpt-4o-mini",
+  usage: {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  },
+  stopReason: "stop",
+  timestamp: Date.now(),
+});
+
 describe("tts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(completeSimple).mockResolvedValue({
-      content: [{ type: "text", text: "Summary" }],
-    });
+    vi.mocked(completeSimple).mockResolvedValue(
+      mockAssistantMessage([{ type: "text", text: "Summary" }]),
+    );
   });
 
   describe("isValidVoiceId", () => {
@@ -164,7 +190,7 @@ describe("tts", () => {
   });
 
   describe("resolveEdgeOutputFormat", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -222,7 +248,7 @@ describe("tts", () => {
   });
 
   describe("summarizeText", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -230,9 +256,9 @@ describe("tts", () => {
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue({
-        content: [{ type: "text", text: mockSummary }],
-      });
+      vi.mocked(completeSimple).mockResolvedValue(
+        mockAssistantMessage([{ type: "text", text: mockSummary }]),
+      );
 
       const longText = "A".repeat(2000);
       const result = await summarizeText({
@@ -267,7 +293,7 @@ describe("tts", () => {
     });
 
     it("uses summaryModel override when configured", async () => {
-      const cfg = {
+      const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
@@ -329,9 +355,7 @@ describe("tts", () => {
     });
 
     it("throws error when no summary is returned", async () => {
-      vi.mocked(completeSimple).mockResolvedValue({
-        content: [],
-      });
+      vi.mocked(completeSimple).mockResolvedValue(mockAssistantMessage([]));
 
       await expect(
         summarizeText({
@@ -345,9 +369,9 @@ describe("tts", () => {
     });
 
     it("throws error when summary content is empty", async () => {
-      vi.mocked(completeSimple).mockResolvedValue({
-        content: [{ type: "text", text: "   " }],
-      });
+      vi.mocked(completeSimple).mockResolvedValue(
+        mockAssistantMessage([{ type: "text", text: "   " }]),
+      );
 
       await expect(
         summarizeText({
@@ -362,41 +386,9 @@ describe("tts", () => {
   });
 
   describe("getTtsProvider", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
-    };
-
-    const restoreEnv = (snapshot: Record<string, string | undefined>) => {
-      const keys = ["OPENAI_API_KEY", "ELEVENLABS_API_KEY", "XI_API_KEY"] as const;
-      for (const key of keys) {
-        const value = snapshot[key];
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-    };
-
-    const withEnv = (env: Record<string, string | undefined>, run: () => void) => {
-      const snapshot = {
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
-        XI_API_KEY: process.env.XI_API_KEY,
-      };
-      try {
-        for (const [key, value] of Object.entries(env)) {
-          if (value === undefined) {
-            delete process.env[key];
-          } else {
-            process.env[key] = value;
-          }
-        }
-        run();
-      } finally {
-        restoreEnv(snapshot);
-      }
     };
 
     it("prefers OpenAI when no provider is configured and API key exists", () => {
@@ -446,7 +438,7 @@ describe("tts", () => {
   });
 
   describe("maybeApplyTtsToPayload", () => {
-    const baseCfg = {
+    const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {
         tts: {
@@ -457,7 +449,9 @@ describe("tts", () => {
       },
     };
 
-    it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
+    const withMockedAutoTtsFetch = async (
+      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+    ) => {
       const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
       process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
       const originalFetch = globalThis.fetch;
@@ -466,132 +460,91 @@ describe("tts", () => {
         arrayBuffer: async () => new ArrayBuffer(1),
       }));
       globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        await run(fetchMock);
+      } finally {
+        globalThis.fetch = originalFetch;
+        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+      }
+    };
 
-      const payload = { text: "Hello world" };
-      const result = await maybeApplyTtsToPayload({
-        payload,
-        cfg: baseCfg,
-        kind: "final",
-        inboundAudio: false,
+    const taggedCfg: OpenClawConfig = {
+      ...baseCfg,
+      messages: {
+        ...baseCfg.messages!,
+        tts: { ...baseCfg.messages!.tts, auto: "tagged" },
+      },
+    };
+
+    it("skips auto-TTS when inbound audio gating is on and the message is not audio", async () => {
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const payload = { text: "Hello world" };
+        const result = await maybeApplyTtsToPayload({
+          payload,
+          cfg: baseCfg,
+          kind: "final",
+          inboundAudio: false,
+        });
+
+        expect(result).toBe(payload);
+        expect(fetchMock).not.toHaveBeenCalled();
       });
-
-      expect(result).toBe(payload);
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("skips auto-TTS when markdown stripping leaves text too short", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const payload = { text: "### **bold**" };
+        const result = await maybeApplyTtsToPayload({
+          payload,
+          cfg: baseCfg,
+          kind: "final",
+          inboundAudio: true,
+        });
 
-      const payload = { text: "### **bold**" };
-      const result = await maybeApplyTtsToPayload({
-        payload,
-        cfg: baseCfg,
-        kind: "final",
-        inboundAudio: true,
+        expect(result).toBe(payload);
+        expect(fetchMock).not.toHaveBeenCalled();
       });
-
-      expect(result).toBe(payload);
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("attempts auto-TTS when inbound audio gating is on and the message is audio", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "Hello world" },
+          cfg: baseCfg,
+          kind: "final",
+          inboundAudio: true,
+        });
 
-      const result = await maybeApplyTtsToPayload({
-        payload: { text: "Hello world" },
-        cfg: baseCfg,
-        kind: "final",
-        inboundAudio: true,
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
       });
-
-      expect(result.mediaUrl).toBeDefined();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("skips auto-TTS in tagged mode unless a tts tag is present", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const payload = { text: "Hello world" };
+        const result = await maybeApplyTtsToPayload({
+          payload,
+          cfg: taggedCfg,
+          kind: "final",
+        });
 
-      const cfg = {
-        ...baseCfg,
-        messages: {
-          ...baseCfg.messages,
-          tts: { ...baseCfg.messages.tts, auto: "tagged" },
-        },
-      };
-
-      const payload = { text: "Hello world" };
-      const result = await maybeApplyTtsToPayload({
-        payload,
-        cfg,
-        kind: "final",
+        expect(result).toBe(payload);
+        expect(fetchMock).not.toHaveBeenCalled();
       });
-
-      expect(result).toBe(payload);
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
 
     it("runs auto-TTS in tagged mode when tags are present", async () => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      await withMockedAutoTtsFetch(async (fetchMock) => {
+        const result = await maybeApplyTtsToPayload({
+          payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
+          cfg: taggedCfg,
+          kind: "final",
+        });
 
-      const cfg = {
-        ...baseCfg,
-        messages: {
-          ...baseCfg.messages,
-          tts: { ...baseCfg.messages.tts, auto: "tagged" },
-        },
-      };
-
-      const result = await maybeApplyTtsToPayload({
-        payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
-        cfg,
-        kind: "final",
+        expect(result.mediaUrl).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
       });
-
-      expect(result.mediaUrl).toBeDefined();
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      globalThis.fetch = originalFetch;
-      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
   });
 });

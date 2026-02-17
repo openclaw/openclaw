@@ -1,9 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelRow } from "./list.types.js";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
   getCustomProviderApiKey,
@@ -15,12 +12,16 @@ import {
   resolveForwardCompatModel,
 } from "../../agents/model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
+import { ensurePiAuthJsonFromAuthProfiles } from "../../agents/pi-auth-json.js";
+import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   formatErrorWithStack,
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
+import type { ModelRow } from "./list.types.js";
 import { isLocalBaseUrl, modelKey } from "./shared.js";
 
 const hasAuthForProvider = (
@@ -101,6 +102,7 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
 export async function loadModelRegistry(cfg: OpenClawConfig) {
   await ensureOpenClawModelsJson(cfg);
   const agentDir = resolveOpenClawAgentDir();
+  await ensurePiAuthJsonFromAuthProfiles(agentDir);
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
   const appended = appendAntigravityForwardCompatModels(registry.getAll(), registry);

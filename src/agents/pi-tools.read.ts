@@ -1,10 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
-import type { AnyAgentTool } from "./pi-tools.types.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -86,6 +86,12 @@ type RequiredParamGroup = {
   allowEmpty?: boolean;
   label?: string;
 };
+
+const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
+
+function parameterValidationError(message: string): Error {
+  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
+}
 
 export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
@@ -245,9 +251,10 @@ export function assertRequiredParams(
   toolName: string,
 ): void {
   if (!record || typeof record !== "object") {
-    throw new Error(`Missing parameters for ${toolName}`);
+    throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
+  const missingLabels: string[] = [];
   for (const group of groups) {
     const satisfied = group.keys.some((key) => {
       if (!(key in record)) {
@@ -265,8 +272,14 @@ export function assertRequiredParams(
 
     if (!satisfied) {
       const label = group.label ?? group.keys.join(" or ");
-      throw new Error(`Missing required parameter: ${label}`);
+      missingLabels.push(label);
     }
+  }
+
+  if (missingLabels.length > 0) {
+    const joined = missingLabels.join(", ");
+    const noun = missingLabels.length === 1 ? "parameter" : "parameters";
+    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
   }
 }
 

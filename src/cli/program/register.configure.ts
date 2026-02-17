@@ -1,9 +1,7 @@
 import type { Command } from "commander";
 import {
   CONFIGURE_WIZARD_SECTIONS,
-  configureCommand,
-  configureCommandWithSections,
-  parseConfigureWizardSections,
+  configureCommandFromSectionsArg,
 } from "../../commands/configure.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -13,7 +11,7 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 export function registerConfigureCommand(program: Command) {
   program
     .command("configure")
-    .description("Interactive prompt to set up credentials, devices, and agent defaults")
+    .description("Interactive setup wizard for credentials, channels, gateway, and agent defaults")
     .addHelpText(
       "after",
       () =>
@@ -27,21 +25,7 @@ export function registerConfigureCommand(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { sections, invalid } = parseConfigureWizardSections(opts.section);
-        if (sections.length === 0) {
-          await configureCommand(defaultRuntime);
-          return;
-        }
-
-        if (invalid.length > 0) {
-          defaultRuntime.error(
-            `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,
-          );
-          defaultRuntime.exit(1);
-          return;
-        }
-
-        await configureCommandWithSections(sections as never, defaultRuntime);
+        await configureCommandFromSectionsArg(opts.section, defaultRuntime);
       });
     });
 }

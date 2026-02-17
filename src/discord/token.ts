@@ -1,10 +1,10 @@
+import type { BaseTokenResolution } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export type DiscordTokenSource = "env" | "config" | "none";
 
-export type DiscordTokenResolution = {
-  token: string;
+export type DiscordTokenResolution = BaseTokenResolution & {
   source: DiscordTokenSource;
 };
 

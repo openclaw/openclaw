@@ -1,33 +1,37 @@
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { sendMessageDiscord } from "../../discord/send.js";
-import type { sendMessageIMessage } from "../../imessage/send.js";
-import type { sendMessageSlack } from "../../slack/send.js";
-import type { sendMessageTelegram } from "../../telegram/send.js";
-import type { sendMessageWhatsApp } from "../../web/outbound.js";
-import type { OutboundIdentity } from "./identity.js";
-import type { NormalizedOutboundPayload } from "./payloads.js";
-import type { OutboundChannel } from "./targets.js";
 import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+} from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import type { sendMessageDiscord } from "../../discord/send.js";
+import type { sendMessageIMessage } from "../../imessage/send.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
+import type { sendMessageSlack } from "../../slack/send.js";
+import type { sendMessageTelegram } from "../../telegram/send.js";
+import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import type { OutboundIdentity } from "./identity.js";
+import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
@@ -78,8 +82,7 @@ type ChannelHandler = {
   sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
 };
 
-// Channel docking: outbound delivery delegates to plugin.outbound adapters.
-async function createChannelHandler(params: {
+type ChannelHandlerParams = {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -90,47 +93,27 @@ async function createChannelHandler(params: {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
-}): Promise<ChannelHandler> {
+  mediaLocalRoots?: readonly string[];
+};
+
+// Channel docking: outbound delivery delegates to plugin.outbound adapters.
+async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   const outbound = await loadChannelOutboundAdapter(params.channel);
-  if (!outbound?.sendText || !outbound?.sendMedia) {
-    throw new Error(`Outbound not configured for channel: ${params.channel}`);
-  }
-  const handler = createPluginHandler({
-    outbound,
-    cfg: params.cfg,
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-    identity: params.identity,
-    deps: params.deps,
-    gifPlayback: params.gifPlayback,
-    silent: params.silent,
-  });
+  const handler = createPluginHandler({ ...params, outbound });
   if (!handler) {
     throw new Error(`Outbound not configured for channel: ${params.channel}`);
   }
   return handler;
 }
 
-function createPluginHandler(params: {
-  outbound?: ChannelOutboundAdapter;
-  cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  identity?: OutboundIdentity;
-  deps?: OutboundSendDeps;
-  gifPlayback?: boolean;
-  silent?: boolean;
-}): ChannelHandler | null {
+function createPluginHandler(
+  params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
+): ChannelHandler | null {
   const outbound = params.outbound;
   if (!outbound?.sendText || !outbound?.sendMedia) {
     return null;
   }
+  const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
   const sendMedia = outbound.sendMedia;
   const chunker = outbound.chunker ?? null;
@@ -142,47 +125,40 @@ function createPluginHandler(params: {
     sendPayload: outbound.sendPayload
       ? async (payload) =>
           outbound.sendPayload!({
-            cfg: params.cfg,
-            to: params.to,
+            ...baseCtx,
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
-            accountId: params.accountId,
-            replyToId: params.replyToId,
-            threadId: params.threadId,
-            identity: params.identity,
-            gifPlayback: params.gifPlayback,
-            deps: params.deps,
-            silent: params.silent,
             payload,
           })
       : undefined,
     sendText: async (text) =>
       sendText({
-        cfg: params.cfg,
-        to: params.to,
+        ...baseCtx,
         text,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        identity: params.identity,
-        gifPlayback: params.gifPlayback,
-        deps: params.deps,
-        silent: params.silent,
       }),
     sendMedia: async (caption, mediaUrl) =>
       sendMedia({
-        cfg: params.cfg,
-        to: params.to,
+        ...baseCtx,
         text: caption,
         mediaUrl,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        identity: params.identity,
-        gifPlayback: params.gifPlayback,
-        deps: params.deps,
-        silent: params.silent,
       }),
+  };
+}
+
+function createChannelOutboundContextBase(
+  params: ChannelHandlerParams,
+): Omit<ChannelOutboundContext, "text" | "mediaUrl"> {
+  return {
+    cfg: params.cfg,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    identity: params.identity,
+    gifPlayback: params.gifPlayback,
+    deps: params.deps,
+    silent: params.silent,
+    mediaLocalRoots: params.mediaLocalRoots,
   };
 }
 
@@ -203,6 +179,8 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  /** Active agent id for media local-root scoping. */
+  agentId?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -286,6 +264,10 @@ async function deliverOutboundPayloadsCore(
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    cfg,
+    params.agentId ?? params.mirror?.agentId,
+  );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -298,6 +280,7 @@ async function deliverOutboundPayloadsCore(
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
+    mediaLocalRoots,
   });
   const textLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
@@ -400,6 +383,7 @@ async function deliverOutboundPayloadsCore(
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: formatted.styles,
+        mediaLocalRoots,
       })),
     };
   };

@@ -1,7 +1,8 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -62,15 +63,12 @@ describe("createOpenClawCodingTools", () => {
     it("adds Claude-style aliases to schemas without dropping metadata", () => {
       const base: AgentTool = {
         name: "write",
+        label: "write",
         description: "test",
-        parameters: {
-          type: "object",
-          required: ["path", "content"],
-          properties: {
-            path: { type: "string", description: "Path" },
-            content: { type: "string", description: "Body" },
-          },
-        },
+        parameters: Type.Object({
+          path: Type.String({ description: "Path" }),
+          content: Type.String({ description: "Body" }),
+        }),
         execute: vi.fn(),
       };
 
@@ -90,19 +88,19 @@ describe("createOpenClawCodingTools", () => {
       const execute = vi.fn(async (_id, args) => args);
       const tool: AgentTool = {
         name: "write",
+        label: "write",
         description: "test",
-        parameters: {
-          type: "object",
-          required: ["path", "content"],
-          properties: {
-            path: { type: "string" },
-            content: { type: "string" },
-          },
-        },
+        parameters: Type.Object({
+          path: Type.String(),
+          content: Type.String(),
+        }),
         execute,
       };
 
-      const wrapped = __testing.wrapToolParamNormalization(tool, [{ keys: ["path", "file_path"] }]);
+      const wrapped = __testing.wrapToolParamNormalization(tool, [
+        { keys: ["path", "file_path"], label: "path (path or file_path)" },
+        { keys: ["content"], label: "content" },
+      ]);
 
       await wrapped.execute("tool-1", { file_path: "foo.txt", content: "x" });
       expect(execute).toHaveBeenCalledWith(
@@ -115,8 +113,20 @@ describe("createOpenClawCodingTools", () => {
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );
+      await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
+      );
       await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
         /Missing required parameter/,
+      );
+      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
+      );
+      await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
+        /Missing required parameters: path \(path or file_path\), content/,
+      );
+      await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
       );
     });
   });

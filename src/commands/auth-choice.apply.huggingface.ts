@@ -1,4 +1,3 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import {
   discoverHuggingfaceModels,
   isHuggingfacePolicyLocked,
@@ -9,6 +8,8 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
+import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { ensureModelAllowlistEntry } from "./model-allowlist.js";
 import {
@@ -27,15 +28,7 @@ export async function applyAuthChoiceHuggingface(
 
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
-  const noteAgentModel = async (model: string) => {
-    if (!params.agentId) {
-      return;
-    }
-    await params.prompter.note(
-      `Default model set to ${model} for agent "${params.agentId}".`,
-      "Model configured",
-    );
-  };
+  const noteAgentModel = createAuthChoiceAgentModelNoter(params);
 
   let hasCredential = false;
   let hfKey = "";

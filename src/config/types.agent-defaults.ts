@@ -91,6 +91,34 @@ export type CliBackendConfig = {
   imageMode?: "repeat" | "list";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /** Runtime reliability tuning for this backend's process lifecycle. */
+  reliability?: {
+    /** No-output watchdog tuning (fresh vs resumed runs). */
+    watchdog?: {
+      /** Fresh/new sessions (non-resume). */
+      fresh?: {
+        /** Fixed watchdog timeout in ms (overrides ratio when set). */
+        noOutputTimeoutMs?: number;
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+      /** Resume sessions. */
+      resume?: {
+        /** Fixed watchdog timeout in ms (overrides ratio when set). */
+        noOutputTimeoutMs?: number;
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+    };
+  };
 };
 
 export type AgentDefaultsConfig = {
@@ -108,7 +136,7 @@ export type AgentDefaultsConfig = {
   skipBootstrap?: boolean;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
-  /** Max total chars across all injected bootstrap files (default: 24000). */
+  /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
@@ -192,6 +220,8 @@ export type AgentDefaultsConfig = {
     prompt?: string;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;
+    /** Suppress tool error warning payloads during heartbeat runs. */
+    suppressToolErrorWarnings?: boolean;
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
@@ -230,7 +260,7 @@ export type AgentDefaultsConfig = {
     workspaceAccess?: "none" | "ro" | "rw";
     /**
      * Session tools visibility for sandboxed sessions.
-     * - "spawned": only allow session tools to target sessions spawned from this session (default)
+     * - "spawned": only allow session tools to target the current session and sessions spawned from it (default)
      * - "all": allow session tools to target any session
      */
     sessionToolsVisibility?: "spawned" | "all";
