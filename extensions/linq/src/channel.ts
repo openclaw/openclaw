@@ -16,7 +16,6 @@ import {
   type ResolvedLinqAccount,
   type LinqProbe,
   LinqConfigSchema,
-  linqOnboardingAdapter,
 } from "openclaw/plugin-sdk";
 import { getLinqRuntime } from "./runtime.js";
 
@@ -28,7 +27,6 @@ export const linqPlugin: ChannelPlugin<ResolvedLinqAccount, LinqProbe> = {
     ...meta,
     aliases: ["linq-imessage"],
   },
-  onboarding: linqOnboardingAdapter,
   pairing: {
     idLabel: "phoneNumber",
     notifyApproval: async ({ id }) => {
