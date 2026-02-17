@@ -436,9 +436,13 @@ describe("telegramMessageActions", () => {
 
   it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {
     const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
 
     await expect(
-      telegramMessageActions.handleAction({
+      handleAction({
         channel: "telegram",
         action: "edit",
         params: {
@@ -595,9 +599,13 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
     } as OpenClawConfig;
+    const handleAction = signalMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("signal handleAction unavailable");
+    }
 
     await expect(
-      signalMessageActions.handleAction({
+      handleAction({
         channel: "signal",
         action: "react",
         params: { to: "+15550001111", messageId: "123", emoji: "✅" },
@@ -661,9 +669,13 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
+    const handleAction = signalMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("signal handleAction unavailable");
+    }
 
     await expect(
-      signalMessageActions.handleAction({
+      handleAction({
         channel: "signal",
         action: "react",
         params: { to: "signal:group:group-id", messageId: "123", emoji: "✅" },

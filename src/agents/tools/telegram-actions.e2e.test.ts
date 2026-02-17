@@ -76,7 +76,7 @@ describe("handleTelegramAction", () => {
     reactMessageTelegram.mockResolvedValueOnce({
       ok: false,
       warning: "Reaction unavailable: ✅",
-    });
+    } as unknown as Awaited<ReturnType<typeof reactMessageTelegram>>);
     const result = await handleTelegramAction(defaultReactionAction, reactionConfig("minimal"));
     const textPayload = result.content.find((item) => item.type === "text");
     expect(textPayload?.type).toBe("text");

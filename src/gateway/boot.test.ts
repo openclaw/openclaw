@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionScope } from "../config/sessions/types.js";
 
 const agentCommand = vi.fn();
 
@@ -14,7 +15,12 @@ const { resolveStorePath } = await import("../config/sessions/paths.js");
 const { loadSessionStore, saveSessionStore } = await import("../config/sessions/store.js");
 
 describe("runBootOnce", () => {
-  const resolveMainStore = (cfg: { session?: { store?: string } } = {}) => {
+  const resolveMainStore = (
+    cfg: {
+      session?: { store?: string; scope?: SessionScope; mainKey?: string };
+      agents?: { list?: Array<{ id?: string; default?: boolean }> };
+    } = {},
+  ) => {
     const sessionKey = resolveMainSessionKey(cfg);
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
