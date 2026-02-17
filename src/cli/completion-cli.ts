@@ -1,9 +1,10 @@
+import { Command, Option } from "commander";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Command, Option } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { loggingState } from "../logging/state.js";
 import { pathExists } from "../utils.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry.js";
 import { getProgramContext } from "./program/program-context.js";
@@ -241,6 +242,8 @@ export function registerCompletionCli(program: Command) {
       // Route logs to stderr so plugin loading messages do not corrupt
       // the completion script written to stdout.
       routeLogsToStderr();
+      // Suppress file logging so completion output does not pollute the shared gateway log file.
+      loggingState.overrideSettings = { level: "silent" };
       const shell = options.shell ?? "zsh";
 
       // Completion needs the full Commander command tree (including nested subcommands).
