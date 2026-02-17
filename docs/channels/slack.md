@@ -201,6 +201,12 @@ For actions/directory reads, user token can be preferred when configured. For wr
 - Enable native Slack command handlers with `channels.slack.commands.native: true` (or global `commands.native: true`).
 - When native commands are enabled, register matching slash commands in Slack (`/<command>` names).
 - If native commands are not enabled, you can run a single configured slash command via `channels.slack.slashCommand`.
+- Native arg menus now adapt their rendering strategy:
+  - up to 5 options: button blocks
+  - 6-100 options: static select menu
+  - more than 100 options: external select with async option filtering when interactivity options handlers are available
+  - if encoded option values exceed Slack limits, the flow falls back to buttons
+- For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
 
 Default slash command settings:
 
@@ -286,6 +292,9 @@ Available action groups in current Slack tooling:
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
+- Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
+  - block actions: selected values, labels, picker values, and `workflow_*` metadata
+  - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
 
 ## Ack reactions
 
