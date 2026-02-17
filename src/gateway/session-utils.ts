@@ -1,11 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type {
-  GatewayAgentRow,
-  GatewaySessionRow,
-  GatewaySessionsDefaults,
-  SessionsListResult,
-} from "./session-utils.types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -33,10 +27,13 @@ import {
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
-import {
-  readFirstUserMessageFromTranscript,
-  readLastMessagePreviewFromTranscript,
-} from "./session-utils.fs.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
+import type {
+  GatewayAgentRow,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  SessionsListResult,
+} from "./session-utils.types.js";
 
 export {
   archiveFileOnDisk,
@@ -44,6 +41,7 @@ export {
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
@@ -394,7 +392,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   let agentIds = listConfiguredAgentIds(cfg).filter((id) =>
     allowedIds ? allowedIds.has(id) : true,
   );
-  if (mainKey && !agentIds.includes(mainKey)) {
+  if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
     agentIds = [...agentIds, mainKey];
   }
   const agents = agentIds.map((id) => {
@@ -817,22 +815,21 @@ export function listSessionsFromStore(params: {
     let derivedTitle: string | undefined;
     let lastMessagePreview: string | undefined;
     if (entry?.sessionId) {
-      if (includeDerivedTitles) {
-        const firstUserMsg = readFirstUserMessageFromTranscript(
+      if (includeDerivedTitles || includeLastMessage) {
+        const parsed = parseAgentSessionKey(s.key);
+        const agentId =
+          parsed && parsed.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg);
+        const fields = readSessionTitleFieldsFromTranscript(
           entry.sessionId,
           storePath,
           entry.sessionFile,
+          agentId,
         );
-        derivedTitle = deriveSessionTitle(entry, firstUserMsg);
-      }
-      if (includeLastMessage) {
-        const lastMsg = readLastMessagePreviewFromTranscript(
-          entry.sessionId,
-          storePath,
-          entry.sessionFile,
-        );
-        if (lastMsg) {
-          lastMessagePreview = lastMsg;
+        if (includeDerivedTitles) {
+          derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+        }
+        if (includeLastMessage && fields.lastMessagePreview) {
+          lastMessagePreview = fields.lastMessagePreview;
         }
       }
     }

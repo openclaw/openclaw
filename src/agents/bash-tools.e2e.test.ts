@@ -62,6 +62,16 @@ async function waitForCompletion(sessionId: string) {
   return status;
 }
 
+async function runBackgroundEchoLines(lines: string[]) {
+  const result = await execTool.execute("call1", {
+    command: echoLines(lines),
+    background: true,
+  });
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+  await waitForCompletion(sessionId);
+  return sessionId;
+}
+
 beforeEach(() => {
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
@@ -221,6 +231,23 @@ describe("exec tool backgrounding", () => {
     expect(status).toBe("completed");
   });
 
+  it("defaults process log to a bounded tail when no window is provided", async () => {
+    const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
+    const sessionId = await runBackgroundEchoLines(lines);
+
+    const log = await processTool.execute("call2", {
+      action: "log",
+      sessionId,
+    });
+    const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
+    const firstLine = textBlock.split("\n")[0]?.trim();
+    expect(textBlock).toContain("showing last 200 of 260 lines");
+    expect(firstLine).toBe("line-61");
+    expect(textBlock).toContain("line-61");
+    expect(textBlock).toContain("line-260");
+    expect((log.details as { totalLines?: number }).totalLines).toBe(260);
+  });
+
   it("supports line offsets for log slices", async () => {
     const result = await execTool.execute("call1", {
       command: echoLines(["alpha", "beta", "gamma"]),
@@ -237,6 +264,24 @@ describe("exec tool backgrounding", () => {
     });
     const textBlock = log.content.find((c) => c.type === "text");
     expect(normalizeText(textBlock?.text)).toBe("beta");
+  });
+
+  it("keeps offset-only log requests unbounded by default tail mode", async () => {
+    const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
+    const sessionId = await runBackgroundEchoLines(lines);
+
+    const log = await processTool.execute("call2", {
+      action: "log",
+      sessionId,
+      offset: 30,
+    });
+
+    const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
+    const renderedLines = textBlock.split("\n");
+    expect(renderedLines[0]?.trim()).toBe("line-31");
+    expect(renderedLines[renderedLines.length - 1]?.trim()).toBe("line-260");
+    expect(textBlock).not.toContain("showing last 200");
+    expect((log.details as { totalLines?: number }).totalLines).toBe(260);
   });
 
   it("scopes process sessions by scopeKey", async () => {
@@ -266,7 +311,38 @@ describe("exec tool backgrounding", () => {
       action: "poll",
       sessionId: sessionA,
     });
-    expect(pollB.details.status).toBe("failed");
+    const pollBDetails = pollB.details as { status?: string };
+    expect(pollBDetails.status).toBe("failed");
+  });
+});
+
+describe("exec exit codes", () => {
+  const originalShell = process.env.SHELL;
+
+  beforeEach(() => {
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
+  });
+
+  afterEach(() => {
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
+  });
+
+  it("treats non-zero exits as completed and appends exit code", async () => {
+    const command = isWin
+      ? joinCommands(["Write-Output nope", "exit 1"])
+      : joinCommands(["echo nope", "exit 1"]);
+    const result = await execTool.execute("call1", { command });
+    const resultDetails = result.details as { status?: string; exitCode?: number | null };
+    expect(resultDetails.status).toBe("completed");
+    expect(resultDetails.exitCode).toBe(1);
+
+    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    expect(text).toContain("nope");
+    expect(text).toContain("Command exited with code 1");
   });
 });
 
@@ -299,6 +375,49 @@ describe("exec notifyOnExit", () => {
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
+  });
+
+  it("skips no-op completion events when command succeeds without output", async () => {
+    const tool = createExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      notifyOnExit: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call2", {
+      command: shortDelayCmd,
+      background: true,
+    });
+
+    expect(result.details.status).toBe("running");
+    const sessionId = (result.details as { sessionId: string }).sessionId;
+    const status = await waitForCompletion(sessionId);
+    expect(status).toBe("completed");
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+  });
+
+  it("can re-enable no-op completion events via notifyOnExitEmptySuccess", async () => {
+    const tool = createExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call3", {
+      command: shortDelayCmd,
+      background: true,
+    });
+
+    expect(result.details.status).toBe("running");
+    const sessionId = (result.details as { sessionId: string }).sessionId;
+    const status = await waitForCompletion(sessionId);
+    expect(status).toBe("completed");
+    const events = peekSystemEvents("agent:main:main");
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.some((event) => event.includes("Exec completed"))).toBe(true);
   });
 });
 

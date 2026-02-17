@@ -1,52 +1,31 @@
 import crypto from "node:crypto";
-import type { TypingMode } from "../../config/types.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingController } from "./typing.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import type { FollowupRun } from "./queue.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
+  filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
-
-/**
- * Creates a payload key for deduplication.
- * Includes all fields that affect delivery semantics to avoid incorrect deduplication.
- */
-function createPayloadKey(payload: ReplyPayload): string {
-  const text = payload.text?.trim() ?? "";
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
-  return JSON.stringify({
-    text,
-    mediaList,
-    replyToId: payload.replyToId,
-    replyToTag: payload.replyToTag,
-    replyToCurrent: payload.replyToCurrent,
-    audioAsVoice: payload.audioAsVoice,
-    isError: payload.isError,
-    channelData: payload.channelData,
-  });
-}
+import type { TypingController } from "./typing.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -146,71 +125,6 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-
-      // Track payloads sent via streaming to avoid double-sending at the end.
-      const streamedPayloadKeys = new Set<string>();
-
-      // Determine if we should stream block replies incrementally.
-      const { originatingChannel, originatingTo } = queued;
-      const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
-      const canStreamBlocks = shouldRouteToOriginating || Boolean(opts?.onBlockReply);
-
-      /**
-       * Handles incremental block replies during the agent run.
-       * Routes directly to the originating channel for immediate delivery.
-       */
-      const handleBlockReply = canStreamBlocks
-        ? async (payload: ReplyPayload, _context?: BlockReplyContext) => {
-            if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
-              return;
-            }
-            if (
-              isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
-              !payload.mediaUrl &&
-              !payload.mediaUrls?.length
-            ) {
-              return;
-            }
-
-            const payloadKey = createPayloadKey(payload);
-            let delivered = false;
-
-            await typingSignals.signalTextDelta(payload.text);
-
-            // Route to originating channel if set, otherwise fall back to dispatcher.
-            if (shouldRouteToOriginating) {
-              const result = await routeReply({
-                payload,
-                channel: originatingChannel,
-                to: originatingTo,
-                sessionKey: queued.run.sessionKey,
-                accountId: queued.originatingAccountId,
-                threadId: queued.originatingThreadId,
-                cfg: queued.run.config,
-              });
-              if (result.ok) {
-                delivered = true;
-              } else {
-                const errorMsg = result.error ?? "unknown error";
-                logVerbose(`followup queue: streaming route-reply failed: ${errorMsg}`);
-                // Fallback: try the dispatcher if routing failed.
-                if (opts?.onBlockReply) {
-                  await opts.onBlockReply(payload);
-                  delivered = true;
-                }
-              }
-            } else if (opts?.onBlockReply) {
-              await opts.onBlockReply(payload);
-              delivered = true;
-            }
-
-            // Only mark as sent after successful delivery to avoid dropping payloads.
-            if (delivered) {
-              streamedPayloadKeys.add(payloadKey);
-            }
-          }
-        : undefined;
-
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -222,8 +136,7 @@ export function createFollowupRunner(params: {
             resolveAgentIdFromSessionKey(queued.run.sessionKey),
           ),
           run: (provider, model) => {
-            const authProfileId =
-              provider === queued.run.provider ? queued.run.authProfileId : undefined;
+            const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
@@ -249,25 +162,22 @@ export function createFollowupRunner(params: {
               enforceFinalTag: queued.run.enforceFinalTag,
               provider,
               model,
-              authProfileId,
-              authProfileIdSource: authProfileId ? queued.run.authProfileIdSource : undefined,
+              ...authProfile,
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
+              suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
               execOverrides: queued.run.execOverrides,
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,
               blockReplyBreak: queued.run.blockReplyBreak,
-              // Enable incremental streaming for followup runs.
-              onBlockReply: handleBlockReply,
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {
                   return;
                 }
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "end" && !willRetry) {
+                if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
               },
@@ -283,9 +193,9 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      const usage = runResult.meta.agentMeta?.usage;
-      const promptTokens = runResult.meta.agentMeta?.promptTokens;
-      const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const usage = runResult.meta?.agentMeta?.usage;
+      const promptTokens = runResult.meta?.agentMeta?.promptTokens;
+      const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
@@ -297,7 +207,7 @@ export function createFollowupRunner(params: {
           storePath,
           sessionKey,
           usage,
-          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
@@ -342,20 +252,17 @@ export function createFollowupRunner(params: {
         payloads: replyTaggedPayloads,
         sentTexts: runResult.messagingToolSentTexts ?? [],
       });
+      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
+        payloads: dedupedPayloads,
+        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
+      });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
         messageProvider: queued.run.messageProvider,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         originatingTo: queued.originatingTo,
         accountId: queued.run.agentAccountId,
       });
-
-      // Filter out payloads already sent via streaming to avoid duplicates.
-      const unstreamedPayloads = dedupedPayloads.filter((payload) => {
-        const key = createPayloadKey(payload);
-        return !streamedPayloadKeys.has(key);
-      });
-
-      const finalPayloads = suppressMessagingToolReplies ? [] : unstreamedPayloads;
+      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
         return;
@@ -367,7 +274,7 @@ export function createFollowupRunner(params: {
           sessionStore,
           sessionKey,
           storePath,
-          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 
-const providerRegistry = new Map([
+const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
   ["openai", { capabilities: ["image"] }],
   ["groq", { capabilities: ["audio"] }],
 ]);

@@ -1,4 +1,5 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
 
@@ -57,13 +58,9 @@ describeLive("gemini live switch", () => {
           {
             name: "bash",
             description: "Run shell command",
-            parameters: {
-              type: "object",
-              properties: {
-                command: { type: "string" },
-              },
-              required: ["command"],
-            },
+            parameters: Type.Object({
+              command: Type.String(),
+            }),
           },
         ],
       },

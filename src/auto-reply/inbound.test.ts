@@ -116,6 +116,43 @@ describe("finalizeInboundContext", () => {
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
   });
+
+  it("fills MediaType/MediaTypes defaults only when media exists", () => {
+    const withMedia: MsgContext = {
+      Body: "hi",
+      MediaPath: "/tmp/file.bin",
+    };
+    const outWithMedia = finalizeInboundContext(withMedia);
+    expect(outWithMedia.MediaType).toBe("application/octet-stream");
+    expect(outWithMedia.MediaTypes).toEqual(["application/octet-stream"]);
+
+    const withoutMedia: MsgContext = { Body: "hi" };
+    const outWithoutMedia = finalizeInboundContext(withoutMedia);
+    expect(outWithoutMedia.MediaType).toBeUndefined();
+    expect(outWithoutMedia.MediaTypes).toBeUndefined();
+  });
+
+  it("pads MediaTypes to match MediaPaths/MediaUrls length", () => {
+    const ctx: MsgContext = {
+      Body: "hi",
+      MediaPaths: ["/tmp/a", "/tmp/b"],
+      MediaTypes: ["image/png"],
+    };
+    const out = finalizeInboundContext(ctx);
+    expect(out.MediaType).toBe("image/png");
+    expect(out.MediaTypes).toEqual(["image/png", "application/octet-stream"]);
+  });
+
+  it("derives MediaType from MediaTypes when missing", () => {
+    const ctx: MsgContext = {
+      Body: "hi",
+      MediaPath: "/tmp/a",
+      MediaTypes: ["image/jpeg"],
+    };
+    const out = finalizeInboundContext(ctx);
+    expect(out.MediaType).toBe("image/jpeg");
+    expect(out.MediaTypes).toEqual(["image/jpeg"]);
+  });
 });
 
 describe("inbound dedupe", () => {
@@ -333,6 +370,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
       channel: "discord",
       id: "123",
       chatType: "group",
@@ -357,6 +395,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
       channel: "slack",
       id: "C123",
       chatType: "group",
