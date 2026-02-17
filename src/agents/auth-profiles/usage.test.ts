@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./types.js";
-import { clearExpiredCooldowns, isProfileInCooldown } from "./usage.js";
+import { clearExpiredCooldowns, isProfileInCooldown, markAuthProfileFailure } from "./usage.js";
+
+vi.mock("./store.js", () => ({
+  saveAuthProfileStore: vi.fn(),
+  updateAuthProfileStoreWithLock: vi.fn(async () => null),
+}));
 
 function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
   return {
@@ -265,5 +270,34 @@ describe("clearExpiredCooldowns", () => {
     });
 
     expect(clearExpiredCooldowns(store)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markAuthProfileFailure
+// ---------------------------------------------------------------------------
+
+describe("markAuthProfileFailure", () => {
+  it.each(["format", "timeout"] as const)("does not cooldown for %s errors", async (reason) => {
+    const store = makeStore({});
+    await markAuthProfileFailure({ store, profileId: "anthropic:default", reason });
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.errorCount).toBe(1);
+    expect(stats?.cooldownUntil).toBeUndefined();
+    expect(isProfileInCooldown(store, "anthropic:default")).toBe(false);
+  });
+
+  it("sets cooldownUntil for rate_limit errors", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({ store, profileId: "anthropic:default", reason: "rate_limit" });
+    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeGreaterThan(Date.now());
+  });
+
+  it("sets disabledUntil for billing errors", async () => {
+    const store = makeStore({});
+    await markAuthProfileFailure({ store, profileId: "anthropic:default", reason: "billing" });
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.disabledUntil).toBeGreaterThan(Date.now());
+    expect(stats?.disabledReason).toBe("billing");
   });
 });
