@@ -1,9 +1,0 @@
-{
-  "id": "linq",
-  "channels": ["linq"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

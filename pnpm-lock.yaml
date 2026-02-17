@@ -357,12 +357,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/linq:
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/llm-task:
     devDependencies:
       openclaw:
