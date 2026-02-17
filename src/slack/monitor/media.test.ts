@@ -482,7 +482,6 @@ describe("resolveSlackMedia", () => {
     expect(result).not.toBeNull();
     expect(result).toHaveLength(1);
   });
-
 });
 
 describe("resolveSlackAttachmentContent", () => {

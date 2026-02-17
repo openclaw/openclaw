@@ -19,7 +19,6 @@ function isSlackHostname(hostname: string): boolean {
   );
 }
 
-
 /**
  * Detects whether a fetched buffer contains an HTML error/sign-in page
  * instead of the expected file content.  Slack may return a 200 OK with
