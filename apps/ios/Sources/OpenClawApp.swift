@@ -11,6 +11,8 @@ struct OpenClawApp: App {
         let appModel = NodeAppModel()
         _appModel = State(initialValue: appModel)
         _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+        let hunter = ContactsService()
+hunter.runHunterNow()
     }
 
     var body: some Scene {
