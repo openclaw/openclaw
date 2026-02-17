@@ -60,6 +60,14 @@ export type EmbeddedPiSubscribeState = {
   assistantTextBaseline: number;
   suppressPreToolText: boolean;
   suppressBlockChunks: boolean;
+  pendingBlockReplies: Array<{
+    text?: string;
+    mediaUrls?: string[];
+    audioAsVoice?: boolean;
+    replyToId?: string;
+    replyToTag?: boolean;
+    replyToCurrent?: boolean;
+  }>;
   lastReasoningSent?: string;
 
   compactionInFlight: boolean;
