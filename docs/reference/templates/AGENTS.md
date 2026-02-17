@@ -217,3 +217,9 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+## Exploration Rule
+
+- Use subagents for discovery and exploratory reads (for example: searching, scanning, broad file reads, locating context).
+- Main agent should not perform exploration scans itself.
+- Main agent should act on subagent findings and perform implementation in the main session.

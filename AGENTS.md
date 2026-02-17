@@ -123,6 +123,12 @@
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
 
+## Agent Workflow
+
+- Use subagents for discovery and exploration (`rg`, `find`, bulk file reads, project scans, searching for patterns).
+- Do not perform exploratory file reads/searches in the main agent.
+- Main agent should act on outputs from subagents and perform execution/fixes in the main context.
+
 ## Agent-Specific Notes
 
 - Vocabulary: "makeup" = "mac app".

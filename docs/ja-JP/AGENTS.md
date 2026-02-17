@@ -35,3 +35,9 @@ Notes:
 - Prefer `doc` mode for whole-page translation; `segment` mode for small fixes.
 - If a very large file times out, do targeted edits or split the page before rerunning.
 - After translation, spot-check: code spans/blocks unchanged, links/anchors unchanged, placeholders preserved.
+
+## 参照ルール（探索）
+
+- 探索・発見（検索、スキャン、広範なファイル参照）の作業はサブエージェントに委任する。
+- メインエージェントは探索的なファイル読み取りを直接実行しない。
+- メインエージェントはサブエージェントの結果を受けて実装・修正を行う。

@@ -57,3 +57,9 @@ go run scripts/docs-i18n/main.go -mode segment docs/channels/matrix.md
 - 反馈用户：@AaronWander、@taiyi747、@Explorer1092、@rendaoyuan
 - 变更要点：更新 prompt 规则、扩充 glossary、清理 TM、批量再生成 + 定点修复
 - 参考链接：https://github.com/openclaw/openclaw/issues/6995
+
+## 探索规则
+
+- 将探索性任务（搜索、扫描、批量文件读取、上下文定位）交给子代理执行。
+- 主代理不应执行探索式文件读取。
+- 主代理应基于子代理的结果进行实现与修订。
