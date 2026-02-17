@@ -1,5 +1,5 @@
-import path from "node:path";
 import type { Bot } from "grammy";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../config/paths.js";
 
@@ -413,5 +413,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replies: [expect.objectContaining({ text: expect.stringContaining("⚠️") })],
       }),
     );
+  });
+
+  it("preserves draft message when error occurs after streaming content (#18012)", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // User sees useful partial content streamed
+        await replyOptions?.onPartialReply?.({
+          text: "Here is the git status:\n- modified: file.ts",
+        });
+        // Tool failure triggers error payload
+        await dispatcherOptions.deliver(
+          { text: "⚠️ git push failed: remote not found", isError: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // Draft should NOT be cleared — user's partial content must be preserved
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    // Error should be delivered as a separate new message
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: expect.stringContaining("git push failed") })],
+      }),
+    );
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("still clears draft on error when no content was streamed", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      // Error happens immediately, no partial content was streamed
+      await dispatcherOptions.deliver(
+        { text: "⚠️ Something went wrong", isError: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // No content was streamed, so draft should be cleared normally
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 });
