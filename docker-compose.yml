@@ -40,6 +40,7 @@ services:
       SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-placeholder}
       SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-placeholder}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-placeholder}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       SLACK_OAUTH_REDIRECT_URI: ${SLACK_OAUTH_REDIRECT_URI:-http://localhost:9876/slack/callback}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
       OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-openclaw:local}

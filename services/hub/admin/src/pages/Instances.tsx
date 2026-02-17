@@ -83,15 +83,26 @@ export default function Instances() {
                   Created {timeAgo(inst.createdAt)} · {inst.bridgeUrl}
                 </div>
               </a>
-              <button
-                onClick={(e) => {
-                  e.preventDefault();
-                  void handleDelete(inst.id);
-                }}
-                className="ml-4 text-xs text-gray-500 hover:text-red-400"
-              >
-                Delete
-              </button>
+              <div className="flex items-center gap-2 ml-4">
+                <a
+                  href={`${inst.gatewayUrl.replace(/^ws/, "http")}?token=${inst.gatewayToken}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="px-3 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 text-white rounded"
+                >
+                  Dashboard
+                </a>
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void handleDelete(inst.id);
+                  }}
+                  className="text-xs text-gray-500 hover:text-red-400"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           ))}
         </div>

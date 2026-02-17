@@ -9,9 +9,9 @@ import {
 
 let client: SocketModeClient | null = null;
 
-/** Convert a gateway WebSocket URL to an HTTP URL (ws:// → http://, wss:// → https://). */
-function gatewayHttpUrl(gatewayUrl: string): string {
-  return gatewayUrl.replace(/^ws(s?):\/\//, "http$1://");
+/** Force IPv4 to avoid macOS resolving localhost to ::1 while Docker only binds IPv4. */
+function forceIPv4(url: string): string {
+  return url.replace("://localhost", "://127.0.0.1");
 }
 
 /** Forge a Slack-compatible HMAC-SHA256 signature so the gateway's Bolt HTTPReceiver accepts the request. */
@@ -21,6 +21,11 @@ function forgeSignature(signingSecret: string, timestamp: string, rawBody: strin
 }
 
 export async function startSocketReceiver(env: Env): Promise<void> {
+  if (!env.SLACK_APP_TOKEN) {
+    console.warn("[socket-receiver] SLACK_APP_TOKEN not set — Socket Mode disabled");
+    return;
+  }
+
   client = new SocketModeClient({ appToken: env.SLACK_APP_TOKEN });
 
   client.on("slack_event", async ({ body, ack }) => {
@@ -76,10 +81,13 @@ export async function startSocketReceiver(env: Env): Promise<void> {
       return;
     }
 
-    // Forge Slack signature and forward as HTTP POST to gateway
+    // Forge Slack signature and forward as HTTP POST to the bridge
     const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = forgeSignature(env.SLACK_SIGNING_SECRET, timestamp, rawBody);
-    const targetUrl = `${gatewayHttpUrl(instance.gatewayUrl)}/slack/events`;
+    const targetUrl = forceIPv4(`${instance.gatewayUrl.replace(/^ws/, "http")}/slack/events`);
+
+    console.log(`[socket-receiver] ${eventType} from ${teamId} → ${targetUrl}`);
+    console.log(`[socket-receiver] body: ${rawBody.slice(0, 800)}`);
 
     const startMs = Date.now();
     try {
@@ -94,19 +102,25 @@ export async function startSocketReceiver(env: Env): Promise<void> {
       });
 
       const latencyMs = Date.now() - startMs;
+      const statusLabel = res.ok ? "delivered" : "rejected";
+      const respBody = await res.text().catch(() => "");
+      console.log(
+        `[socket-receiver] ${eventType} → ${res.status} ${res.statusText} (${latencyMs}ms)`,
+        respBody.slice(0, 500) || "(empty body)",
+      );
       insertEventLog({
         instanceId: instance.id,
         connectionId: connection.id,
         provider: "slack",
         externalId: teamId,
         eventType,
-        status: "delivered",
+        status: statusLabel,
         responseStatus: res.status,
         latencyMs,
       });
     } catch (err) {
       const latencyMs = Date.now() - startMs;
-      console.error(`[socket-receiver] Failed to forward event to instance ${instance.id}:`, err);
+      console.error(`[socket-receiver] ${eventType} → FAILED (${latencyMs}ms):`, err);
       insertEventLog({
         instanceId: instance.id,
         connectionId: connection.id,

@@ -10,8 +10,13 @@ export type ConfigPatchOptions = {
   signingSecret: string;
 };
 
+/** Force IPv4 to avoid macOS resolving localhost to ::1 while Docker only binds IPv4. */
+function forceIPv4(url: string): string {
+  return url.replace("://localhost", "://127.0.0.1");
+}
+
 export async function patchGatewayConfig(opts: ConfigPatchOptions): Promise<void> {
-  const client = createGatewayWsClient({ url: opts.gatewayUrl });
+  const client = createGatewayWsClient({ url: forceIPv4(opts.gatewayUrl) });
 
   try {
     await client.waitOpen();
@@ -73,6 +78,9 @@ export async function patchGatewayConfig(opts: ConfigPatchOptions): Promise<void
     }
 
     // Build the config patch — always HTTP mode for hub-managed Slack
+    // dmPolicy "open" allows DMs without pairing; groupPolicy "open" allows
+    // any channel to trigger the bot (mention-gated by default).
+    // Use flat dmPolicy/allowFrom (not nested dm.*) to match the canonical schema.
     const patch = {
       channels: {
         slack: {
@@ -81,6 +89,9 @@ export async function patchGatewayConfig(opts: ConfigPatchOptions): Promise<void
           botToken: opts.botToken,
           signingSecret: opts.signingSecret,
           webhookPath: "/slack/events",
+          groupPolicy: "open",
+          dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     };

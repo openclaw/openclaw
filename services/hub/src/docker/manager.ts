@@ -119,9 +119,9 @@ export async function spawnInstance(params: { name: string; image: string }): Pr
 
   return {
     containerId: info.Id,
-    gatewayUrl: `ws://localhost:${gatewayPort}`,
+    gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
     gatewayToken,
-    bridgeUrl: `http://localhost:${bridgePort}`,
+    bridgeUrl: `http://127.0.0.1:${bridgePort}`,
     deviceCredentials: {
       deviceId: device.deviceId,
       publicKeyPem: device.publicKeyPem,
@@ -185,8 +185,8 @@ export async function waitForContainerRestart(
       const bridgePort = ports["18790/tcp"]?.[0]?.HostPort;
       if (gatewayPort && bridgePort) {
         return {
-          gatewayUrl: `ws://localhost:${gatewayPort}`,
-          bridgeUrl: `http://localhost:${bridgePort}`,
+          gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
+          bridgeUrl: `http://127.0.0.1:${bridgePort}`,
         };
       }
     }

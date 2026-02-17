@@ -135,6 +135,14 @@ export default function InstanceDetail({ id }: { id: string }) {
             {containerStatus}
           </span>
         )}
+        <a
+          href={`${instance.gatewayUrl.replace(/^ws/, "http")}?token=${instance.gatewayToken}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-auto px-4 py-1.5 text-sm bg-blue-700 hover:bg-blue-600 text-white rounded"
+        >
+          Open Dashboard
+        </a>
       </div>
 
       {/* Info */}

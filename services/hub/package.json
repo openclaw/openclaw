@@ -9,7 +9,7 @@
     "build:all": "npm run build && npm run build:admin",
     "dev": "tsc && node --watch dist/index.js",
     "dev:admin": "cd admin && npm run dev",
-    "dev:all": "npm run dev & npm run dev:admin & wait",
+    "dev:all": "trap 'kill 0' SIGINT SIGTERM; npm run dev & npm run dev:admin & wait",
     "start": "node dist/index.js"
   },
   "dependencies": {

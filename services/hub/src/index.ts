@@ -55,9 +55,23 @@ startSocketReceiver(env).catch((err) => {
 });
 
 // Graceful shutdown
+let shuttingDown = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
+    if (shuttingDown) {
+      console.log(`Received ${signal} again, forcing exit`);
+      process.exit(1);
+    }
+    shuttingDown = true;
     console.log(`Received ${signal}, shutting down…`);
+
+    // Force exit after 5s if disconnect hangs
+    const forceTimer = setTimeout(() => {
+      console.error("Shutdown timed out, forcing exit");
+      process.exit(1);
+    }, 5_000);
+    forceTimer.unref();
+
     await stopSocketReceiver();
     process.exit(0);
   });

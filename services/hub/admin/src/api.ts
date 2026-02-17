@@ -38,6 +38,7 @@ export type InstanceSummary = {
   id: string;
   name: string;
   gatewayUrl: string;
+  gatewayToken: string;
   bridgeUrl: string;
   containerId: string | null;
   createdAt: number;

@@ -26,7 +26,7 @@ export async function loadEnv(): Promise<Env> {
     SLACK_CLIENT_ID: requireEnv("SLACK_CLIENT_ID"),
     SLACK_CLIENT_SECRET: requireEnv("SLACK_CLIENT_SECRET"),
     SLACK_SIGNING_SECRET: requireEnv("SLACK_SIGNING_SECRET"),
-    SLACK_APP_TOKEN: requireEnv("SLACK_APP_TOKEN"),
+    SLACK_APP_TOKEN: process.env.SLACK_APP_TOKEN || "",
     SLACK_OAUTH_REDIRECT_URI: requireEnv("SLACK_OAUTH_REDIRECT_URI"),
     ADMIN_PASSWORD: requireEnv("ADMIN_PASSWORD"),
     OPENCLAW_IMAGE: process.env.OPENCLAW_IMAGE || "openclaw:local",
