@@ -91,23 +91,24 @@ export async function draftReply(
     replyContent = `The requested change has been completed: ${contract.intent}`;
   }
 
-  // Create the draft via MCP — use the same account that received the original message
+  // Outlook replies require QA screenshot attachment — no draft without evidence
   const account = contract.message_account ?? "xcellerate";
   if (contract.message_platform === "outlook") {
+    const screenshotPath = (contract.qa_results as Record<string, unknown>)?.screenshot_path as string | undefined;
+    if (!screenshotPath) {
+      logger?.error(`[reply-drafter] No screenshot available for contract #${contract.id} — cannot create reply without QA evidence`);
+      return null;
+    }
+
     const draftResult = await bridge.createReplyDraft(contract.message_id, replyContent, account);
     const draftData = draftResult.result as Record<string, unknown> | undefined;
     const draftId = draftData?.draft_id as string | undefined;
     if (draftId) {
-      // Attach QA screenshot if available (best-effort)
-      const screenshotPath = (contract.qa_results as Record<string, unknown>)?.screenshot_path as string | undefined;
-      if (screenshotPath) {
-        try {
-          await bridge.addAttachmentToDraft(draftId, screenshotPath, account);
-        } catch (err) {
-          logger?.warn(`[reply-drafter] Failed to attach screenshot for contract #${contract.id}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      } else {
-        logger?.warn(`[reply-drafter] No screenshot available for contract #${contract.id} — reply will be sent without QA evidence`);
+      try {
+        await bridge.addAttachmentToDraft(draftId, screenshotPath, account);
+      } catch (err) {
+        logger?.error(`[reply-drafter] Failed to attach screenshot for contract #${contract.id}: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
       }
       return { draftId, replyContent };
     }

@@ -81,7 +81,7 @@ describe("reply drafter: screenshot attachment", () => {
     );
   });
 
-  it("skips attachment when no screenshot_path in qa_results", async () => {
+  it("returns null when no screenshot_path in qa_results (attachment required)", async () => {
     const bridge = createMockBridge();
     const db = createMockDb();
     const contract = makeContract({
@@ -90,12 +90,11 @@ describe("reply drafter: screenshot attachment", () => {
 
     const result = await draftReply(contract, db, bridge);
 
-    expect(result).not.toBeNull();
-    expect(result!.draftId).toBe("draft-abc");
+    expect(result).toBeNull();
     expect(bridge.addAttachmentToDraft).not.toHaveBeenCalled();
   });
 
-  it("attachment failure is non-fatal — draft still returned", async () => {
+  it("returns null when addAttachmentToDraft fails (attachment required)", async () => {
     const bridge = createMockBridge();
     (bridge.addAttachmentToDraft as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("File not found"),
@@ -107,9 +106,20 @@ describe("reply drafter: screenshot attachment", () => {
 
     const result = await draftReply(contract, db, bridge);
 
-    expect(result).not.toBeNull();
-    expect(result!.draftId).toBe("draft-abc");
-    expect(result!.replyContent).toBeTruthy();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when qa_results is null (no evidence at all)", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      qa_results: null,
+    });
+
+    const result = await draftReply(contract, db, bridge);
+
+    expect(result).toBeNull();
+    expect(bridge.createReplyDraft).not.toHaveBeenCalled();
   });
 
   it("uses message_account for attachment (falls back to xcellerate)", async () => {
@@ -142,8 +152,8 @@ describe("reply drafter: screenshot attachment", () => {
   });
 });
 
-describe("reply drafter: screenshot guarantee warnings", () => {
-  it("logs warning when DONE contract has no screenshot_path", async () => {
+describe("reply drafter: attachment guarantee logging", () => {
+  it("logs error when no screenshot_path — returns null", async () => {
     const bridge = createMockBridge();
     const db = createMockDb();
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -152,14 +162,15 @@ describe("reply drafter: screenshot guarantee warnings", () => {
       qa_results: { passed: true },  // no screenshot_path
     });
 
-    await draftReply(contract, db, bridge, logger);
+    const result = await draftReply(contract, db, bridge, logger);
 
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(result).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining("screenshot"),
     );
   });
 
-  it("does NOT warn when screenshot_path is present", async () => {
+  it("does NOT log error when screenshot_path is present and attachment succeeds", async () => {
     const bridge = createMockBridge();
     const db = createMockDb();
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -170,13 +181,10 @@ describe("reply drafter: screenshot guarantee warnings", () => {
 
     await draftReply(contract, db, bridge, logger);
 
-    // No screenshot warning (may have other logs)
-    const screenshotWarnings = (logger.warn as ReturnType<typeof vi.fn>).mock.calls
-      .filter((args: unknown[]) => typeof args[0] === "string" && args[0].includes("screenshot"));
-    expect(screenshotWarnings).toHaveLength(0);
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it("logs warning when addAttachmentToDraft fails", async () => {
+  it("logs error when addAttachmentToDraft fails — returns null", async () => {
     const bridge = createMockBridge();
     (bridge.addAttachmentToDraft as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("File not found"),
@@ -189,12 +197,8 @@ describe("reply drafter: screenshot guarantee warnings", () => {
 
     const result = await draftReply(contract, db, bridge, logger);
 
-    // Draft still returned (non-fatal)
-    expect(result).not.toBeNull();
-    expect(result!.draftId).toBe("draft-abc");
-
-    // But a warning was logged about the attachment failure
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(result).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining("attach"),
     );
   });
@@ -207,7 +211,7 @@ describe("reply drafter: account-aware replies", () => {
     const contract = makeContract({
       message_account: "vvg",
       message_platform: "outlook",
-      qa_results: { passed: true },
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
     });
 
     await draftReply(contract, db, bridge);
