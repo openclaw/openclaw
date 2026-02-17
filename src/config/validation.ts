@@ -254,10 +254,25 @@ function validateConfigObjectWithPluginsBase(
         }
       }
       if (!allowedChannels.has(trimmed)) {
-        issues.push({
-          path: `channels.${trimmed}`,
-          message: `unknown channel id: ${trimmed}`,
-        });
+        // If the channel key is referenced in plugins.entries or plugins.allow,
+        // it is likely a bundled channel plugin whose directory could not be
+        // resolved.  Downgrade to a warning instead of blocking startup.
+        const pluginEntries = config.plugins?.entries;
+        const pluginAllow = config.plugins?.allow;
+        const referencedByPlugin =
+          (pluginEntries && isRecord(pluginEntries) && trimmed in pluginEntries) ||
+          (Array.isArray(pluginAllow) && pluginAllow.includes(trimmed));
+        if (referencedByPlugin) {
+          warnings.push({
+            path: `channels.${trimmed}`,
+            message: `unknown channel id: ${trimmed} (may be a bundled plugin channel; verify plugin is installed)`,
+          });
+        } else {
+          issues.push({
+            path: `channels.${trimmed}`,
+            message: `unknown channel id: ${trimmed}`,
+          });
+        }
       }
     }
   }
@@ -319,16 +334,48 @@ function validateConfigObjectWithPluginsBase(
 
   const { registry, knownIds, normalizedPlugins } = ensureRegistry();
 
+  // Collect channel IDs declared by discovered plugins so we can recognise
+  // bundled-plugin references that survive in config after an upgrade from
+  // external → stock.  When the bundled directory is not resolvable the
+  // plugin won't appear in knownIds, but the channel ID is still valid.
+  const pluginChannelIds = new Set<string>();
+  for (const record of registry.plugins) {
+    for (const channelId of record.channels) {
+      pluginChannelIds.add(channelId);
+    }
+  }
+
+  const isKnownChannelPlugin = (pluginId: string): boolean => {
+    // The plugin ID itself is a channel key present in config.channels,
+    // or it matches a channel declared by a discovered plugin.
+    if (pluginChannelIds.has(pluginId)) {
+      return true;
+    }
+    if (config.channels && isRecord(config.channels) && pluginId in config.channels) {
+      return true;
+    }
+    return false;
+  };
+
   const pluginsConfig = config.plugins;
 
   const entries = pluginsConfig?.entries;
   if (entries && isRecord(entries)) {
     for (const pluginId of Object.keys(entries)) {
       if (!knownIds.has(pluginId)) {
-        issues.push({
-          path: `plugins.entries.${pluginId}`,
-          message: `plugin not found: ${pluginId}`,
-        });
+        if (isKnownChannelPlugin(pluginId)) {
+          // Bundled plugin whose directory could not be resolved — warn
+          // instead of blocking startup.
+          warnings.push({
+            path: `plugins.entries.${pluginId}`,
+            message: `plugin not found: ${pluginId} (may be a bundled plugin; entry can be removed)`,
+          });
+        } else {
+          issues.push({
+            path: `plugins.entries.${pluginId}`,
+            message: `plugin not found: ${pluginId}`,
+          });
+        }
       }
     }
   }
@@ -339,10 +386,17 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      issues.push({
-        path: "plugins.allow",
-        message: `plugin not found: ${pluginId}`,
-      });
+      if (isKnownChannelPlugin(pluginId)) {
+        warnings.push({
+          path: "plugins.allow",
+          message: `plugin not found: ${pluginId} (may be a bundled plugin; entry can be removed)`,
+        });
+      } else {
+        issues.push({
+          path: "plugins.allow",
+          message: `plugin not found: ${pluginId}`,
+        });
+      }
     }
   }
 
@@ -352,10 +406,17 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      issues.push({
-        path: "plugins.deny",
-        message: `plugin not found: ${pluginId}`,
-      });
+      if (isKnownChannelPlugin(pluginId)) {
+        warnings.push({
+          path: "plugins.deny",
+          message: `plugin not found: ${pluginId} (may be a bundled plugin; entry can be removed)`,
+        });
+      } else {
+        issues.push({
+          path: "plugins.deny",
+          message: `plugin not found: ${pluginId}`,
+        });
+      }
     }
   }
 
