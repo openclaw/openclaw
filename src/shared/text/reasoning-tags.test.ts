@@ -228,7 +228,7 @@ describe("stripDsmlMarkup", () => {
 
   it("strips DSML function_calls block from end of text", () => {
     const input =
-      "Perfect! I'll post the tweet now. <\uFF5CDSML\uFF5Cfunction_calls> <\uFF5CDSML\uFF5Cinvoke name=\"exec\"> some args";
+      'Perfect! I\'ll post the tweet now. <\uFF5CDSML\uFF5Cfunction_calls> <\uFF5CDSML\uFF5Cinvoke name="exec"> some args';
     expect(stripDsmlMarkup(input)).toBe("Perfect! I'll post the tweet now.");
   });
 
@@ -254,7 +254,7 @@ describe("stripDsmlMarkup", () => {
 
   it("strips DSML function_calls block from end of text", () => {
     const input =
-      "Perfect! I'll post the tweet now. <｜DSML｜function_calls> <｜DSML｜invoke name=\"exec\"> some args";
+      'Perfect! I\'ll post the tweet now. <｜DSML｜function_calls> <｜DSML｜invoke name="exec"> some args';
     expect(stripDsmlMarkup(input)).toBe("Perfect! I'll post the tweet now.");
   });
 
