@@ -548,6 +548,60 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "123" });
   });
 
+  it("applies direct-message chat-type threading override", async () => {
+    replyMock.mockResolvedValue({ text: "thread reply" });
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "all" },
+        },
+      },
+    };
+
+    await runDirectMessageEvent("123");
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "123" });
+  });
+
+  it("applies channel chat-type threading override", async () => {
+    replyMock.mockResolvedValue({ text: "channel reply" });
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+          requireMention: false,
+          replyToMode: "all",
+          replyToModeByChatType: { channel: "off" },
+        },
+      },
+    };
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        channel_type: "channel",
+        text: "hello channel",
+        ts: "123",
+      }),
+    });
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: undefined });
+  });
+
   it("treats parent_user_id as a thread reply even when thread_ts matches ts", async () => {
     replyMock.mockResolvedValue({ text: "thread reply" });
 

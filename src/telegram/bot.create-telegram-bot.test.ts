@@ -50,8 +50,13 @@ const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 
-const sleep = async (ms: number) => {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+const waitForReplyCalls = async (count: number, timeout = 3000) => {
+  await vi.waitFor(
+    () => {
+      expect(replySpy).toHaveBeenCalledTimes(count);
+    },
+    { timeout, interval: 20 },
+  );
 };
 
 describe("createTelegramBot", () => {
@@ -1928,9 +1933,7 @@ describe("createTelegramBot", () => {
 
     await Promise.all([first, second]);
     expect(replySpy).not.toHaveBeenCalled();
-    await sleep(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs + 80);
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
+    await waitForReplyCalls(1);
     const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
     expect(payload.Body).toContain("album caption");
     expect(payload.MediaPaths).toHaveLength(2);
@@ -1984,9 +1987,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
-    await sleep(TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 100);
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
+    await waitForReplyCalls(1);
     const payload = replySpy.mock.calls[0]?.[0] as { RawBody?: string };
     expect(payload.RawBody).toContain(part1.slice(0, 32));
     expect(payload.RawBody).toContain(part2.slice(0, 32));

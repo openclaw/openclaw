@@ -15,7 +15,7 @@ import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
-import { resolveSlackAccount } from "../accounts.js";
+import { resolveSlackAccount, resolveSlackReplyToMode } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -117,7 +117,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
-  const replyToMode = slackCfg.replyToMode ?? "all";
+  const replyToMode = resolveSlackReplyToMode(account, undefined);
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);

@@ -27,6 +27,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return { dir, storePath: path.join(dir, "sessions.json") };
   }
 
+  async function readSessionStoreEventually(storePath: string): Promise<Record<string, unknown>> {
+    const timeoutAt = Date.now() + 1000;
+    while (Date.now() < timeoutAt) {
+      if (fs.existsSync(storePath)) {
+        try {
+          const raw = fs.readFileSync(storePath, "utf-8");
+          return raw.trim() ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        } catch {
+          // File may be mid-write; retry.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return {};
+  }
+
   beforeAll(() => {
     fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-thread-"));
   });
@@ -119,6 +135,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
       botTokenSource: "config",
       appTokenSource: "config",
       config,
+      replyToMode: config.replyToMode,
+      replyToModeByChatType: config.replyToModeByChatType,
+      dm: config.dm,
     };
   }
 
@@ -316,6 +335,53 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not pre-create a new thread session entry before reply generation", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "100.000",
+    });
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U2", ts: "100.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U2", ts: "100.000" }],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createThreadSlackCtx({ cfg, replies });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createThreadAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "current message",
+        ts: "101.000",
+        thread_ts: "100.000",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    const store = await readSessionStoreEventually(storePath);
+    expect(store[threadKeys.sessionKey]).toBeUndefined();
   });
 
   it("does not mark first thread turn when thread session already exists in store", async () => {

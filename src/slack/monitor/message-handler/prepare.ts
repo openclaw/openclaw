@@ -32,7 +32,7 @@ import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import type { ResolvedSlackAccount } from "../../accounts.js";
+import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
@@ -199,7 +199,9 @@ export async function prepareSlackMessage(params: {
   });
 
   const baseSessionKey = route.sessionKey;
-  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const chatTypeForReplyMode = isDirectMessage ? "direct" : isRoom ? "channel" : "group";
+  const replyToMode = resolveSlackReplyToMode(account, chatTypeForReplyMode);
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
@@ -636,6 +638,9 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey,
     ctx: ctxPayload,
+    // For thread turns, let initSessionState create the thread session entry so
+    // first-turn thread context (starter/history) is preserved.
+    createIfMissing: !isThreadReply,
     updateLastRoute: isDirectMessage
       ? {
           sessionKey: route.mainSessionKey,
@@ -669,6 +674,7 @@ export async function prepareSlackMessage(params: {
     ctx,
     account,
     message,
+    replyToMode,
     route,
     channelConfig,
     replyTarget,

@@ -9,6 +9,7 @@ export type PreparedSlackMessage = {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
+  replyToMode: "off" | "first" | "all";
   route: ResolvedAgentRoute;
   channelConfig: SlackChannelConfigResolved | null;
   replyTarget: string;
