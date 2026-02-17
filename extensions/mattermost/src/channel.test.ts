@@ -37,6 +37,12 @@ describe("mattermostPlugin", () => {
     });
   });
 
+  describe("capabilities", () => {
+    it("declares reactions support", () => {
+      expect(mattermostPlugin.capabilities?.reactions).toBe(true);
+    });
+  });
+
   describe("messageActions", () => {
     it("exposes react when mattermost is configured", () => {
       const cfg: OpenClawConfig = {
