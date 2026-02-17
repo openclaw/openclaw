@@ -27,7 +27,9 @@ export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensi
         ],
         { timeout: 5000 },
         (err, stdout) => {
-          if (err) return reject(err);
+          if (err) {
+            return reject(err);
+          }
           resolve(stdout);
         },
       );
