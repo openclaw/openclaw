@@ -76,6 +76,12 @@ describe("ports helpers", () => {
     ).toBe("gateway");
   });
 
+  it("builds standalone-safe gateway hints", () => {
+    const hints = buildPortHints([{ pid: 321, commandLine: "openclaw-gateway" }], 18789);
+    expect(hints.join("\n")).toContain("openclaw gateway --force --port 18789");
+    expect(hints.join("\n")).not.toContain("openclaw gateway stop");
+  });
+
   it("formats port diagnostics with hints", () => {
     const diagnostics = {
       port: 18789,

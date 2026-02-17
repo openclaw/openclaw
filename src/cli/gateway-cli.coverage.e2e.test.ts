@@ -20,6 +20,27 @@ const forceFreePortAndWait = vi.fn<
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const inspectPortUsage = vi.fn(async (port: number) => ({
+  port,
+  status: "busy" as const,
+  listeners: [{ pid: 123, commandLine: "openclaw-gateway" }],
+  hints: [],
+}));
+const classifyPortListener = vi.fn((listener: { commandLine?: string }) =>
+  String(listener.commandLine ?? "")
+    .toLowerCase()
+    .includes("openclaw")
+    ? "gateway"
+    : "unknown",
+);
+const formatPortDiagnostics = vi.fn(
+  (diagnostics: { port: number; listeners: Array<{ pid?: number; commandLine?: string }> }) => [
+    `Port ${diagnostics.port} is already in use.`,
+    ...diagnostics.listeners.map(
+      (listener) => `- pid ${listener.pid ?? "?"}: ${listener.commandLine ?? "unknown"}`,
+    ),
+  ],
+);
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
 const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon[]>>(
   async () => [],
@@ -60,6 +81,16 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("./ports.js", () => ({
   forceFreePortAndWait: (port: number) => forceFreePortAndWait(port),
+}));
+
+vi.mock("../infra/ports.js", () => ({
+  inspectPortUsage: (port: number) => inspectPortUsage(port),
+  classifyPortListener: (listener: { commandLine?: string }, port: number) =>
+    classifyPortListener(listener, port),
+  formatPortDiagnostics: (diagnostics: {
+    port: number;
+    listeners: Array<{ pid?: number; commandLine?: string }>;
+  }) => formatPortDiagnostics(diagnostics),
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -291,6 +322,12 @@ describe("gateway-cli coverage", () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     serviceIsLoaded.mockResolvedValue(true);
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 123, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
 
     const { GatewayLockError } = await import("../infra/gateway-lock.js");
     startGatewayServer.mockRejectedValueOnce(
@@ -311,6 +348,40 @@ describe("gateway-cli coverage", () => {
     expect(startGatewayServer).toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
     expect(runtimeErrors.join("\n")).toContain("gateway stop");
+  });
+
+  it("prints standalone guidance on GatewayLockError when service is not loaded", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceIsLoaded.mockResolvedValue(false);
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 51667, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+
+    const { GatewayLockError } = await import("../infra/gateway-lock.js");
+    startGatewayServer.mockRejectedValueOnce(
+      new GatewayLockError("gateway already running (pid 51667); lock timeout after 5000ms"),
+    );
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await expect(
+      program.parseAsync(["gateway", "--token", "test-token", "--allow-unconfigured"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Gateway failed to start:");
+    expect(output).toContain("standalone gateway listener");
+    expect(output).toContain("openclaw gateway --force --port 18789");
+    expect(output).not.toContain("Gateway service appears loaded. Stop it first.");
   });
 
   it("uses env/config port when --port is omitted", async () => {

@@ -9,13 +9,18 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import {
+  classifyPortListener,
+  formatPortDiagnostics,
+  inspectPortUsage,
+} from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -52,6 +57,50 @@ type GatewayRunOpts = {
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
+
+async function maybeExplainStandaloneGatewayProcess(port: number): Promise<void> {
+  let diagnostics: Awaited<ReturnType<typeof inspectPortUsage>> | null = null;
+  try {
+    diagnostics = await inspectPortUsage(port);
+    if (diagnostics.status === "busy") {
+      for (const line of formatPortDiagnostics(diagnostics)) {
+        defaultRuntime.error(line);
+      }
+    }
+  } catch {
+    // ignore diagnostics failures
+  }
+
+  if (!diagnostics || diagnostics.status !== "busy") {
+    return;
+  }
+
+  const hasGatewayListener = diagnostics.listeners.some(
+    (listener) => classifyPortListener(listener, port) === "gateway",
+  );
+  if (!hasGatewayListener) {
+    return;
+  }
+
+  const service = resolveGatewayService();
+  let loaded: boolean | null = null;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = null;
+  }
+
+  if (loaded !== false) {
+    return;
+  }
+
+  defaultRuntime.error(
+    "Detected a standalone gateway listener (not service-managed); `openclaw gateway stop` will not stop it.",
+  );
+  defaultRuntime.error(
+    `Use ${formatCliCommand(`openclaw gateway --force --port ${port}`)} to replace it, or stop the listed PID manually.`,
+  );
+}
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
@@ -290,19 +339,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
       const errMessage = describeUnknownError(err);
-      defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
-      );
-      try {
-        const diagnostics = await inspectPortUsage(port);
-        if (diagnostics.status === "busy") {
-          for (const line of formatPortDiagnostics(diagnostics)) {
-            defaultRuntime.error(line);
-          }
-        }
-      } catch {
-        // ignore diagnostics failures
-      }
+      defaultRuntime.error(`Gateway failed to start: ${errMessage}`);
+      await maybeExplainStandaloneGatewayProcess(port);
       await maybeExplainGatewayServiceStop();
       defaultRuntime.exit(1);
       return;

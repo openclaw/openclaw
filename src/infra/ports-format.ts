@@ -27,7 +27,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   const hints: string[] = [];
   if (kinds.has("gateway")) {
     hints.push(
-      `Gateway already running locally. Stop it (${formatCliCommand("openclaw gateway stop")}) or use a different port.`,
+      `Gateway already running locally. Stop the existing listener (or run ${formatCliCommand(`openclaw gateway --force --port ${port}`)}) or use a different port.`,
     );
   }
   if (kinds.has("ssh")) {
