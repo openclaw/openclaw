@@ -1,5 +1,5 @@
-import type { DialogStep } from "../dialog/types.js";
 import { DialogSession } from "../dialog/session.js";
+import type { DialogStep } from "../dialog/types.js";
 
 export class DialogManager {
   private sessions = new Map<string, DialogSession>();

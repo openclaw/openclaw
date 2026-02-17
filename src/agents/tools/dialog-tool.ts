@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import type { AnyAgentTool } from "./common.js";
 import { callGateway } from "../../gateway/call.js";
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 
 const DialogToolSchema = Type.Object({

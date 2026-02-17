@@ -1,5 +1,4 @@
 import type { DialogStep } from "../../dialog/types.js";
-import type { GatewayRequestHandlers } from "./types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,6 +8,7 @@ import {
   validateDialogStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function formatStepPrompt(step: DialogStep): string {

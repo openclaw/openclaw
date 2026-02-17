@@ -1,6 +1,6 @@
 import type { SessionEntry } from "../../config/sessions.js";
-import type { ReplyPayload } from "../types.js";
 import { callGateway } from "../../gateway/call.js";
+import type { ReplyPayload } from "../types.js";
 
 export type DialogInterceptResult = {
   reply: ReplyPayload;
