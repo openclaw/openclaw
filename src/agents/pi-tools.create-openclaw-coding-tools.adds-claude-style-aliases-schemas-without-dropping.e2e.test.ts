@@ -142,6 +142,8 @@ describe("createOpenClawCodingTools", () => {
     expect(browser.description).toMatch(/browser\.defaultProfile/i);
     expect(browser.description).toMatch(/omit profile/i);
     expect(browser.description).toMatch(/profile="chrome"/i);
+    expect(browser.description).toMatch(/explicitly asks/i);
+    expect(browser.description).not.toMatch(/ALWAYS use profile="chrome"/i);
   });
   it("keeps browser tool schema properties after normalization", () => {
     const browser = defaultTools.find((tool) => tool.name === "browser");

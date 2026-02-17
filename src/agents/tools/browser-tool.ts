@@ -233,10 +233,10 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      `Profiles: omit profile to use browser.defaultProfile (currently "${defaultBrowserProfile}") for direct CDP control. Use profile="chrome" only for Chrome extension relay takeover. Use profile="openclaw" for the isolated openclaw-managed browser.`,
-      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
+      `Profiles: omit profile to use browser.defaultProfile (currently "${defaultBrowserProfile}") for direct CDP control. Use profile="chrome" only when the user explicitly asks for Browser Relay extension flow. Use profile="openclaw" for the isolated openclaw-managed browser.`,
+      'Only use profile="chrome" when the user explicitly asks for Browser Relay extension flow; otherwise use browser.defaultProfile.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
+      'For Browser Relay (profile="chrome"), user must attach a tab via toolbar badge ON. For normal workflows prefer browser.defaultProfile direct CDP first.',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -846,16 +846,16 @@ export function createBrowserTool(opts?: {
                 }
                 const fallbackHint =
                   defaultBrowserProfile && defaultBrowserProfile !== "chrome"
-                    ? ` If you intended direct CDP control, retry with profile="${defaultBrowserProfile}" (or omit profile to use browser.defaultProfile).`
+                    ? ` Try profile="${defaultBrowserProfile}" (or omit profile to use browser.defaultProfile).`
                     : "";
                 throw new Error(
-                  "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry." +
+                  "No attached tabs found on relay profile (chrome). Prefer browser.defaultProfile direct CDP first; use relay attach only when explicitly needed." +
                     fallbackHint,
                   { cause: err },
                 );
               }
               throw new Error(
-                `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+                'Chrome relay tab not found (stale targetId?). Run action=tabs profile="chrome" for relay tabs, or omit profile to use browser.defaultProfile tabs.',
                 { cause: err },
               );
             }
