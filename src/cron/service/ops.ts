@@ -12,7 +12,15 @@ import {
 import { locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
-import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
+import {
+  armTimer,
+  DEFAULT_JOB_TIMEOUT_MS,
+  emit,
+  executeJob,
+  runMissedJobs,
+  stopTimer,
+  wake,
+} from "./timer.js";
 
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
@@ -199,7 +207,27 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
-      return { ok: true, ran: false, reason: "already-running" as const };
+      // Detect stale running markers: if the job has been "running" for longer
+      // than 2× the configured timeout (or 20 min default), treat the marker as
+      // stale and clear it so the job can be triggered again. This handles edge
+      // cases where runningAtMs is persisted but never cleared (e.g. process
+      // crash between persist and applyJobResult). See #17554.
+      const jobTimeoutMs =
+        job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+          ? job.payload.timeoutSeconds * 1_000
+          : DEFAULT_JOB_TIMEOUT_MS;
+      const staleThresholdMs = jobTimeoutMs * 2;
+      const now = state.deps.nowMs();
+      if (now - job.state.runningAtMs > staleThresholdMs) {
+        state.deps.log.warn(
+          { jobId: job.id, runningAtMs: job.state.runningAtMs, ageMs: now - job.state.runningAtMs },
+          "cron: clearing stale running marker (exceeded 2× timeout)",
+        );
+        job.state.runningAtMs = undefined;
+        await persist(state);
+      } else {
+        return { ok: true, ran: false, reason: "already-running" as const };
+      }
     }
     const now = state.deps.nowMs();
     const due = isJobDue(job, now, { forced: mode === "force" });
