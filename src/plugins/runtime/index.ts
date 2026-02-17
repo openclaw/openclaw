@@ -73,6 +73,7 @@ import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   listLineAccountIds,
@@ -269,6 +270,7 @@ function createRuntimeConfig(): PluginRuntime["config"] {
 function createRuntimeSystem(): PluginRuntime["system"] {
   return {
     enqueueSystemEvent,
+    requestHeartbeatNow,
     runCommandWithTimeout,
     formatNativeDependencyHint,
   };
