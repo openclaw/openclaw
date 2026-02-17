@@ -72,33 +72,30 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      // Add type guard
+      // Type guard for error case
       expect(res.issues).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             path: "models.providers.google.api",
-            message: "Invalid input", // Updated to match actual Zod error message
+            message: "Invalid input",
           }),
         ]),
       );
 
-      // Crucially, assert that the invalid provider is *not* present in the returned config
-      // This demonstrates graceful degradation.
-      const providers = res.config?.models?.providers; // Safely access providers
-
-      // Assert that if providers exist, 'google' is not a property.
-      // If `providers` is undefined (meaning models or providers were completely removed),
-      // then this is also a graceful failure.
-      if (providers) {
-        expect(providers).not.toHaveProperty("google");
-        expect(providers).toHaveProperty("anthropic"); // Valid providers should still be present
+      // Assert that the config returned when ok is false does NOT contain the invalid provider
+      // The overall `res.config` might be null/undefined, or a partial object depending on how
+      // `validateConfigObject` is implemented to recover.
+      // For this test, we expect the invalid provider to be filtered out if `models.providers` exists.
+      // If `res.config` is present and has models.providers, then it should *not* have 'google'.
+      if (res.config?.models?.providers) {
+        expect(res.config.models.providers).not.toHaveProperty("google");
+        expect(res.config.models.providers).toHaveProperty("anthropic");
       } else {
-        // If models.providers is entirely absent, assert that the config still allows it to be absent.
-        // This handles cases where ALL providers might be invalid.
+        // If models.providers is completely absent, that's also valid graceful degradation.
         expect(res.config?.models?.providers).toBeUndefined();
       }
     } else {
-      throw new Error("Expected validation to fail"); // Ensure test fails if it unexpectedly passes
+      throw new Error("Expected validation to fail");
     }
   });
 });

@@ -14,7 +14,8 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
-import { OpenClawSchema, ModelProviderSchema } from "./zod-schema.js"; // Import ModelProviderSchema and OpenClawSchema
+import { ModelProviderSchema } from "./zod-schema.core.js"; // Correct import for ModelProviderSchema
+import { OpenClawSchema } from "./zod-schema.js";
 
 const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const AVATAR_DATA_RE = /^data:/i;
@@ -144,7 +145,7 @@ export function validateConfigObjectRaw(
   // This ensures the returned config *only* contains valid providers.
   if (providersToDisable.size > 0 && finalConfig.models?.providers) {
     const originalProviders = finalConfig.models.providers;
-    const filteredProviders: Record<string, z.infer<typeof ModelProviderSchema>> = {};
+    const filteredProviders = {};
 
     for (const [providerKey, providerConfig] of Object.entries(originalProviders)) {
       if (!providersToDisable.has(providerKey)) {
