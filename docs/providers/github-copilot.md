@@ -67,6 +67,7 @@ openclaw models set github-copilot/gpt-4o
 
 - Requires an interactive TTY; run it directly in a terminal.
 - Copilot model availability depends on your plan; if a model is rejected, try
-  another ID (for example `github-copilot/gpt-4.1`).
+  another ID (for example `github-copilot/gpt-4.1` or `github-copilot/gpt-5.3-codex`).
 - The login stores a GitHub token in the auth profile store and exchanges it for a
   Copilot API token when OpenClaw runs.
+- `github-copilot/gpt-5.3-codex` supports `xhigh` thinking (`/think xhigh`).

@@ -51,7 +51,8 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
   });
 
-  it("includes xhigh for github-copilot gpt-5.2 refs", () => {
+  it("includes xhigh for github-copilot codex refs", () => {
+    expect(listThinkingLevels("github-copilot", "gpt-5.3-codex")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
   });

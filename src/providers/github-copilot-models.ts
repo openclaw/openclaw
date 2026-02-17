@@ -11,6 +11,7 @@ const DEFAULT_MODEL_IDS = [
   "gpt-4.1",
   "gpt-4.1-mini",
   "gpt-4.1-nano",
+  "gpt-5.3-codex",
   "o1",
   "o1-mini",
   "o3-mini",
@@ -25,6 +26,7 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
   if (!id) {
     throw new Error("Model id required");
   }
+  const isCodex = /(?:^|-)codex(?:$|-)/i.test(id);
   return {
     id,
     name: id,
@@ -32,7 +34,7 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
     // We use OpenAI-compatible responses API, while keeping the provider id as
     // "github-copilot" (pi-ai uses that to attach Copilot-specific headers).
     api: "openai-responses",
-    reasoning: false,
+    reasoning: isCodex,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
