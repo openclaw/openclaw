@@ -10,6 +10,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
+import type { DeepgramSTTProvider } from "./providers/stt-deepgram.js";
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
@@ -20,7 +21,7 @@ import type {
  */
 export interface MediaStreamConfig {
   /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  sttProvider: OpenAIRealtimeSTTProvider | DeepgramSTTProvider;
   /** Validate whether to accept a media stream for the given call ID */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
