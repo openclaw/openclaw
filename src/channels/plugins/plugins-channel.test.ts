@@ -51,6 +51,12 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("uuid:")).toBe(false);
     expect(looksLikeSignalTargetId("uuid:not-a-uuid")).toBe(false);
   });
+
+  it("accepts signal:+E.164 for target detection (media and message send)", () => {
+    expect(looksLikeSignalTargetId("signal:+10123566789")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:+15551234567")).toBe(true);
+    expect(looksLikeSignalTargetId("+15551234567")).toBe(true);
+  });
 });
 
 describe("telegramOutbound.sendPayload", () => {

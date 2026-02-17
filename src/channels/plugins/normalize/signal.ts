@@ -57,5 +57,7 @@ export function looksLikeSignalTargetId(raw: string): boolean {
   if (UUID_PATTERN.test(trimmed) || UUID_COMPACT_PATTERN.test(trimmed)) {
     return true;
   }
-  return /^\+?\d{3,}$/.test(trimmed);
+  // E.164: accept with or without signal: prefix (e.g. signal:+15551234567)
+  const forE164 = trimmed.replace(/^signal:/i, "").trim();
+  return /^\+?\d{3,}$/.test(forE164);
 }
