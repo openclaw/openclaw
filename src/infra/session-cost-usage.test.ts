@@ -96,7 +96,7 @@ describe("session cost usage", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const originalState = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = root;
@@ -275,7 +275,11 @@ describe("session cost usage", () => {
     try {
       const summary = await loadSessionCostSummary({
         sessionId: "sess-worker-1",
-        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        sessionEntry: {
+          sessionId: "sess-worker-1",
+          updatedAt: Date.now(),
+          sessionFile: workerSessionFile,
+        },
         agentId: "worker1",
       });
       expect(summary?.totalTokens).toBe(18);
@@ -317,7 +321,11 @@ describe("session cost usage", () => {
     try {
       const timeseries = await loadSessionUsageTimeSeries({
         sessionId: "sess-worker-2",
-        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        sessionEntry: {
+          sessionId: "sess-worker-2",
+          updatedAt: Date.now(),
+          sessionFile: workerSessionFile,
+        },
         agentId: "worker2",
       });
       expect(timeseries?.points.length).toBe(1);
@@ -357,7 +365,11 @@ describe("session cost usage", () => {
     try {
       const logs = await loadSessionLogs({
         sessionId: "sess-worker-3",
-        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        sessionEntry: {
+          sessionId: "sess-worker-3",
+          updatedAt: Date.now(),
+          sessionFile: workerSessionFile,
+        },
         agentId: "worker3",
       });
       expect(logs).toHaveLength(1);

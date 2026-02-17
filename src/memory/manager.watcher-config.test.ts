@@ -82,7 +82,10 @@ describe("memory watcher config", () => {
     manager = result.manager;
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls[0] as [string[], Record<string, unknown>];
+    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      Record<string, unknown>,
+    ];
     expect(watchedPaths).toEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
