@@ -294,7 +294,7 @@ export class TeslaClient {
         chargeLimitPercent: cs?.charge_limit_soc as number,
       },
       climate: {
-        insideTemp: cs ? (cl?.inside_temp as number) : 0,
+        insideTemp: cl?.inside_temp as number,
         outsideTemp: cl?.outside_temp as number,
         driverTempSetting: cl?.driver_temp_setting as number,
         passengerTempSetting: cl?.passenger_temp_setting as number,
