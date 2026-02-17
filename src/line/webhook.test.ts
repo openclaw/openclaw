@@ -38,6 +38,35 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).toHaveBeenCalledWith(expect.objectContaining({ events: expect.any(Array) }));
   });
 
+  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+    const onEvents = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const runtime = { error: vi.fn() };
+    const secret = "secret";
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: secret,
+      onEvents,
+      runtime,
+    });
+
+    const req = {
+      headers: { "x-line-signature": sign(rawBody, secret) },
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.status).not.toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ error: "Internal server error" });
+    expect(runtime.error).toHaveBeenCalled();
+  });
+
   it("parses JSON from raw buffer body", async () => {
     const onEvents = vi.fn(async () => {});
     const secret = "secret";

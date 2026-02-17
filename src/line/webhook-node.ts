@@ -93,18 +93,15 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
-      // Respond immediately with 200 to avoid LINE timeout
+      // Process events before acknowledging delivery so failures can retry upstream.
+      if (body.events && body.events.length > 0) {
+        logVerbose(`line: received ${body.events.length} webhook events`);
+        await params.bot.handleWebhook(body);
+      }
+
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok" }));
-
-      // Process events asynchronously
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        await params.bot.handleWebhook(body).catch((err) => {
-          params.runtime.error?.(danger(`line webhook handler failed: ${String(err)}`));
-        });
-      }
     } catch (err) {
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;
