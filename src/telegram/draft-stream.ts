@@ -9,6 +9,8 @@ export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
+  /** Returns the last text successfully sent/edited to Telegram (not just attempted). */
+  lastAppliedText: () => string | undefined;
   clear: () => Promise<void>;
   stop: () => void;
   /** Reset internal state so the next update creates a new message instead of editing. */
@@ -38,7 +40,12 @@ export function createTelegramDraftStream(params: {
       : threadParams;
 
   let streamMessageId: number | undefined;
-  let lastSentText = "";
+  let lastAttemptedText = "";
+  let lastAppliedText: string | undefined;
+  let lastSentAt = 0;
+  let pendingText = "";
+  let inFlightPromise: Promise<void> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
   const sendOrEditStreamMessage = async (text: string) => {
@@ -58,13 +65,15 @@ export function createTelegramDraftStream(params: {
       );
       return;
     }
-    if (trimmed === lastSentText) {
+    if (trimmed === lastAttemptedText) {
       return;
     }
-    lastSentText = trimmed;
+    lastAttemptedText = trimmed;
+    lastSentAt = Date.now();
     try {
       if (typeof streamMessageId === "number") {
         await params.api.editMessageText(chatId, streamMessageId, trimmed);
+        lastAppliedText = trimmed;
         return;
       }
       const sent = await params.api.sendMessage(chatId, trimmed, replyParams);
@@ -75,6 +84,7 @@ export function createTelegramDraftStream(params: {
         return;
       }
       streamMessageId = Math.trunc(sentMessageId);
+      lastAppliedText = trimmed;
     } catch (err) {
       stopped = true;
       params.warn?.(
@@ -112,7 +122,7 @@ export function createTelegramDraftStream(params: {
 
   const forceNewMessage = () => {
     streamMessageId = undefined;
-    lastSentText = "";
+    lastAttemptedText = "";
     loop.resetPending();
   };
 
@@ -122,6 +132,7 @@ export function createTelegramDraftStream(params: {
     update: loop.update,
     flush: loop.flush,
     messageId: () => streamMessageId,
+    lastAppliedText: () => lastAppliedText,
     clear,
     stop,
     forceNewMessage,

@@ -1,5 +1,5 @@
-import path from "node:path";
 import type { Bot } from "grammy";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../config/paths.js";
 
@@ -41,14 +41,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     editMessageTelegram.mockReset();
   });
 
-  function createDraftStream(messageId?: number) {
+  function createDraftStream(messageId?: number, lastApplied?: string) {
     return {
       update: vi.fn(),
       flush: vi.fn().mockResolvedValue(undefined),
       messageId: vi.fn().mockReturnValue(messageId),
+      lastAppliedText: vi.fn().mockReturnValue(lastApplied),
       clear: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn(),
-      forceNewMessage: vi.fn(),
     };
   }
 
@@ -115,13 +115,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     context: TelegramMessageContext;
     telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
+    replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
   }) {
     await dispatchTelegramMessage({
       context: params.context,
       bot: createBot(),
       cfg: {},
       runtime: createRuntime(),
-      replyToMode: "first",
+      replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
@@ -152,6 +153,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         chatId: 123,
         thread: { id: 777, scope: "dm" },
+        replyToMessageId: 456,
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
@@ -216,13 +218,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
-  it("does not overwrite finalized preview when additional final payloads are sent", async () => {
-    const draftStream = createDraftStream(999);
+  it("skips final preview edit when draft already matches final plain text", async () => {
+    const draftStream = createDraftStream(999, "Hello final");
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Primary result" }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "Hello final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("still edits preview when final has inline buttons", async () => {
+    const draftStream = createDraftStream(999, "Hello final");
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
-        { text: "⚠️ Recovered tool error details" },
+        {
+          text: "Hello final",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Press", callback_data: "press" }]],
+            },
+          },
+        },
         { kind: "final" },
       );
       return { queuedFinal: true };
@@ -232,20 +257,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       999,
-      "Primary result",
-      expect.any(Object),
-    );
-    expect(deliverReplies).toHaveBeenCalledWith(
+      "Hello final",
       expect.objectContaining({
-        replies: [expect.objectContaining({ text: "⚠️ Recovered tool error details" })],
+        buttons: [[{ text: "Press", callback_data: "press" }]],
       }),
     );
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(draftStream.stop).toHaveBeenCalled();
   });
 
   it("falls back to normal delivery when preview final is too long to edit", async () => {
@@ -293,97 +312,26 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("forces new message when new assistant message starts after previous output", async () => {
-    const draftStream = createDraftStream(999);
+  it("omits replyToMessageId from draft stream when replyToMode is off", async () => {
+    const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        // First assistant message: partial text
-        await replyOptions?.onPartialReply?.({ text: "First response" });
-        // New assistant message starts (e.g., after tool call)
-        await replyOptions?.onAssistantMessageStart?.();
-        // Second assistant message: new text
-        await replyOptions?.onPartialReply?.({ text: "After tool call" });
-        await dispatcherOptions.deliver({ text: "After tool call" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
-    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+    await dispatchWithContext({
+      context: createContext(),
+      replyToMode: "off",
+    });
 
-    // Should force new message when assistant message starts after previous output
-    expect(draftStream.forceNewMessage).toHaveBeenCalled();
-  });
-
-  it("does not force new message on first assistant message start", async () => {
-    const draftStream = createDraftStream(999);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        // First assistant message starts (no previous output)
-        await replyOptions?.onAssistantMessageStart?.();
-        // Partial updates
-        await replyOptions?.onPartialReply?.({ text: "Hello" });
-        await replyOptions?.onPartialReply?.({ text: "Hello world" });
-        await dispatcherOptions.deliver({ text: "Hello world" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: 123,
+        replyToMessageId: undefined,
+      }),
     );
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "block" });
-
-    // First message start shouldn't trigger forceNewMessage (no previous output)
-    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
-  });
-
-  it("forces new message when reasoning ends after previous output", async () => {
-    const draftStream = createDraftStream(999);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        // First partial: text before thinking
-        await replyOptions?.onPartialReply?.({ text: "Let me check" });
-        // Reasoning stream (thinking block)
-        await replyOptions?.onReasoningStream?.({ text: "Analyzing..." });
-        // Reasoning ends
-        await replyOptions?.onReasoningEnd?.();
-        // Second partial: text after thinking
-        await replyOptions?.onPartialReply?.({ text: "Here's the answer" });
-        await dispatcherOptions.deliver({ text: "Here's the answer" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "block" });
-
-    // Should force new message when reasoning ends
-    expect(draftStream.forceNewMessage).toHaveBeenCalled();
-  });
-
-  it("does not force new message on reasoning end without previous output", async () => {
-    const draftStream = createDraftStream(999);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        // Reasoning starts immediately (no previous text output)
-        await replyOptions?.onReasoningStream?.({ text: "Thinking..." });
-        // Reasoning ends
-        await replyOptions?.onReasoningEnd?.();
-        // First actual text output
-        await replyOptions?.onPartialReply?.({ text: "Here's my answer" });
-        await dispatcherOptions.deliver({ text: "Here's my answer" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-    deliverReplies.mockResolvedValue({ delivered: true });
-
-    await dispatchWithContext({ context: createContext(), streamMode: "block" });
-
-    // No previous text output, so no forceNewMessage needed
-    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
   it("does not edit preview message when final payload is an error", async () => {

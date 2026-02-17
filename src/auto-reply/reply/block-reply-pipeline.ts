@@ -1,7 +1,7 @@
-import { logVerbose } from "../../globals.js";
 import type { ReplyPayload } from "../types.js";
-import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
+import { logVerbose } from "../../globals.js";
+import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
@@ -11,6 +11,8 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  /** Returns true if any block reply delivery failed during this pipeline's lifetime. */
+  hasDeliveryFailures: () => boolean;
 };
 
 export type BlockReplyBuffer = {
@@ -88,6 +90,7 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
+  let hadDeliveryFailure = false;
   let didLogTimeout = false;
 
   const sendPayload = (payload: ReplyPayload, skipSeen?: boolean) => {
@@ -142,6 +145,7 @@ export function createBlockReplyPipeline(params: {
           }
           return;
         }
+        hadDeliveryFailure = true;
         logVerbose(`block reply delivery failed: ${String(err)}`);
       })
       .finally(() => {
@@ -234,6 +238,7 @@ export function createBlockReplyPipeline(params: {
     hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
     didStream: () => didStream,
     isAborted: () => aborted,
+    hasDeliveryFailures: () => hadDeliveryFailure,
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyPayloadKey(payload);
       return sentKeys.has(payloadKey);

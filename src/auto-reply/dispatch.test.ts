@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
     sendToolResult: () => true,
     sendBlockReply: () => true,
+    sendBlockReplyAsync: () => ({ enqueued: true, delivered: Promise.resolve() }),
     sendFinalReply: () => true,
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     markComplete: () => {
@@ -66,6 +67,7 @@ describe("withReplyDispatcher", () => {
     const dispatcher = {
       sendToolResult: () => true,
       sendBlockReply: () => true,
+      sendBlockReplyAsync: () => ({ enqueued: true, delivered: Promise.resolve() }),
       sendFinalReply: () => {
         order.push("sendFinalReply");
         return true;
