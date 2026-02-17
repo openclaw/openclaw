@@ -63,6 +63,7 @@ async function withCanvasGatewayHarness(params: {
   const canvasWss = new WebSocketServer({ noServer: true });
   const canvasHost: CanvasHostHandler = {
     rootDir: "test",
+    basePath: "/canvas",
     close: async () => {},
     handleUpgrade: (req, socket, head) => {
       const url = new URL(req.url ?? "/", "http://localhost");

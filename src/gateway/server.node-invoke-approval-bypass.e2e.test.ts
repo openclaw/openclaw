@@ -268,10 +268,11 @@ describe("node.invoke approval bypass", () => {
     });
     expect(invoke.ok).toBe(true);
 
-    expect(lastInvokeParams).toBeTruthy();
-    expect(lastInvokeParams?.approved).toBe(true);
-    expect(lastInvokeParams?.approvalDecision).toBe("allow-once");
-    expect(lastInvokeParams?.injected).toBeUndefined();
+    const invokeParams = lastInvokeParams as Record<string, unknown> | null;
+    expect(invokeParams).toBeTruthy();
+    expect(invokeParams?.["approved"]).toBe(true);
+    expect(invokeParams?.["approvalDecision"]).toBe("allow-once");
+    expect(invokeParams?.["injected"]).toBeUndefined();
 
     ws.close();
     ws2.close();
