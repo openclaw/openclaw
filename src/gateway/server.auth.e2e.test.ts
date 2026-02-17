@@ -1460,10 +1460,11 @@ describe("gateway server auth/connect", () => {
             "x-forwarded-user": "testuser",
           },
         });
-        const challengePromise = onceMessage<{ payload?: unknown }>(
-          ws,
-          (o) => o.type === "event" && o.event === "connect.challenge",
-        );
+        const challengePromise = onceMessage<{
+          type?: string;
+          event?: string;
+          payload?: Record<string, unknown> | null;
+        }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
         await new Promise<void>((resolve) => ws.once("open", resolve));
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
