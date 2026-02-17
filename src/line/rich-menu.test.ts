@@ -26,7 +26,7 @@ describe("messageAction", () => {
   it("truncates label to 20 characters", () => {
     const action = messageAction("This is a very long label text");
 
-    expect(action.label.length).toBe(20);
+    expect((action.label ?? "").length).toBe(20);
     expect(action.label).toBe("This is a very long ");
   });
 });
@@ -43,7 +43,7 @@ describe("uriAction", () => {
   it("truncates label to 20 characters", () => {
     const action = uriAction("Click here to visit our website", "https://example.com");
 
-    expect(action.label.length).toBe(20);
+    expect((action.label ?? "").length).toBe(20);
   });
 });
 
