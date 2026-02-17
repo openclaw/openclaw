@@ -12,6 +12,7 @@
     "dist/",
     "docs/_layouts/",
     "node_modules/",
+    "OPENCLAW_DOCS_ALL.md",
     "patches/",
     "pnpm-lock.yaml/",
     "Swabble/",

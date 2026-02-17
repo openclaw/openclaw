@@ -1,7 +1,7 @@
 ---
 name: code-factory
 description: "Harness Engineering pattern for agent-driven development. One loop: coding agent writes code, repo enforces risk-aware checks, review agent validates PRs, evidence is machine-verifiable, findings become repeatable harness cases. Agents can implement, validate, and review with deterministic, auditable standards."
-metadata: {"openclaw":{"emoji":"🏭","requires":{"bins":["git","gh","npm"]}}}
+metadata: { "openclaw": { "emoji": "🏭", "requires": { "bins": ["git", "gh", "npm"] } } }
 ---
 
 # Code Factory — Agent-Driven Development Loop
@@ -36,46 +36,28 @@ Create `.harness/risk-policy.json` at the repo root:
       "*.config.ts",
       "*.config.js"
     ],
-    "medium": [
-      "src/components/**",
-      "src/hooks/**",
-      "src/utils/**"
-    ],
+    "medium": ["src/components/**", "src/hooks/**", "src/utils/**"],
     "low": ["**"]
   },
   "mergePolicy": {
     "high": {
-      "requiredChecks": [
-        "risk-policy-gate",
-        "harness-smoke",
-        "code-review-agent",
-        "ci-pipeline"
-      ],
+      "requiredChecks": ["risk-policy-gate", "harness-smoke", "code-review-agent", "ci-pipeline"],
       "requireBrowserEvidence": true,
       "minTestCoverage": 80
     },
     "medium": {
-      "requiredChecks": [
-        "risk-policy-gate",
-        "ci-pipeline"
-      ],
+      "requiredChecks": ["risk-policy-gate", "ci-pipeline"],
       "requireBrowserEvidence": false,
       "minTestCoverage": 60
     },
     "low": {
-      "requiredChecks": [
-        "risk-policy-gate",
-        "ci-pipeline"
-      ],
+      "requiredChecks": ["risk-policy-gate", "ci-pipeline"],
       "requireBrowserEvidence": false,
       "minTestCoverage": 0
     }
   },
   "docsDriftRules": {
-    "trackedPaths": [
-      ".harness/**",
-      ".github/workflows/**"
-    ],
+    "trackedPaths": [".harness/**", ".github/workflows/**"],
     "requireChangelogEntry": true
   },
   "evidenceRequirements": {
@@ -147,9 +129,7 @@ export async function assertDocsDriftRules(
 }
 
 function matchGlob(file: string, pattern: string): boolean {
-  const regex = new RegExp(
-    "^" + pattern.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*") + "$",
-  );
+  const regex = new RegExp("^" + pattern.replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*") + "$");
   return regex.test(file);
 }
 ```
@@ -161,10 +141,7 @@ This is critical. Review state is valid ONLY for the current PR head commit.
 ```typescript
 // .harness/scripts/sha-discipline.ts
 
-export async function waitForReviewOnHead(
-  headSha: string,
-  timeoutMinutes = 20,
-): Promise<void> {
+export async function waitForReviewOnHead(headSha: string, timeoutMinutes = 20): Promise<void> {
   const deadline = Date.now() + timeoutMinutes * 60 * 1000;
 
   while (Date.now() < deadline) {
@@ -216,11 +193,10 @@ export async function requestReviewRerun(
     return false; // Already requested for this SHA
   }
 
-  await postPRComment(prNumber, [
-    MARKER,
-    `@${reviewAgentUsername} please re-review`,
-    trigger,
-  ].join("\n"));
+  await postPRComment(
+    prNumber,
+    [MARKER, `@${reviewAgentUsername} please re-review`, trigger].join("\n"),
+  );
 
   return true;
 }
@@ -238,9 +214,7 @@ export async function runRemediation(
   headSha: string,
   findings: ReviewFinding[],
 ): Promise<void> {
-  const actionableFindings = findings.filter(
-    (f) => f.severity !== "info" && f.sha === headSha,
-  );
+  const actionableFindings = findings.filter((f) => f.severity !== "info" && f.sha === headSha);
 
   if (actionableFindings.length === 0) return;
 
@@ -248,8 +222,8 @@ export async function runRemediation(
   const task = [
     `Fix the following code review findings for PR #${prNumber}:`,
     "",
-    ...actionableFindings.map((f, i) =>
-      `${i + 1}. [${f.severity}] ${f.file}:${f.line} — ${f.message}`,
+    ...actionableFindings.map(
+      (f, i) => `${i + 1}. [${f.severity}] ${f.file}:${f.line} — ${f.message}`,
     ),
     "",
     "Instructions:",
@@ -283,9 +257,7 @@ export async function autoResolveBotThreads(
     if (thread.isResolved) continue;
 
     // Check if ALL comments in thread are from the review bot
-    const allFromBot = thread.comments.every(
-      (c) => c.author === reviewBotUsername,
-    );
+    const allFromBot = thread.comments.every((c) => c.author === reviewBotUsername);
 
     if (allFromBot) {
       await resolveThread(thread.id);
@@ -313,6 +285,7 @@ npm run harness:ui:verify-browser-evidence
 ```
 
 Evidence verification checks:
+
 - Required flows exist in manifest
 - Expected entrypoint was used
 - Expected account identity is present for logged-in flows
@@ -336,18 +309,23 @@ This ensures fixes aren't one-off patches but grow long-term coverage.
 ## GitHub Actions Workflows
 
 ### risk-policy-gate.yml
+
 Runs first on every PR. If it fails, no other checks run.
 
 ### ci-pipeline.yml
+
 Standard build/test/lint pipeline. Only runs after risk-policy-gate passes.
 
 ### code-review-rerun.yml
+
 Watches for PR synchronize events. Requests re-review from the review agent for the new head SHA.
 
 ### remediation.yml
+
 When review agent posts findings, triggers the coding agent to fix them.
 
 ### auto-resolve-threads.yml
+
 After clean review rerun, auto-resolves bot-only threads.
 
 ## Setup Checklist

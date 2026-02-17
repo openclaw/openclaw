@@ -1,7 +1,15 @@
 ---
 name: x-reply-agent
 description: "Autonomous X (Twitter) reply agent. Scans your feed and relevant conversations 24/7. Drafts context-aware replies from your brand account. Builds followers and drives demos. Safe up to 200 replies/day."
-metadata: {"openclaw":{"emoji":"💬","requires":{"bins":["curl"],"env":["X_BEARER_TOKEN"]},"primaryEnv":"X_BEARER_TOKEN"}}
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "💬",
+        "requires": { "bins": ["curl"], "env": ["X_BEARER_TOKEN"] },
+        "primaryEnv": "X_BEARER_TOKEN",
+      },
+  }
 ---
 
 # X Reply Agent
@@ -15,7 +23,9 @@ The goal is **not** spam. The goal is being the most helpful voice in every rele
 ## Monitoring Targets
 
 ### 1. Keyword Monitoring
+
 Track conversations containing:
+
 ```
 "[your product category]"
 "alternative to [competitor]"
@@ -26,42 +36,50 @@ Track conversations containing:
 ```
 
 ### 2. Account Monitoring
+
 Follow and reply to posts from:
+
 - Competitor accounts (reply to their followers' complaints)
 - Industry influencers (add value to their threads)
 - Target customer accounts (engage with their content)
 - Relevant hashtag participants
 
 ### 3. Trending Topic Riding
+
 When trending topics intersect with your domain, join the conversation with relevant takes.
 
 ## Reply Frameworks
 
 ### Framework 1: Helpful Expert
+
 ```
 "[Acknowledge their point]. One thing that helped us was [specific tactic].
 [1-2 sentence explanation]. Happy to share more if useful."
 ```
 
 ### Framework 2: Respectful Disagreement
+
 ```
 "Interesting take. We actually found the opposite — [your data/experience].
 [Brief explanation of why]. Curious if others have seen this too?"
 ```
 
 ### Framework 3: Resource Share
+
 ```
 "Been researching this exact topic. [Specific insight].
 We put together a [resource type] on this: [link if appropriate]"
 ```
 
 ### Framework 4: Question Engagement
+
 ```
 "Great question. From what we've seen: [direct answer].
 The tricky part is [nuance]. What's your use case?"
 ```
 
 ### Framework 5: Subtle Product Mention
+
 ```
 "We ran into this too and ended up building [product feature] for it.
 [How it works in 1 sentence]. Not for everyone but works for [use case]."
@@ -94,6 +112,7 @@ DON'T: "Love this! 🔥 Follow us for more!"
 ## Performance Metrics
 
 Track daily:
+
 - Replies sent (target: 100-150/day)
 - Impressions on replies
 - Profile visits from replies

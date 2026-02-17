@@ -1,7 +1,7 @@
 ---
 name: social-content-factory
 description: "Generate TikTok carousels, YouTube Shorts scripts, Instagram Reels content, and X threads on autopilot. Creates hooks, scripts, slide content, and captions. Posts as drafts for human review. Cost: ~$0.50/post."
-metadata: {"openclaw":{"emoji":"🎬","requires":{"bins":["curl"]}}}
+metadata: { "openclaw": { "emoji": "🎬", "requires": { "bins": ["curl"] } } }
 ---
 
 # Social Content Factory
@@ -13,6 +13,7 @@ Generate short-form video scripts, carousels, and social content at scale. Human
 ### TikTok/Instagram Carousels (6-slide format)
 
 **Structure:**
+
 ```
 Slide 1: HOOK — Stop the scroll
 Slide 2: PROBLEM — Relatable pain point
@@ -26,6 +27,7 @@ Slide 6: CTA — What to do next
 `[Person] + [conflict] -> showed them [AI/tool] -> mind changed`
 
 Examples:
+
 - "My boss said AI can't do marketing. I showed him this."
 - "Client wanted 100 blog posts in a week. Here's what happened."
 - "They laughed when I said I automate my SEO. Then they saw the traffic."
@@ -33,6 +35,7 @@ Examples:
 ### YouTube Shorts (60-second scripts)
 
 **Structure:**
+
 ```
 0-3s:  HOOK — Provocative statement or question
 3-15s: SETUP — Context and relatable scenario
@@ -44,6 +47,7 @@ Examples:
 ### X Threads (8-12 tweets)
 
 **Structure:**
+
 ```
 Tweet 1: Hook + promise ("I grew X to Y in Z days. Here's the exact playbook:")
 Tweet 2-3: Context / why this matters
@@ -95,6 +99,7 @@ Include visual directions for each slide/scene:
 ## Publishing Schedule
 
 Optimal posting times (UTC):
+
 ```
 TikTok:    10:00, 14:00, 19:00
 Instagram: 11:00, 15:00, 20:00
@@ -103,6 +108,7 @@ YouTube:   12:00, 16:00
 ```
 
 Daily targets:
+
 - 2-3 TikTok/Instagram posts
 - 1-2 X threads
 - 1 YouTube Short
@@ -126,8 +132,8 @@ Save drafts to `$VIBECLAW_WORKSPACE/drafts/social/`:
   "topic": "AI marketing automation",
   "hook": "My boss said AI can't do marketing...",
   "slides": [
-    {"number": 1, "text": "...", "visual": "..."},
-    {"number": 2, "text": "...", "visual": "..."}
+    { "number": 1, "text": "...", "visual": "..." },
+    { "number": 2, "text": "...", "visual": "..." }
   ],
   "caption": "...",
   "hashtags": ["#ai", "#marketing", "#automation"],

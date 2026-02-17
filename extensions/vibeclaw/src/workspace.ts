@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 
 const DEFAULT_CONFIG = {
   product: {
@@ -300,7 +300,11 @@ export async function saveDraft(
   const draftPath = path.join(ws, "drafts", category, `${id}.json`);
   await fs.writeFile(
     draftPath,
-    JSON.stringify({ ...draft, id, createdAt: draft.createdAt ?? new Date().toISOString() }, null, 2),
+    JSON.stringify(
+      { ...draft, id, createdAt: draft.createdAt ?? new Date().toISOString() },
+      null,
+      2,
+    ),
     "utf-8",
   );
   return id as string;
@@ -372,7 +376,10 @@ export async function getMetrics(
   return metrics;
 }
 
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+function deepMerge(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
   const result = { ...target };
   for (const key of Object.keys(source)) {
     if (
@@ -383,7 +390,10 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
       typeof target[key] === "object" &&
       !Array.isArray(target[key])
     ) {
-      result[key] = deepMerge(target[key] as Record<string, unknown>, source[key] as Record<string, unknown>);
+      result[key] = deepMerge(
+        target[key] as Record<string, unknown>,
+        source[key] as Record<string, unknown>,
+      );
     } else {
       result[key] = source[key];
     }

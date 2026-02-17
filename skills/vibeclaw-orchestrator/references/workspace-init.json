@@ -68,10 +68,10 @@
       "topicsPerMonth": 100,
       "platformsPerTopic": 20,
       "anchorTextRotation": {
-        "exactMatch": 0.20,
+        "exactMatch": 0.2,
         "partialMatch": 0.25,
-        "branded": 0.20,
-        "generic": 0.20,
+        "branded": 0.2,
+        "generic": 0.2,
         "nakedUrl": 0.15
       }
     },
@@ -115,19 +115,13 @@
     }
   },
   "budget": {
-    "dailyMaxUsd": 5.00,
-    "alertThresholdUsd": 4.00,
-    "monthlyMaxUsd": 150.00
+    "dailyMaxUsd": 5.0,
+    "alertThresholdUsd": 4.0,
+    "monthlyMaxUsd": 150.0
   },
   "learning": {
     "reviewFrequency": "weekly",
     "autoCapture": true,
-    "knowledgeFiles": [
-      "platforms.md",
-      "templates.md",
-      "hooks.md",
-      "seo.md",
-      "errors.md"
-    ]
+    "knowledgeFiles": ["platforms.md", "templates.md", "hooks.md", "seo.md", "errors.md"]
   }
 }

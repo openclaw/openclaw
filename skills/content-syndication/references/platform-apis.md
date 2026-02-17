@@ -3,6 +3,7 @@
 ## Platform Publishing Methods
 
 ### LinkedIn
+
 - API: Share API v2 (requires OAuth app)
 - Method: POST to `/v2/ugcPosts`
 - Auth: OAuth 2.0 access token
@@ -10,6 +11,7 @@
 - Notes: Articles need LinkedIn Publishing API (separate permission)
 
 ### Medium
+
 - API: Medium API
 - Method: POST to `/v1/users/{userId}/posts`
 - Auth: Integration token
@@ -17,6 +19,7 @@
 - Notes: Supports canonical URL for SEO
 
 ### Dev.to
+
 - API: Forem API
 - Method: POST to `/api/articles`
 - Auth: API key in header
@@ -24,6 +27,7 @@
 - Notes: Supports canonical_url, published flag for drafts
 
 ### Hashnode
+
 - API: GraphQL API
 - Method: POST mutation `createPublicationStory`
 - Auth: Personal access token
@@ -31,10 +35,12 @@
 - Notes: Supports canonical URL, tags, series
 
 ### Substack
+
 - No public API — use email-based workflow or browser automation
 - Alternative: Publish via email to your Substack publication address
 
 ### WordPress.com
+
 - API: WordPress REST API v2
 - Method: POST to `/wp/v2/posts`
 - Auth: OAuth 2.0 or application password
@@ -42,6 +48,7 @@
 - Notes: Self-hosted WordPress uses same API
 
 ### Reddit
+
 - API: Reddit API (OAuth)
 - Method: POST to `/api/submit`
 - Auth: OAuth 2.0 (user agent required)
@@ -49,10 +56,12 @@
 - Notes: Markdown formatting, respect subreddit rules
 
 ### Quora
+
 - No public API — use browser automation or manual posting
 - Notes: Quora spaces allow cross-posting
 
 ### Tumblr
+
 - API: Tumblr API v2
 - Method: POST to `/v2/blog/{blog-identifier}/post`
 - Auth: OAuth 1.0a
@@ -60,6 +69,7 @@
 - Notes: Supports HTML content
 
 ### GitHub
+
 - API: GitHub REST API
 - Method: POST/PUT to create/update files
 - Auth: Personal access token
@@ -67,6 +77,7 @@
 - Notes: Great for README files, wikis, and awesome-list contributions
 
 ### X (Twitter)
+
 - API: X API v2
 - Method: POST to `/2/tweets`
 - Auth: OAuth 2.0 PKCE

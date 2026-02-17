@@ -58,9 +58,7 @@ export async function waitForReviewOnHead(
           console.log(`Review passed for ${headSha}`);
           return;
         }
-        throw new Error(
-          `Review check '${checkName}' failed for ${headSha}: ${latest.conclusion}`,
-        );
+        throw new Error(`Review check '${checkName}' failed for ${headSha}: ${latest.conclusion}`);
       }
 
       console.log(`Review status: ${latest.status} — waiting...`);
@@ -71,9 +69,7 @@ export async function waitForReviewOnHead(
     await sleep(pollIntervalMs);
   }
 
-  throw new Error(
-    `Review timed out after ${timeoutMinutes} minutes for ${headSha}`,
-  );
+  throw new Error(`Review timed out after ${timeoutMinutes} minutes for ${headSha}`);
 }
 
 export function isStaleReview(reviewSha: string, currentHeadSha: string): boolean {
@@ -83,7 +79,8 @@ export function isStaleReview(reviewSha: string, currentHeadSha: string): boolea
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main() {
-  const headSha = process.env.HEAD_SHA ?? execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+  const headSha =
+    process.env.HEAD_SHA ?? execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
   const checkName = process.env.REVIEW_CHECK_NAME ?? "code-review-agent";
   const timeout = parseInt(process.env.REVIEW_TIMEOUT_MINUTES ?? "20", 10);
 

@@ -1,6 +1,7 @@
 # Complete Directory List (100+)
 
 ## Tier 1 — High Impact
+
 1. Product Hunt — producthunt.com
 2. Hacker News (Show HN) — news.ycombinator.com
 3. BetaList — betalist.com
@@ -13,6 +14,7 @@
 10. Software Advice — softwareadvice.com
 
 ## Tier 2 — Startup Directories
+
 11. DevHunt — devhunt.org
 12. Uneed — uneed.best
 13. BetaPage — betapage.co
@@ -30,6 +32,7 @@
 25. StartupTracker — startuptracker.io
 
 ## Tier 3 — AI/Tech Specific
+
 26. Futurepedia — futurepedia.io
 27. There's An AI For That — theresanaiforthat.com
 28. AI Tool Directory — aitoolsdirectory.com
@@ -47,6 +50,7 @@
 40. Toolify — toolify.ai
 
 ## Tier 4 — SEO and Link Building
+
 41. Crunchbase — crunchbase.com
 42. AngelList/Wellfound — wellfound.com
 43. F6S — f6s.com
@@ -59,6 +63,7 @@
 50. BuiltWith — builtwith.com
 
 ## Tier 5 — Review Sites
+
 51. Trustpilot — trustpilot.com
 52. SoftwareSuggest — softwaresuggest.com
 53. CompareCamp — comparecamp.com
@@ -71,6 +76,7 @@
 60. Business-Software.com — business-software.com
 
 ## Tier 6 — Developer/Tech Communities
+
 61. GitHub (README awesome lists) — github.com
 62. Dev.to — dev.to
 63. Hashnode — hashnode.dev
@@ -83,6 +89,7 @@
 70. Awesome lists — github.com/topics/awesome
 
 ## Tier 7 — General Directories
+
 71. Capterra — capterra.com
 72. AppSumo Marketplace — appsumo.com
 73. Chrome Web Store — chrome.google.com/webstore
@@ -95,6 +102,7 @@
 80. Notion Integrations — notion.so/integrations
 
 ## Tier 8 — Social/Content Platforms
+
 81. LinkedIn Company Page — linkedin.com
 82. Twitter/X Profile — x.com
 83. Facebook Page — facebook.com
@@ -107,6 +115,7 @@
 90. Medium Publication — medium.com
 
 ## Tier 9 — Regional/Niche
+
 91. Betafy — betafy.co
 92. Vator — vator.tv
 93. TechPluto — techpluto.com
@@ -116,9 +125,10 @@
 97. AllTopStartups — alltopstartups.com
 98. NextBigWhat — nextbigwhat.com
 99. YourStory — yourstory.com
-100. TechInAsia — techinasia.com
+100.  TechInAsia — techinasia.com
 
 ## Tier 10 — Bonus Directories
+
 101. Microconf Connect — microconf.com
 102. SaaS Invaders — saasinvaders.com
 103. Remote Tools — remotetools.club

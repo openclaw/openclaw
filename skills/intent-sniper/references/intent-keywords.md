@@ -61,6 +61,7 @@
 ## Platform-Specific Search Queries
 
 ### Reddit
+
 ```
 site:reddit.com "best [category]" -site:reddit.com/r/AskReddit
 site:reddit.com "alternative to [competitor]"
@@ -68,6 +69,7 @@ subreddit:[niche] "looking for" OR "recommend" OR "best"
 ```
 
 ### Quora
+
 ```
 site:quora.com "best [category] tool"
 site:quora.com "alternative to [competitor]"
@@ -75,6 +77,7 @@ site:quora.com "how to [task]"
 ```
 
 ### X (Twitter)
+
 ```
 "[category] recommendations" -is:retweet
 "alternative to [competitor]" -is:retweet
@@ -83,6 +86,7 @@ site:quora.com "how to [task]"
 ```
 
 ### Hacker News
+
 ```
 site:news.ycombinator.com "Ask HN" "[category]"
 site:news.ycombinator.com "Show HN" "[competitor]"

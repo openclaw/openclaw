@@ -1,7 +1,7 @@
 ---
 name: intent-sniper
 description: "Monitor X, Reddit, Quora, and HackerNews for buying-intent posts. Detect phrases like 'need alternative to', 'best tool for', 'struggling with'. Reply with helpful, context-aware responses that naturally mention your product."
-metadata: {"openclaw":{"emoji":"🎯","requires":{"bins":["curl"]}}}
+metadata: { "openclaw": { "emoji": "🎯", "requires": { "bins": ["curl"] } } }
 ---
 
 # Intent Sniper
@@ -28,6 +28,7 @@ Search subreddits for intent posts:
 ```
 
 **Reply format for Reddit:**
+
 - Lead with genuine help or personal experience
 - Compare 2-3 tools objectively (including yours)
 - Never sound like an ad. Sound like a fellow user sharing experience
@@ -35,6 +36,7 @@ Search subreddits for intent posts:
 - End with "I ended up going with [product] because [specific reason]"
 
 **Reddit rules:**
+
 - Max 10-15 replies per day per account
 - Never reply to posts older than 48 hours
 - Vary reply length (2-5 paragraphs)
@@ -46,6 +48,7 @@ Search subreddits for intent posts:
 Search for intent tweets:
 
 **Intent keywords to monitor:**
+
 ```
 "need alternative to [competitor]"
 "best tool for [category]"
@@ -57,6 +60,7 @@ Search for intent tweets:
 ```
 
 **Reply format for X:**
+
 - Short, conversational, helpful
 - Max 280 chars. Get to the point
 - One specific benefit, not a feature list
@@ -68,6 +72,7 @@ Search for intent tweets:
 Search for questions in your domain:
 
 **Reply format for Quora:**
+
 - Detailed, authoritative answer (300-800 words)
 - Structure with headers and bullet points
 - Cite sources and data where possible
@@ -79,6 +84,7 @@ Search for questions in your domain:
 Monitor Show HN, Ask HN, and comments:
 
 **Reply format for HN:**
+
 - Technical, no-BS tone
 - Share concrete data or experience
 - Never overtly promote — community will downvote
@@ -88,19 +94,20 @@ Monitor Show HN, Ask HN, and comments:
 
 Rate each post 1-5 before replying:
 
-| Score | Criteria | Action |
-|-------|----------|--------|
-| 5 | Explicitly asking for tool recommendations | Reply immediately |
-| 4 | Describing a problem your product solves | Reply with solution |
-| 3 | Comparing competitors, open to alternatives | Reply with comparison |
-| 2 | General discussion about the space | Reply only if very relevant |
-| 1 | Tangential mention | Skip |
+| Score | Criteria                                    | Action                      |
+| ----- | ------------------------------------------- | --------------------------- |
+| 5     | Explicitly asking for tool recommendations  | Reply immediately           |
+| 4     | Describing a problem your product solves    | Reply with solution         |
+| 3     | Comparing competitors, open to alternatives | Reply with comparison       |
+| 2     | General discussion about the space          | Reply only if very relevant |
+| 1     | Tangential mention                          | Skip                        |
 
 Only reply to score 3+.
 
 ## Reply Quality Checklist
 
 Before posting any reply:
+
 - [ ] Does it genuinely help the person?
 - [ ] Would a human find this reply useful even without the product mention?
 - [ ] Is the tone native to the platform?

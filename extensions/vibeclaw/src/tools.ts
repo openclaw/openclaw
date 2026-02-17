@@ -124,7 +124,8 @@ export function createVibeclawTools(api: OpenClawPluginApi, workspace: string, _
               "with the appropriate skill loaded.",
             spawnInstructions: campaignData.agents.map((a: string) => ({
               skill: a,
-              exampleTask: `Run ${a} workflow for campaign '${campaignId}'. ` +
+              exampleTask:
+                `Run ${a} workflow for campaign '${campaignId}'. ` +
                 `Read config from ${ws}/config.json. ` +
                 `Log results to ${ws}/logs/${a}.jsonl.`,
             })),
@@ -135,7 +136,8 @@ export function createVibeclawTools(api: OpenClawPluginApi, workspace: string, _
           if (!campaignId) return json({ error: "Campaign name is required for 'launch'" });
 
           const existing = await loadCampaign(workspace, campaignId);
-          if (!existing) return json({ error: `Campaign '${campaignId}' not found. Use 'plan' first.` });
+          if (!existing)
+            return json({ error: `Campaign '${campaignId}' not found. Use 'plan' first.` });
 
           existing.status = "active";
           existing.launchedAt = new Date().toISOString();
@@ -261,7 +263,9 @@ export function createVibeclawTools(api: OpenClawPluginApi, workspace: string, _
         workspace: ws,
         configured: true,
         hasConfig: !!config,
-        product: config ? (config.product as Record<string, unknown>)?.name ?? "(not set)" : "(no config)",
+        product: config
+          ? ((config.product as Record<string, unknown>)?.name ?? "(not set)")
+          : "(no config)",
         activeCampaigns: campaigns.filter((c) => c.status === "active"),
         allCampaigns: campaigns,
         agentMetrics: metrics,
@@ -369,7 +373,8 @@ export function createVibeclawTools(api: OpenClawPluginApi, workspace: string, _
       properties: {
         agent: {
           type: "string",
-          description: "Agent name (becomes the log filename, e.g. 'intent-sniper' → intent-sniper.jsonl)",
+          description:
+            "Agent name (becomes the log filename, e.g. 'intent-sniper' → intent-sniper.jsonl)",
         },
         entry: {
           type: "object",
@@ -421,7 +426,8 @@ export function createVibeclawTools(api: OpenClawPluginApi, workspace: string, _
         },
         draft: {
           type: "object",
-          description: "Draft content (for 'save' action). Include id, title, content, platform, status.",
+          description:
+            "Draft content (for 'save' action). Include id, title, content, platform, status.",
         },
         limit: {
           type: "number",
@@ -475,7 +481,8 @@ export function createVibeclawTools(api: OpenClawPluginApi, workspace: string, _
         },
         updates: {
           type: "object",
-          description: "Config updates to merge (for 'update' action). Deep-merges with existing config.",
+          description:
+            "Config updates to merge (for 'update' action). Deep-merges with existing config.",
         },
       },
       required: ["action"],

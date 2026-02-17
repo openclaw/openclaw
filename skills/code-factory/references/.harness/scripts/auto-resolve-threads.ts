@@ -76,10 +76,7 @@ function resolveThread(threadId: string): void {
   });
 }
 
-export function autoResolveBotThreads(
-  prNumber: number,
-  reviewBotUsername: string,
-): number {
+export function autoResolveBotThreads(prNumber: number, reviewBotUsername: string): number {
   const threads = getReviewThreads(prNumber);
   let resolved = 0;
 
