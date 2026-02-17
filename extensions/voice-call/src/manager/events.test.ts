@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
+import type { VoiceCallProvider } from "../providers/base.js";
 import type { HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
@@ -29,15 +30,28 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
   };
 }
 
+function createProvider(overrides: Partial<VoiceCallProvider> = {}): VoiceCallProvider {
+  return {
+    name: "plivo",
+    verifyWebhook: () => ({ ok: true }),
+    parseWebhookEvent: () => ({ events: [] }),
+    initiateCall: async () => ({ providerCallId: "provider-call-id", status: "initiated" }),
+    hangupCall: async () => {},
+    playTts: async () => {},
+    startListening: async () => {},
+    stopListening: async () => {},
+    ...overrides,
+  };
+}
+
 describe("processEvent (functional)", () => {
   it("calls provider hangup when rejecting inbound call", () => {
     const hangupCalls: HangupCallInput[] = [];
-    const provider = {
-      name: "plivo" as const,
-      async hangupCall(input: HangupCallInput): Promise<void> {
+    const provider = createProvider({
+      hangupCall: async (input: HangupCallInput): Promise<void> => {
         hangupCalls.push(input);
       },
-    };
+    });
 
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
@@ -98,12 +112,11 @@ describe("processEvent (functional)", () => {
 
   it("calls hangup only once for duplicate events for same rejected call", () => {
     const hangupCalls: HangupCallInput[] = [];
-    const provider = {
-      name: "plivo" as const,
-      async hangupCall(input: HangupCallInput): Promise<void> {
+    const provider = createProvider({
+      hangupCall: async (input: HangupCallInput): Promise<void> => {
         hangupCalls.push(input);
       },
-    };
+    });
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,
@@ -208,12 +221,11 @@ describe("processEvent (functional)", () => {
   });
 
   it("when hangup throws, logs and does not throw", () => {
-    const provider = {
-      name: "plivo" as const,
-      async hangupCall(): Promise<void> {
+    const provider = createProvider({
+      hangupCall: async (): Promise<void> => {
         throw new Error("provider down");
       },
-    };
+    });
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,

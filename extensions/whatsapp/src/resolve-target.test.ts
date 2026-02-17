@@ -101,6 +101,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("[redacted-email]");
   });
 
@@ -112,6 +115,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("[redacted-email]");
   });
 
@@ -123,6 +129,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("[redacted-email]");
   });
 
@@ -134,6 +143,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("[redacted-email]");
   });
 
@@ -145,6 +157,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected resolution to fail");
+    }
     expect(result.error).toBeDefined();
   });
 
