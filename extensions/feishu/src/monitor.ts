@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as http from "http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
@@ -95,6 +96,75 @@ function registerEventHandlers(
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
+    },
+    "im.message.reaction.created_v1": async (data) => {
+      try {
+        const event = data as unknown as {
+          message_id: string;
+          reaction_type: { emoji_type: string };
+          operator_type: string;
+          user_id: { open_id: string };
+          action_time: string;
+        };
+
+        const emoji = event.reaction_type?.emoji_type;
+        const messageId = event.message_id;
+        const senderId = event.user_id?.open_id;
+
+        // Skip bot self-reactions
+        const myBotId = botOpenIds.get(accountId);
+        if (event.operator_type === "app" || senderId === myBotId) {
+          return;
+        }
+
+        // Skip typing indicator emoji (if used)
+        if (emoji === "Typing") {
+          return;
+        }
+
+        log(`feishu[${accountId}]: reaction ${emoji} on ${messageId} from ${senderId}`);
+
+        // Note: Feishu DM chat_ids also use "oc_" prefix, so we cannot distinguish
+        // group vs DM by prefix alone. For now treat all reactions as DM (p2p)
+        // routing via the sender's open_id.
+        const syntheticEvent: FeishuMessageEvent = {
+          sender: {
+            sender_id: { open_id: senderId },
+            sender_type: "user",
+          },
+          message: {
+            message_id: `${messageId}:reaction:${emoji}:${crypto.randomUUID()}`,
+            chat_id: `p2p:${senderId}`,
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({
+              text: `[reacted with ${emoji} to message ${messageId}]`,
+            }),
+          },
+        };
+
+        const promise = handleFeishuMessage({
+          cfg,
+          event: syntheticEvent,
+          botOpenId: myBotId,
+          runtime,
+          chatHistories,
+          accountId,
+        });
+
+        if (fireAndForget) {
+          promise.catch((err) => {
+            error(`feishu[${accountId}]: error handling reaction: ${String(err)}`);
+          });
+        } else {
+          await promise;
+        }
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+      }
+    },
+    "im.message.reaction.deleted_v1": async () => {
+      // Ignore reaction removals
     },
   });
 }
