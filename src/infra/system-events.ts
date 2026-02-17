@@ -108,6 +108,28 @@ export function peekSystemEvents(sessionKey: string): string[] {
   return peekSystemEventEntries(sessionKey).map((event) => event.text);
 }
 
+/**
+ * Remove all queued events whose `contextKey` matches `key` (case-insensitive)
+ * across ALL session queues.
+ * Used to drop pending notifications for deleted cron jobs (#18880).
+ */
+export function dropSystemEventsByContextKey(contextKey: string): number {
+  const normalized = contextKey.trim().toLowerCase();
+  if (!normalized) {
+    return 0;
+  }
+  let total = 0;
+  for (const [sessionKey, entry] of queues) {
+    const before = entry.queue.length;
+    entry.queue = entry.queue.filter((e) => e.contextKey !== normalized);
+    total += before - entry.queue.length;
+    if (entry.queue.length === 0) {
+      queues.delete(sessionKey);
+    }
+  }
+  return total;
+}
+
 export function hasSystemEvents(sessionKey: string) {
   const key = requireSessionKey(sessionKey);
   return (queues.get(key)?.queue.length ?? 0) > 0;
