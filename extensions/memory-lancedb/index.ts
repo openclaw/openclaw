@@ -275,6 +275,9 @@ export function detectCategory(text: string): MemoryCategory {
   if (/我喜欢|我偏好|我讨厌|我不喜欢|我爱|我想要|我需要/.test(text)) {
     return "preference";
   }
+  if (/我喜欢|我偏好|我讨厌|我不喜欢|我爱|我想要|我需要/.test(text)) {
+    return "preference";
+  }
   if (/rozhodli|decided|will use|budeme/i.test(lower)) {
     return "decision";
   }
