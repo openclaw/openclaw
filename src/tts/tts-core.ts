@@ -318,14 +318,9 @@ export function parseTtsDirectives(
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
             break;
-          case "instructions":
-          case "openai_instructions":
-          case "openaiinstructions":
-            if (!policy.allowInstructions) {
-              break;
-            }
-            overrides.openai = { ...overrides.openai, instructions: rawValue };
-            break;
+          // NOTE: instructions directive intentionally not supported here because
+          // the parser splits on whitespace, which would truncate multi-word instructions.
+          // Use config `tts.openai.instructions` instead for reliable behavior.
           default:
             break;
         }
