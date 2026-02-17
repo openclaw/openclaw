@@ -127,7 +127,11 @@ export async function getStatusSummary(
         const age = updatedAt ? now - updatedAt : null;
         const model = entry?.model ?? configModel ?? null;
         const contextTokens =
-          entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
+          entry?.contextTokens ??
+          cfg.agents?.defaults?.contextTokens ??
+          lookupContextTokens(model) ??
+          configContextTokens ??
+          null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
