@@ -4,10 +4,7 @@ description: Publish blog posts automatically to static site generators (Hugo, J
 metadata:
   {
     "openclaw":
-      {
-        "emoji": "📝",
-        "requires": { "anyBins": ["hugo", "jekyll", "npx", "gh", "curl"] },
-      },
+      { "emoji": "📝", "requires": { "anyBins": ["hugo", "jekyll", "npx", "gh", "curl"] } },
   }
 ---
 
@@ -17,14 +14,14 @@ Automate blog post creation and publishing across static site generators and CMS
 
 ## Supported Platforms
 
-| Platform     | Detection                          | Publish Method          |
-| ------------ | ---------------------------------- | ----------------------- |
-| **Hugo**     | `hugo.toml` / `config.toml`       | `hugo new` + git push   |
-| **Jekyll**   | `_config.yml` + `_posts/`         | Create in `_posts/`     |
-| **Astro**    | `astro.config.*`                   | Create in `src/content/`|
-| **Next.js**  | `next.config.*` + content dir     | Create in content dir   |
-| **Ghost**    | Ghost Admin API URL configured     | REST API publish        |
-| **WordPress**| WP REST API URL configured         | REST API publish        |
+| Platform      | Detection                      | Publish Method           |
+| ------------- | ------------------------------ | ------------------------ |
+| **Hugo**      | `hugo.toml` / `config.toml`    | `hugo new` + git push    |
+| **Jekyll**    | `_config.yml` + `_posts/`      | Create in `_posts/`      |
+| **Astro**     | `astro.config.*`               | Create in `src/content/` |
+| **Next.js**   | `next.config.*` + content dir  | Create in content dir    |
+| **Ghost**     | Ghost Admin API URL configured | REST API publish         |
+| **WordPress** | WP REST API URL configured     | REST API publish         |
 
 ## Workflow
 
@@ -40,6 +37,7 @@ ls hugo.toml config.toml _config.yml astro.config.* next.config.* 2>/dev/null
 Create frontmatter appropriate for the platform:
 
 **Hugo/Jekyll/Astro:**
+
 ```yaml
 ---
 title: "Post Title"
@@ -51,14 +49,17 @@ draft: false
 ```
 
 **Ghost/WordPress (API):**
+
 ```json
 {
-  "posts": [{
-    "title": "Post Title",
-    "html": "<p>Content here</p>",
-    "status": "published",
-    "tags": [{"name": "tag1"}]
-  }]
+  "posts": [
+    {
+      "title": "Post Title",
+      "html": "<p>Content here</p>",
+      "status": "published",
+      "tags": [{ "name": "tag1" }]
+    }
+  ]
 }
 ```
 

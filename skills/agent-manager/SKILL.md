@@ -1,13 +1,7 @@
 ---
 name: agent-manager
 description: Manage and orchestrate multiple OpenClaw agents. Use when the user wants to assign tasks to agents, check agent status, switch agent modes (creative, research, auto), list running agents, or coordinate multi-agent workflows. Triggers for "give agent X this task", "what are my agents doing", "switch to creative mode", "assign this to the researcher", "agent status", or "run this with the coder".
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🎛️",
-      },
-  }
+metadata: { "openclaw": { "emoji": "🎛️" } }
 ---
 
 # Agent Manager
@@ -16,13 +10,13 @@ Orchestrate multiple agents, assign tasks, check status, and switch modes.
 
 ## Available Agents
 
-| Agent ID | Role | Model | Skills |
-| -------- | ---- | ----- | ------ |
-| `commander` | Orchestrator - routes tasks, coordinates agents | Kimi K2.5 | All skills, sub-agent access |
-| `researcher` | Research & Analysis - scans web, X.com, trends | Kimi K2.5 | research-scout, web_search, web_fetch, browser |
-| `creator` | Content Creation - blogs, media, creative writing | Kimi K2.5 | blog-publisher, creative-mode, canvas |
-| `deployer` | Site & App Deployment | Kimi K2.5 | site-deployer, coding-agent, github |
-| `voice` | Voice Cloning & TTS | Kimi K2.5 | voice-clone, sherpa-onnx-tts |
+| Agent ID     | Role                                              | Model     | Skills                                         |
+| ------------ | ------------------------------------------------- | --------- | ---------------------------------------------- |
+| `commander`  | Orchestrator - routes tasks, coordinates agents   | Kimi K2.5 | All skills, sub-agent access                   |
+| `researcher` | Research & Analysis - scans web, X.com, trends    | Kimi K2.5 | research-scout, web_search, web_fetch, browser |
+| `creator`    | Content Creation - blogs, media, creative writing | Kimi K2.5 | blog-publisher, creative-mode, canvas          |
+| `deployer`   | Site & App Deployment                             | Kimi K2.5 | site-deployer, coding-agent, github            |
+| `voice`      | Voice Cloning & TTS                               | Kimi K2.5 | voice-clone, sherpa-onnx-tts                   |
 
 ## Assigning Tasks
 
@@ -95,12 +89,12 @@ The commander will relay proposals to you for approval.
 
 ## Quick Commands
 
-| Command | What it does |
-| ------- | ------------ |
-| "Status" | List all agents and their current state |
-| "Research X" | Send topic to researcher agent |
-| "Blog about X" | Send topic to creator agent |
-| "Deploy X" | Send project to deployer agent |
+| Command         | What it does                                 |
+| --------------- | -------------------------------------------- |
+| "Status"        | List all agents and their current state      |
+| "Research X"    | Send topic to researcher agent               |
+| "Blog about X"  | Send topic to creator agent                  |
+| "Deploy X"      | Send project to deployer agent               |
 | "Creative mode" | Switch creator to autonomous creative output |
-| "What's new?" | Ask researcher for latest findings |
-| "Pause all" | Suspend all running sub-agents |
+| "What's new?"   | Ask researcher for latest findings           |
+| "Pause all"     | Suspend all running sub-agents               |

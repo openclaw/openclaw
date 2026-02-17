@@ -14,8 +14,8 @@
       subagents: {
         model: "moonshot/kimi-k2.5",
         thinking: "low",
-        maxConcurrent: 4,             // Mac-friendly: max 4 parallel agents
-        archiveAfterMinutes: 60,      // Clean up idle agents
+        maxConcurrent: 4, // Mac-friendly: max 4 parallel agents
+        archiveAfterMinutes: 60, // Clean up idle agents
       },
     },
 
@@ -47,7 +47,7 @@
           "weather",
         ],
         subagents: {
-          allowAgents: ["*"],         // Can delegate to any agent
+          allowAgents: ["*"], // Can delegate to any agent
         },
       },
 
@@ -61,11 +61,7 @@
           name: "Scout",
           emoji: "🔍",
         },
-        skills: [
-          "research-scout",
-          "summarize",
-          "blogwatcher",
-        ],
+        skills: ["research-scout", "summarize", "blogwatcher"],
       },
 
       // === CREATOR ===
@@ -78,12 +74,7 @@
           name: "Creator",
           emoji: "🎨",
         },
-        skills: [
-          "creative-mode",
-          "blog-publisher",
-          "canvas",
-          "summarize",
-        ],
+        skills: ["creative-mode", "blog-publisher", "canvas", "summarize"],
       },
 
       // === DEPLOYER ===
@@ -96,11 +87,7 @@
           name: "Deployer",
           emoji: "🚀",
         },
-        skills: [
-          "site-deployer",
-          "coding-agent",
-          "github",
-        ],
+        skills: ["site-deployer", "coding-agent", "github"],
       },
 
       // === VOICE ===
@@ -113,11 +100,7 @@
           name: "Voice",
           emoji: "🎙️",
         },
-        skills: [
-          "voice-clone",
-          "sherpa-onnx-tts",
-          "openai-whisper",
-        ],
+        skills: ["voice-clone", "sherpa-onnx-tts", "openai-whisper"],
       },
     ],
 

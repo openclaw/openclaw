@@ -3,6 +3,7 @@
 ## X.com (Twitter) Queries
 
 ### AI Agents & Frameworks
+
 ```
 "AI agents" OR "agent framework" OR "agentic AI" min_faves:10 -is:retweet
 "multi-agent" OR "agent orchestration" OR "agent swarm" min_faves:5
@@ -10,6 +11,7 @@
 ```
 
 ### AI Coding Tools
+
 ```
 "AI coding" OR "code agent" OR "vibe coding" OR "AI developer" min_faves:20
 "Claude Code" OR "Cursor" OR "Copilot" OR "Windsurf" min_faves:10
@@ -17,6 +19,7 @@
 ```
 
 ### Open Source AI
+
 ```
 "open source LLM" OR "local AI" OR "self-hosted AI" min_faves:10
 "ollama" OR "llama.cpp" OR "vllm" OR "mlx" min_faves:5
@@ -24,6 +27,7 @@
 ```
 
 ### AI Automation & Workflows
+
 ```
 "AI automation" OR "AI workflow" OR "n8n AI" OR "make.com AI" min_faves:10
 "AI pipeline" OR "AI orchestration" OR "langchain" OR "llamaindex" min_faves:5
@@ -31,6 +35,7 @@
 ```
 
 ### AI Business & Monetization
+
 ```
 "AI SaaS" OR "AI startup" OR "AI business" min_faves:50
 "AI side project" OR "built with AI" OR "AI tool launch" min_faves:20
@@ -38,6 +43,7 @@
 ```
 
 ### Voice & Media AI
+
 ```
 "voice cloning" OR "text to speech" OR "AI voice" min_faves:10
 "AI video" OR "AI image" OR "AI music" min_faves:20
@@ -104,20 +110,20 @@ site:arxiv.org "code generation" OR "program synthesis" 2026
 
 ## Newsletter & Blog Sources
 
-| Source | URL | Focus |
-| ------ | --- | ----- |
-| The Batch | deeplearning.ai/the-batch | Andrew Ng's AI weekly |
-| AI News | artificialintelligence-news.com | Industry news |
-| Papers With Code | paperswithcode.com | SOTA papers |
-| Hugging Face Blog | huggingface.co/blog | Open source AI |
-| Simon Willison | simonwillison.net | AI tools & LLMs |
-| Latent Space | latent.space | AI engineering |
+| Source            | URL                             | Focus                 |
+| ----------------- | ------------------------------- | --------------------- |
+| The Batch         | deeplearning.ai/the-batch       | Andrew Ng's AI weekly |
+| AI News           | artificialintelligence-news.com | Industry news         |
+| Papers With Code  | paperswithcode.com              | SOTA papers           |
+| Hugging Face Blog | huggingface.co/blog             | Open source AI        |
+| Simon Willison    | simonwillison.net               | AI tools & LLMs       |
+| Latent Space      | latent.space                    | AI engineering        |
 
 ## Freshness Filters (web_search)
 
-| Filter | Meaning | Use Case |
-| ------ | ------- | -------- |
-| `freshness:"pd"` | Past day (24h) | Daily scan |
-| `freshness:"pw"` | Past week | Weekly digest |
-| `freshness:"pm"` | Past month | Monthly review |
-| `freshness:"py"` | Past year | Annual trends |
+| Filter           | Meaning        | Use Case       |
+| ---------------- | -------------- | -------------- |
+| `freshness:"pd"` | Past day (24h) | Daily scan     |
+| `freshness:"pw"` | Past week      | Weekly digest  |
+| `freshness:"pm"` | Past month     | Monthly review |
+| `freshness:"py"` | Past year      | Annual trends  |

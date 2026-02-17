@@ -23,25 +23,25 @@ COMMANDER (orchestrator)
 
 ## Quick Commands
 
-| Say this | What happens |
-| -------- | ------------ |
-| "Status" | Commander reports all agent activity |
-| "Research AI agents" | Researcher scans all sources |
-| "Write a blog about X" | Creator drafts content |
-| "Deploy my site" | Deployer handles deployment |
-| "Clone this voice" | Voice agent processes audio |
-| "Creative mode" | Creator enters autonomous brainstorm |
-| "What's new?" | Researcher shares latest findings |
-| "Assign X to researcher" | Direct task assignment |
+| Say this                 | What happens                         |
+| ------------------------ | ------------------------------------ |
+| "Status"                 | Commander reports all agent activity |
+| "Research AI agents"     | Researcher scans all sources         |
+| "Write a blog about X"   | Creator drafts content               |
+| "Deploy my site"         | Deployer handles deployment          |
+| "Clone this voice"       | Voice agent processes audio          |
+| "Creative mode"          | Creator enters autonomous brainstorm |
+| "What's new?"            | Researcher shares latest findings    |
+| "Assign X to researcher" | Direct task assignment               |
 
 ## Automated Schedule
 
-| Time | Agent | Task |
-| ---- | ----- | ---- |
-| 08:00 daily | Researcher | Morning AI digest |
-| 09:30 Mon-Fri | Creator | Content proposals |
-| 10:00 Sunday | Researcher | Weekly deep research |
-| Every 6h | Commander | System health check |
+| Time          | Agent      | Task                 |
+| ------------- | ---------- | -------------------- |
+| 08:00 daily   | Researcher | Morning AI digest    |
+| 09:30 Mon-Fri | Creator    | Content proposals    |
+| 10:00 Sunday  | Researcher | Weekly deep research |
+| Every 6h      | Commander  | System health check  |
 
 ## Agent Rules
 

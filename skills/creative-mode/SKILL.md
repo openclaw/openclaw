@@ -1,13 +1,7 @@
 ---
 name: creative-mode
 description: Autonomous creative content generation mode. Use when the user wants creative output like social media posts, blog ideas, marketing copy, brainstorming, storytelling, or when they say "creative mode", "brainstorm", "generate ideas", "content sprint", or "be creative". Also triggers for autonomous content workflows where the agent proposes and creates content independently.
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🎨",
-      },
-  }
+metadata: { "openclaw": { "emoji": "🎨" } }
 ---
 
 # Creative Mode
@@ -17,6 +11,7 @@ Autonomous creative content generation. When activated, generate content proacti
 ## Modes
 
 ### Brainstorm Mode
+
 Generate ideas without filtering. Quantity over quality first, then refine.
 
 ```
@@ -25,6 +20,7 @@ Output: 10-20 raw ideas, then rank top 5 by impact and feasibility
 ```
 
 ### Content Sprint Mode
+
 Rapid-fire content creation. Set a target and produce.
 
 ```
@@ -33,6 +29,7 @@ Output: 5 ready-to-post pieces with hashtags and call-to-action
 ```
 
 ### Story Mode
+
 Narrative-driven content. Turn dry topics into engaging stories.
 
 ```
@@ -42,14 +39,14 @@ Output: Narrative blog post with hook, tension, resolution
 
 ## Content Types
 
-| Type | Length | Format | Use Case |
-| ---- | ------ | ------ | -------- |
-| **X/Twitter Post** | 280 chars | Plain text + hashtags | Quick announcements, insights |
-| **Thread** | 5-10 posts | Numbered thread | Deep dives, tutorials |
-| **Blog Post** | 800-1500 words | Markdown with frontmatter | SEO, thought leadership |
-| **LinkedIn Post** | 500-1000 chars | Professional tone | B2B, networking |
-| **Newsletter** | 500-800 words | Sections with headers | Weekly/monthly updates |
-| **Video Script** | 60-180 seconds | Script with timing notes | Reels, TikTok, YouTube Shorts |
+| Type               | Length         | Format                    | Use Case                      |
+| ------------------ | -------------- | ------------------------- | ----------------------------- |
+| **X/Twitter Post** | 280 chars      | Plain text + hashtags     | Quick announcements, insights |
+| **Thread**         | 5-10 posts     | Numbered thread           | Deep dives, tutorials         |
+| **Blog Post**      | 800-1500 words | Markdown with frontmatter | SEO, thought leadership       |
+| **LinkedIn Post**  | 500-1000 chars | Professional tone         | B2B, networking               |
+| **Newsletter**     | 500-800 words  | Sections with headers     | Weekly/monthly updates        |
+| **Video Script**   | 60-180 seconds | Script with timing notes  | Reels, TikTok, YouTube Shorts |
 
 ## Autonomous Workflow
 
@@ -78,18 +75,21 @@ cron action:"add" name:"Daily Content Ideas" schedule:"0 9 * * 1-5" tz:"Europe/B
 ## Writing Guidelines
 
 ### Hooks (First Line)
+
 - Start with a bold claim, question, or number
 - "Most people miss this about AI agents..."
 - "I automated my entire blog pipeline in 10 minutes."
 - "3 AI tools that changed how I work (all free)"
 
 ### Structure
+
 - **Short paragraphs** (1-3 sentences max)
 - **Line breaks** between thoughts (especially for social media)
 - **Bold key phrases** for scanability
 - **End with CTA** (call to action, question, or next step)
 
 ### Tone
+
 - Conversational, not corporate
 - Show, don't tell (include examples, screenshots, results)
 - Be specific (numbers, tool names, time saved)
@@ -98,6 +98,7 @@ cron action:"add" name:"Daily Content Ideas" schedule:"0 9 * * 1-5" tz:"Europe/B
 ## Content Templates
 
 ### X/Twitter Thread Template
+
 ```
 1/ [Hook - bold statement or question]
 
@@ -115,6 +116,7 @@ Save this thread. 🔖
 ```
 
 ### Blog Post Template
+
 ```markdown
 ---
 title: "[Specific, Benefit-Driven Title]"
@@ -142,7 +144,7 @@ tags: ["ai", "agents", "automation"]
 
 ---
 
-*[Brief CTA or question to engage readers]*
+_[Brief CTA or question to engage readers]_
 ```
 
 ## Integration

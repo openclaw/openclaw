@@ -48,6 +48,7 @@ npx netlify-cli deploy --dir=dist
 ```
 
 **netlify.toml example:**
+
 ```toml
 [build]
   command = "npm run build"
@@ -96,6 +97,7 @@ npx gh-pages -d dist
 ```
 
 **URL pattern:**
+
 - User site: `https://<user>.github.io/`
 - Project site: `https://<user>.github.io/<repo>/`
 
@@ -124,6 +126,7 @@ flyctl secrets set DATABASE_URL=xxx
 ```
 
 **fly.toml example:**
+
 ```toml
 app = "my-app"
 primary_region = "iad"
@@ -162,13 +165,13 @@ railway add --plugin postgresql
 
 ## Platform Comparison
 
-| Feature | Vercel | Netlify | Cloudflare | GH Pages | Fly.io | Railway |
-| ------- | ------ | ------- | ---------- | -------- | ------ | ------- |
-| Free tier | Yes | Yes | Yes | Yes | Yes | Yes |
-| Custom domain | Yes | Yes | Yes | Yes | Yes | Yes |
-| HTTPS | Auto | Auto | Auto | Auto | Auto | Auto |
-| Serverless functions | Yes | Yes | Yes (Workers) | No | N/A | N/A |
-| Docker | No | No | No | No | Yes | Yes |
-| Database | Postgres | No | D1/KV | No | Postgres | Postgres |
-| Build minutes (free) | 6000/mo | 300/mo | 500/mo | 2000/mo | N/A | 500/mo |
-| Bandwidth (free) | 100GB | 100GB | Unlimited | 100GB | 3GB shared | 100GB |
+| Feature              | Vercel   | Netlify | Cloudflare    | GH Pages | Fly.io     | Railway  |
+| -------------------- | -------- | ------- | ------------- | -------- | ---------- | -------- |
+| Free tier            | Yes      | Yes     | Yes           | Yes      | Yes        | Yes      |
+| Custom domain        | Yes      | Yes     | Yes           | Yes      | Yes        | Yes      |
+| HTTPS                | Auto     | Auto    | Auto          | Auto     | Auto       | Auto     |
+| Serverless functions | Yes      | Yes     | Yes (Workers) | No       | N/A        | N/A      |
+| Docker               | No       | No      | No            | No       | Yes        | Yes      |
+| Database             | Postgres | No      | D1/KV         | No       | Postgres   | Postgres |
+| Build minutes (free) | 6000/mo  | 300/mo  | 500/mo        | 2000/mo  | N/A        | 500/mo   |
+| Bandwidth (free)     | 100GB    | 100GB   | Unlimited     | 100GB    | 3GB shared | 100GB    |

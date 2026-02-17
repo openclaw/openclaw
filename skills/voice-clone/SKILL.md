@@ -1,14 +1,7 @@
 ---
 name: voice-clone
 description: Clone voices and generate speech using ElevenLabs voice cloning API. Use when the user wants to clone a voice, create a custom voice from audio samples, generate speech in a cloned voice, or work with voice profiles. Also triggers for "clone my voice", "speak like X", "create a voice from this audio", or "use my voice".
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🎙️",
-        "requires": { "env": ["ELEVENLABS_API_KEY"] },
-      },
-  }
+metadata: { "openclaw": { "emoji": "🎙️", "requires": { "env": ["ELEVENLABS_API_KEY"] } } }
 ---
 
 # Voice Clone
@@ -50,6 +43,7 @@ scripts/voice-clone.sh clone \
 ```
 
 **Audio sample requirements:**
+
 - Minimum 30 seconds, ideally 1-3 minutes per sample
 - Clean audio, no background noise
 - Natural speaking voice
@@ -81,10 +75,10 @@ Add the cloned voice to `~/.openclaw/openclaw.json`:
         stability: 0.5,
         similarityBoost: 0.75,
         style: 0.5,
-        useSpeakerBoost: true
-      }
-    }
-  }
+        useSpeakerBoost: true,
+      },
+    },
+  },
 }
 ```
 
@@ -92,12 +86,12 @@ All TTS output across all channels (WhatsApp, Telegram, Discord, etc.) will use 
 
 ## Voice Settings
 
-| Parameter          | Range   | Effect                                               |
-| ------------------ | ------- | ---------------------------------------------------- |
-| `stability`        | 0.0-1.0 | Higher = more consistent, lower = more expressive    |
-| `similarity_boost` | 0.0-1.0 | Higher = closer to original voice                    |
-| `style`            | 0.0-1.0 | Higher = more expressive style (costs more latency)  |
-| `use_speaker_boost`| boolean | Enhance voice clarity (recommended for cloned voices)|
+| Parameter           | Range   | Effect                                                |
+| ------------------- | ------- | ----------------------------------------------------- |
+| `stability`         | 0.0-1.0 | Higher = more consistent, lower = more expressive     |
+| `similarity_boost`  | 0.0-1.0 | Higher = closer to original voice                     |
+| `style`             | 0.0-1.0 | Higher = more expressive style (costs more latency)   |
+| `use_speaker_boost` | boolean | Enhance voice clarity (recommended for cloned voices) |
 
 ## Integration
 

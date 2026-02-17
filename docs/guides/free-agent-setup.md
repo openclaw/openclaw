@@ -9,13 +9,13 @@ Run powerful AI agents without paying for API access. OpenClaw supports several 
 
 ## Free Model Providers
 
-| Provider        | Model            | Context Window | API Key Required | Cost  |
-| --------------- | ---------------- | -------------- | ---------------- | ----- |
-| **Moonshot**    | Kimi K2.5        | 256k tokens    | Yes (free tier)  | $0    |
-| **Qwen Portal** | Qwen Coder      | 128k tokens    | OAuth (free)     | $0    |
-| **Xiaomi**      | MiMo V2 Flash   | 262k tokens    | Yes (free tier)  | $0    |
-| **Qianfan**     | DeepSeek V3.2   | 98k tokens     | Yes (free tier)  | $0    |
-| **Ollama**      | Any local model  | 128k tokens    | No               | $0    |
+| Provider        | Model           | Context Window | API Key Required | Cost |
+| --------------- | --------------- | -------------- | ---------------- | ---- |
+| **Moonshot**    | Kimi K2.5       | 256k tokens    | Yes (free tier)  | $0   |
+| **Qwen Portal** | Qwen Coder      | 128k tokens    | OAuth (free)     | $0   |
+| **Xiaomi**      | MiMo V2 Flash   | 262k tokens    | Yes (free tier)  | $0   |
+| **Qianfan**     | DeepSeek V3.2   | 98k tokens     | Yes (free tier)  | $0   |
+| **Ollama**      | Any local model | 128k tokens    | No               | $0   |
 
 ## Quick Start: Kimi K2.5
 
@@ -38,7 +38,7 @@ Add to `~/.openclaw/openclaw.json`:
         name: "Free Agent",
         model: {
           primary: "moonshot/kimi-k2.5",
-          fallbacks: ["qianfan/deepseek-v3.2", "xiaomi/mimo-v2-flash"]
+          fallbacks: ["qianfan/deepseek-v3.2", "xiaomi/mimo-v2-flash"],
         },
         skills: [
           "blog-publisher",
@@ -46,11 +46,11 @@ Add to `~/.openclaw/openclaw.json`:
           "voice-clone",
           "coding-agent",
           "github",
-          "canvas"
-        ]
-      }
-    ]
-  }
+          "canvas",
+        ],
+      },
+    ],
+  },
 }
 ```
 
@@ -71,10 +71,10 @@ openclaw auth add moonshot --api-key "your-key-here"
     bindings: [
       {
         agentId: "free-agent",
-        match: { channel: "telegram" }
-      }
-    ]
-  }
+        match: { channel: "telegram" },
+      },
+    ],
+  },
 }
 ```
 
@@ -86,26 +86,26 @@ Use free models for routine tasks and paid models for complex reasoning:
 {
   agents: {
     defaults: {
-      model: "moonshot/kimi-k2.5"  // default: free
+      model: "moonshot/kimi-k2.5", // default: free
     },
     list: [
       {
         id: "daily",
         name: "Daily Assistant",
         model: "moonshot/kimi-k2.5",
-        skills: ["blog-publisher", "site-deployer", "weather", "github"]
+        skills: ["blog-publisher", "site-deployer", "weather", "github"],
       },
       {
         id: "power",
         name: "Power Agent",
         model: {
           primary: "anthropic/claude-opus-4-6",
-          fallbacks: ["moonshot/kimi-k2.5"]
+          fallbacks: ["moonshot/kimi-k2.5"],
         },
-        skills: ["coding-agent", "voice-clone", "canvas"]
-      }
-    ]
-  }
+        skills: ["coding-agent", "voice-clone", "canvas"],
+      },
+    ],
+  },
 }
 ```
 
@@ -121,10 +121,10 @@ For fully offline operation with zero API costs:
         id: "local",
         name: "Local Agent",
         model: "ollama/llama3.1:70b",
-        skills: ["blog-publisher", "site-deployer", "coding-agent"]
-      }
-    ]
-  }
+        skills: ["blog-publisher", "site-deployer", "coding-agent"],
+      },
+    ],
+  },
 }
 ```
 
@@ -139,13 +139,13 @@ For the complete 5-agent orchestrated setup with automated research, creative mo
 
 ### Agents Overview
 
-| Agent | Role | What it does |
-| ----- | ---- | ------------ |
-| Commander | Orchestrator | Routes tasks, coordinates all agents |
-| Researcher | AI Scout | Scans X.com, HackerNews, GitHub daily |
-| Creator | Content | Blog posts, social media, creative mode |
-| Deployer | DevOps | Deploys sites, manages code |
-| Voice | Audio | Voice cloning, TTS |
+| Agent      | Role         | What it does                            |
+| ---------- | ------------ | --------------------------------------- |
+| Commander  | Orchestrator | Routes tasks, coordinates all agents    |
+| Researcher | AI Scout     | Scans X.com, HackerNews, GitHub daily   |
+| Creator    | Content      | Blog posts, social media, creative mode |
+| Deployer   | DevOps       | Deploys sites, manages code             |
+| Voice      | Audio        | Voice cloning, TTS                      |
 
 ### Setup Automated Research
 

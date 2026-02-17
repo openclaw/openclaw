@@ -1,13 +1,7 @@
 ---
 name: research-scout
 description: Research agent that scans X.com (Twitter), tech blogs, HackerNews, Reddit, and AI newsletters for the latest AI hacks, tools, blueprints, and breakthroughs. Use when the user wants to find trending AI topics, discover new tools, monitor competitors, scan social media for AI news, or compile research digests. Triggers for "what's new in AI", "scan X.com", "find latest AI tools", "research digest", "trending AI topics", or "scout for new hacks".
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🔍",
-      },
-  }
+metadata: { "openclaw": { "emoji": "🔍" } }
 ---
 
 # Research Scout
@@ -18,14 +12,14 @@ For search query templates, see [references/search-queries.md](references/search
 
 ## Sources (Priority Order)
 
-| Source | Method | Best For |
-| ------ | ------ | -------- |
-| **X.com** | `web_search` + `web_fetch` | Real-time AI discussions, tool launches |
-| **HackerNews** | `web_fetch` hn.algolia.com API | Deep tech discussions, new repos |
-| **Reddit** | `web_search` site:reddit.com | Community reviews, comparisons |
-| **GitHub Trending** | `web_fetch` github.com/trending | New open-source AI tools |
-| **AI Newsletters** | `web_fetch` specific URLs | Curated AI news |
-| **ArXiv** | `web_search` site:arxiv.org | Research papers |
+| Source              | Method                          | Best For                                |
+| ------------------- | ------------------------------- | --------------------------------------- |
+| **X.com**           | `web_search` + `web_fetch`      | Real-time AI discussions, tool launches |
+| **HackerNews**      | `web_fetch` hn.algolia.com API  | Deep tech discussions, new repos        |
+| **Reddit**          | `web_search` site:reddit.com    | Community reviews, comparisons          |
+| **GitHub Trending** | `web_fetch` github.com/trending | New open-source AI tools                |
+| **AI Newsletters**  | `web_fetch` specific URLs       | Curated AI news                         |
+| **ArXiv**           | `web_search` site:arxiv.org     | Research papers                         |
 
 ## Workflow
 
@@ -82,21 +76,26 @@ cron action:"add" name:"AI Research Digest" schedule:"0 8 * * *" tz:"Europe/Berl
 # AI Research Digest - YYYY-MM-DD
 
 ## Breaking News
+
 - [Title](url) - One-line summary
 - [Title](url) - One-line summary
 
 ## New Tools & Repos
+
 - **[Tool Name](url)** - What it does, why it matters
   - Stars: X | Language: Y | License: Z
 
 ## Key Discussions (X.com)
+
 - [@handle](url): "Key quote or insight"
 - [@handle](url): "Key quote or insight"
 
 ## Papers & Research
+
 - [Paper Title](arxiv-url) - Plain-language summary
 
 ## Actionable Recommendations
+
 1. **[Action]** - Why and how it improves our system
 2. **[Action]** - Why and how it improves our system
 3. **[Action]** - Why and how it improves our system
@@ -105,6 +104,7 @@ cron action:"add" name:"AI Research Digest" schedule:"0 8 * * *" tz:"Europe/Berl
 ## X.com Scanning Strategy
 
 ### Search Patterns
+
 ```
 # AI agent frameworks and tools
 "AI agents" OR "agent framework" OR "agentic" filter:links min_faves:10
@@ -123,6 +123,7 @@ cron action:"add" name:"AI Research Digest" schedule:"0 8 * * *" tz:"Europe/Berl
 ```
 
 ### Key Accounts to Monitor
+
 ```
 @kaborobot @_akhaliq @roaborot @_philschmid @hwchase17
 @langaborot @llamaindex @OpenAI @anthropicai @GoogleAI
@@ -140,6 +141,7 @@ cron action:"add" name:"AI Research Digest" schedule:"0 8 * * *" tz:"Europe/Berl
 ## Integration with Other Agents
 
 After research, hand off to:
+
 - **Creator agent**: "Write a blog post based on ~/workspace/research/digest.md"
 - **Commander**: "Here are 3 recommendations. Which should we implement?"
 - **Deployer**: "Found a new tool at <repo>. Clone and test it."
