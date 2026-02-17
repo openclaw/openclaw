@@ -3,10 +3,10 @@ import {
   type OpenClawConfig,
   type ReplyPayload,
 } from "openclaw/plugin-sdk";
-import type { InfoflowAtOptions, InfoflowMessageContentItem } from "./types.js";
 import { getInfoflowSendLog } from "./logging.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowMessage } from "./send.js";
+import type { InfoflowAtOptions, InfoflowMessageContentItem } from "./types.js";
 
 export type CreateInfoflowReplyDispatcherParams = {
   cfg: OpenClawConfig;

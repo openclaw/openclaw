@@ -3,17 +3,17 @@
  * Supports both private (DM) and group chat messages.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { createHash } from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveInfoflowAccount } from "./accounts.js";
+import { recordSentMessageId } from "./infoflow-req-parse.js";
+import { getInfoflowSendLog } from "./logging.js";
+import { getInfoflowRuntime } from "./runtime.js";
 import type {
   InfoflowGroupMessageBodyItem,
   InfoflowMessageContentItem,
   ResolvedInfoflowAccount,
 } from "./types.js";
-import { resolveInfoflowAccount } from "./accounts.js";
-import { recordSentMessageId } from "./infoflow-req-parse.js";
-import { getInfoflowSendLog } from "./logging.js";
-import { getInfoflowRuntime } from "./runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
 

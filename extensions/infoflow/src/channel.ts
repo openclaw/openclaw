@@ -9,7 +9,6 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import type { InfoflowMessageContentItem, ResolvedInfoflowAccount } from "./types.js";
 import {
   getChannelSection,
   listInfoflowAccountIds,
@@ -21,6 +20,7 @@ import { startInfoflowMonitor } from "./monitor.js";
 import { getInfoflowRuntime } from "./runtime.js";
 import { sendInfoflowMessage } from "./send.js";
 import { normalizeInfoflowTarget, looksLikeInfoflowId } from "./targets.js";
+import type { InfoflowMessageContentItem, ResolvedInfoflowAccount } from "./types.js";
 
 // Re-export types and account functions for external consumers
 export type { InfoflowAccountConfig, ResolvedInfoflowAccount } from "./types.js";

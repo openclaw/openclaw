@@ -1,12 +1,12 @@
+import { createHash, createDecipheriv } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createHash, createDecipheriv } from "node:crypto";
 import { createDedupeCache } from "openclaw/plugin-sdk";
-import type { ResolvedInfoflowAccount } from "./channel.js";
 // ---------------------------------------------------------------------------
 // Message deduplication
 // ---------------------------------------------------------------------------
 import { handlePrivateChatMessage, handleGroupChatMessage } from "./bot.js";
+import type { ResolvedInfoflowAccount } from "./channel.js";
 import { getInfoflowParseLog } from "./logging.js";
 
 const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutes

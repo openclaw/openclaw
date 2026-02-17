@@ -1,3 +1,7 @@
+import { resolveInfoflowAccount } from "./accounts.js";
+import { getInfoflowBotLog } from "./logging.js";
+import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
+import { getInfoflowRuntime } from "./runtime.js";
 import type {
   InfoflowChatType,
   InfoflowMessageEvent,
@@ -5,10 +9,6 @@ import type {
   HandlePrivateChatParams,
   HandleGroupChatParams,
 } from "./types.js";
-import { resolveInfoflowAccount } from "./accounts.js";
-import { getInfoflowBotLog } from "./logging.js";
-import { createInfoflowReplyDispatcher } from "./reply-dispatcher.js";
-import { getInfoflowRuntime } from "./runtime.js";
 
 // Re-export types for external consumers
 export type { InfoflowChatType, InfoflowMessageEvent } from "./types.js";
