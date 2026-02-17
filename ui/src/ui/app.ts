@@ -1,6 +1,6 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { i18n, I18nController, type Locale } from "../i18n/index.ts";
+import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -109,11 +109,8 @@ export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   constructor() {
     super();
-    if (this.settings.locale) {
-      const supportedLocales: Locale[] = ["en", "zh-CN", "zh-TW", "pt-BR"];
-      if (supportedLocales.includes(this.settings.locale as Locale)) {
-        void i18n.setLocale(this.settings.locale as Locale);
-      }
+    if (isSupportedLocale(this.settings.locale)) {
+      void i18n.setLocale(this.settings.locale);
     }
   }
   @state() password = "";

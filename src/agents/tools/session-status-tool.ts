@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
-import { buildStatusMessage, getTranscriptInfo } from "../../auto-reply/status.js";
+import { buildStatusMessage } from "../../auto-reply/status.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -382,13 +382,6 @@ export function createSessionStatusTool(opts?: {
           showDetails: queueOverrides,
         },
         includeTranscriptUsage: false,
-        transcriptInfo: getTranscriptInfo({
-          sessionId: resolved.entry?.sessionId,
-          sessionEntry: resolved.entry,
-          agentId,
-          sessionKey: resolved.key,
-          storePath,
-        }),
       });
 
       return {

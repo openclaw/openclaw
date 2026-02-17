@@ -19,8 +19,8 @@ const NON_INTERACTIVE_DEFAULT_OPTIONS = {
 export function createThrowingRuntime(): NonInteractiveRuntime {
   return {
     log: () => {},
-    error: (msg: string) => {
-      throw new Error(msg);
+    error: (...args: unknown[]) => {
+      throw new Error(args.map(String).join(" "));
     },
     exit: (code: number) => {
       throw new Error(`exit:${code}`);
