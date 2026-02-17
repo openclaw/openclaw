@@ -104,6 +104,10 @@ export type TelegramAccountConfig = {
   /** Telegram stream preview mode (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /** Inbound media types to silently skip. Supported: "photo", "video", "video_note", "document", "audio", "voice", "sticker". */
+  ignoreMediaTypes?: Array<
+    "photo" | "video" | "video_note" | "document" | "audio" | "voice" | "sticker"
+  >;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
