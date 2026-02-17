@@ -387,9 +387,7 @@ const icStoragePlugin = {
         if (!cfg.canisterId) return;
         // Phase 2: wire to MemorySearchManager to pull session memories and sync.
         // No-op for now -- sync must be triggered manually via vault_sync tool or CLI.
-        api.logger.info?.(
-          "IC Memory Vault: session_end hook fired (sync wiring pending Phase 2)",
-        );
+        api.logger.info?.("IC Memory Vault: session_end hook fired (sync wiring pending Phase 2)");
       });
     }
 
@@ -397,10 +395,19 @@ const icStoragePlugin = {
     api.on("agent_end", async (_event) => {
       // Track memory growth for milestone nudges (even if vault isn't configured)
       promptState = loadPromptState();
-      promptState.trackedMemoryCount += 1; // approximate: 1 conversation ~ 1 memory
+      const previousCount = promptState.trackedMemoryCount;
+      promptState.trackedMemoryCount = previousCount + 1; // approximate: 1 conversation ~ 1 memory
 
       // Check if we should show a milestone nudge
-      if (!cfg.canisterId && shouldNudgeForMilestone(promptState, promptState.trackedMemoryCount)) {
+      // Pass a snapshot with the *previous* count so shouldNudgeForMilestone can detect
+      // that the new count (previousCount + 1) just crossed a milestone threshold.
+      if (
+        !cfg.canisterId &&
+        shouldNudgeForMilestone(
+          { ...promptState, trackedMemoryCount: previousCount },
+          previousCount + 1,
+        )
+      ) {
         const messages = getMilestoneNudgeMessage(promptState.trackedMemoryCount);
         for (const line of messages) {
           api.logger.info(line);
@@ -414,9 +421,7 @@ const icStoragePlugin = {
       // Phase 2: wire to MemorySearchManager to pull conversation memories and sync.
       // No-op for now -- sync must be triggered manually via vault_sync tool or CLI.
       if (cfg.canisterId && cfg.syncOnAgentEnd) {
-        api.logger.info?.(
-          "IC Memory Vault: agent_end hook fired (sync wiring pending Phase 2)",
-        );
+        api.logger.info?.("IC Memory Vault: agent_end hook fired (sync wiring pending Phase 2)");
       }
     });
 
