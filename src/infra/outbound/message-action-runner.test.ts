@@ -598,6 +598,71 @@ describe("runMessageAction sandboxed media validation", () => {
       }),
     ).rejects.toThrow(/data:/i);
   });
+
+  // Regression tests for #17936: fail-closed when sandboxRoot is absent
+  it("rejects local absolute paths when sandboxRoot is absent", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          media: "/etc/passwd",
+          message: "",
+        },
+        // No sandboxRoot — must fail-closed
+      }),
+    ).rejects.toThrow(/sandboxRoot/i);
+  });
+
+  it("rejects file:// URLs when sandboxRoot is absent", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          media: "file:///etc/passwd",
+          message: "",
+        },
+        // No sandboxRoot — must fail-closed
+      }),
+    ).rejects.toThrow(/sandboxRoot/i);
+  });
+
+  it("rejects relative paths when sandboxRoot is absent", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          media: "./secrets/token.txt",
+          message: "",
+        },
+        // No sandboxRoot — must fail-closed
+      }),
+    ).rejects.toThrow(/sandboxRoot/i);
+  });
+
+  it("allows HTTPS URLs when sandboxRoot is absent", async () => {
+    // HTTP(S) URLs should always be allowed — they don't expose local files
+    // This test verifies that HTTPS URLs pass the sandboxRoot validation
+    // (the dry run will fail later for other reasons, but not during media validation)
+    const result = runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        media: "https://example.com/image.png",
+        message: "",
+      },
+      // No sandboxRoot — HTTPS URLs should still work
+    });
+    // Should not throw "sandboxRoot" error - may throw other errors (no plugin etc)
+    // but the media path validation should pass
+    await expect(result).rejects.not.toThrow(/sandboxRoot/i);
+  });
 });
 
 describe("runMessageAction media caption behavior", () => {

@@ -238,6 +238,14 @@ export async function normalizeSandboxMediaParams(params: {
     }
     assertMediaNotDataUrl(raw);
     if (!sandboxRoot) {
+      // Fail-closed: reject local paths when sandboxRoot is absent (fixes #17936)
+      const trimmed = raw.trim();
+      if (!/^https?:\/\//i.test(trimmed)) {
+        throw new Error(
+          `Local filesystem paths require sandboxRoot to be configured. ` +
+            `Rejected: ${key}="${trimmed.slice(0, 50)}${trimmed.length > 50 ? "..." : ""}"`,
+        );
+      }
       continue;
     }
     const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
@@ -260,9 +268,19 @@ export async function normalizeSandboxMediaList(params: {
       continue;
     }
     assertMediaNotDataUrl(raw);
-    const resolved = sandboxRoot
-      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
-      : raw;
+    let resolved: string;
+    if (sandboxRoot) {
+      resolved = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+    } else {
+      // Fail-closed: reject local paths when sandboxRoot is absent (fixes #17936)
+      if (!/^https?:\/\//i.test(raw)) {
+        throw new Error(
+          `Local filesystem paths require sandboxRoot to be configured. ` +
+            `Rejected media value: "${raw.slice(0, 50)}${raw.length > 50 ? "..." : ""}"`,
+        );
+      }
+      resolved = raw;
+    }
     if (seen.has(resolved)) {
       continue;
     }
