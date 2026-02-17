@@ -82,6 +82,21 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
 
+const formatDiscordAllowFrom = (allowFrom: Array<string | number>) =>
+  allowFrom
+    .map((entry) =>
+      String(entry)
+        .trim()
+        .replace(/^<@!?/, "")
+        .replace(/>$/, "")
+        .replace(/^discord:/i, "")
+        .replace(/^user:/i, "")
+        .replace(/^pk:/i, "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+
 function buildDirectOrGroupThreadToolContext(params: {
   context: ChannelThreadingContext;
   hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
@@ -218,17 +233,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           String(entry),
         );
       },
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom
-          .map((entry) => String(entry).trim())
-          .filter(Boolean)
-          .map((entry) =>
-            entry
-              .replace(/^discord:/i, "")
-              .replace(/^user:/i, "")
-              .replace(/^pk:/i, "")
-              .toLowerCase(),
-          ),
+      formatAllowFrom: ({ allowFrom }) => formatDiscordAllowFrom(allowFrom),
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,

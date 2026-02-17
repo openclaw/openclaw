@@ -1,19 +1,21 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 
-const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-  if (method === "cron.status") {
-    return { enabled: true };
-  }
-  return { ok: true, params };
-});
+const callGatewayFromCli = vi.fn(
+  async (method: string, _opts: unknown, params?: unknown, _timeoutMs?: number) => {
+    if (method === "cron.status") {
+      return { enabled: true };
+    }
+    return { ok: true, params };
+  },
+);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
     callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      callGatewayFromCli(method, opts, params, extra),
+      callGatewayFromCli(method, opts, params, extra as number | undefined),
   };
 });
 

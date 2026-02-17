@@ -1,4 +1,5 @@
 import {
+  autocompleteMultiselect,
   cancel,
   confirm,
   intro,
@@ -11,6 +12,7 @@ import {
   text,
 } from "@clack/prompts";
 import { createCliProgress } from "../cli/progress.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { note as emitNote } from "../terminal/note.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
@@ -23,6 +25,30 @@ function guardCancel<T>(value: T | symbol): T {
     throw new WizardCancelledError();
   }
   return value;
+}
+
+function normalizeSearchTokens(search: string): string[] {
+  return search
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+function buildOptionSearchText<T>(option: Option<T>): string {
+  const label = stripAnsi(option.label ?? "");
+  const hint = stripAnsi(option.hint ?? "");
+  const value = String(option.value ?? "");
+  return `${label} ${hint} ${value}`.toLowerCase();
+}
+
+export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
+  const tokens = normalizeSearchTokens(search);
+  if (tokens.length === 0) {
+    return true;
+  }
+  const haystack = buildOptionSearchText(option);
+  return tokens.every((token) => haystack.includes(token));
 }
 
 export function createClackPrompter(): WizardPrompter {
@@ -47,17 +73,31 @@ export function createClackPrompter(): WizardPrompter {
           initialValue: params.initialValue,
         }),
       ),
-    multiselect: async (params) =>
-      guardCancel(
+    multiselect: async (params) => {
+      const options = params.options.map((opt) => {
+        const base = { value: opt.value, label: opt.label };
+        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
+      }) as Option<(typeof params.options)[number]["value"]>[];
+
+      if (params.searchable) {
+        return guardCancel(
+          await autocompleteMultiselect({
+            message: stylePromptMessage(params.message),
+            options,
+            initialValues: params.initialValues,
+            filter: tokenizedOptionFilter,
+          }),
+        );
+      }
+
+      return guardCancel(
         await multiselect({
           message: stylePromptMessage(params.message),
-          options: params.options.map((opt) => {
-            const base = { value: opt.value, label: opt.label };
-            return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-          }) as Option<(typeof params.options)[number]["value"]>[],
+          options,
           initialValues: params.initialValues,
         }),
-      ),
+      );
+    },
     text: async (params) => {
       const validate = params.validate;
       return guardCancel(
