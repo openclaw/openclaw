@@ -63,6 +63,17 @@ const PROVIDER_ALIASES: Record<string, ProviderId> = {
   venice: "venice",
   xai: "xai",
   "x.ai": "xai",
+
+  // Azure OpenAI
+  "azure-openai": "azure-openai",
+  azure: "azure-openai",
+  "azure-openai-service": "azure-openai",
+
+  // Hugging Face
+  huggingface: "huggingface",
+  "hugging-face": "huggingface",
+  hf: "huggingface",
+  "hf-inference": "huggingface",
 };
 
 /**

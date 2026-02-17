@@ -25,6 +25,8 @@ export type ProviderId =
   | "zai"
   | "venice"
   | "xai"
+  | "azure-openai"
+  | "huggingface"
   | string;
 /* eslint-enable @typescript-eslint/no-redundant-type-constituents */
 

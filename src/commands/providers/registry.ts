@@ -195,6 +195,35 @@ export const PROVIDER_REGISTRY: ProviderDefinition[] = [
     envVars: ["SYNTHETIC_API_KEY"],
     authModes: ["api-key"],
   },
+  {
+    id: "azure-openai",
+    name: "Azure OpenAI",
+    envVars: ["AZURE_OPENAI_API_KEY"],
+    altEnvVars: ["AZURE_OPENAI_ENDPOINT"],
+    authModes: ["api-key"],
+    requiresConfig: true,
+    models: [
+      "azure-openai/gpt-4o",
+      "azure-openai/gpt-4o-mini",
+      "azure-openai/gpt-4-turbo",
+      "azure-openai/o1",
+      "azure-openai/o3-mini",
+    ],
+  },
+  {
+    id: "huggingface",
+    name: "Hugging Face",
+    envVars: ["HUGGINGFACE_API_KEY"],
+    altEnvVars: ["HF_TOKEN", "HF_API_KEY"],
+    authModes: ["api-key"],
+    defaultBaseUrl: "https://api-inference.huggingface.co/v1",
+    models: [
+      "huggingface/meta-llama/Llama-3.3-70B-Instruct",
+      "huggingface/Qwen/Qwen2.5-72B-Instruct",
+      "huggingface/mistralai/Mistral-7B-Instruct-v0.3",
+      "huggingface/microsoft/Phi-3.5-mini-instruct",
+    ],
+  },
 ];
 
 /**
