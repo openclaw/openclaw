@@ -136,6 +136,16 @@ The **installer script** is the recommended way to install OpenClaw. It handles 
   </Accordion>
 </AccordionGroup>
 
+## x402 / Daydreams Router
+
+If you want to use [Daydreams Router (x402)](/providers/x402) with on-device wallet signing via SAW, use the fork installer — it handles SAW setup, gateway install, and x402 onboarding in one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/daydreamsai/openclaw-x402-router/main/scripts/install-openclaw-fork.sh | bash
+```
+
+See [Daydreams Router (x402)](/providers/x402#one-line-install-recommended) for details and environment variable overrides.
+
 ## Other install methods
 
 <CardGroup cols={2}>
