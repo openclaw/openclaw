@@ -71,6 +71,23 @@ beforeEach(() => {
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
 });
 
+function getLastRouteUpdate():
+  | { sessionKey?: string; channel?: string; to?: string; accountId?: string }
+  | undefined {
+  const callArgs = recordInboundSession.mock.calls.at(-1) as unknown[] | undefined;
+  const params = callArgs?.[0] as
+    | {
+        updateLastRoute?: {
+          sessionKey?: string;
+          channel?: string;
+          to?: string;
+          accountId?: string;
+        };
+      }
+    | undefined;
+  return params?.updateLastRoute;
+}
+
 describe("processDiscordMessage ack reactions", () => {
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
@@ -168,5 +185,72 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain("⏳");
     expect(emojis).toContain("⚠️");
     expect(emojis).toContain("✅");
+  });
+});
+
+describe("processDiscordMessage session routing", () => {
+  it("stores DM lastRoute with user target for direct-session continuity", async () => {
+    const ctx = await createBaseContext({
+      data: { guild: null },
+      channelInfo: null,
+      channelName: undefined,
+      isGuildMessage: false,
+      isDirectMessage: true,
+      isGroupDm: false,
+      shouldRequireMention: false,
+      canDetectMention: false,
+      effectiveWasMentioned: false,
+      displayChannelSlug: "",
+      guildInfo: null,
+      guildSlug: "",
+      message: {
+        id: "m1",
+        channelId: "dm1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+      messageChannelId: "dm1",
+      baseSessionKey: "agent:main:discord:direct:u1",
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:discord:direct:u1",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastRouteUpdate()).toEqual({
+      sessionKey: "agent:main:discord:direct:u1",
+      channel: "discord",
+      to: "user:U1",
+      accountId: "default",
+    });
+  });
+
+  it("stores group lastRoute with channel target", async () => {
+    const ctx = await createBaseContext({
+      baseSessionKey: "agent:main:discord:channel:c1",
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:c1",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastRouteUpdate()).toEqual({
+      sessionKey: "agent:main:discord:channel:c1",
+      channel: "discord",
+      to: "channel:c1",
+      accountId: "default",
+    });
   });
 });
