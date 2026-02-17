@@ -1,16 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
-import * as replyModule from "../auto-reply/reply.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -24,33 +23,6 @@ beforeEach(() => {
 });
 
 describe("heartbeat transcript pruning", () => {
-  async function seedSessionStore(
-    storePath: string,
-    sessionKey: string,
-    session: {
-      sessionId?: string;
-      updatedAt?: number;
-      lastChannel: string;
-      lastProvider: string;
-      lastTo: string;
-    },
-  ) {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: session.sessionId ?? "sid",
-            updatedAt: session.updatedAt ?? Date.now(),
-            ...session,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-  }
-
   async function createTranscriptWithContent(transcriptPath: string, sessionId: string) {
     const header = {
       type: "session",
@@ -65,33 +37,21 @@ describe("heartbeat transcript pruning", () => {
     return existingContent;
   }
 
-  async function withTempHeartbeatSandbox<T>(
+  async function withTempTelegramHeartbeatSandbox<T>(
     fn: (ctx: {
       tmpDir: string;
       storePath: string;
       replySpy: ReturnType<typeof vi.spyOn>;
     }) => Promise<T>,
   ) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-prune-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
-      return await fn({ tmpDir, storePath, replySpy });
-    } finally {
-      replySpy.mockRestore();
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    return withTempHeartbeatSandbox(fn, {
+      prefix: "openclaw-hb-prune-",
+      unsetEnvVars: ["TELEGRAM_BOT_TOKEN"],
+    });
   }
 
   it("prunes transcript when heartbeat returns HEARTBEAT_OK", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const sessionKey = resolveMainSessionKey(undefined);
       const sessionId = "test-session-prune";
       const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -139,7 +99,7 @@ describe("heartbeat transcript pruning", () => {
   });
 
   it("does not prune transcript when heartbeat returns meaningful content", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const sessionKey = resolveMainSessionKey(undefined);
       const sessionId = "test-session-no-prune";
       const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
