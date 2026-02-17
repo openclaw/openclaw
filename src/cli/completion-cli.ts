@@ -252,11 +252,33 @@ export function registerCompletionCli(program: Command) {
         }
       }
 
-      // Eagerly register all subcommands to build the full tree
+      // Register all subcommands to build the full tree for completion.
+      // Heavy subcommands (pairing, plugins) trigger loadConfig() → jiti
+      // transpilation of hundreds of TS files. Completion only needs command
+      // names and descriptions, so register lightweight stubs for those.
+      const HEAVY_SUBCMD_STUBS: Record<string, { desc: string; subs: string[] }> = {
+        pairing: {
+          desc: "Pairing helpers",
+          subs: ["list", "approve"],
+        },
+        plugins: {
+          desc: "Plugin management",
+          subs: ["list", "info", "enable", "disable", "uninstall", "install", "update", "doctor"],
+        },
+      };
       const entries = getSubCliEntries();
       for (const entry of entries) {
         // Skip completion command itself to avoid cycle if we were to add it to the list
         if (entry.name === "completion") {
+          continue;
+        }
+        const stub = HEAVY_SUBCMD_STUBS[entry.name];
+        if (stub) {
+          // Register a lightweight stub — no plugin loading
+          const cmd = program.command(entry.name).description(stub.desc);
+          for (const sub of stub.subs) {
+            cmd.command(sub);
+          }
           continue;
         }
         await registerSubCliByName(program, entry.name);
