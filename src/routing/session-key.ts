@@ -25,6 +25,55 @@ function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
+function normalizeSessionKeyTail(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const parts = trimmed.split(":");
+  const channel = parts[0]?.trim().toLowerCase();
+  const kind = parts[1]?.trim().toLowerCase();
+  if (channel === "signal" && kind === "group") {
+    const groupId = parts[2]?.trim() ?? "";
+    if (!groupId) {
+      return trimmed.toLowerCase();
+    }
+    const suffix = parts
+      .slice(3)
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean);
+    return ["signal", "group", groupId, ...suffix].join(":");
+  }
+  return trimmed.toLowerCase();
+}
+
+function normalizePeerIdForSessionKey(params: {
+  channel: string;
+  peerKind: ChatType;
+  peerId: string;
+}): string {
+  const trimmed = params.peerId.trim();
+  if (!trimmed) {
+    return "unknown";
+  }
+  if (params.channel.trim().toLowerCase() === "signal" && params.peerKind === "group") {
+    return trimmed;
+  }
+  return trimmed.toLowerCase();
+}
+
+export function normalizeSessionKeyForStorage(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const parsed = parseAgentSessionKey(trimmed);
+  if (parsed) {
+    return `agent:${normalizeAgentId(parsed.agentId)}:${normalizeSessionKeyTail(parsed.rest)}`;
+  }
+  return normalizeSessionKeyTail(trimmed);
+}
+
 export function normalizeMainKey(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   return trimmed ? trimmed.toLowerCase() : DEFAULT_MAIN_KEY;
@@ -47,14 +96,14 @@ export function toAgentStoreSessionKey(params: {
   if (!raw || raw === DEFAULT_MAIN_KEY) {
     return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
   }
-  const lowered = raw.toLowerCase();
-  if (lowered.startsWith("agent:")) {
-    return lowered;
+  const normalized = normalizeSessionKeyForStorage(raw);
+  if (normalized.startsWith("agent:")) {
+    return normalized;
   }
-  if (lowered.startsWith("subagent:")) {
-    return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
+  if (normalized.startsWith("subagent:")) {
+    return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
   }
-  return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
+  return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
 }
 
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
@@ -164,7 +213,11 @@ export function buildAgentPeerSessionKey(params: {
     if (linkedPeerId) {
       peerId = linkedPeerId;
     }
-    peerId = peerId.toLowerCase();
+    peerId = normalizePeerIdForSessionKey({
+      channel: params.channel,
+      peerKind: "direct",
+      peerId,
+    });
     if (dmScope === "per-account-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
       const accountId = normalizeAccountId(params.accountId);
@@ -183,7 +236,11 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
-  const peerId = ((params.peerId ?? "").trim() || "unknown").toLowerCase();
+  const peerId = normalizePeerIdForSessionKey({
+    channel,
+    peerKind,
+    peerId: (params.peerId ?? "").trim(),
+  });
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
@@ -241,7 +298,11 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = params.peerId.trim().toLowerCase() || "unknown";
+  const peerId = normalizePeerIdForSessionKey({
+    channel,
+    peerKind: params.peerKind,
+    peerId: params.peerId,
+  });
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 

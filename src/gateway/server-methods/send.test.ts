@@ -222,6 +222,26 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("preserves signal group session key casing for mirroring", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-signal", channel: "signal" }]);
+
+    await runSend({
+      to: "group:ABcDeFgHiJkLmN==",
+      message: "hi",
+      channel: "signal",
+      idempotencyKey: "idem-signal-case",
+      sessionKey: "agent:main:signal:group:ABcDeFgHiJkLmN==",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:signal:group:ABcDeFgHiJkLmN==",
+        }),
+      }),
+    );
+  });
+
   it("derives a target session key when none is provided", async () => {
     mockDeliverySuccess("m3");
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { getSubagentDepth, isCronSessionKey } from "../sessions/session-key-utils.js";
-import { classifySessionKeyShape } from "./session-key.js";
+import {
+  buildAgentPeerSessionKey,
+  classifySessionKeyShape,
+  normalizeSessionKeyForStorage,
+  toAgentStoreSessionKey,
+} from "./session-key.js";
 
 describe("classifySessionKeyShape", () => {
   it("classifies empty keys as missing", () => {
@@ -64,5 +69,30 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("agent:main:subagent:worker")).toBe(false);
     expect(isCronSessionKey("cron:job-1")).toBe(false);
     expect(isCronSessionKey(undefined)).toBe(false);
+  });
+});
+
+describe("signal group session keys", () => {
+  it("preserves signal group id casing for non-direct route keys", () => {
+    expect(
+      buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "signal",
+        peerKind: "group",
+        peerId: "ABcDeFgHiJkLmN==",
+      }),
+    ).toBe("agent:main:signal:group:ABcDeFgHiJkLmN==");
+  });
+
+  it("keeps signal group id casing when normalizing store keys", () => {
+    expect(
+      toAgentStoreSessionKey({
+        agentId: "main",
+        requestKey: "signal:group:ABcDeFgHiJkLmN==",
+      }),
+    ).toBe("agent:main:signal:group:ABcDeFgHiJkLmN==");
+    expect(normalizeSessionKeyForStorage("agent:Main:signal:group:ABcDeFgHiJkLmN==")).toBe(
+      "agent:main:signal:group:ABcDeFgHiJkLmN==",
+    );
   });
 });

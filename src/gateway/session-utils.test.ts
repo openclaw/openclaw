@@ -107,6 +107,20 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("resolveSessionStoreKey preserves signal group id casing", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSessionStoreKey({
+        cfg,
+        sessionKey: "agent:ops:signal:group:ABcDeFgHiJkLmN==",
+      }),
+    ).toBe("agent:ops:signal:group:ABcDeFgHiJkLmN==");
+  });
+
   test("resolveSessionStoreKey honors global scope", () => {
     const cfg = {
       session: { scope: "global", mainKey: "work" },

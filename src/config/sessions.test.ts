@@ -67,6 +67,18 @@ describe("sessions", () => {
     ).toBe("agent:main:discord:group:12345");
   });
 
+  it("preserves Signal group id case when explicit SessionKey is provided", () => {
+    expect(
+      resolveSessionKey(
+        "per-sender",
+        {
+          SessionKey: "agent:main:signal:group:ABcDeFgHiJkLmN==",
+        },
+        "main",
+      ),
+    ).toBe("agent:main:signal:group:ABcDeFgHiJkLmN==");
+  });
+
   it("builds discord display name with guild+channel slugs", () => {
     expect(
       buildGroupDisplayName({

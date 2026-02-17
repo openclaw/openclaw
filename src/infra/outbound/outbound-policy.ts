@@ -66,7 +66,19 @@ function resolveContextGuardTarget(
 }
 
 function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
-  return normalizeTargetForProvider(channel, raw) ?? raw.trim().toLowerCase();
+  const normalized = normalizeTargetForProvider(channel, raw);
+  if (normalized) {
+    return normalized;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Signal group IDs are base64 and case-sensitive.
+  if (channel === "signal") {
+    return trimmed;
+  }
+  return trimmed.toLowerCase();
 }
 
 function isCrossContextTarget(params: {

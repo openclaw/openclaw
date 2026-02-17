@@ -24,6 +24,7 @@ import {
 import {
   normalizeAgentId,
   normalizeMainKey,
+  normalizeSessionKeyForStorage,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
@@ -408,14 +409,14 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
 }
 
 function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
-  const lowered = key.toLowerCase();
-  if (lowered === "global" || lowered === "unknown") {
-    return lowered;
+  const normalized = normalizeSessionKeyForStorage(key);
+  if (normalized === "global" || normalized === "unknown") {
+    return normalized;
   }
-  if (lowered.startsWith("agent:")) {
-    return lowered;
+  if (normalized.startsWith("agent:")) {
+    return normalized;
   }
-  return `agent:${normalizeAgentId(agentId)}:${lowered}`;
+  return `agent:${normalizeAgentId(agentId)}:${normalized}`;
 }
 
 function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
@@ -430,33 +431,31 @@ export function resolveSessionStoreKey(params: {
   if (!raw) {
     return raw;
   }
-  const rawLower = raw.toLowerCase();
-  if (rawLower === "global" || rawLower === "unknown") {
-    return rawLower;
+  const normalizedRaw = normalizeSessionKeyForStorage(raw);
+  if (normalizedRaw === "global" || normalizedRaw === "unknown") {
+    return normalizedRaw;
   }
 
-  const parsed = parseAgentSessionKey(raw);
+  const parsed = parseAgentSessionKey(normalizedRaw);
   if (parsed) {
     const agentId = normalizeAgentId(parsed.agentId);
-    const lowered = raw.toLowerCase();
     const canonical = canonicalizeMainSessionAlias({
       cfg: params.cfg,
       agentId,
-      sessionKey: lowered,
+      sessionKey: normalizedRaw,
     });
-    if (canonical !== lowered) {
+    if (canonical !== normalizedRaw) {
       return canonical;
     }
-    return lowered;
+    return normalizedRaw;
   }
 
-  const lowered = raw.toLowerCase();
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (lowered === "main" || lowered === rawMainKey) {
+  if (normalizedRaw === "main" || normalizedRaw === rawMainKey) {
     return resolveMainSessionKey(params.cfg);
   }
   const agentId = resolveDefaultStoreAgentId(params.cfg);
-  return canonicalizeSessionKeyForAgent(agentId, lowered);
+  return canonicalizeSessionKeyForAgent(agentId, normalizedRaw);
 }
 
 function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
@@ -479,15 +478,15 @@ export function canonicalizeSpawnedByForAgent(
   if (!raw) {
     return undefined;
   }
-  const lower = raw.toLowerCase();
-  if (lower === "global" || lower === "unknown") {
-    return lower;
+  const normalizedRaw = normalizeSessionKeyForStorage(raw);
+  if (normalizedRaw === "global" || normalizedRaw === "unknown") {
+    return normalizedRaw;
   }
   let result: string;
-  if (raw.toLowerCase().startsWith("agent:")) {
-    result = raw.toLowerCase();
+  if (normalizedRaw.startsWith("agent:")) {
+    result = normalizedRaw;
   } else {
-    result = `agent:${normalizeAgentId(agentId)}:${lower}`;
+    result = `agent:${normalizeAgentId(agentId)}:${normalizedRaw}`;
   }
   // Resolve main-alias references (e.g. agent:ops:main → configured main key).
   const parsed = parseAgentSessionKey(result);

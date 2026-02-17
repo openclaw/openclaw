@@ -768,6 +768,19 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.from).toBe("group:ABC123");
   });
 
+  it("preserves Signal group id case in session keys", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "signal",
+      agentId: "main",
+      target: "signal:group:ABcDeFgHiJkLmN==",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:signal:group:ABcDeFgHiJkLmN==");
+    expect(route?.from).toBe("group:ABcDeFgHiJkLmN==");
+    expect(route?.to).toBe("group:ABcDeFgHiJkLmN==");
+  });
+
   it("treats Zalo Personal DM targets as direct sessions", async () => {
     const cfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
     const route = await resolveOutboundSessionRoute({
