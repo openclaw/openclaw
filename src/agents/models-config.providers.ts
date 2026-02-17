@@ -53,6 +53,11 @@ export {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 import {
+  buildMeganovaModelDefinition,
+  MEGANOVA_BASE_URL,
+  MEGANOVA_MODEL_CATALOG,
+} from "./meganova-models.js";
+import {
   MINIMAX_OAUTH_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
   QWEN_OAUTH_MARKER,
@@ -429,6 +434,14 @@ export function normalizeProviders(params: {
   return mutated ? next : providers;
 }
 
+function buildMeganovaProvider(): ProviderConfig {
+  return {
+    baseUrl: MEGANOVA_BASE_URL,
+    api: "openai-completions",
+    models: MEGANOVA_MODEL_CATALOG.map(buildMeganovaModelDefinition),
+  };
+}
+
 type ImplicitProviderParams = {
   agentDir: string;
   config?: OpenClawConfig;
@@ -507,6 +520,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     apiKey,
   })),
   withApiKey("together", async ({ apiKey }) => ({ ...buildTogetherProvider(), apiKey })),
+  withApiKey("meganova", async ({ apiKey }) => ({ ...buildMeganovaProvider(), apiKey })),
   withApiKey("huggingface", async ({ apiKey, discoveryApiKey }) => ({
     ...(await buildHuggingfaceProvider(discoveryApiKey)),
     apiKey,

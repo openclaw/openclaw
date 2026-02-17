@@ -48,6 +48,7 @@ export type AuthChoice =
   | "mistral-api-key"
   | "volcengine-api-key"
   | "byteplus-api-key"
+  | "meganova-api-key"
   | "qianfan-api-key"
   | "custom-api-key"
   | "skip";
@@ -73,6 +74,7 @@ export type AuthChoiceGroupId =
   | "mistral"
   | "qwen"
   | "together"
+  | "meganova"
   | "huggingface"
   | "qianfan"
   | "xai"
@@ -129,6 +131,7 @@ export type OnboardOptions = {
   syntheticApiKey?: string;
   veniceApiKey?: string;
   togetherApiKey?: string;
+  meganovaApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;

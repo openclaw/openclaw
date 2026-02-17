@@ -4,6 +4,11 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildMeganovaModelDefinition,
+  MEGANOVA_BASE_URL,
+  MEGANOVA_MODEL_CATALOG,
+} from "../agents/meganova-models.js";
+import {
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
@@ -34,6 +39,7 @@ import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
+  MEGANOVA_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -325,6 +331,36 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, VENICE_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply MegaNova provider configuration without changing the default model.
+ * Registers MegaNova models and sets up the provider, but preserves existing model selection.
+ */
+export function applyMeganovaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MEGANOVA_DEFAULT_MODEL_REF] = {
+    ...models[MEGANOVA_DEFAULT_MODEL_REF],
+    alias: models[MEGANOVA_DEFAULT_MODEL_REF]?.alias ?? "MegaNova",
+  };
+
+  const meganovaModels = MEGANOVA_MODEL_CATALOG.map(buildMeganovaModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "meganova",
+    api: "openai-completions",
+    baseUrl: MEGANOVA_BASE_URL,
+    catalogModels: meganovaModels,
+  });
+}
+
+/**
+ * Apply MegaNova provider configuration AND set MegaNova as the default model.
+ * Use this when MegaNova is the primary provider choice during onboarding.
+ */
+export function applyMeganovaConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyMeganovaProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MEGANOVA_DEFAULT_MODEL_REF);
 }
 
 /**
