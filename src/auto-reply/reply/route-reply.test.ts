@@ -64,6 +64,9 @@ const { routeReply } = await import("./route-reply.js");
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
   plugins: [],
   tools: [],
+  hooks: [],
+  typedHooks: [],
+  commands: [],
   channels,
   providers: [],
   gatewayHandlers: {},
