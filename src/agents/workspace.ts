@@ -425,35 +425,26 @@ export async function ensureAgentWorkspace(params?: {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
     // indicators exist, treat onboarding as complete and avoid recreating BOOTSTRAP for
     // already-onboarded workspaces.
-    // Only load templates if not already cached and files exist (need comparison)
-    const identityTemplate =
-      templateCache.get(DEFAULT_IDENTITY_FILENAME) ??
-      (await loadTemplate(DEFAULT_IDENTITY_FILENAME));
-    const userTemplate =
-      templateCache.get(DEFAULT_USER_FILENAME) ?? (await loadTemplate(DEFAULT_USER_FILENAME));
+    const identityFresh = filesToCreate.some((f) => f.template === DEFAULT_IDENTITY_FILENAME);
+    const userFresh = filesToCreate.some((f) => f.template === DEFAULT_USER_FILENAME);
+    const bothFresh = identityFresh && userFresh;
 
-    const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
-    ]);
-    const hasUserContent = await (async () => {
-      const indicators = [
-        path.join(dir, "memory"),
-        path.join(dir, DEFAULT_MEMORY_FILENAME),
-        path.join(dir, ".git"),
-      ];
-      for (const indicator of indicators) {
-        try {
-          await fs.access(indicator);
-          return true;
-        } catch {
-          // continue
-        }
-      }
-      return false;
-    })();
-    const legacyOnboardingCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
+    // Fresh files = first-time onboarding, will need bootstrap; only compare if files pre-existed
+    // Also check userContentExists (memory/, MEMORY.md, .git) which indicates an established workspace
+    let legacyOnboardingCompleted = userContentExists;
+    if (!legacyOnboardingCompleted && !bothFresh) {
+      const [identityTemplate, userTemplate] = await Promise.all([
+        templateCache.get(DEFAULT_IDENTITY_FILENAME) ?? loadTemplate(DEFAULT_IDENTITY_FILENAME),
+        templateCache.get(DEFAULT_USER_FILENAME) ?? loadTemplate(DEFAULT_USER_FILENAME),
+      ]);
+      const [identityContent, userContent] = await Promise.all([
+        fs.readFile(identityPath, "utf-8"),
+        fs.readFile(userPath, "utf-8"),
+      ]);
+      legacyOnboardingCompleted =
+        identityContent !== identityTemplate || userContent !== userTemplate;
+    }
+
     if (legacyOnboardingCompleted) {
       markState({ onboardingCompletedAt: nowIso() });
     } else {
