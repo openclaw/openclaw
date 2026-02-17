@@ -162,6 +162,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     : undefined;
   let transcriptRejectionReason: string | null = null;
   let clearDurationTimer = false;
+  let runAnsweredSideEffects = false;
 
   if (event.providerCallId && event.providerCallId !== call.providerCallId) {
     const previousProviderCallId = call.providerCallId;
@@ -189,14 +190,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     case "call.answered":
       call.answeredAt = event.timestamp;
       transitionState(call, "answered");
-      startMaxDurationTimer({
-        ctx,
-        callId: call.callId,
-        onTimeout: async (callId) => {
-          await endCall(ctx, callId);
-        },
-      });
-      ctx.onCallAnswered?.(call);
+      runAnsweredSideEffects = true;
       break;
 
     case "call.active":
@@ -276,6 +270,16 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   }
   if (transcriptRejectionReason) {
     rejectTranscriptWaiter(ctx, call.callId, transcriptRejectionReason);
+  }
+  if (runAnsweredSideEffects) {
+    startMaxDurationTimer({
+      ctx,
+      callId: call.callId,
+      onTimeout: async (callId) => {
+        await endCall(ctx, callId);
+      },
+    });
+    ctx.onCallAnswered?.(call);
   }
 
   ctx.processedEventIds.add(event.id);

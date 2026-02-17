@@ -42,9 +42,23 @@ export function startMaxDurationTimer(params: {
       console.log(
         `[voice-call] Max duration reached (${params.ctx.config.maxDurationSeconds}s), ending call ${params.callId}`,
       );
+      const previousEndReason = call.endReason;
       call.endReason = "timeout";
-      persistCallRecord(params.ctx.storePath, call);
-      await params.onTimeout(params.callId);
+      try {
+        persistCallRecord(params.ctx.storePath, call);
+      } catch (err) {
+        call.endReason = previousEndReason;
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[voice-call] Failed to persist timeout marker for ${params.callId}: ${message}`,
+        );
+      }
+      try {
+        await params.onTimeout(params.callId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[voice-call] Timeout handler failed for ${params.callId}: ${message}`);
+      }
     }
   }, maxDurationMs);
 

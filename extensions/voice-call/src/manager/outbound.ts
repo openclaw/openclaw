@@ -50,6 +50,19 @@ type EndCallContext = Pick<
   | "maxDurationTimers"
 >;
 
+function cloneCallRecord(call: CallRecord): CallRecord {
+  return {
+    ...call,
+    transcript: [...call.transcript],
+    processedEventIds: [...call.processedEventIds],
+    metadata: call.metadata ? { ...call.metadata } : undefined,
+  };
+}
+
+function restoreCallRecord(call: CallRecord, snapshot: CallRecord): void {
+  Object.assign(call, snapshot);
+}
+
 export async function initiateCall(
   ctx: InitiateContext,
   to: string,
@@ -100,8 +113,16 @@ export async function initiateCall(
     },
   };
 
+  try {
+    persistCallRecord(ctx.storePath, callRecord);
+  } catch (err) {
+    return {
+      callId,
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
   ctx.activeCalls.set(callId, callRecord);
-  persistCallRecord(ctx.storePath, callRecord);
 
   try {
     // For notify mode with a message, use inline TwiML with <Say>.
@@ -126,10 +147,24 @@ export async function initiateCall(
 
     return { callId, success: true };
   } catch (err) {
+    const originalCall = cloneCallRecord(callRecord);
     callRecord.state = "failed";
     callRecord.endedAt = Date.now();
     callRecord.endReason = "failed";
-    persistCallRecord(ctx.storePath, callRecord);
+    try {
+      persistCallRecord(ctx.storePath, callRecord);
+    } catch (persistErr) {
+      restoreCallRecord(callRecord, originalCall);
+      if (callRecord.providerCallId) {
+        ctx.providerCallIdMap.delete(callRecord.providerCallId);
+      }
+      ctx.activeCalls.delete(callId);
+      return {
+        callId,
+        success: false,
+        error: persistErr instanceof Error ? persistErr.message : String(persistErr),
+      };
+    }
     ctx.activeCalls.delete(callId);
     if (callRecord.providerCallId) {
       ctx.providerCallIdMap.delete(callRecord.providerCallId);
@@ -160,8 +195,14 @@ export async function speak(
   }
 
   try {
+    const previousCall = cloneCallRecord(call);
     transitionState(call, "speaking");
-    persistCallRecord(ctx.storePath, call);
+    try {
+      persistCallRecord(ctx.storePath, call);
+    } catch (err) {
+      restoreCallRecord(call, previousCall);
+      throw err;
+    }
 
     addTranscriptEntry(call, "bot", text);
 
@@ -203,8 +244,17 @@ export async function speakInitialMessage(
 
   // Clear so we don't speak it again if the provider reconnects.
   if (call.metadata) {
+    const previousMetadata = { ...call.metadata };
     delete call.metadata.initialMessage;
-    persistCallRecord(ctx.storePath, call);
+    try {
+      persistCallRecord(ctx.storePath, call);
+    } catch (err) {
+      call.metadata = previousMetadata;
+      console.warn(
+        `[voice-call] Failed to persist initial-message state for ${call.callId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
   }
 
   console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
@@ -246,8 +296,14 @@ export async function continueCall(
   try {
     await speak(ctx, callId, prompt);
 
+    const previousCall = cloneCallRecord(call);
     transitionState(call, "listening");
-    persistCallRecord(ctx.storePath, call);
+    try {
+      persistCallRecord(ctx.storePath, call);
+    } catch (err) {
+      restoreCallRecord(call, previousCall);
+      throw err;
+    }
 
     await ctx.provider.startListening({ callId, providerCallId: call.providerCallId });
 
@@ -286,10 +342,16 @@ export async function endCall(
       reason: "hangup-bot",
     });
 
+    const previousCall = cloneCallRecord(call);
     call.state = "hangup-bot";
     call.endedAt = Date.now();
     call.endReason = "hangup-bot";
-    persistCallRecord(ctx.storePath, call);
+    try {
+      persistCallRecord(ctx.storePath, call);
+    } catch (err) {
+      restoreCallRecord(call, previousCall);
+      throw err;
+    }
 
     clearMaxDurationTimer(ctx, callId);
     rejectTranscriptWaiter(ctx, callId, "Call ended: hangup-bot");

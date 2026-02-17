@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { VoiceCallConfigSchema } from "../config.js";
@@ -205,6 +205,75 @@ describe("processEvent (functional)", () => {
     });
 
     expect(answeredCallId).toBe("call-2");
+  });
+
+  it("retries answered side effects only after persistence succeeds", () => {
+    const now = Date.now();
+    let answeredCalls = 0;
+    const ctx = createContext({
+      onCallAnswered: () => {
+        answeredCalls += 1;
+      },
+    });
+    ctx.activeCalls.set("call-answered-retry", {
+      callId: "call-answered-retry",
+      providerCallId: "provider-answered-retry",
+      provider: "plivo",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550000003",
+      to: "+15550000000",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-answered-retry", "call-answered-retry");
+
+    const event: NormalizedEvent = {
+      id: "evt-answered-retry",
+      type: "call.answered",
+      callId: "call-answered-retry",
+      providerCallId: "provider-answered-retry",
+      timestamp: now + 1,
+    };
+
+    const originalAppendFileSync = fs.appendFileSync;
+    let failFirstWrite = true;
+    const appendSpy = vi.spyOn(fs, "appendFileSync").mockImplementation(
+      ((...args: unknown[]) => {
+        const data = args[1];
+        if (failFirstWrite && typeof data === "string" && data.includes('"evt-answered-retry"')) {
+          failFirstWrite = false;
+          throw new Error("disk full");
+        }
+        return Reflect.apply(
+          originalAppendFileSync,
+          fs,
+          args as Parameters<typeof fs.appendFileSync>,
+        );
+      }) as typeof fs.appendFileSync,
+    );
+
+    try {
+      expect(() => processEvent(ctx, event)).toThrow("disk full");
+      expect(answeredCalls).toBe(0);
+      expect(ctx.processedEventIds.has(event.id)).toBe(false);
+      expect(ctx.maxDurationTimers.size).toBe(0);
+      expect(ctx.activeCalls.get("call-answered-retry")?.state).toBe("ringing");
+
+      expect(() => processEvent(ctx, event)).not.toThrow();
+      expect(answeredCalls).toBe(1);
+      expect(ctx.processedEventIds.has(event.id)).toBe(true);
+      expect(ctx.maxDurationTimers.size).toBe(1);
+      expect(ctx.activeCalls.get("call-answered-retry")?.state).toBe("answered");
+    } finally {
+      for (const timer of ctx.maxDurationTimers.values()) {
+        clearTimeout(timer);
+      }
+      ctx.maxDurationTimers.clear();
+      appendSpy.mockRestore();
+    }
   });
 
   it("when hangup throws, logs and does not throw", () => {
