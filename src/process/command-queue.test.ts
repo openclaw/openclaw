@@ -98,7 +98,7 @@ describe("command queue", () => {
     await Promise.all([first, second]);
 
     expect(waited).not.toBeNull();
-    expect(waited as number).toBeGreaterThanOrEqual(5);
+    expect(waited as unknown as number).toBeGreaterThanOrEqual(5);
     expect(queuedAhead).toBe(0);
   });
 
