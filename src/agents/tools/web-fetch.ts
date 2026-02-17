@@ -26,6 +26,7 @@ import {
   normalizeCacheKey,
   readCache,
   readResponseText,
+  resolveWebUrlAllowlist,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
   withTimeout,
@@ -75,17 +76,7 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
 type WebConfig = NonNullable<OpenClawConfig["tools"]>["web"];
 
 export function resolveFetchUrlAllowlist(web?: WebConfig): string[] | undefined {
-  if (!web || typeof web !== "object") {
-    return undefined;
-  }
-  if (!("urlAllowlist" in web)) {
-    return undefined;
-  }
-  const allowlist = web.urlAllowlist;
-  if (!Array.isArray(allowlist)) {
-    return undefined;
-  }
-  return allowlist.length > 0 ? allowlist : undefined;
+  return resolveWebUrlAllowlist(web);
 }
 
 export function isUrlAllowedByAllowlist(url: string, allowlist: string[]): boolean {
