@@ -58,6 +58,54 @@ const AgentCallToolSchema = Type.Object({
   ),
 });
 
+export interface AgentCall {
+  agent: string;
+  skill: string;
+  input: Record<string, unknown>;
+  mode?: "execute" | "critique";
+  timeoutSeconds?: number;
+}
+
+export interface AgentCallBatchResult {
+  results: Array<{
+    index: number;
+    status: AgentCallResult["status"];
+    output?: unknown;
+    confidence?: number;
+    error?: string;
+  }>;
+  aggregateConfidence: number;
+  completedCount: number;
+  errorCount: number;
+  totalCount: number;
+}
+
+const AgentCallBatchToolSchema = Type.Object({
+  calls: Type.Array(
+    Type.Object({
+      agent: Type.String({ description: "Target agent ID" }),
+      skill: Type.String({ description: "Skill to invoke" }),
+      input: Type.Object({}, { additionalProperties: true }),
+      mode: Type.Optional(
+        Type.String({
+          enum: ["execute", "critique"],
+          default: "execute",
+        }),
+      ),
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 0, maximum: 3600 })),
+    }),
+    { minItems: 1, description: "Array of agent calls to execute" },
+  ),
+  concurrency: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 50,
+      default: 5,
+      description: "Maximum concurrent calls (default: 5)",
+    }),
+  ),
+});
+
 export interface AgentCallResult {
   status: "completed" | "working" | "error" | "forbidden";
   output?: unknown;
@@ -438,6 +486,110 @@ export function createAgentCallTool(opts?: {
         taskId: runId,
         correlationId, // RFC: For response routing
       } as AgentCallResult);
+    },
+  };
+}
+
+async function executeSingleAgentCall(
+  call: AgentCall,
+  opts?: {
+    agentSessionKey?: string;
+    agentChannel?: GatewayMessageChannel;
+  },
+): Promise<AgentCallBatchResult["results"][0]> {
+  const tool = createAgentCallTool(opts);
+  const result = await tool.execute("", {
+    agent: call.agent,
+    skill: call.skill,
+    input: call.input,
+    mode: call.mode ?? "execute",
+    timeoutSeconds: call.timeoutSeconds,
+  });
+
+  const parsed = typeof result === "string" ? JSON.parse(result) : result;
+  return {
+    index: 0,
+    status: parsed.status,
+    output: parsed.output,
+    confidence: parsed.confidence,
+    error: parsed.error,
+  };
+}
+
+export function createAgentCallBatchTool(opts?: {
+  agentSessionKey?: string;
+  agentChannel?: GatewayMessageChannel;
+  sandboxed?: boolean;
+}): AnyAgentTool {
+  return {
+    label: "Agent Call Batch",
+    name: "agent_call_batch",
+    description:
+      "Execute multiple agent calls in parallel with configurable concurrency. " +
+      "Returns aggregated results including aggregate confidence.",
+    parameters: AgentCallBatchToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const calls = params.calls as AgentCall[];
+      const concurrency = (params.concurrency as number) ?? 5;
+
+      if (!Array.isArray(calls) || calls.length === 0) {
+        return jsonResult({
+          results: [],
+          aggregateConfidence: 0,
+          completedCount: 0,
+          errorCount: 0,
+          totalCount: 0,
+        } as AgentCallBatchResult);
+      }
+
+      const executeWithIndex = async (
+        call: AgentCall,
+        index: number,
+      ): Promise<AgentCallBatchResult["results"][0]> => {
+        try {
+          const result = await executeSingleAgentCall(call, opts);
+          return {
+            ...result,
+            index,
+          };
+        } catch (err) {
+          return {
+            index,
+            status: "error",
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      };
+
+      const results: AgentCallBatchResult["results"] = [];
+
+      for (let i = 0; i < calls.length; i += concurrency) {
+        const batch = calls.slice(i, i + concurrency);
+        const batchResults = await Promise.all(
+          batch.map((call, j) => executeWithIndex(call, i + j)),
+        );
+        results.push(...batchResults);
+      }
+
+      const completedResults = results.filter(
+        (r) => r.status === "completed" && r.confidence !== undefined,
+      );
+      const aggregateConfidence =
+        completedResults.length > 0
+          ? completedResults.reduce((sum, r) => sum + (r.confidence ?? 0), 0) /
+            completedResults.length
+          : 0;
+
+      const errorCount = results.filter((r) => r.status === "error").length;
+
+      return jsonResult({
+        results,
+        aggregateConfidence,
+        completedCount: completedResults.length,
+        errorCount,
+        totalCount: results.length,
+      } as AgentCallBatchResult);
     },
   };
 }
