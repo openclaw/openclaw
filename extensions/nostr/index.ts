@@ -9,7 +9,7 @@ import { resolveNostrAccount } from "./src/types.js";
 const plugin = {
   id: "nostr",
   name: "Nostr",
-  description: "Nostr DM channel plugin via NIP-04",
+  description: "Nostr AI agent channel plugin via NIP-63 with NIP-44 encryption",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setNostrRuntime(api.runtime);

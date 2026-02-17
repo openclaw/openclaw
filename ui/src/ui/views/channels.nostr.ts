@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
-import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
+import type { ChannelAccountSnapshot, NostrProfile, NostrStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,
@@ -8,6 +8,234 @@ import {
   type NostrProfileFormCallbacks,
 } from "./channels.nostr-profile-form.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+
+const RECOMMENDED_NOSTR_RELAYS = [
+  "wss://relay.damus.io",
+  "wss://relay.primal.net",
+  "wss://nostr.wine",
+];
+
+type NostrConfigValue = {
+  privateKey: string;
+  relays: string[];
+  dmPolicy: string | null;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function toStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry) => String(entry).trim()).filter(Boolean);
+}
+
+function parseRelaysInput(raw: string): string[] {
+  const relays = raw
+    .split(/[\n,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const deduped: string[] = [];
+  for (const relay of relays) {
+    if (!deduped.includes(relay)) {
+      deduped.push(relay);
+    }
+  }
+  return deduped;
+}
+
+function formatRelayInput(relays: string[]): string {
+  return relays.join("\n");
+}
+
+function readNostrConfig(configForm: Record<string, unknown> | null): NostrConfigValue {
+  const root = asRecord(configForm);
+  if (!root) {
+    return { privateKey: "", relays: [], dmPolicy: null };
+  }
+
+  const rootChannels = asRecord(root.channels);
+  const fromChannels = asRecord(rootChannels?.nostr);
+  const resolved = fromChannels ?? {};
+  const privateKey = typeof resolved.privateKey === "string" ? resolved.privateKey : "";
+
+  return {
+    privateKey: privateKey.trim(),
+    relays: toStringList(resolved.relays),
+    dmPolicy: typeof resolved.dmPolicy === "string" ? resolved.dmPolicy : null,
+  };
+}
+
+function hasProfileData(profile: NostrProfile | undefined | null): boolean {
+  if (!profile) {
+    return false;
+  }
+  return ["name", "displayName", "about", "picture", "banner", "website", "nip05", "lud16"].some(
+    (field) => Boolean(String(profile[field as keyof NostrProfile] ?? "").trim()),
+  );
+}
+
+function renderChecklistItem(params: { label: string; done: boolean }) {
+  return html`
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <span style="color: var(--success-color); width: 16px; text-align: center;">
+        ${params.done ? "✓" : "○"}
+      </span>
+      <span>${params.label}</span>
+    </div>
+  `;
+}
+
+function renderNostrSetupCard(params: {
+  props: ChannelsProps;
+  summaryConfigured: boolean;
+  hasConfiguredKey: boolean;
+  hasConfiguredRelays: boolean;
+  hasProfile: boolean;
+  running: boolean;
+  publicKey: string | null | undefined;
+  relaysText: string;
+  onEditProfile?: () => void;
+}) {
+  const {
+    props,
+    summaryConfigured,
+    hasConfiguredKey,
+    hasConfiguredRelays,
+    hasProfile,
+    running,
+    publicKey,
+    relaysText,
+    onEditProfile,
+  } = params;
+
+  const showWizard = props.onboarding || !hasConfiguredKey || !hasConfiguredRelays || !hasProfile;
+  if (!showWizard) {
+    return nothing;
+  }
+
+  const configDraft = readNostrConfig(props.configForm);
+  const privateKeyValue = hasConfiguredKey && !configDraft.privateKey ? "" : configDraft.privateKey;
+  const canSave =
+    props.connected && !props.configSaving && !props.configSchemaLoading && props.configFormDirty;
+
+  const renderProfileButton = () => {
+    if (!onEditProfile) {
+      return nothing;
+    }
+
+    const label = hasProfile ? "Edit profile" : "Add profile";
+    return html`
+      <button class="btn" type="button" @click=${onEditProfile}>
+        ${label}
+      </button>
+    `;
+  };
+
+  return html`
+    <div
+      class="callout info"
+      style="margin-top: 12px; padding: 12px; border-radius: 8px;"
+    >
+      <div style="font-weight: 600; margin-bottom: 8px;">Nostr onboarding</div>
+      <div class="status-list" style="margin-bottom: 12px;">
+        ${renderChecklistItem({ label: "Private key configured", done: hasConfiguredKey })}
+        ${renderChecklistItem({ label: "Relay list set", done: hasConfiguredRelays })}
+        ${renderChecklistItem({ label: "Profile metadata set", done: hasProfile })}
+        ${renderChecklistItem({
+          label: "Gateway status shows configured",
+          done: summaryConfigured || running,
+        })}
+      </div>
+
+      <div style="display: grid; gap: 12px;">
+        <label style="display: grid; gap: 6px;">
+          <span style="font-size: 13px; font-weight: 500;">Private key (nsec or hex)</span>
+          <input
+            type="password"
+            autocomplete="off"
+            inputmode="text"
+            placeholder=${hasConfiguredKey ? "Configured — paste to replace" : "nsec1..."}
+            .value=${privateKeyValue}
+            @input=${(e: InputEvent) => {
+              const target = e.target as HTMLInputElement;
+              props.onConfigPatch(["channels", "nostr", "privateKey"], target.value.trim());
+            }}
+          />
+          ${
+            configDraft.dmPolicy
+              ? html`<div style="font-size: 12px; color: var(--text-muted);">
+                Access policy: ${configDraft.dmPolicy}
+              </div>`
+              : nothing
+          }
+        </label>
+
+        <label style="display: grid; gap: 6px;">
+          <span style="font-size: 13px; font-weight: 500;">Relay URLs</span>
+          <textarea
+            rows="4"
+            style="width: 100%; border-radius: 4px; border: 1px solid var(--border-color); padding: 8px; resize: vertical; font-family: var(--font-mono, monospace);"
+            placeholder="wss://relay.damus.io"
+            .value=${relaysText}
+            @input=${(e: InputEvent) => {
+              const target = e.target as HTMLTextAreaElement;
+              props.onConfigPatch(["channels", "nostr", "relays"], parseRelaysInput(target.value));
+            }}
+          ></textarea>
+          <button
+            class="btn btn-sm"
+            type="button"
+            @click=${() =>
+              props.onConfigPatch(["channels", "nostr", "relays"], [...RECOMMENDED_NOSTR_RELAYS])}
+          >
+            Use recommended relays
+          </button>
+        </label>
+      </div>
+
+      <div class="row" style="margin-top: 12px; flex-wrap: wrap;">
+        <button class="btn primary" ?disabled=${!canSave} @click=${props.onConfigSave}>
+          ${props.configFormDirty ? "Save Nostr config" : "Config up to date"}
+        </button>
+        <button
+          class="btn"
+          type="button"
+          @click=${() => props.onRefresh(false)}
+          style="margin-left: 8px;"
+          ?disabled=${!props.connected}
+        >
+          Refresh status
+        </button>
+        ${renderProfileButton()}
+        <a
+          class="btn btn-sm"
+          href="https://docs.openclaw.ai/channels/nostr"
+          target="_blank"
+          rel="noreferrer"
+          style="margin-left: 8px; text-decoration: none; display: inline-flex; align-items: center;"
+        >
+          Read setup docs
+        </a>
+      </div>
+
+      ${
+        publicKey
+          ? html`
+          <div style="margin-top: 8px; font-size: 12px;">
+            Public key: <span class="monospace">${publicKey}</span>
+          </div>
+        `
+          : nothing
+      }
+    </div>
+  `;
+}
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)
@@ -43,6 +271,7 @@ export function renderNostrCard(params: {
     profileFormCallbacks,
     onEditProfile,
   } = params;
+
   const primaryAccount = nostrAccounts[0];
   const summaryConfigured = nostr?.configured ?? primaryAccount?.configured ?? false;
   const summaryRunning = nostr?.running ?? primaryAccount?.running ?? false;
@@ -52,6 +281,13 @@ export function renderNostrCard(params: {
   const summaryLastError = nostr?.lastError ?? primaryAccount?.lastError ?? null;
   const hasMultipleAccounts = nostrAccounts.length > 1;
   const showingForm = profileFormState !== null && profileFormState !== undefined;
+
+  const profileFromStatus = (primaryAccount as { profile?: NostrProfile | null } | undefined)
+    ?.profile;
+  const hasProfileDataInStatus = hasProfileData(profileFromStatus ?? nostr?.profile);
+  const configValues = readNostrConfig(props.configForm);
+  const hasConfiguredKey = Boolean(summaryPublicKey) || Boolean(configValues.privateKey);
+  const hasConfiguredRelays = configValues.relays.length > 0;
 
   const renderAccountCard = (account: ChannelAccountSnapshot) => {
     const publicKey = (account as { publicKey?: string }).publicKey;
@@ -94,7 +330,6 @@ export function renderNostrCard(params: {
   };
 
   const renderProfileSection = () => {
-    // If showing form, render the form instead of the read-only view
     if (showingForm && profileFormCallbacks) {
       return renderNostrProfileForm({
         state: profileFormState,
@@ -125,7 +360,7 @@ export function renderNostrCard(params: {
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <div style="font-weight: 500;">Profile</div>
           ${
-            summaryConfigured
+            summaryConfigured || hasProfileDataInStatus
               ? html`
                 <button
                   class="btn btn-sm"
@@ -174,7 +409,7 @@ export function renderNostrCard(params: {
             `
             : html`
                 <div style="color: var(--text-muted); font-size: 13px">
-                  No profile set. Click "Edit Profile" to add your name, bio, and avatar.
+                  No profile set. Use this section to add your name, bio, avatar, and Nostr metadata.
                 </div>
               `
         }
@@ -185,7 +420,7 @@ export function renderNostrCard(params: {
   return html`
     <div class="card">
       <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
+      <div class="card-sub">Encrypted AI prompts over Nostr relays via NIP-63 and NIP-44.</div>
       ${accountCountLabel}
 
       ${
@@ -224,6 +459,18 @@ export function renderNostrCard(params: {
           ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
           : nothing
       }
+
+      ${renderNostrSetupCard({
+        props,
+        summaryConfigured,
+        hasConfiguredKey,
+        hasConfiguredRelays,
+        hasProfile: hasProfileDataInStatus,
+        running: summaryRunning,
+        publicKey: summaryPublicKey,
+        relaysText: formatRelayInput(configValues.relays),
+        onEditProfile,
+      })}
 
       ${renderProfileSection()}
 

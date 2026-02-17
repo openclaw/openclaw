@@ -85,6 +85,8 @@
     "mac:package": "bash scripts/package-mac-app.sh",
     "mac:restart": "bash scripts/restart-mac.sh",
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
+    "onboard:nostr": "bash -lc 'source scripts/dev/onboard-nostr-env.sh && scripts/dev/onboard-session.sh nostr'",
+    "onboard:nostr:env": "bash -lc 'source scripts/dev/onboard-nostr-env.sh'",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",

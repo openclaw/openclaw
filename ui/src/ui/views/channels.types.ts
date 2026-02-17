@@ -17,6 +17,7 @@ import type { NostrProfileFormState } from "./channels.nostr-profile-form.ts";
 export type ChannelKey = string;
 
 export type ChannelsProps = {
+  onboarding: boolean;
   connected: boolean;
   loading: boolean;
   snapshot: ChannelsStatusSnapshot | null;
