@@ -140,6 +140,20 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
+  it("does not force store for OpenAI Responses when baseUrl is empty", () => {
+    const payload = runStoreMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "",
+      } as Model<"openai-responses">,
+    });
+    expect(payload.store).toBe(false);
+  });
+
   it("does not force store=true for Codex responses (Codex requires store=false)", () => {
     const payload = runStoreMutationCase({
       applyProvider: "openai-codex",
