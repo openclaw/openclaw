@@ -212,7 +212,7 @@ export async function persistInlineDirectives(params: {
   return {
     provider,
     model,
-    contextTokens: agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens: agentCfg?.contextTokens ?? lookupContextTokens({ provider, modelId: model }) ?? DEFAULT_CONTEXT_TOKENS,
   };
 }
 

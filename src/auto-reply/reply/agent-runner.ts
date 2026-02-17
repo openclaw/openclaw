@@ -419,7 +419,7 @@ export async function runReplyAgent(params: {
       : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
-      lookupContextTokens(modelUsed) ??
+      lookupContextTokens({ provider: providerUsed, modelId: modelUsed }) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
