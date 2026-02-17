@@ -44,49 +44,59 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
       });
 
       if (ctx.reactionDelivery === "immediate") {
-        const { getReactionDebouncer } = await import("../../../infra/reaction-dispatch/index.js");
-        const debouncer = getReactionDebouncer(ctx.reactionBundleWindowMs);
+        try {
+          const { getReactionDebouncer } =
+            await import("../../../infra/reaction-dispatch/index.js");
+          const debouncer = getReactionDebouncer(ctx.reactionBundleWindowMs);
 
-        let reactedMessageContent: string | undefined;
-        let reactedMessageAuthor: string | undefined;
-        if (ctx.reactionIncludeMessage && item.channel && item.ts) {
-          try {
-            const history = await ctx.app.client.conversations.history({
-              token: ctx.botToken,
-              channel: item.channel,
-              latest: item.ts,
-              limit: 1,
-              inclusive: true,
-            });
-            const msg = history.messages?.[0];
-            if (msg) {
-              reactedMessageContent = msg.text || undefined;
-              const msgUser = msg.user ? await ctx.resolveUserName(msg.user) : undefined;
-              reactedMessageAuthor = msgUser?.name ?? msg.user;
+          let reactedMessageContent: string | undefined;
+          let reactedMessageAuthor: string | undefined;
+          if (ctx.reactionIncludeMessage && item.channel && item.ts) {
+            try {
+              const history = await ctx.app.client.conversations.history({
+                token: ctx.botToken,
+                channel: item.channel,
+                latest: item.ts,
+                limit: 1,
+                inclusive: true,
+              });
+              const msg = history.messages?.[0];
+              if (msg) {
+                reactedMessageContent = msg.text || undefined;
+                const msgUser = msg.user ? await ctx.resolveUserName(msg.user) : undefined;
+                reactedMessageAuthor = msgUser?.name ?? msg.user;
+              }
+            } catch (err) {
+              logVerbose(`slack: failed to fetch reacted message: ${String(err)}`);
             }
-          } catch (err) {
-            logVerbose(`slack: failed to fetch reacted message: ${String(err)}`);
           }
-        }
 
-        await debouncer.enqueue(
-          {
-            emoji: emojiLabel,
-            actorLabel: actorLabel ?? "unknown",
-            actorId: event.user,
-            action,
-            ts: Date.now(),
-          },
-          {
-            channel: "slack",
-            accountId: ctx.accountId,
+          await debouncer.enqueue(
+            {
+              emoji: emojiLabel,
+              actorLabel: actorLabel ?? "unknown",
+              actorId: event.user,
+              action,
+              ts: Date.now(),
+            },
+            {
+              channel: "slack",
+              accountId: ctx.accountId,
+              sessionKey,
+              messageId: item.ts ?? "unknown",
+              reactedMessageContent,
+              reactedMessageAuthor,
+              conversationLabel: channelLabel,
+            },
+          );
+        } catch (err) {
+          logVerbose(danger(`slack reaction dispatch failed: ${String(err)}`));
+          // Fallback to deferred on dispatch failure
+          enqueueSystemEvent(text, {
             sessionKey,
-            messageId: item.ts ?? "unknown",
-            reactedMessageContent,
-            reactedMessageAuthor,
-            conversationLabel: channelLabel,
-          },
-        );
+            contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
+          });
+        }
       } else {
         enqueueSystemEvent(text, {
           sessionKey,
