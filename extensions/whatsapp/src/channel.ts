@@ -290,15 +290,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     pollMaxOptions: 12,
     resolveTarget: ({ to, allowFrom, mode }) =>
       resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-    sendText: async (params) => {
-      const { to, text, accountId, deps, gifPlayback } = params;
-      const linkPreview = (params as { linkPreview?: boolean }).linkPreview;
+    sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {
         verbose: false,
         accountId: accountId ?? undefined,
         gifPlayback,
-        linkPreview,
       });
       return { channel: "whatsapp", ...result };
     },
