@@ -197,6 +197,22 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
   });
+
+  it("returns false for non-default agent without explicit heartbeat config", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", heartbeat: { every: "1h" } },
+          { id: "docs" },
+        ],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "docs")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
 });
 
 describe("resolveHeartbeatDeliveryTarget", () => {
@@ -1247,6 +1263,35 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
     } finally {
       replySpy.mockRestore();
+    }
+  });
+
+  it("bypasses agent-enabled check for cron-triggered heartbeats", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", heartbeat: { every: "1h" } },
+        ],
+      },
+    };
+
+    // "main" is disabled because "ops" has an explicit heartbeat entry
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+
+    // Without cron reason, it should be skipped as disabled
+    const resNoCron = await runHeartbeatOnce({ cfg, agentId: "main" });
+    expect(resNoCron.status).toBe("skipped");
+    if (resNoCron.status === "skipped") {
+      expect(resNoCron.reason).toBe("disabled");
+    }
+
+    // With cron reason, it should bypass the disabled check
+    const resCron = await runHeartbeatOnce({ cfg, agentId: "main", reason: "cron:job-1" });
+    expect(resCron.status).not.toBe("skipped");
+    if (resCron.status === "skipped") {
+      expect(resCron.reason).not.toBe("disabled");
     }
   });
 
