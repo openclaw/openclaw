@@ -7,13 +7,14 @@
  * across multiple providers.
  */
 
+import type { OpenClawConfig } from "../../config/config.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import { resolveHeartbeatPrompt } from "../heartbeat.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 
 export type RouteReplyParams = {
@@ -76,6 +77,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    heartbeatPrompt: resolveHeartbeatPrompt(cfg?.agents?.defaults?.heartbeat?.prompt),
   });
   if (!normalized) {
     return { ok: true };
