@@ -1,9 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type {
   GatewayRequestHandlerOptions,
   OpenClawPluginApi,
   RespondFn,
 } from "openclaw/plugin-sdk";
-import { randomUUID } from "node:crypto";
 import { agentCommand } from "../../../src/commands/agent.js";
 import { ErrorCodes, errorShape } from "../../../src/gateway/protocol/index.js";
 import { agentHandlers } from "../../../src/gateway/server-methods/agent.js";

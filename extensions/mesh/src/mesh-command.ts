@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi, ReplyPayload } from "openclaw/plugin-sdk";
-import type { PluginCommandContext } from "../../../src/plugins/types.js";
 import { callGateway } from "../../../src/gateway/call.js";
 import { logVerbose } from "../../../src/globals.js";
+import type { PluginCommandContext } from "../../../src/plugins/types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../src/utils/message-channel.js";
 
 type MeshPlanShape = {
