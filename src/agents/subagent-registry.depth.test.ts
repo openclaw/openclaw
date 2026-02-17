@@ -96,6 +96,38 @@ afterEach(async () => {
   }
 });
 
+async function waitForPerformanceRecord(
+  runId: string,
+  stateDir: string,
+): Promise<Record<string, unknown>> {
+  const dataDir = path.join(stateDir, "data");
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      const files = await fs.readdir(dataDir);
+      for (const file of files) {
+        if (!file.startsWith("agent-performance-") || !file.endsWith(".jsonl")) {
+          continue;
+        }
+        const raw = await fs.readFile(path.join(dataDir, file), "utf8");
+        const lines = raw
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        const record = lines.find((line) => line.runId === runId);
+        if (record) {
+          return record;
+        }
+      }
+    } catch {
+      // File may not exist yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for performance record for run ${runId}`);
+}
+
 describe("subagent registry depth metadata", () => {
   it("stores explicit depth and initializes childKeys", () => {
     registerSubagentRun({
@@ -307,5 +339,29 @@ describe("slot reservation", () => {
     expect(reserveChildSlot?.(parentKey, 1)).toBe(true);
     resetSubagentRegistryForTests({ persist: false });
     expect(reserveChildSlot?.(parentKey, 1)).toBe(true);
+  });
+});
+
+describe("performance tracking", () => {
+  it("records performance JSONL after subagent announce + cleanup", async () => {
+    if (!tempStateDir) {
+      throw new Error("missing tempStateDir");
+    }
+
+    registerSubagentRun({
+      runId: "run-performance-jsonl",
+      childSessionKey: "agent:main:subagent:perf",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "collect stats",
+      cleanup: "keep",
+    });
+
+    const record = await waitForPerformanceRecord("run-performance-jsonl", tempStateDir);
+    expect(record).toMatchObject({
+      runId: "run-performance-jsonl",
+      agentId: "main",
+      spawnerSessionKey: "agent:main:main",
+    });
   });
 });

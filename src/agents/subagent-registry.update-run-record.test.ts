@@ -106,12 +106,20 @@ describe("updateRunRecord", () => {
       task: "updated task",
       label: "updated label",
       endedAt: 123,
+      latestProgress: {
+        phase: "finalizing",
+        percentComplete: 90,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+      },
+      verificationState: "running",
     });
 
     const updated = getRunByChildKey("agent:main:subagent:child-1");
     expect(updated?.task).toBe("updated task");
     expect(updated?.label).toBe("updated label");
     expect(updated?.endedAt).toBe(123);
+    expect(updated?.latestProgress?.phase).toBe("finalizing");
+    expect(updated?.verificationState).toBe("running");
     expect(saveSubagentRegistryToDiskMock).toHaveBeenCalledTimes(1);
   });
 

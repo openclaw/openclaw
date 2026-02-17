@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import type { VerificationCheckResult, VerificationResult } from "./spawn-verification.types.js";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
@@ -22,6 +23,12 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
 import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
+import {
+  rankAgentsForTask,
+  resolveAgentCapabilitiesFromConfig,
+  resolveCapabilityCardsFromConfig,
+} from "./capability-routing.js";
+import { parseCompletionReport } from "./completion-report-parser.js";
 import { buildDelegationPrompt } from "./delegation-prompt.js";
 import {
   isEmbeddedPiRunActive,
@@ -29,9 +36,17 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
 import { resolveMaxChildrenPerAgent, resolveMaxSpawnDepth } from "./recursive-spawn-config.js";
+import { runSpawnVerificationChecks } from "./spawn-verification.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import { readLatestProgressForRun } from "./subagent-progress.js";
 import { buildProviderUsageSummary } from "./subagent-provider-limits.js";
-import { getActiveChildCount, listAllSubagentRuns } from "./subagent-registry.js";
+import {
+  getActiveChildCount,
+  getRunById,
+  listAllSubagentRuns,
+  updateRunRecord,
+  type SubagentRunRecord,
+} from "./subagent-registry.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { getAncestors } from "./tools/sessions-lineage.js";
 
@@ -380,6 +395,8 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
+  completionReport?: boolean;
+  progressReporting?: boolean;
 }) {
   const childDepth = getSubagentDepth(params.childSessionKey);
   const taskText =
@@ -402,6 +419,17 @@ export function buildSubagentSystemPrompt(params: {
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
     "",
+    params.progressReporting || params.completionReport ? "## Reporting Tools" : undefined,
+    params.progressReporting
+      ? "- `report_progress` is enabled. Call it at meaningful milestones (for example start, major phase changes, and finish prep) with phase + percentComplete when known."
+      : undefined,
+    params.completionReport
+      ? "- `report_completion` is enabled. Before your final reply, call it once with a concise summary and any relevant status/confidence/artifacts."
+      : undefined,
+    params.progressReporting || params.completionReport
+      ? "- These reports are for your parent agent and do not replace your final natural-language response."
+      : undefined,
+    params.progressReporting || params.completionReport ? "" : undefined,
     "## Output Format",
     "When complete, your final response should include:",
     "- What you accomplished or found",
@@ -458,7 +486,13 @@ export function buildSubagentSystemPrompt(params: {
       id,
       model,
       description: fallbackDescription ?? agentConfig?.name,
+      capabilities: resolveAgentCapabilitiesFromConfig({ cfg, agentId: id }),
+      capabilityCards: resolveCapabilityCardsFromConfig({ cfg, agentId: id }),
     };
+  });
+  const rankedFleet = rankAgentsForTask({
+    task: params.task ?? "",
+    fleet,
   });
 
   const parentKey = params.requesterSessionKey?.trim() || "unknown";
@@ -471,7 +505,8 @@ export function buildSubagentSystemPrompt(params: {
     maxChildrenPerAgent,
     globalSlotsAvailable,
     maxConcurrent,
-    fleet,
+    fleet: rankedFleet,
+    task: params.task,
     providerSlots,
   });
   return `${prompt}\n${delegationPrompt}`;
@@ -483,6 +518,99 @@ export type SubagentRunOutcome = {
 };
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
+
+function formatVerificationCheckLine(check: VerificationCheckResult): string {
+  const target = check.target ? ` (${check.target})` : "";
+  if (check.passed) {
+    return `- PASS ${check.type}${target}`;
+  }
+  const reason = check.reason?.trim() ? `: ${check.reason.trim()}` : "";
+  return `- FAIL ${check.type}${target}${reason}`;
+}
+
+function buildCompletionVerificationCheck(params: {
+  run?: SubagentRunRecord;
+  completionReportFound: boolean;
+}): VerificationCheckResult | undefined {
+  if (!params.run?.verification?.requireCompletionReport) {
+    return undefined;
+  }
+  if (params.completionReportFound) {
+    return {
+      type: "completion_report",
+      target: "report_completion",
+      passed: true,
+    };
+  }
+  return {
+    type: "completion_report",
+    target: "report_completion",
+    passed: false,
+    reason: "completion_report_missing",
+  };
+}
+
+function mergeVerificationResults(params: {
+  base: VerificationResult;
+  completionCheck?: VerificationCheckResult;
+}): VerificationResult {
+  const checks = params.completionCheck
+    ? [...params.base.checks, params.completionCheck]
+    : [...params.base.checks];
+  const hasFailure = checks.some((check) => !check.passed);
+  const status = hasFailure ? "failed" : checks.length > 0 ? "passed" : params.base.status;
+  return {
+    ...params.base,
+    status,
+    checks,
+  };
+}
+
+function resolveVerificationFailureAction(
+  run?: SubagentRunRecord,
+): "retry_once" | "escalate" | "fail" {
+  const action = run?.verification?.onFailure;
+  return action === "retry_once" || action === "escalate" || action === "fail" ? action : "fail";
+}
+
+async function maybeSpawnVerificationRetry(params: {
+  run: SubagentRunRecord;
+  failedChecks: VerificationCheckResult[];
+}): Promise<{ started: true; runId: string } | { started: false; reason: string }> {
+  if (!params.run.originalSpawnParams) {
+    return { started: false, reason: "missing_original_spawn_params" };
+  }
+
+  const failureContext = params.failedChecks.map((check) => formatVerificationCheckLine(check));
+  const retryTask = [
+    "[RETRY - Previous attempt failed verification]",
+    `Original task: ${params.run.task}`,
+    "Verification failures:",
+    ...(failureContext.length > 0
+      ? failureContext
+      : ["- No explicit failure details were captured"]),
+    "",
+    "Re-run the task and address each failure before finishing.",
+  ].join("\n");
+
+  try {
+    const { spawnCore } = await import("./spawn-core.js");
+    const spawned = await spawnCore({
+      task: retryTask,
+      cleanup: params.run.cleanup,
+      requesterSessionKey: params.run.requesterSessionKey,
+      requesterOrigin: params.run.requesterOrigin,
+      ...params.run.originalSpawnParams,
+      verification: params.run.originalSpawnParams.verification ?? params.run.verification,
+    });
+    return { started: true, runId: spawned.runId };
+  } catch (err) {
+    return {
+      started: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
 
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
@@ -593,6 +721,82 @@ export async function runSubagentAnnounceFlow(params: {
       return false;
     }
 
+    const runRecord = getRunById(params.childRunId);
+    const completionReport = reply?.trim() ? parseCompletionReport(reply) : null;
+    const latestProgress = await readLatestProgressForRun({ runId: params.childRunId });
+    if (runRecord) {
+      const patch: Partial<SubagentRunRecord> = {};
+      if (completionReport) {
+        patch.completionReport = completionReport;
+      }
+      if (latestProgress) {
+        patch.latestProgress = latestProgress;
+      }
+      if (Object.keys(patch).length > 0) {
+        updateRunRecord(params.childRunId, patch);
+      }
+    }
+
+    const verificationNotes: string[] = [];
+    let statusLabelOverride: string | undefined;
+    if (runRecord?.verification) {
+      updateRunRecord(params.childRunId, { verificationState: "running" });
+      const artifactResult = await runSpawnVerificationChecks({
+        contract: runRecord.verification,
+      });
+      const completionCheck = buildCompletionVerificationCheck({
+        run: runRecord,
+        completionReportFound: Boolean(completionReport),
+      });
+      const verificationResult = mergeVerificationResults({
+        base: artifactResult,
+        completionCheck,
+      });
+      const verificationState = verificationResult.status === "passed" ? "passed" : "failed";
+      updateRunRecord(params.childRunId, {
+        verificationState,
+        verificationResult,
+      });
+
+      if (verificationResult.status === "failed") {
+        const failedChecks = verificationResult.checks.filter((check) => !check.passed);
+        verificationNotes.push("Verification checks failed:");
+        verificationNotes.push(...failedChecks.map((check) => formatVerificationCheckLine(check)));
+
+        const failureAction = resolveVerificationFailureAction(runRecord);
+        if (failureAction === "retry_once") {
+          if (runRecord.retryAttemptedAt) {
+            verificationNotes.push(
+              "Retry already attempted previously; escalating as a hard failure.",
+            );
+            statusLabelOverride = "failed verification after retry";
+          } else {
+            const retryStartedAt = Date.now();
+            updateRunRecord(params.childRunId, { retryAttemptedAt: retryStartedAt });
+            const refreshedRun = getRunById(params.childRunId) ?? runRecord;
+            const retryOutcome = await maybeSpawnVerificationRetry({
+              run: refreshedRun,
+              failedChecks,
+            });
+            if (retryOutcome.started) {
+              verificationNotes.push(`Retry started as runId ${retryOutcome.runId}.`);
+              statusLabelOverride = "failed verification (retry started)";
+            } else {
+              verificationNotes.push(`Retry could not start: ${retryOutcome.reason}`);
+              statusLabelOverride = "failed verification";
+            }
+          }
+        } else if (failureAction === "escalate") {
+          verificationNotes.push("Escalation requested by verification policy.");
+          statusLabelOverride = "failed verification and requires escalation";
+        } else {
+          statusLabelOverride = "failed verification";
+        }
+      } else if (verificationResult.status === "passed") {
+        verificationNotes.push("Verification checks passed.");
+      }
+    }
+
     // Build stats
     const statsLine = await buildSubagentStatsLine({
       sessionKey: params.childSessionKey,
@@ -602,17 +806,33 @@ export async function runSubagentAnnounceFlow(params: {
 
     // Build status label
     const statusLabel =
-      outcome.status === "ok"
+      statusLabelOverride ??
+      (outcome.status === "ok"
         ? "completed successfully"
         : outcome.status === "timeout"
           ? "timed out"
           : outcome.status === "error"
             ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
+            : "finished with unknown status");
 
     // Build instructional message for main agent
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
+    const progressLine = latestProgress
+      ? `Latest progress: ${latestProgress.phase}${
+          typeof latestProgress.percentComplete === "number"
+            ? ` (${latestProgress.percentComplete}%)`
+            : ""
+        } at ${latestProgress.updatedAt}`
+      : undefined;
+    const completionLines = completionReport
+      ? [
+          "Completion report:",
+          completionReport.status ? `- status: ${completionReport.status}` : undefined,
+          completionReport.confidence ? `- confidence: ${completionReport.confidence}` : undefined,
+          completionReport.summary ? `- summary: ${completionReport.summary}` : undefined,
+        ].filter((line): line is string => Boolean(line))
+      : [];
     const triggerMessage = [
       `A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
@@ -620,6 +840,9 @@ export async function runSubagentAnnounceFlow(params: {
       reply || "(no output)",
       "",
       statsLine,
+      ...(progressLine ? ["", progressLine] : []),
+      ...(completionLines.length > 0 ? ["", ...completionLines] : []),
+      ...(verificationNotes.length > 0 ? ["", ...verificationNotes] : []),
       "",
       "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
       `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
@@ -657,7 +880,7 @@ export async function runSubagentAnnounceFlow(params: {
         );
         // Preserve retryability across restore/wake cycles instead of dropping output.
         shouldDeleteChildSession = false;
-        return false;
+        return true;
       }
       return true;
     }

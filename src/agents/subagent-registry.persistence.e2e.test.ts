@@ -102,7 +102,7 @@ describe("subagent registry persistence", () => {
     expect(first.requesterOrigin?.accountId).toBe("acct-main");
   });
 
-  it("skips cleanup when cleanupHandled was persisted", async () => {
+  it("retries cleanup when cleanupHandled was persisted without completion", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
 
@@ -120,7 +120,7 @@ describe("subagent registry persistence", () => {
           createdAt: 1,
           startedAt: 1,
           endedAt: 2,
-          cleanupHandled: true, // Already handled - should be skipped
+          cleanupHandled: true, // stale handled marker from older flows
         },
       },
     };
@@ -132,13 +132,12 @@ describe("subagent registry persistence", () => {
 
     await new Promise((r) => setTimeout(r, 0));
 
-    // announce should NOT be called since cleanupHandled was true
     const calls = announceSpy.mock.calls.map((call) => call[0]);
     const match = calls.find(
       (params) =>
         (params as { childSessionKey?: string }).childSessionKey === "agent:main:subagent:two",
     );
-    expect(match).toBeFalsy();
+    expect(match).toBeTruthy();
   });
 
   it("maps legacy announce fields into cleanup state", async () => {
@@ -177,7 +176,7 @@ describe("subagent registry persistence", () => {
     expect(entry?.requesterOrigin?.accountId).toBe("legacy-account");
 
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as { version?: number };
-    expect(after.version).toBe(2);
+    expect(after.version).toBe(3);
   });
 
   it("retries cleanup announce after a failed announce", async () => {
@@ -273,5 +272,44 @@ describe("subagent registry persistence", () => {
       runs?: Record<string, unknown>;
     };
     expect(afterSecond.runs?.["run-4"]).toBeUndefined();
+  });
+
+  it("cleans up per-run progress files when delete-mode run is finalized", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const progressPath = path.join(tempStateDir, "progress", "run-5.jsonl");
+    const persisted = {
+      version: 2,
+      runs: {
+        "run-5": {
+          runId: "run-5",
+          childSessionKey: "agent:main:subagent:five",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "cleanup progress",
+          cleanup: "delete",
+          createdAt: 1,
+          startedAt: 1,
+          endedAt: 2,
+        },
+      },
+    };
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
+    await fs.mkdir(path.dirname(progressPath), { recursive: true });
+    await fs.writeFile(progressPath, '{"runId":"run-5","phase":"done"}\n', "utf8");
+
+    resetSubagentRegistryForTests({ persist: false });
+    initSubagentRegistry();
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<string, unknown>;
+    };
+    expect(after.runs?.["run-5"]).toBeUndefined();
+    await expect(fs.stat(progressPath)).rejects.toBeTruthy();
   });
 });

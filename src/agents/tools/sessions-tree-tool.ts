@@ -3,7 +3,12 @@ import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { listPendingRequestsForChild } from "../orchestrator-request-registry.js";
-import { listAllSubagentRuns, type SubagentRunRecord } from "../subagent-registry.js";
+import { readLatestProgressForRun } from "../subagent-progress.js";
+import {
+  listAllSubagentRuns,
+  updateRunRecord,
+  type SubagentRunRecord,
+} from "../subagent-registry.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 import { getDescendants } from "./sessions-lineage.js";
@@ -20,6 +25,27 @@ type SessionsTreeNode = {
   runStatus?: "running" | "blocked" | "input_required" | "idle" | "completed" | "error" | "timeout";
   pendingRequestCount?: number;
   runtimeMs: number;
+  latestProgress?: {
+    phase: string;
+    percentComplete?: number;
+    updatedAt: string;
+  };
+  completion?: {
+    status?: "complete" | "partial" | "failed";
+    confidence?: "high" | "medium" | "low";
+    summary?: string;
+    artifactCount?: number;
+    blockerCount?: number;
+    warningCount?: number;
+  };
+  verification?: {
+    state?: "pending" | "running" | "passed" | "failed";
+    status?: "passed" | "failed" | "skipped";
+    failedCheckCount?: number;
+    onFailure?: "retry_once" | "escalate" | "fail";
+    verifiedAt?: number;
+    retryAttemptedAt?: number;
+  };
   children: SessionsTreeNode[];
 };
 
@@ -50,6 +76,73 @@ function resolveRuntimeMs(run: SubagentRunRecord) {
   const start = typeof run.startedAt === "number" ? run.startedAt : run.createdAt;
   const end = typeof run.endedAt === "number" ? run.endedAt : Date.now();
   return Math.max(0, end - start);
+}
+
+function sameProgress(
+  a?: SubagentRunRecord["latestProgress"],
+  b?: Awaited<ReturnType<typeof readLatestProgressForRun>>,
+): boolean {
+  if (!a || !b) {
+    return false;
+  }
+  return (
+    a.phase === b.phase && a.updatedAt === b.updatedAt && a.percentComplete === b.percentComplete
+  );
+}
+
+function projectCompletion(run: SubagentRunRecord): SessionsTreeNode["completion"] | undefined {
+  const report = run.completionReport;
+  if (!report) {
+    return undefined;
+  }
+
+  const completion: SessionsTreeNode["completion"] = {};
+  if (report.status) {
+    completion.status = report.status;
+  }
+  if (report.confidence) {
+    completion.confidence = report.confidence;
+  }
+  if (report.summary) {
+    completion.summary = report.summary;
+  }
+  if (Array.isArray(report.artifacts) && report.artifacts.length > 0) {
+    completion.artifactCount = report.artifacts.length;
+  }
+  if (Array.isArray(report.blockers) && report.blockers.length > 0) {
+    completion.blockerCount = report.blockers.length;
+  }
+  if (Array.isArray(report.warnings) && report.warnings.length > 0) {
+    completion.warningCount = report.warnings.length;
+  }
+
+  return Object.keys(completion).length > 0 ? completion : undefined;
+}
+
+function projectVerification(run: SubagentRunRecord): SessionsTreeNode["verification"] | undefined {
+  const verification: SessionsTreeNode["verification"] = {};
+  if (run.verificationState) {
+    verification.state = run.verificationState;
+  }
+  if (run.verificationResult?.status) {
+    verification.status = run.verificationResult.status;
+  }
+  if (Array.isArray(run.verificationResult?.checks)) {
+    const failedCheckCount = run.verificationResult.checks.filter((check) => !check.passed).length;
+    if (failedCheckCount > 0) {
+      verification.failedCheckCount = failedCheckCount;
+    }
+  }
+  if (run.verification?.onFailure) {
+    verification.onFailure = run.verification.onFailure;
+  }
+  if (typeof run.verificationResult?.verifiedAt === "number") {
+    verification.verifiedAt = run.verificationResult.verifiedAt;
+  }
+  if (typeof run.retryAttemptedAt === "number") {
+    verification.retryAttemptedAt = run.retryAttemptedAt;
+  }
+  return Object.keys(verification).length > 0 ? verification : undefined;
 }
 
 export function createSessionsTreeTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
@@ -97,12 +190,12 @@ export function createSessionsTreeTool(opts?: { agentSessionKey?: string }): Any
         visibleRuns.filter((run) => !runByChildKey.has(run.requesterSessionKey)),
       );
 
-      const buildNode = (
+      const buildNode = async (
         run: SubagentRunRecord,
         relativeDepth: number,
         fallbackDepth: number,
         path: Set<string>,
-      ): SessionsTreeNode => {
+      ): Promise<SessionsTreeNode> => {
         const key = run.childSessionKey;
         const nodeDepth = typeof run.depth === "number" ? run.depth : fallbackDepth;
         const status = resolveStatus(run);
@@ -118,14 +211,25 @@ export function createSessionsTreeTool(opts?: { agentSessionKey?: string }): Any
         const nextPath = new Set(path);
         nextPath.add(key);
 
+        const latestProgress =
+          run.latestProgress ?? (await readLatestProgressForRun({ runId: run.runId }));
+        if (latestProgress && !sameProgress(run.latestProgress, latestProgress)) {
+          updateRunRecord(run.runId, { latestProgress });
+        }
+
         let children: SessionsTreeNode[] = [];
         if (maxDepth === undefined || relativeDepth < maxDepth) {
           const childRuns = sortRuns(childrenByRequester.get(key) ?? []);
-          children = childRuns
-            .filter((child) => !nextPath.has(child.childSessionKey))
-            .map((child) => buildNode(child, relativeDepth + 1, nodeDepth + 1, nextPath));
+          const nextChildren = childRuns.filter((child) => !nextPath.has(child.childSessionKey));
+          children = await Promise.all(
+            nextChildren.map((child) =>
+              buildNode(child, relativeDepth + 1, nodeDepth + 1, nextPath),
+            ),
+          );
         }
 
+        const completion = projectCompletion(run);
+        const verification = projectVerification(run);
         return {
           key,
           label: run.label?.trim() || run.task,
@@ -134,11 +238,14 @@ export function createSessionsTreeTool(opts?: { agentSessionKey?: string }): Any
           ...(runStatus && { runStatus }),
           ...(pendingRequestCount && { pendingRequestCount }),
           runtimeMs,
+          ...(latestProgress ? { latestProgress } : {}),
+          ...(completion ? { completion } : {}),
+          ...(verification ? { verification } : {}),
           children,
         };
       };
 
-      const tree = roots.map((root) => buildNode(root, 0, 1, new Set<string>()));
+      const tree = await Promise.all(roots.map((root) => buildNode(root, 0, 1, new Set<string>())));
       const total = visibleRuns.length;
       const active = visibleRuns.filter((run) => !run.endedAt).length;
       const completed = visibleRuns.filter((run) => !!run.endedAt).length;

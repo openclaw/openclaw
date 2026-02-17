@@ -26,6 +26,23 @@ import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
+async function waitForMethodCalls(params: {
+  calls: Array<{ method?: string }>;
+  method: string;
+  count: number;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 2_000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const seen = params.calls.filter((call) => call.method === params.method).length;
+    if (seen >= params.count) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("openclaw-tools: subagents", () => {
   beforeEach(() => {
     configOverride = {
@@ -167,9 +184,19 @@ describe("openclaw-tools: subagents", () => {
         waitCalls.push(params ?? {});
         return {
           runId: params?.runId ?? "run-1",
-          status: "ok",
+          status: "pending",
           startedAt: 1000,
           endedAt: 2000,
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+          ],
         };
       }
       if (request.method === "sessions.delete") {
@@ -221,6 +248,7 @@ describe("openclaw-tools: subagents", () => {
     const childWait = waitCalls.find((call) => call.runId === childRunId);
     expect(childWait?.timeoutMs).toBe(1000);
 
+    await waitForMethodCalls({ calls, method: "agent", count: 2 });
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
 
@@ -282,9 +310,19 @@ describe("openclaw-tools: subagents", () => {
         const params = request.params as { runId?: string; timeoutMs?: number } | undefined;
         return {
           runId: params?.runId ?? "run-1",
-          status: "ok",
+          status: "pending",
           startedAt: 1000,
           endedAt: 2000,
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+            },
+          ],
         };
       }
       if (request.method === "sessions.delete" || request.method === "sessions.patch") {
@@ -332,6 +370,7 @@ describe("openclaw-tools: subagents", () => {
       vi.useRealTimers();
     }
 
+    await waitForMethodCalls({ calls, method: "agent", count: 2 });
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
     const announceParams = agentCalls[1]?.params as

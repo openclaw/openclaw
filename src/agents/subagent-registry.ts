@@ -1,16 +1,44 @@
 import crypto from "node:crypto";
+import type { CompletionReport } from "./completion-report-parser.js";
+import type { VerificationContract, VerificationResult } from "./spawn-verification.types.js";
 import { normalizeSubagentProviderLimitKey } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveStorePath,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { recordAgentPerformance, type AgentPerformanceOutcome } from "./performance-tracker.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
+import { cleanupProgressFileForRun, type SubagentLatestProgress } from "./subagent-progress.js";
 import {
   loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk,
 } from "./subagent-registry.store.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
+
+export type OriginalSpawnParams = {
+  label?: string;
+  requestedAgentId?: string;
+  modelOverride?: string;
+  thinkingOverrideRaw?: string;
+  explicitRunTimeoutSeconds?: number;
+  completionReport?: boolean;
+  progressReporting?: boolean;
+  requesterAgentIdOverride?: string;
+  agentGroupId?: string | null;
+  agentGroupChannel?: string | null;
+  agentGroupSpace?: string | null;
+  toolOverrides?: {
+    allow?: string[];
+    deny?: string[];
+  };
+  verification?: VerificationContract;
+};
 
 export type SubagentRunRecord = {
   runId: string;
@@ -31,9 +59,17 @@ export type SubagentRunRecord = {
   depth?: number;
   provider?: string;
   childKeys?: Set<string>;
+  completionReport?: CompletionReport;
+  latestProgress?: SubagentLatestProgress;
+  verification?: VerificationContract;
+  verificationResult?: VerificationResult;
+  verificationState?: "pending" | "running" | "passed" | "failed";
+  retryAttemptedAt?: number;
+  originalSpawnParams?: OriginalSpawnParams;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
+const cleanupInProgress = new Set<string>();
 const log = createSubsystemLogger("agents/subagent-registry");
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
@@ -198,6 +234,12 @@ function resumeSubagentRun(runId: string) {
   }
 
   if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
+    // Older registry snapshots could mark handled before announce completion.
+    // Keep these runs retryable on restore.
+    if (entry.cleanupHandled && !entry.cleanupCompletedAt) {
+      entry.cleanupHandled = false;
+      persistSubagentRuns();
+    }
     if (!beginSubagentCleanup(runId)) {
       return;
     }
@@ -216,9 +258,13 @@ function resumeSubagentRun(runId: string) {
       endedAt: entry.endedAt,
       label: entry.label,
       outcome: entry.outcome,
-    }).then((didAnnounce) => {
-      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
-    });
+    })
+      .then((didAnnounce) => {
+        finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+      })
+      .catch(() => {
+        finalizeSubagentCleanup(runId, entry.cleanup, false);
+      });
     resumedRuns.add(runId);
     return;
   }
@@ -305,7 +351,14 @@ async function sweepSubagentRuns() {
       continue;
     }
     subagentRuns.delete(runId);
+    cleanupInProgress.delete(runId);
+    resumedRuns.delete(runId);
     mutated = true;
+    try {
+      await cleanupProgressFileForRun(runId);
+    } catch {
+      // ignore
+    }
     try {
       await callGateway({
         method: "sessions.delete",
@@ -379,13 +432,95 @@ function ensureListener() {
       endedAt: entry.endedAt,
       label: entry.label,
       outcome: entry.outcome,
-    }).then((didAnnounce) => {
-      finalizeSubagentCleanup(evt.runId, entry.cleanup, didAnnounce);
-    });
+    })
+      .then((didAnnounce) => {
+        finalizeSubagentCleanup(evt.runId, entry.cleanup, didAnnounce);
+      })
+      .catch(() => {
+        finalizeSubagentCleanup(evt.runId, entry.cleanup, false);
+      });
+  });
+}
+
+function resolvePerformanceOutcome(entry: SubagentRunRecord): AgentPerformanceOutcome {
+  const status = entry.outcome?.status;
+  if (status === "timeout") {
+    return "timeout";
+  }
+  if (status === "error") {
+    return "failure";
+  }
+  if (entry.verificationState === "failed") {
+    return "partial";
+  }
+  return "success";
+}
+
+function resolveVerificationPassed(entry: SubagentRunRecord): boolean | undefined {
+  const status = entry.verificationResult?.status;
+  if (status === "passed") {
+    return true;
+  }
+  if (status === "failed") {
+    return false;
+  }
+  return undefined;
+}
+
+function resolveRunTokens(childSessionKey: string): {
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+} {
+  const cfg = loadConfig();
+  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const sessionEntry = store[childSessionKey];
+  const inputTokens =
+    typeof sessionEntry?.inputTokens === "number" ? sessionEntry.inputTokens : undefined;
+  const outputTokens =
+    typeof sessionEntry?.outputTokens === "number" ? sessionEntry.outputTokens : undefined;
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+  };
+}
+
+async function recordSubagentPerformance(entry: SubagentRunRecord): Promise<void> {
+  const agentId = resolveAgentIdFromSessionKey(entry.childSessionKey);
+  const endedAt = typeof entry.endedAt === "number" ? entry.endedAt : Date.now();
+  const startedAt =
+    typeof entry.startedAt === "number"
+      ? entry.startedAt
+      : typeof entry.createdAt === "number"
+        ? entry.createdAt
+        : endedAt;
+  const runtimeMs = Math.max(0, endedAt - startedAt);
+  const completionReport = entry.completionReport
+    ? {
+        status: entry.completionReport.status,
+        confidence: entry.completionReport.confidence,
+      }
+    : undefined;
+  const tokens = resolveRunTokens(entry.childSessionKey);
+
+  await recordAgentPerformance({
+    runId: entry.runId,
+    agentId,
+    taskType: entry.label ?? "subagent",
+    spawnerSessionKey: entry.requesterSessionKey,
+    startedAt,
+    endedAt,
+    runtimeMs,
+    outcome: resolvePerformanceOutcome(entry),
+    verificationPassed: resolveVerificationPassed(entry),
+    completionReport,
+    ...tokens,
   });
 }
 
 function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didAnnounce: boolean) {
+  cleanupInProgress.delete(runId);
   const entry = subagentRuns.get(runId);
   if (!entry) {
     return;
@@ -396,11 +531,16 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
     persistSubagentRuns();
     return;
   }
+  void recordSubagentPerformance(entry).catch((err) => {
+    log.warn(`failed to record subagent performance for run ${runId}: ${String(err)}`);
+  });
   if (cleanup === "delete") {
     subagentRuns.delete(runId);
     persistSubagentRuns();
+    void cleanupProgressFileForRun(runId).catch(() => {});
     return;
   }
+  entry.cleanupHandled = true;
   entry.cleanupCompletedAt = Date.now();
   persistSubagentRuns();
 }
@@ -413,11 +553,13 @@ function beginSubagentCleanup(runId: string) {
   if (entry.cleanupCompletedAt) {
     return false;
   }
+  if (cleanupInProgress.has(runId)) {
+    return false;
+  }
   if (entry.cleanupHandled) {
     return false;
   }
-  entry.cleanupHandled = true;
-  persistSubagentRuns();
+  cleanupInProgress.add(runId);
   return true;
 }
 
@@ -434,6 +576,8 @@ export function registerSubagentRun(params: {
   depth?: number;
   provider?: string;
   providerReservation?: ProviderSlotReservation | null;
+  verification?: VerificationContract;
+  originalSpawnParams?: OriginalSpawnParams;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -460,6 +604,9 @@ export function registerSubagentRun(params: {
     depth: params.depth ?? 1,
     provider: provider || undefined,
     childKeys: new Set(),
+    verification: params.verification,
+    verificationState: params.verification ? "pending" : undefined,
+    originalSpawnParams: params.originalSpawnParams,
   });
   const parentRun = getRunByChildKey(params.requesterSessionKey);
   if (parentRun) {
@@ -545,9 +692,13 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       endedAt: entry.endedAt,
       label: entry.label,
       outcome: entry.outcome,
-    }).then((didAnnounce) => {
-      finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
-    });
+    })
+      .then((didAnnounce) => {
+        finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+      })
+      .catch(() => {
+        finalizeSubagentCleanup(runId, entry.cleanup, false);
+      });
   } catch {
     // ignore
   }
@@ -555,6 +706,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
+  cleanupInProgress.clear();
   resumedRuns.clear();
   pendingSpawns.clear();
   pendingProviderSpawns.clear();
@@ -586,9 +738,12 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export function releaseSubagentRun(runId: string) {
+  cleanupInProgress.delete(runId);
+  resumedRuns.delete(runId);
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();
+    void cleanupProgressFileForRun(runId).catch(() => {});
   }
   if (subagentRuns.size === 0) {
     stopSweeper();
@@ -604,6 +759,11 @@ export function updateRunRecord(runId: string, patch: Partial<SubagentRunRecord>
   }
   Object.assign(entry, patch);
   persistSubagentRuns();
+}
+
+export function getRunById(runId: string): SubagentRunRecord | undefined {
+  restoreSubagentRunsOnce();
+  return subagentRuns.get(runId);
 }
 
 export function listSubagentRunsForRequester(requesterSessionKey: string): SubagentRunRecord[] {

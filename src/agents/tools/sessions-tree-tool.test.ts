@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SubagentRunRecord } from "../subagent-registry.js";
-import { addSubagentRunForTests, resetSubagentRegistryForTests } from "../subagent-registry.js";
+import {
+  addSubagentRunForTests,
+  getRunById,
+  resetSubagentRegistryForTests,
+} from "../subagent-registry.js";
 
 let configOverride: OpenClawConfig = {
   session: {
@@ -37,6 +41,12 @@ function addRun(params: {
   endedAt?: number;
   outcome?: SubagentRunRecord["outcome"];
   depth?: number;
+  completionReport?: SubagentRunRecord["completionReport"];
+  latestProgress?: SubagentRunRecord["latestProgress"];
+  verification?: SubagentRunRecord["verification"];
+  verificationResult?: SubagentRunRecord["verificationResult"];
+  verificationState?: SubagentRunRecord["verificationState"];
+  retryAttemptedAt?: number;
 }) {
   addSubagentRunForTests({
     runId: params.runId,
@@ -51,6 +61,12 @@ function addRun(params: {
     endedAt: params.endedAt,
     outcome: params.outcome,
     depth: params.depth,
+    completionReport: params.completionReport,
+    latestProgress: params.latestProgress,
+    verification: params.verification,
+    verificationResult: params.verificationResult,
+    verificationState: params.verificationState,
+    retryAttemptedAt: params.retryAttemptedAt,
     childKeys: new Set<string>(),
   } as SubagentRunRecord);
 }
@@ -185,5 +201,111 @@ describe("sessions_tree tool", () => {
     expect(details.total).toBe(2);
     expect(details.tree.map((node) => node.key)).toEqual([parent]);
     expect(details.tree[0]?.children).toEqual([]);
+  });
+
+  it("projects completion, verification, and latest progress", async () => {
+    addRun({
+      runId: "run-wave2",
+      childSessionKey: "agent:main:subagent:wave2",
+      requesterSessionKey: "main",
+      label: "wave2",
+      task: "wave2",
+      createdAt: 1000,
+      startedAt: 1000,
+      endedAt: 1500,
+      outcome: { status: "ok" },
+      completionReport: {
+        status: "partial",
+        confidence: "medium",
+        summary: "Primary work done with one warning.",
+        artifacts: [{ path: "out/report.md" }],
+        warnings: ["Needs follow-up"],
+      },
+      verification: {
+        onFailure: "retry_once",
+      },
+      verificationState: "failed",
+      verificationResult: {
+        status: "failed",
+        checks: [
+          {
+            type: "artifact",
+            target: "/tmp/out.json",
+            passed: false,
+            reason: "artifact_not_found",
+          },
+        ],
+        verifiedAt: 1700000000000,
+      },
+      retryAttemptedAt: 1700000001000,
+    });
+
+    const progressPath = path.join(tempStateDir!, "progress", "run-wave2.jsonl");
+    await fs.mkdir(path.dirname(progressPath), { recursive: true });
+    await fs.writeFile(
+      progressPath,
+      [
+        JSON.stringify({
+          runId: "run-wave2",
+          phase: "Collecting",
+          percentComplete: 30,
+          updatedAt: "2026-02-17T00:00:00.000Z",
+        }),
+        JSON.stringify({
+          runId: "run-wave2",
+          phase: "Finalizing",
+          percentComplete: 95,
+          updatedAt: "2026-02-17T00:01:00.000Z",
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const tool = createSessionsTreeTool({ agentSessionKey: "main" });
+    const result = await tool.execute("call-wave2", {});
+    const details = result.details as {
+      tree: Array<{
+        key: string;
+        latestProgress?: { phase: string; percentComplete?: number; updatedAt: string };
+        completion?: {
+          status?: string;
+          confidence?: string;
+          artifactCount?: number;
+          warningCount?: number;
+        };
+        verification?: {
+          state?: string;
+          status?: string;
+          failedCheckCount?: number;
+          onFailure?: string;
+          retryAttemptedAt?: number;
+        };
+      }>;
+    };
+
+    const node = details.tree.find((entry) => entry.key === "agent:main:subagent:wave2");
+    expect(node?.latestProgress).toMatchObject({
+      phase: "Finalizing",
+      percentComplete: 95,
+      updatedAt: "2026-02-17T00:01:00.000Z",
+    });
+    expect(node?.completion).toMatchObject({
+      status: "partial",
+      confidence: "medium",
+      artifactCount: 1,
+      warningCount: 1,
+    });
+    expect(node?.verification).toMatchObject({
+      state: "failed",
+      status: "failed",
+      failedCheckCount: 1,
+      onFailure: "retry_once",
+      retryAttemptedAt: 1700000001000,
+    });
+
+    expect(getRunById("run-wave2")?.latestProgress).toMatchObject({
+      phase: "Finalizing",
+      percentComplete: 95,
+    });
   });
 });

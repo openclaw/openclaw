@@ -3,13 +3,16 @@ import type { OrchestratorRequestRecord } from "../orchestrator-request-registry
 import type { SubagentRunRecord } from "../subagent-registry.js";
 import { createSessionsTreeTool } from "./sessions-tree-tool.js";
 
-const { mockListAllSubagentRuns, mockListPendingRequestsForChild } = vi.hoisted(() => ({
-  mockListAllSubagentRuns: vi.fn<() => SubagentRunRecord[]>(() => []),
-  mockListPendingRequestsForChild: vi.fn<() => OrchestratorRequestRecord[]>(() => []),
-}));
+const { mockListAllSubagentRuns, mockListPendingRequestsForChild, mockUpdateRunRecord } =
+  vi.hoisted(() => ({
+    mockListAllSubagentRuns: vi.fn<() => SubagentRunRecord[]>(() => []),
+    mockListPendingRequestsForChild: vi.fn<() => OrchestratorRequestRecord[]>(() => []),
+    mockUpdateRunRecord: vi.fn(),
+  }));
 
 vi.mock("../subagent-registry.js", () => ({
   listAllSubagentRuns: mockListAllSubagentRuns,
+  updateRunRecord: mockUpdateRunRecord,
 }));
 
 vi.mock("../orchestrator-request-registry.js", () => ({
