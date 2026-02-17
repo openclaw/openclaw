@@ -36,11 +36,10 @@ describe("GatewayClient", () => {
     wsMockState.last = null;
     const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
     client.start();
+    const last = wsMockState.last as { url: unknown; opts: unknown } | null;
 
-    expect(wsMockState.last?.url).toBe("ws://127.0.0.1:1");
-    expect(wsMockState.last?.opts).toEqual(
-      expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }),
-    );
+    expect(last?.url).toBe("ws://127.0.0.1:1");
+    expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
   });
 });
 
@@ -153,7 +152,8 @@ describe("late-arriving invoke results", () => {
         context,
       });
 
-      const [ok, payload, error] = respond.mock.lastCall ?? [];
+      const [ok, rawPayload, error] = respond.mock.lastCall ?? [];
+      const payload = rawPayload as { ok?: boolean; ignored?: boolean } | undefined;
 
       // Late-arriving results return success instead of error to reduce log noise.
       expect(ok).toBe(true);

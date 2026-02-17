@@ -126,7 +126,8 @@ function createErrnoError(code: string) {
 }
 
 function mockWorkspaceStateRead(params: { onboardingCompletedAt?: string; errorCode?: string }) {
-  mocks.fsReadFile.mockImplementation(async (filePath: string | URL | number) => {
+  mocks.fsReadFile.mockImplementation(async (...args: unknown[]) => {
+    const filePath = args[0];
     if (String(filePath).endsWith("workspace-state.json")) {
       if (params.errorCode) {
         throw createErrnoError(params.errorCode);

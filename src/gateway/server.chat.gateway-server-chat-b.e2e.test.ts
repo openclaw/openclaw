@@ -270,7 +270,7 @@ describe("gateway server chat", () => {
   test("smoke: supports abort and idempotent completion", async () => {
     const tempDirs: string[] = [];
     const { server, ws } = await startServerWithClient();
-    const spy = vi.mocked(getReplyFromConfig);
+    const spy = vi.mocked(getReplyFromConfig) as unknown as ReturnType<typeof vi.fn>;
     let aborted = false;
 
     try {
