@@ -16,7 +16,7 @@ import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
 export type GatewayCronState = {
@@ -98,10 +98,15 @@ export function buildGatewayCronService(params: {
         agentId: params.agentId,
       });
     }
+    const candidate = toAgentStoreSessionKey({
+      agentId: params.agentId,
+      requestKey: requested,
+      mainKey: params.runtimeConfig.session?.mainKey,
+    });
     const canonical = canonicalizeMainSessionAlias({
       cfg: params.runtimeConfig,
       agentId: params.agentId,
-      sessionKey: requested,
+      sessionKey: candidate,
     });
     if (canonical !== "global") {
       const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
