@@ -84,8 +84,8 @@ describe("RawBody directive parsing", () => {
         (agentMocks.runEmbeddedPiAgent.mock.calls[0]?.[0] as { prompt?: string } | undefined)
           ?.prompt ?? "";
       expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
-      expect(prompt).toContain('"sender": "Peter"');
-      expect(prompt).toContain('"body": "hello"');
+      expect(prompt).toContain('"sender":"Peter"');
+      expect(prompt).toContain('"body":"hello"');
       expect(prompt).toContain("status please");
       expect(prompt).not.toContain("/think:high");
     });
