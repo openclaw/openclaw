@@ -1,0 +1,24 @@
+{
+  "name": "@six-fingered-man/governance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Governance types, identity, ledger, and permission contracts for The Six Fingered Man",
+  "type": "module",
+  "exports": {
+    ".": "./src/types.ts",
+    "./types": "./src/types.ts",
+    "./identity": "./src/identity/did.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^2.1.0",
+    "@noble/hashes": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
