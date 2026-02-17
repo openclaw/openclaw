@@ -178,7 +178,7 @@
   .field select {
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    font-size: 14px;
+    font-size: 16px; /* >= 16px prevents iOS Safari auto-zoom on focus */
   }
 
   /* Buttons */
