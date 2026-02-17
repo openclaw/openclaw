@@ -46,5 +46,6 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     service: resolveGatewayService(),
     renderStartHints: renderGatewayServiceStartHints,
     opts,
+    checkTokenDrift: true,
   });
 }
