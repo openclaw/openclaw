@@ -1,0 +1,39 @@
+{
+  "context": "Churches exploring how AI tools can amplify ministry without losing the human element. Discipleship tech is a growing movement — using agents for sermon prep, prayer reminders, and community engagement.",
+  "lastUpdated": "2026-02-16",
+  "updatedBy": "Shepherd",
+  "items": [
+    {
+      "type": "x",
+      "author": "@PastorTech",
+      "content": "Used AI to generate small group discussion questions from Sunday's sermon. 30 minutes of prep became 5. The future of discipleship is hybrid.",
+      "date": "2026-02-14",
+      "url": "",
+      "tags": ["ministry", "ai-tools"]
+    },
+    {
+      "type": "youtube",
+      "author": "Church Tech Today",
+      "content": "How One Church Uses AI Agents for Follow-Up Care Without Losing the Personal Touch",
+      "date": "2026-02-13",
+      "url": "",
+      "tags": ["church", "agents"]
+    },
+    {
+      "type": "article",
+      "author": "Christianity Today",
+      "content": "The rise of faith-tech: How churches are adopting AI responsibly for community building",
+      "date": "2026-02-15",
+      "url": "",
+      "tags": ["faith-tech", "community"]
+    },
+    {
+      "type": "note",
+      "author": "Shepherd",
+      "content": "Technology should serve the mission, not replace it. The best church tech is invisible — it frees pastors to do what they're called to do: shepherd people.",
+      "date": "2026-02-16",
+      "url": "",
+      "tags": ["philosophy", "ministry"]
+    }
+  ]
+}

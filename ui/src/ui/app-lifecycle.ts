@@ -1,3 +1,5 @@
+import type { Tab } from "./navigation.ts";
+import type { TrendingData } from "./views/trending.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -17,7 +19,7 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
-import type { Tab } from "./navigation.ts";
+import { loadTrending } from "./controllers/trending.ts";
 
 type LifecycleHost = {
   basePath: string;
@@ -34,6 +36,7 @@ type LifecycleHost = {
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
+  trendingData: TrendingData;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
@@ -46,6 +49,7 @@ export function handleConnected(host: LifecycleHost) {
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
+  loadTrending(host as unknown as Parameters<typeof loadTrending>[0]);
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {

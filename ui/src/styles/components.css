@@ -2104,3 +2104,228 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ===========================================
+   Trending - Curated agent feeds
+   =========================================== */
+
+.tr-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.tr-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--secondary);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.tr-tab:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.tr-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.tr-tab-emoji {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.tr-tab-count {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: var(--radius-full);
+  padding: 2px 7px;
+  background: rgba(255, 255, 255, 0.15);
+  line-height: 1;
+}
+
+.tr-tab.active .tr-tab-count {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+:root[data-theme="light"] .tr-tab-count {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="light"] .tr-tab.active .tr-tab-count {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.tr-context {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  padding: 16px 20px 16px 24px;
+  margin-bottom: 16px;
+  animation: rise 0.3s var(--ease-out) backwards;
+  overflow: hidden;
+}
+
+.tr-context::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.tr-context-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.tr-context-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.tr-feed {
+  display: grid;
+  gap: 8px;
+  container-type: inline-size;
+}
+
+.tr-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tr-item {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tr-type-color, var(--border));
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  background: var(--card);
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+  animation: rise 0.3s var(--ease-out) backwards;
+}
+
+.tr-item:hover {
+  border-color: var(--border-strong);
+}
+
+.tr-item--clickable {
+  cursor: pointer;
+}
+
+.tr-item--clickable:hover {
+  background: var(--bg-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.tr-item-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tr-item-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tr-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.tr-item-author {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-strong);
+}
+
+.tr-item-date {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.tr-item-content {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.tr-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.tr-tag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  background: var(--secondary);
+}
+
+@container (max-width: 480px) {
+  .tr-item {
+    grid-template-columns: 1fr;
+  }
+
+  .tr-item-icon {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+
+  .tr-tabs {
+    gap: 6px;
+  }
+
+  .tr-tab {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+}

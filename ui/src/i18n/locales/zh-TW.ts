@@ -24,6 +24,7 @@ export const zh_TW: TranslationMap = {
   tabs: {
     agents: "代理",
     overview: "概覽",
+    trending: "Trending",
     channels: "頻道",
     instances: "實例",
     sessions: "會話",
@@ -39,6 +40,7 @@ export const zh_TW: TranslationMap = {
   subtitles: {
     agents: "管理代理工作區、工具和身份。",
     overview: "網關狀態、入口點和快速健康讀取。",
+    trending: "Curated by your agents — crypto, AI, and faith.",
     channels: "管理頻道和設置。",
     instances: "來自已連接客戶端和節點的在線信號。",
     sessions: "檢查活動會話並調整每個會話的默認設置。",
