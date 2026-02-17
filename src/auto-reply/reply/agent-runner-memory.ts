@@ -19,7 +19,9 @@ import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
+  resolvePeriodicExtractionSettings,
   shouldRunMemoryFlush,
+  shouldRunPeriodicExtraction,
 } from "./memory-flush.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -166,6 +168,127 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+  }
+
+  // --- Periodic fact extraction (independent of compaction threshold) ---
+  activeSessionEntry = await runPeriodicExtractionIfNeeded({
+    ...params,
+    sessionEntry: activeSessionEntry,
+  });
+
+  return activeSessionEntry;
+}
+
+async function runPeriodicExtractionIfNeeded(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  opts?: GetReplyOptions;
+  defaultModel: string;
+  resolvedVerboseLevel: VerboseLevel;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  isHeartbeat: boolean;
+}): Promise<SessionEntry | undefined> {
+  if (params.isHeartbeat) {
+    return params.sessionEntry;
+  }
+
+  const extractionSettings = resolvePeriodicExtractionSettings(params.cfg);
+  if (!extractionSettings) {
+    return params.sessionEntry;
+  }
+
+  const entry =
+    params.sessionEntry ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  if (!shouldRunPeriodicExtraction({ entry, settings: extractionSettings })) {
+    return params.sessionEntry;
+  }
+
+  let activeSessionEntry = params.sessionEntry;
+  const flushRunId = crypto.randomUUID();
+  if (params.sessionKey) {
+    registerAgentRunContext(flushRunId, {
+      sessionKey: params.sessionKey,
+      verboseLevel: params.resolvedVerboseLevel,
+    });
+  }
+
+  const flushSystemPrompt = [
+    params.followupRun.run.extraSystemPrompt,
+    extractionSettings.systemPrompt,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  try {
+    await runWithModelFallback({
+      cfg: params.followupRun.run.config,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      agentDir: params.followupRun.run.agentDir,
+      fallbacksOverride: resolveAgentModelFallbacksOverride(
+        params.followupRun.run.config,
+        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
+      ),
+      run: (provider, model) => {
+        const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
+        const embeddedContext = buildEmbeddedContextFromTemplate({
+          run: params.followupRun.run,
+          sessionCtx: params.sessionCtx,
+          hasRepliedRef: params.opts?.hasRepliedRef,
+        });
+        const senderContext = buildTemplateSenderContext(params.sessionCtx);
+        return runEmbeddedPiAgent({
+          ...embeddedContext,
+          ...senderContext,
+          sessionFile: params.followupRun.run.sessionFile,
+          workspaceDir: params.followupRun.run.workspaceDir,
+          agentDir: params.followupRun.run.agentDir,
+          config: params.followupRun.run.config,
+          skillsSnapshot: params.followupRun.run.skillsSnapshot,
+          prompt: resolveMemoryFlushPromptForRun({
+            prompt: extractionSettings.prompt,
+            cfg: params.cfg,
+          }),
+          extraSystemPrompt: flushSystemPrompt,
+          ownerNumbers: params.followupRun.run.ownerNumbers,
+          enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
+          provider,
+          model,
+          ...authProfile,
+          thinkLevel: params.followupRun.run.thinkLevel,
+          verboseLevel: params.followupRun.run.verboseLevel,
+          reasoningLevel: params.followupRun.run.reasoningLevel,
+          execOverrides: params.followupRun.run.execOverrides,
+          bashElevated: params.followupRun.run.bashElevated,
+          timeoutMs: params.followupRun.run.timeoutMs,
+          runId: flushRunId,
+        });
+      },
+    });
+
+    if (params.storePath && params.sessionKey) {
+      try {
+        const updatedEntry = await updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          update: async () => ({
+            lastPeriodicExtractionAt: Date.now(),
+          }),
+        });
+        if (updatedEntry) {
+          activeSessionEntry = updatedEntry;
+        }
+      } catch (err) {
+        logVerbose(`failed to persist periodic extraction metadata: ${String(err)}`);
+      }
+    }
+  } catch (err) {
+    logVerbose(`periodic fact extraction run failed: ${String(err)}`);
   }
 
   return activeSessionEntry;

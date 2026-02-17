@@ -310,4 +310,21 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+  /**
+   * Periodic fact extraction: run a lightweight memory flush at regular intervals
+   * (time-based) to extract key facts, decisions, and preferences from recent conversation.
+   * Disabled by default.
+   */
+  periodicExtraction?: AgentPeriodicFactExtractionConfig;
+};
+
+export type AgentPeriodicFactExtractionConfig = {
+  /** Enable periodic fact extraction (default: false). */
+  enabled?: boolean;
+  /** Minimum interval between extractions (duration string, e.g. "30m", "1h"). Default: "30m". */
+  every?: string;
+  /** Custom prompt for fact extraction. Uses a structured extraction prompt by default. */
+  prompt?: string;
+  /** Custom system prompt for the extraction turn. */
+  systemPrompt?: string;
 };

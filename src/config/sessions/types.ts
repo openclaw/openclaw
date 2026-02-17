@@ -93,6 +93,8 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  /** Timestamp (ms) of the last periodic fact extraction run. */
+  lastPeriodicExtractionAt?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
