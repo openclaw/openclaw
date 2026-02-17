@@ -19,11 +19,12 @@ RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
 
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=node:node ui/package.json ./ui/package.json
+COPY --chown=node:node extensions ./extensions
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 
 USER node
-RUN pnpm install --frozen-lockfile
+RUN pnpm -r install --frozen-lockfile
 
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
