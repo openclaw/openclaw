@@ -1,6 +1,20 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createPgClient, ensureSchema, upsertConversation, insertMessage } from "./db.js";
 
+/**
+ * Derive the messaging channel from a session key.
+ * Session keys follow the pattern "agent:{agentId}:{channel}:{userId}".
+ * Falls back to "unknown" if the key format is unexpected.
+ */
+function deriveChannel(sessionKey: string): string {
+  const parts = sessionKey.split(":");
+  // Standard format: agent:main:telegram:user123 → "telegram"
+  if (parts.length >= 3 && parts[0] === "agent") {
+    return parts[2];
+  }
+  return "unknown";
+}
+
 const persistPostgresPlugin = {
   id: "persist-postgres",
   name: "Persist (PostgreSQL)",
@@ -51,7 +65,7 @@ const persistPostgresPlugin = {
           const sessionKey = ctx?.sessionKey ?? "unknown";
           const conv = await upsertConversation(sql, {
             sessionKey,
-            channel: "gateway",
+            channel: deriveChannel(sessionKey),
             lastMessageAt: new Date(),
           });
           await insertMessage(sql, {
@@ -83,7 +97,7 @@ const persistPostgresPlugin = {
           const sessionKey = ctx?.sessionKey ?? "unknown";
           const conv = await upsertConversation(sql, {
             sessionKey,
-            channel: "gateway",
+            channel: deriveChannel(sessionKey),
             lastMessageAt: new Date(),
           });
           const content =

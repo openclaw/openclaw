@@ -50,7 +50,7 @@ export async function ensureSchema(sql: postgres.Sql) {
   await sql`
     CREATE TABLE IF NOT EXISTS lp_messages (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      conversation_id UUID REFERENCES lp_conversations(id) ON DELETE CASCADE,
+      conversation_id UUID NOT NULL REFERENCES lp_conversations(id) ON DELETE CASCADE,
       role VARCHAR(20) NOT NULL,
       content TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now(),

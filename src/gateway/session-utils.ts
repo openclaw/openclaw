@@ -825,6 +825,10 @@ export function listSessionsFromStore(params: {
   }
 
   // Absolute timestamp range filters (ms since epoch).
+  // Sessions without createdAt (pre-existing before createdAt tracking) fall back
+  // to epoch 0, so createdAfter filters correctly exclude them and createdBefore
+  // filters include them. This is intentional — see "sessions without createdAt
+  // are treated as createdAt=0" test.
   if (updatedAfter !== undefined) {
     sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= updatedAfter);
   }
