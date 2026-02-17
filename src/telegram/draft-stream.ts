@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
@@ -9,7 +10,9 @@ export type TelegramDraftStream = {
   flush: () => Promise<void>;
   messageId: () => number | undefined;
   clear: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
+  /** Reset internal state so the next update creates a new message instead of editing. */
+  forceNewMessage: () => void;
 };
 
 export function createTelegramDraftStream(params: {
@@ -17,7 +20,10 @@ export function createTelegramDraftStream(params: {
   chatId: number;
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
+  replyToMessageId?: number;
   throttleMs?: number;
+  /** Minimum chars before sending first message (debounce for push notifications) */
+  minInitialChars?: number;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -26,24 +32,27 @@ export function createTelegramDraftStream(params: {
     TELEGRAM_STREAM_MAX_CHARS,
   );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
+  const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
+  const replyParams =
+    params.replyToMessageId != null
+      ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
+      : threadParams;
 
   let streamMessageId: number | undefined;
   let lastSentText = "";
-  let lastSentAt = 0;
-  let pendingText = "";
-  let inFlightPromise: Promise<void> | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
+  let isFinal = false;
 
-  const sendOrEditStreamMessage = async (text: string) => {
-    if (stopped) {
-      return;
+  const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
+    // Allow final flush even if stopped (e.g., after clear()).
+    if (stopped && !isFinal) {
+      return false;
     }
     const trimmed = text.trimEnd();
     if (!trimmed) {
-      return;
+      return false;
     }
     if (trimmed.length > maxChars) {
       // Telegram text messages/edits cap at 4096 chars.
@@ -52,74 +61,65 @@ export function createTelegramDraftStream(params: {
       params.warn?.(
         `telegram stream preview stopped (text length ${trimmed.length} > ${maxChars})`,
       );
-      return;
+      return false;
     }
     if (trimmed === lastSentText) {
-      return;
+      return true;
     }
+
+    // Debounce first preview send for better push notification quality.
+    if (typeof streamMessageId !== "number" && minInitialChars != null && !isFinal) {
+      if (trimmed.length < minInitialChars) {
+        return false;
+      }
+    }
+
     lastSentText = trimmed;
-    lastSentAt = Date.now();
     try {
       if (typeof streamMessageId === "number") {
         await params.api.editMessageText(chatId, streamMessageId, trimmed);
-        return;
+        return true;
       }
-      const sent = await params.api.sendMessage(chatId, trimmed, threadParams);
+      const sent = await params.api.sendMessage(chatId, trimmed, replyParams);
       const sentMessageId = sent?.message_id;
       if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
         stopped = true;
         params.warn?.("telegram stream preview stopped (missing message id from sendMessage)");
-        return;
+        return false;
       }
       streamMessageId = Math.trunc(sentMessageId);
+      return true;
     } catch (err) {
       stopped = true;
       params.warn?.(
         `telegram stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return false;
     }
   };
 
-  const flush = async () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
+  const loop = createDraftStreamLoop({
+    throttleMs,
+    isStopped: () => stopped,
+    sendOrEditStreamMessage,
+  });
+
+  const update = (text: string) => {
+    if (stopped || isFinal) {
+      return;
     }
-    while (!stopped) {
-      if (inFlightPromise) {
-        await inFlightPromise;
-        continue;
-      }
-      const text = pendingText;
-      const trimmed = text.trim();
-      if (!trimmed) {
-        pendingText = "";
-        return;
-      }
-      pendingText = "";
-      const current = sendOrEditStreamMessage(text).finally(() => {
-        if (inFlightPromise === current) {
-          inFlightPromise = undefined;
-        }
-      });
-      inFlightPromise = current;
-      await current;
-      if (!pendingText) {
-        return;
-      }
-    }
+    loop.update(text);
+  };
+
+  const stop = async (): Promise<void> => {
+    isFinal = true;
+    await loop.flush();
   };
 
   const clear = async () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-    pendingText = "";
     stopped = true;
-    if (inFlightPromise) {
-      await inFlightPromise;
-    }
+    loop.stop();
+    await loop.waitForInFlight();
     const messageId = streamMessageId;
     streamMessageId = undefined;
     if (typeof messageId !== "number") {
@@ -134,48 +134,20 @@ export function createTelegramDraftStream(params: {
     }
   };
 
-  const schedule = () => {
-    if (timer) {
-      return;
-    }
-    const delay = Math.max(0, throttleMs - (Date.now() - lastSentAt));
-    timer = setTimeout(() => {
-      void flush();
-    }, delay);
-  };
-
-  const update = (text: string) => {
-    if (stopped) {
-      return;
-    }
-    pendingText = text;
-    if (inFlightPromise) {
-      schedule();
-      return;
-    }
-    if (!timer && Date.now() - lastSentAt >= throttleMs) {
-      void flush();
-      return;
-    }
-    schedule();
-  };
-
-  const stop = () => {
-    stopped = true;
-    pendingText = "";
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+  const forceNewMessage = () => {
+    streamMessageId = undefined;
+    lastSentText = "";
+    loop.resetPending();
   };
 
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
     update,
-    flush,
+    flush: loop.flush,
     messageId: () => streamMessageId,
     clear,
     stop,
+    forceNewMessage,
   };
 }

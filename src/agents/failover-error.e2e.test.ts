@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coerceToFailoverError,
   describeFailoverError,
+  isTimeoutError,
   resolveFailoverReasonFromError,
 } from "./failover-error.js";
 
@@ -25,6 +26,22 @@ describe("failover-error", () => {
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+  });
+
+  it("infers timeout from abort stop-reason messages", () => {
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
+      "timeout",
+    );
+    expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
+  });
+
+  it("treats AbortError reason=abort as timeout", () => {
+    const err = Object.assign(new Error("aborted"), {
+      name: "AbortError",
+      reason: "reason: abort",
+    });
+    expect(isTimeoutError(err)).toBe(true);
   });
 
   it("coerces failover-worthy errors into FailoverError with metadata", () => {

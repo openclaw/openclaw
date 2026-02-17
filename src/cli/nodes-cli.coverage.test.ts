@@ -1,7 +1,17 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const callGateway = vi.fn(async (opts: { method?: string }) => {
+type NodeInvokeCall = {
+  method?: string;
+  params?: {
+    idempotencyKey?: string;
+    command?: string;
+    params?: unknown;
+    timeoutMs?: number;
+  };
+};
+
+const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
     return {
       nodes: [
@@ -62,7 +72,7 @@ const defaultRuntime = {
 };
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts as { method?: string }),
+  callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
@@ -76,6 +86,9 @@ vi.mock("../config/config.js", () => ({
 
 describe("nodes-cli coverage", () => {
   let registerNodesCli: (program: Command) => void;
+
+  const getNodeInvokeCall = () =>
+    callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0] as NodeInvokeCall;
 
   beforeAll(async () => {
     ({ registerNodesCli } = await import("./nodes-cli.js"));
@@ -114,7 +127,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.idempotencyKey).toBe("rk_test");
@@ -143,7 +156,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.idempotencyKey).toBe("rk_test");
@@ -179,7 +192,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("system.notify");
@@ -216,7 +229,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("location.get");

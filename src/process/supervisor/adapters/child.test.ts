@@ -21,11 +21,30 @@ function createStubChild(pid = 1234) {
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
-  child.pid = pid;
-  child.killed = false;
+  Object.defineProperty(child, "pid", { value: pid, configurable: true });
+  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   const killMock = vi.fn(() => true);
   child.kill = killMock as ChildProcess["kill"];
   return { child, killMock };
+}
+
+async function createAdapterHarness(params?: {
+  pid?: number;
+  argv?: string[];
+  env?: NodeJS.ProcessEnv;
+}) {
+  const { createChildAdapter } = await import("./child.js");
+  const { child, killMock } = createStubChild(params?.pid);
+  spawnWithFallbackMock.mockResolvedValue({
+    child,
+    usedFallback: false,
+  });
+  const adapter = await createChildAdapter({
+    argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
+    env: params?.env,
+    stdinMode: "pipe-open",
+  });
+  return { adapter, killMock };
 }
 
 describe("createChildAdapter", () => {
@@ -35,23 +54,21 @@ describe("createChildAdapter", () => {
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {
-    const { child, killMock } = createStubChild(4321);
-    spawnWithFallbackMock.mockResolvedValue({
-      child,
-      usedFallback: false,
-    });
-    const { createChildAdapter } = await import("./child.js");
-    const adapter = await createChildAdapter({
-      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
-      stdinMode: "pipe-open",
-    });
+    const { adapter, killMock } = await createAdapterHarness({ pid: 4321 });
 
     const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
       options?: { detached?: boolean };
       fallbacks?: Array<{ options?: { detached?: boolean } }>;
     };
-    expect(spawnArgs.options?.detached).toBe(true);
-    expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+    // On Windows, detached defaults to false (headless Scheduled Task compat);
+    // on POSIX, detached is true with a no-detach fallback.
+    if (process.platform === "win32") {
+      expect(spawnArgs.options?.detached).toBe(false);
+      expect(spawnArgs.fallbacks).toEqual([]);
+    } else {
+      expect(spawnArgs.options?.detached).toBe(true);
+      expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+    }
 
     adapter.kill();
 
@@ -60,16 +77,7 @@ describe("createChildAdapter", () => {
   });
 
   it("uses direct child.kill for non-SIGKILL signals", async () => {
-    const { child, killMock } = createStubChild(7654);
-    spawnWithFallbackMock.mockResolvedValue({
-      child,
-      usedFallback: false,
-    });
-    const { createChildAdapter } = await import("./child.js");
-    const adapter = await createChildAdapter({
-      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
-      stdinMode: "pipe-open",
-    });
+    const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
     adapter.kill("SIGTERM");
 
@@ -78,15 +86,9 @@ describe("createChildAdapter", () => {
   });
 
   it("keeps inherited env when no override env is provided", async () => {
-    const { child } = createStubChild(3333);
-    spawnWithFallbackMock.mockResolvedValue({
-      child,
-      usedFallback: false,
-    });
-    const { createChildAdapter } = await import("./child.js");
-    await createChildAdapter({
+    await createAdapterHarness({
+      pid: 3333,
       argv: ["node", "-e", "process.exit(0)"],
-      stdinMode: "pipe-open",
     });
 
     const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
@@ -96,16 +98,10 @@ describe("createChildAdapter", () => {
   });
 
   it("passes explicit env overrides as strings", async () => {
-    const { child } = createStubChild(4444);
-    spawnWithFallbackMock.mockResolvedValue({
-      child,
-      usedFallback: false,
-    });
-    const { createChildAdapter } = await import("./child.js");
-    await createChildAdapter({
+    await createAdapterHarness({
+      pid: 4444,
       argv: ["node", "-e", "process.exit(0)"],
       env: { FOO: "bar", COUNT: "12", DROP_ME: undefined },
-      stdinMode: "pipe-open",
     });
 
     const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {

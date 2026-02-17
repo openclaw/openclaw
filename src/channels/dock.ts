@@ -1,17 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  ChannelCapabilities,
-  ChannelCommandAdapter,
-  ChannelElevatedAdapter,
-  ChannelGroupAdapter,
-  ChannelId,
-  ChannelAgentPromptAdapter,
-  ChannelMentionAdapter,
-  ChannelPlugin,
-  ChannelThreadingContext,
-  ChannelThreadingAdapter,
-  ChannelThreadingToolContext,
-} from "./plugins/types.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
@@ -41,6 +28,19 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
+import type {
+  ChannelCapabilities,
+  ChannelCommandAdapter,
+  ChannelElevatedAdapter,
+  ChannelGroupAdapter,
+  ChannelId,
+  ChannelAgentPromptAdapter,
+  ChannelMentionAdapter,
+  ChannelPlugin,
+  ChannelThreadingContext,
+  ChannelThreadingAdapter,
+  ChannelThreadingToolContext,
+} from "./plugins/types.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
 export type ChannelDock = {
@@ -81,6 +81,21 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
+
+const formatDiscordAllowFrom = (allowFrom: Array<string | number>) =>
+  allowFrom
+    .map((entry) =>
+      String(entry)
+        .trim()
+        .replace(/^<@!?/, "")
+        .replace(/>$/, "")
+        .replace(/^discord:/i, "")
+        .replace(/^user:/i, "")
+        .replace(/^pk:/i, "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
 
 function buildDirectOrGroupThreadToolContext(params: {
   context: ChannelThreadingContext;
@@ -218,7 +233,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           String(entry),
         );
       },
-      formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
+      formatAllowFrom: ({ allowFrom }) => formatDiscordAllowFrom(allowFrom),
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,

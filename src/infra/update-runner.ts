@@ -705,14 +705,47 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     const depsStep = await runStep(step("deps install", managerInstallArgs(manager), gitRoot));
     steps.push(depsStep);
+    if (depsStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "deps-install-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const buildStep = await runStep(step("build", managerScriptArgs(manager, "build"), gitRoot));
     steps.push(buildStep);
+    if (buildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const uiBuildStep = await runStep(
       step("ui:build", managerScriptArgs(manager, "ui:build"), gitRoot),
     );
     steps.push(uiBuildStep);
+    if (uiBuildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "ui-build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const doctorEntry = path.join(gitRoot, "openclaw.mjs");
     const doctorEntryExists = await fs
@@ -739,7 +772,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       };
     }
 
-    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive"];
+    // Use --fix so that doctor auto-strips unknown config keys introduced by
+    // schema changes between versions, preventing a startup validation crash.
+    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive", "--fix"];
     const doctorStep = await runStep(
       step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
     );

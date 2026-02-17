@@ -1,4 +1,3 @@
-import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
@@ -33,6 +32,7 @@ import {
   safeParseJson,
   uniqueSortedStrings,
 } from "./nodes.helpers.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   if (entry.role === "node") {

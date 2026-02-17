@@ -3,44 +3,20 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { SessionConfig } from "../types.base.js";
-import type { SessionEntry } from "./types.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
   updateSessionStore,
 } from "../sessions.js";
-import { deriveSessionMetaPatch } from "./metadata.js";
+import type { SessionConfig } from "../types.base.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  resolveMirroredTranscriptText,
-} from "./transcript.js";
-
-describe("deriveSessionMetaPatch", () => {
-  it("captures origin + group metadata", () => {
-    const patch = deriveSessionMetaPatch({
-      ctx: {
-        Provider: "whatsapp",
-        ChatType: "group",
-        GroupSubject: "Family",
-        From: "123@g.us",
-      },
-      sessionKey: "agent:main:whatsapp:group:123@g.us",
-    });
-
-    expect(patch?.origin?.label).toBe("Family id:123@g.us");
-    expect(patch?.origin?.provider).toBe("whatsapp");
-    expect(patch?.subject).toBe("Family");
-    expect(patch?.channel).toBe("whatsapp");
-    expect(patch?.groupId).toBe("123@g.us");
-  });
-});
+import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+import type { SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -67,19 +43,6 @@ describe("session path safety", () => {
         { sessionsDir },
       ),
     ).toThrow(/within sessions directory/);
-  });
-
-  it("uses extracted agent fallback for custom per-agent store roots", () => {
-    const mainSessionsDir = "/srv/custom/agents/main/sessions";
-    const opsSessionFile = "/srv/custom/agents/ops/sessions/abc-123.jsonl";
-
-    const resolved = resolveSessionFilePath(
-      "sess-1",
-      { sessionFile: opsSessionFile },
-      { sessionsDir: mainSessionsDir },
-    );
-
-    expect(resolved).toBe(path.resolve(opsSessionFile));
   });
 });
 
@@ -183,16 +146,6 @@ describe("session store lock (Promise chain mutex)", () => {
   });
 });
 
-describe("resolveMirroredTranscriptText", () => {
-  it("prefers media filenames over text", () => {
-    const result = resolveMirroredTranscriptText({
-      text: "caption here",
-      mediaUrls: ["https://example.com/files/report.pdf?sig=123"],
-    });
-    expect(result).toBe("report.pdf");
-  });
-});
-
 describe("appendAssistantMessageToSessionTranscript", () => {
   let tempDir: string;
   let storePath: string;
@@ -230,6 +183,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(fs.existsSync(result.sessionFile)).toBe(true);
+      const sessionFileMode = fs.statSync(result.sessionFile).mode & 0o777;
+      if (process.platform !== "win32") {
+        expect(sessionFileMode).toBe(0o600);
+      }
 
       const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
       expect(lines.length).toBe(2);
