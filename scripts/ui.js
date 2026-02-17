@@ -50,8 +50,16 @@ function resolveRunner() {
   return null;
 }
 
+function winShell(cmd, args) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(cmd)) {
+    return { cmd: "cmd.exe", args: ["/c", cmd, ...args] };
+  }
+  return { cmd, args };
+}
+
 function run(cmd, args) {
-  const child = spawn(cmd, args, {
+  const resolved = winShell(cmd, args);
+  const child = spawn(resolved.cmd, resolved.args, {
     cwd: uiDir,
     stdio: "inherit",
     env: process.env,
@@ -65,7 +73,8 @@ function run(cmd, args) {
 }
 
 function runSync(cmd, args, envOverride) {
-  const result = spawnSync(cmd, args, {
+  const resolved = winShell(cmd, args);
+  const result = spawnSync(resolved.cmd, resolved.args, {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
