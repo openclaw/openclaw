@@ -924,6 +924,9 @@ export async function runEmbeddedAttempt(
         ) {
           timedOutDuringCompaction = true;
         }
+        if (timeout && subscription.isToolExecutionInFlight()) {
+          timedOutDuringToolExecution = true;
+        }
         abortRun(timeout, reason);
       };
       if (params.abortSignal) {
