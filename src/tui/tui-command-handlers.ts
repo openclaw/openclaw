@@ -1,29 +1,29 @@
-import { randomUUID } from "node:crypto";
 import type { Component, TUI } from "@mariozechner/pi-tui";
-import {
-  formatThinkingLevels,
-  normalizeUsageDisplay,
-  resolveResponseUsageMode,
-} from "../auto-reply/thinking.js";
+import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
-import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
-import {
-  createFilterableSelectList,
-  createSearchableSelectList,
-  createSettingsList,
-} from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
-import { formatStatusSummary } from "./tui-status-summary.js";
-import { extractImagePaths, loadImageAttachments } from "./tui-image-extract.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
+import {
+  formatThinkingLevels,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../auto-reply/thinking.js";
+import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { helpText, parseCommand } from "./commands.js";
+import {
+  createFilterableSelectList,
+  createSearchableSelectList,
+  createSettingsList,
+} from "./components/selectors.js";
+import { extractImagePaths, loadImageAttachments } from "./tui-image-extract.js";
+import { formatStatusSummary } from "./tui-status-summary.js";
 
 type CommandHandlerContext = {
   client: GatewayChatClient;
@@ -449,12 +449,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("usage: /image <path>");
           break;
         }
+        let imgRunId: string | undefined;
         try {
           const attachments = await loadImageAttachments([args]);
           chatLog.addSystem(`\u{1F4CE} 1 image attached: ${attachments[0].fileName}`);
           chatLog.addUser(`[image: ${attachments[0].fileName}]`);
           tui.requestRender();
-          const imgRunId = randomUUID();
+          imgRunId = randomUUID();
           noteLocalRunId(imgRunId);
           state.activeChatRunId = imgRunId;
           setActivityStatus("sending");
@@ -469,10 +470,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           });
           setActivityStatus("waiting");
         } catch (err) {
-          if (state.activeChatRunId) {
-            forgetLocalRunId?.(state.activeChatRunId);
+          if (imgRunId && state.activeChatRunId === imgRunId) {
+            forgetLocalRunId?.(imgRunId);
+            state.activeChatRunId = null;
           }
-          state.activeChatRunId = null;
           chatLog.addSystem(`image failed: ${String(err)}`);
           setActivityStatus("error");
         }
@@ -497,6 +498,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const sendMessage = async (text: string) => {
+    let runId: string | undefined;
     try {
       const { cleanText, paths } = extractImagePaths(text);
       let attachments: Array<{ content: string; mimeType: string; fileName: string }> | undefined;
@@ -509,7 +511,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const message = cleanText || text;
       chatLog.addUser(message);
       tui.requestRender();
-      const runId = randomUUID();
+      runId = randomUUID();
       noteLocalRunId(runId);
       state.activeChatRunId = runId;
       setActivityStatus("sending");
@@ -524,10 +526,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       });
       setActivityStatus("waiting");
     } catch (err) {
-      if (state.activeChatRunId) {
+      if (runId && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
+        state.activeChatRunId = null;
       }
-      state.activeChatRunId = null;
       chatLog.addSystem(`send failed: ${String(err)}`);
       setActivityStatus("error");
     }
