@@ -4,11 +4,11 @@ import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 
 const log = createSubsystemLogger("plugins");
 
-export function resolvePluginProviders(params: {
+export async function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
-}): ProviderPlugin[] {
-  const registry = loadOpenClawPlugins({
+}): Promise<ProviderPlugin[]> {
+  const registry = await loadOpenClawPlugins({
     config: params.config,
     workspaceDir: params.workspaceDir,
     logger: {

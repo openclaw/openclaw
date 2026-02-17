@@ -40,12 +40,12 @@ function isOptionalToolAllowed(params: {
   return params.allowlist.has("group:plugins");
 }
 
-export function resolvePluginTools(params: {
+export async function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
-}): AnyAgentTool[] {
-  const registry = loadOpenClawPlugins({
+}): Promise<AnyAgentTool[]> {
+  const registry = await loadOpenClawPlugins({
     config: params.context.config,
     workspaceDir: params.context.workspaceDir,
     logger: {

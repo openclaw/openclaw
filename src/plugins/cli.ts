@@ -8,7 +8,7 @@ import { loadOpenClawPlugins } from "./loader.js";
 
 const log = createSubsystemLogger("plugins");
 
-export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig) {
+export async function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig) {
   const config = cfg ?? loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
@@ -17,7 +17,7 @@ export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig
     error: (msg: string) => log.error(msg),
     debug: (msg: string) => log.debug(msg),
   };
-  const registry = loadOpenClawPlugins({
+  const registry = await loadOpenClawPlugins({
     config,
     workspaceDir,
     logger,

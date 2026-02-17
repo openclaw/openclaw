@@ -11,17 +11,17 @@ export type PluginStatusReport = PluginRegistry & {
 
 const log = createSubsystemLogger("plugins");
 
-export function buildPluginStatusReport(params?: {
+export async function buildPluginStatusReport(params?: {
   config?: ReturnType<typeof loadConfig>;
   workspaceDir?: string;
-}): PluginStatusReport {
+}): Promise<PluginStatusReport> {
   const config = params?.config ?? loadConfig();
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
       resolveDefaultAgentWorkspaceDir());
 
-  const registry = loadOpenClawPlugins({
+  const registry = await loadOpenClawPlugins({
     config,
     workspaceDir,
     logger: {
