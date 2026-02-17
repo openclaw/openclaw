@@ -56,11 +56,6 @@ RUN chown -R node:node /app
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
-# Support custom init scripts mounted at /openclaw-init.d/
-# Scripts must be executable. They run before the gateway starts.
-# Example: docker run -v ./my-scripts:/openclaw-init.d:ro openclaw
-ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
-
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #
