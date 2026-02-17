@@ -693,7 +693,7 @@ describe("exec approvals node host allowlist check", () => {
 
 describe("exec approvals default agent migration", () => {
   it("migrates legacy default agent entries to main", () => {
-    const file = {
+    const file: ExecApprovalsFile = {
       version: 1,
       agents: {
         default: { allowlist: [{ pattern: "/bin/legacy" }] },
@@ -706,7 +706,7 @@ describe("exec approvals default agent migration", () => {
   });
 
   it("prefers main agent settings when both main and default exist", () => {
-    const file = {
+    const file: ExecApprovalsFile = {
       version: 1,
       agents: {
         main: { ask: "always", allowlist: [{ pattern: "/bin/main" }] },

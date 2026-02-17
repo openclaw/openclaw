@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   logDebug: vi.fn(),
 }));
 const { createService, shutdown, registerUnhandledRejectionHandler, logWarn, logDebug } = mocks;
+const getLoggerInfo = vi.fn();
 
 const asString = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
@@ -81,7 +82,7 @@ describe("gateway bonjour advertiser", () => {
   beforeEach(() => {
     vi.spyOn(logging, "getLogger").mockReturnValue({
       info: (...args: unknown[]) => getLoggerInfo(...args),
-    });
+    } as unknown as ReturnType<typeof logging.getLogger>);
   });
 
   afterEach(() => {
