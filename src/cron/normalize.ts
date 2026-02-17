@@ -131,7 +131,7 @@ function coercePayload(payload: UnknownRecord) {
   }
   if ("timeoutSeconds" in next) {
     if (typeof next.timeoutSeconds === "number" && Number.isFinite(next.timeoutSeconds)) {
-      next.timeoutSeconds = Math.max(1, Math.floor(next.timeoutSeconds));
+      next.timeoutSeconds = Math.max(0, Math.floor(next.timeoutSeconds));
     } else {
       delete next.timeoutSeconds;
     }
