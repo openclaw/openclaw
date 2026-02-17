@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
@@ -19,6 +18,7 @@ import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parseNodeList } from "./format.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 type NodesRunOpts = NodesRpcOpts & {
   node?: string;

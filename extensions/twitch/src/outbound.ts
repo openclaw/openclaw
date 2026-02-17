@@ -5,13 +5,13 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
+import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   OutboundDeliveryResult,
 } from "./types.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
-import { sendMessageTwitchInternal } from "./send.js";
 import { chunkTextForTwitch } from "./utils/markdown.js";
 import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 

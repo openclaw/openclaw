@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
+import { readStringParam } from "../../agents/tools/common.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
-import { readStringParam } from "../../agents/tools/common.js";
 import { extensionForMime } from "../../media/mime.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
@@ -272,6 +272,42 @@ export async function normalizeSandboxMediaList(params: {
   return normalized;
 }
 
+async function hydrateAttachmentActionPayload(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  dryRun?: boolean;
+  /** If caption is missing, copy message -> caption. */
+  allowMessageCaptionFallback?: boolean;
+}): Promise<void> {
+  const mediaHint = readStringParam(params.args, "media", { trim: false });
+  const fileHint =
+    readStringParam(params.args, "path", { trim: false }) ??
+    readStringParam(params.args, "filePath", { trim: false });
+  const contentTypeParam =
+    readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
+
+  if (params.allowMessageCaptionFallback) {
+    const caption = readStringParam(params.args, "caption", { allowEmpty: true })?.trim();
+    const message = readStringParam(params.args, "message", { allowEmpty: true })?.trim();
+    if (!caption && message) {
+      params.args.caption = message;
+    }
+  }
+
+  await hydrateAttachmentPayload({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    args: params.args,
+    dryRun: params.dryRun,
+    contentTypeParam,
+    mediaHint,
+    fileHint,
+  });
+}
+
 export async function hydrateSetGroupIconParams(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -283,23 +319,7 @@ export async function hydrateSetGroupIconParams(params: {
   if (params.action !== "setGroupIcon") {
     return;
   }
-
-  const mediaHint = readStringParam(params.args, "media", { trim: false });
-  const fileHint =
-    readStringParam(params.args, "path", { trim: false }) ??
-    readStringParam(params.args, "filePath", { trim: false });
-  const contentTypeParam =
-    readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
-  await hydrateAttachmentPayload({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    args: params.args,
-    dryRun: params.dryRun,
-    contentTypeParam,
-    mediaHint,
-    fileHint,
-  });
+  await hydrateAttachmentActionPayload(params);
 }
 
 export async function hydrateSendAttachmentParams(params: {
@@ -313,28 +333,7 @@ export async function hydrateSendAttachmentParams(params: {
   if (params.action !== "sendAttachment") {
     return;
   }
-
-  const mediaHint = readStringParam(params.args, "media", { trim: false });
-  const fileHint =
-    readStringParam(params.args, "path", { trim: false }) ??
-    readStringParam(params.args, "filePath", { trim: false });
-  const contentTypeParam =
-    readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
-  const caption = readStringParam(params.args, "caption", { allowEmpty: true })?.trim();
-  const message = readStringParam(params.args, "message", { allowEmpty: true })?.trim();
-  if (!caption && message) {
-    params.args.caption = message;
-  }
-  await hydrateAttachmentPayload({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    args: params.args,
-    dryRun: params.dryRun,
-    contentTypeParam,
-    mediaHint,
-    fileHint,
-  });
+  await hydrateAttachmentActionPayload({ ...params, allowMessageCaptionFallback: true });
 }
 
 export function parseButtonsParam(params: Record<string, unknown>): void {
@@ -368,5 +367,22 @@ export function parseCardParam(params: Record<string, unknown>): void {
     params.card = JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error("--card must be valid JSON");
+  }
+}
+
+export function parseComponentsParam(params: Record<string, unknown>): void {
+  const raw = params.components;
+  if (typeof raw !== "string") {
+    return;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    delete params.components;
+    return;
+  }
+  try {
+    params.components = JSON.parse(trimmed) as unknown;
+  } catch {
+    throw new Error("--components must be valid JSON");
   }
 }

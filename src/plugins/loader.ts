@@ -1,15 +1,9 @@
-import { createJiti } from "jiti";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginModule,
-  PluginDiagnostic,
-  PluginLogger,
-} from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
@@ -27,6 +21,12 @@ import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  PluginDiagnostic,
+  PluginLogger,
+} from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -220,22 +220,30 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
 
-  const pluginSdkAlias = resolvePluginSdkAlias();
-  const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
-  const jiti = createJiti(import.meta.url, {
-    interopDefault: true,
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-    ...(pluginSdkAlias || pluginSdkAccountIdAlias
-      ? {
-          alias: {
-            ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-            ...(pluginSdkAccountIdAlias
-              ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
-              : {}),
-          },
-        }
-      : {}),
-  });
+  // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
+  let jitiLoader: ReturnType<typeof createJiti> | null = null;
+  const getJiti = () => {
+    if (jitiLoader) {
+      return jitiLoader;
+    }
+    const pluginSdkAlias = resolvePluginSdkAlias();
+    const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
+    jitiLoader = createJiti(import.meta.url, {
+      interopDefault: true,
+      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+      ...(pluginSdkAlias || pluginSdkAccountIdAlias
+        ? {
+            alias: {
+              ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+              ...(pluginSdkAccountIdAlias
+                ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
+                : {}),
+            },
+          }
+        : {}),
+    });
+    return jitiLoader;
+  };
 
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
@@ -312,7 +320,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = jiti(candidate.source) as OpenClawPluginModule;
+      mod = getJiti()(candidate.source) as OpenClawPluginModule;
     } catch (err) {
       logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
       record.status = "error";

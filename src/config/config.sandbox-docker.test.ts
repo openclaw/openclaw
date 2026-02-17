@@ -3,13 +3,13 @@ import { resolveSandboxBrowserConfig } from "../agents/sandbox/config.js";
 import { validateConfigObject } from "./config.js";
 
 describe("sandbox docker config", () => {
-  it("accepts binds array in sandbox.docker config", () => {
+  it("accepts safe binds array in sandbox.docker config", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
           sandbox: {
             docker: {
-              binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"],
+              binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
             },
           },
         },
@@ -29,13 +29,58 @@ describe("sandbox docker config", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.config.agents?.defaults?.sandbox?.docker?.binds).toEqual([
-        "/var/run/docker.sock:/var/run/docker.sock",
         "/home/user/source:/source:rw",
+        "/var/data/myapp:/data:ro",
       ]);
       expect(res.config.agents?.list?.[0]?.sandbox?.docker?.binds).toEqual([
         "/home/user/projects:/projects:ro",
       ]);
     }
+  });
+
+  it("rejects network host mode via Zod schema validation", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              network: "host",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects seccomp unconfined via Zod schema validation", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              seccompProfile: "unconfined",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects apparmor unconfined via Zod schema validation", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              apparmorProfile: "unconfined",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
   });
 
   it("rejects non-string values in binds array", () => {
