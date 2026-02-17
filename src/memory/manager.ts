@@ -49,7 +49,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
-  private readonly purpose: "default" | "status";
+  readonly purpose: "default" | "status";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
