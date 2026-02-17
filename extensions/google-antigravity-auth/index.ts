@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import {
+  buildOauthProviderAuthResult,
   emptyPluginConfigSchema,
   isWSL2Sync,
   type OpenClawPluginApi,
@@ -17,7 +18,7 @@ const REDIRECT_URI = "http://localhost:51121/oauth-callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DEFAULT_PROJECT_ID = "rising-fact-p41fc";
-const DEFAULT_MODEL = "google-antigravity/claude-opus-4-6-thinking";
+const DEFAULT_MODEL = "google-antigravity/claude-opus-4-5-thinking";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
@@ -396,37 +397,19 @@ const antigravityPlugin = {
                 progress: spin,
               });
 
-              const profileId = `google-antigravity:${result.email ?? "default"}`;
-              return {
-                profiles: [
-                  {
-                    profileId,
-                    credential: {
-                      type: "oauth",
-                      provider: "google-antigravity",
-                      access: result.access,
-                      refresh: result.refresh,
-                      expires: result.expires,
-                      email: result.email,
-                      projectId: result.projectId,
-                    },
-                  },
-                ],
-                configPatch: {
-                  agents: {
-                    defaults: {
-                      models: {
-                        [DEFAULT_MODEL]: {},
-                      },
-                    },
-                  },
-                },
+              return buildOauthProviderAuthResult({
+                providerId: "google-antigravity",
                 defaultModel: DEFAULT_MODEL,
+                access: result.access,
+                refresh: result.refresh,
+                expires: result.expires,
+                email: result.email,
+                credentialExtra: { projectId: result.projectId },
                 notes: [
                   "Antigravity uses Google Cloud project quotas.",
                   "Enable Gemini for Google Cloud on your project if requests fail.",
                 ],
-              };
+              });
             } catch (err) {
               spin.stop("Antigravity OAuth failed");
               throw err;

@@ -184,6 +184,18 @@ async function readWorkspaceOnboardingState(statePath: string): Promise<Workspac
   }
 }
 
+async function readWorkspaceOnboardingStateForDir(dir: string): Promise<WorkspaceOnboardingState> {
+  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
+  return await readWorkspaceOnboardingState(statePath);
+}
+
+export async function isWorkspaceOnboardingCompleted(dir: string): Promise<boolean> {
+  const state = await readWorkspaceOnboardingStateForDir(dir);
+  return (
+    typeof state.onboardingCompletedAt === "string" && state.onboardingCompletedAt.trim().length > 0
+  );
+}
+
 async function writeWorkspaceOnboardingState(
   statePath: string,
   state: WorkspaceOnboardingState,

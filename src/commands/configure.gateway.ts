@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayPort } from "../config/config.js";
+import {
+  TAILSCALE_DOCS_LINES,
+  TAILSCALE_EXPOSURE_OPTIONS,
+  TAILSCALE_MISSING_BIN_NOTE_LINES,
+} from "../gateway/gateway-config-prompts.shared.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
@@ -80,39 +85,12 @@ export async function promptGatewayConfig(
     customBindHost = typeof input === "string" ? input : undefined;
   }
 
-  let authMode = guardCancel(
-    await select({
-      message: "Gateway auth",
-      options: [
-        { value: "token", label: "Token", hint: "Recommended default" },
-        { value: "password", label: "Password" },
-        {
-          value: "trusted-proxy",
-          label: "Trusted Proxy",
-          hint: "Behind reverse proxy (Pomerium, Caddy, Traefik, etc.)",
-        },
-      ],
-      initialValue: "token",
-    }),
-    runtime,
-  ) as GatewayAuthChoice;
+  let authMode: GatewayAuthChoice = "token";
 
   let tailscaleMode = guardCancel(
     await select({
       message: "Tailscale exposure",
-      options: [
-        { value: "off", label: "Off", hint: "No Tailscale exposure" },
-        {
-          value: "serve",
-          label: "Serve",
-          hint: "Private HTTPS for your tailnet (devices on Tailscale)",
-        },
-        {
-          value: "funnel",
-          label: "Funnel",
-          hint: "Public HTTPS via Tailscale Funnel (internet)",
-        },
-      ],
+      options: [...TAILSCALE_EXPOSURE_OPTIONS],
     }),
     runtime,
   );
@@ -121,27 +99,13 @@ export async function promptGatewayConfig(
   if (tailscaleMode !== "off") {
     const tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
-      note(
-        [
-          "Tailscale binary not found in PATH or /Applications.",
-          "Ensure Tailscale is installed from:",
-          "  https://tailscale.com/download/mac",
-          "",
-          "You can continue setup, but serve/funnel will fail at runtime.",
-        ].join("\n"),
-        "Tailscale Warning",
-      );
+      note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
     }
   }
 
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
-    note(
-      ["Docs:", "https://docs.openclaw.ai/gateway/tailscale", "https://docs.openclaw.ai/web"].join(
-        "\n",
-      ),
-      "Tailscale",
-    );
+    note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
     tailscaleResetOnExit = Boolean(
       guardCancel(
         await confirm({
@@ -158,22 +122,44 @@ export async function promptGatewayConfig(
     bind = "loopback";
   }
 
-  if (tailscaleMode === "funnel" && authMode !== "password") {
-    note("Tailscale funnel requires password auth.", "Note");
-    authMode = "password";
-  }
+  const loopbackOnlyGateway = bind === "loopback" && tailscaleMode === "off";
+  if (loopbackOnlyGateway) {
+    note("Loopback-only gateway does not require gateway.auth. Keeping auth disabled.", "Note");
+  } else {
+    authMode = guardCancel(
+      await select({
+        message: "Gateway auth",
+        options: [
+          { value: "token", label: "Token", hint: "Recommended default" },
+          { value: "password", label: "Password" },
+          {
+            value: "trusted-proxy",
+            label: "Trusted Proxy",
+            hint: "Behind reverse proxy (Pomerium, Caddy, Traefik, etc.)",
+          },
+        ],
+        initialValue: tailscaleMode === "funnel" ? "password" : "token",
+      }),
+      runtime,
+    ) as GatewayAuthChoice;
 
-  if (authMode === "trusted-proxy" && bind === "loopback") {
-    note("Trusted proxy auth requires network bind. Adjusting bind to lan.", "Note");
-    bind = "lan";
-  }
-  if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
-    note(
-      "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
-      "Note",
-    );
-    tailscaleMode = "off";
-    tailscaleResetOnExit = false;
+    if (tailscaleMode === "funnel" && authMode !== "password") {
+      note("Tailscale funnel requires password auth.", "Note");
+      authMode = "password";
+    }
+
+    if (authMode === "trusted-proxy" && bind === "loopback") {
+      note("Trusted proxy auth requires network bind. Adjusting bind to lan.", "Note");
+      bind = "lan";
+    }
+    if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
+      note(
+        "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
+        "Note",
+      );
+      tailscaleMode = "off";
+      tailscaleResetOnExit = false;
+    }
   }
 
   let gatewayToken: string | undefined;
@@ -184,7 +170,7 @@ export async function promptGatewayConfig(
   let trustedProxies: string[] | undefined;
   let next = cfg;
 
-  if (authMode === "token") {
+  if (!loopbackOnlyGateway && authMode === "token") {
     const tokenInput = guardCancel(
       await text({
         message: "Gateway token (blank to generate)",
@@ -195,7 +181,7 @@ export async function promptGatewayConfig(
     gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
   }
 
-  if (authMode === "password") {
+  if (!loopbackOnlyGateway && authMode === "password") {
     const password = guardCancel(
       await text({
         message: "Gateway password",
@@ -206,7 +192,7 @@ export async function promptGatewayConfig(
     gatewayPassword = String(password ?? "").trim();
   }
 
-  if (authMode === "trusted-proxy") {
+  if (!loopbackOnlyGateway && authMode === "trusted-proxy") {
     note(
       [
         "Trusted proxy mode: OpenClaw trusts user identity from a reverse proxy.",
@@ -282,22 +268,26 @@ export async function promptGatewayConfig(
     };
   }
 
-  const authConfig = buildGatewayAuthConfig({
-    existing: next.gateway?.auth,
-    mode: authMode,
-    token: gatewayToken,
-    password: gatewayPassword,
-    trustedProxy: trustedProxyConfig,
-  });
+  const authConfig = loopbackOnlyGateway
+    ? undefined
+    : buildGatewayAuthConfig({
+        existing: next.gateway?.auth,
+        mode: authMode,
+        token: gatewayToken,
+        password: gatewayPassword,
+        trustedProxy: trustedProxyConfig,
+      });
 
+  const gatewayWithoutAuth = { ...next.gateway };
+  delete gatewayWithoutAuth.auth;
   next = {
     ...next,
     gateway: {
-      ...next.gateway,
+      ...gatewayWithoutAuth,
       mode: "local",
       port,
       bind,
-      auth: authConfig,
+      ...(authConfig ? { auth: authConfig } : {}),
       ...(customBindHost && { customBindHost }),
       ...(trustedProxies && { trustedProxies }),
       tailscale: {

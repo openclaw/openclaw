@@ -12,7 +12,7 @@ import { resolveSlackChannelAllowlist } from "../../../slack/resolve-channels.js
 import { resolveSlackUserAllowlist } from "../../../slack/resolve-users.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { promptChannelAccessConfig } from "./channel-access.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
 
 const channel = "slack" as const;
 
@@ -124,10 +124,29 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
   );
 }
 
-function setSlackGroupPolicy(
+async function promptSlackTokens(prompter: WizardPrompter): Promise<{
+  botToken: string;
+  appToken: string;
+}> {
+  const botToken = String(
+    await prompter.text({
+      message: "Enter Slack bot token (xoxb-...)",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+  ).trim();
+  const appToken = String(
+    await prompter.text({
+      message: "Enter Slack app token (xapp-...)",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+  ).trim();
+  return { botToken, appToken };
+}
+
+function patchSlackConfigForAccount(
   cfg: OpenClawConfig,
   accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
+  patch: Record<string, unknown>,
 ): OpenClawConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -137,7 +156,7 @@ function setSlackGroupPolicy(
         slack: {
           ...cfg.channels?.slack,
           enabled: true,
-          groupPolicy,
+          ...patch,
         },
       },
     };
@@ -154,12 +173,20 @@ function setSlackGroupPolicy(
           [accountId]: {
             ...cfg.channels?.slack?.accounts?.[accountId],
             enabled: cfg.channels?.slack?.accounts?.[accountId]?.enabled ?? true,
-            groupPolicy,
+            ...patch,
           },
         },
       },
     },
   };
+}
+
+function setSlackGroupPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  groupPolicy: "open" | "allowlist" | "disabled",
+): OpenClawConfig {
+  return patchSlackConfigForAccount(cfg, accountId, { groupPolicy });
 }
 
 function setSlackChannelAllowlist(
@@ -168,37 +195,7 @@ function setSlackChannelAllowlist(
   channelKeys: string[],
 ): OpenClawConfig {
   const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        slack: {
-          ...cfg.channels?.slack,
-          enabled: true,
-          channels,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      slack: {
-        ...cfg.channels?.slack,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.slack?.accounts,
-          [accountId]: {
-            ...cfg.channels?.slack?.accounts?.[accountId],
-            enabled: cfg.channels?.slack?.accounts?.[accountId]?.enabled ?? true,
-            channels,
-          },
-        },
-      },
-    },
-  };
+  return patchSlackConfigForAccount(cfg, accountId, { channels });
 }
 
 function setSlackAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
@@ -283,9 +280,7 @@ async function promptSlackAllowFrom(params: {
         );
         continue;
       }
-      const unique = [...new Set([...existing.map((v) => String(v).trim()), ...ids])].filter(
-        Boolean,
-      );
+      const unique = mergeAllowFromEntries(existing, ids);
       return setSlackAllowFrom(params.cfg, unique);
     }
 
@@ -306,7 +301,7 @@ async function promptSlackAllowFrom(params: {
       continue;
     }
     const ids = results.map((res) => res.id as string);
-    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
+    const unique = mergeAllowFromEntries(existing, ids);
     return setSlackAllowFrom(params.cfg, unique);
   }
 }
@@ -392,18 +387,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
           },
         };
       } else {
-        botToken = String(
-          await prompter.text({
-            message: "Enter Slack bot token (xoxb-...)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-        appToken = String(
-          await prompter.text({
-            message: "Enter Slack app token (xapp-...)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        ({ botToken, appToken } = await promptSlackTokens(prompter));
       }
     } else if (hasConfigTokens) {
       const keep = await prompter.confirm({
@@ -411,32 +395,10 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: true,
       });
       if (!keep) {
-        botToken = String(
-          await prompter.text({
-            message: "Enter Slack bot token (xoxb-...)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-        appToken = String(
-          await prompter.text({
-            message: "Enter Slack app token (xapp-...)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        ({ botToken, appToken } = await promptSlackTokens(prompter));
       }
     } else {
-      botToken = String(
-        await prompter.text({
-          message: "Enter Slack bot token (xoxb-...)",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-      ).trim();
-      appToken = String(
-        await prompter.text({
-          message: "Enter Slack app token (xapp-...)",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-      ).trim();
+      ({ botToken, appToken } = await promptSlackTokens(prompter));
     }
 
     if (botToken && appToken) {

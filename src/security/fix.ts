@@ -366,6 +366,21 @@ async function chmodCredentialsAndAgentState(params: {
     const storePath = path.join(sessionsDir, "sessions.json");
     // eslint-disable-next-line no-await-in-loop
     params.actions.push(await params.applyPerms({ path: storePath, mode: 0o600, require: "file" }));
+
+    // Fix permissions on session transcript files (*.jsonl)
+    // eslint-disable-next-line no-await-in-loop
+    const sessionEntries = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of sessionEntries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      const p = path.join(sessionsDir, entry.name);
+      // eslint-disable-next-line no-await-in-loop
+      params.actions.push(await params.applyPerms({ path: p, mode: 0o600, require: "file" }));
+    }
   }
 }
 

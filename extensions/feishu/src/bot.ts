@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import {
+  buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
   clearHistoryEntriesIfEnabled,
@@ -184,10 +185,17 @@ function parseMessageContent(content: string, messageType: string): string {
 }
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
-  const mentions = event.message.mentions ?? [];
-  if (mentions.length === 0) return false;
   if (!botOpenId) return false;
-  return mentions.some((m) => m.id.open_id === botOpenId);
+  const mentions = event.message.mentions ?? [];
+  if (mentions.length > 0) {
+    return mentions.some((m) => m.id.open_id === botOpenId);
+  }
+  // Post (rich text) messages may have empty message.mentions when they contain docs/paste
+  if (event.message.message_type === "post") {
+    const { mentionedOpenIds } = parsePostContent(event.message.content);
+    return mentionedOpenIds.some((id) => id === botOpenId);
+  }
+  return false;
 }
 
 function stripBotMention(
@@ -243,6 +251,7 @@ function parseMediaKeys(
 function parsePostContent(content: string): {
   textContent: string;
   imageKeys: string[];
+  mentionedOpenIds: string[];
 } {
   try {
     const parsed = JSON.parse(content);
@@ -250,6 +259,7 @@ function parsePostContent(content: string): {
     const contentBlocks = parsed.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
+    const mentionedOpenIds: string[] = [];
 
     for (const paragraph of contentBlocks) {
       if (Array.isArray(paragraph)) {
@@ -262,6 +272,9 @@ function parsePostContent(content: string): {
           } else if (element.tag === "at") {
             // Mention: @username
             textContent += `@${element.user_name || element.user_id || ""}`;
+            if (element.user_id) {
+              mentionedOpenIds.push(element.user_id);
+            }
           } else if (element.tag === "img" && element.image_key) {
             // Embedded image
             imageKeys.push(element.image_key);
@@ -272,11 +285,12 @@ function parsePostContent(content: string): {
     }
 
     return {
-      textContent: textContent.trim() || "[富文本消息]",
+      textContent: textContent.trim() || "[Rich text message]",
       imageKeys,
+      mentionedOpenIds,
     };
   } catch {
-    return { textContent: "[富文本消息]", imageKeys: [] };
+    return { textContent: "[Rich text message]", imageKeys: [], mentionedOpenIds: [] };
   }
 }
 
@@ -433,27 +447,6 @@ async function resolveFeishuMediaList(params: {
  * Build media payload for inbound context.
  * Similar to Discord's buildDiscordMediaPayload().
  */
-function buildFeishuMediaPayload(mediaList: FeishuMediaInfo[]): {
-  MediaPath?: string;
-  MediaType?: string;
-  MediaUrl?: string;
-  MediaPaths?: string[];
-  MediaUrls?: string[];
-  MediaTypes?: string[];
-} {
-  const first = mediaList[0];
-  const mediaPaths = mediaList.map((media) => media.path);
-  const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
-  return {
-    MediaPath: first?.path,
-    MediaType: first?.contentType,
-    MediaUrl: first?.path,
-    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
-  };
-}
-
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
@@ -766,7 +759,7 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildFeishuMediaPayload(mediaList);
+    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     // Fetch quoted/replied message content if parentId exists
     let quotedContent: string | undefined;

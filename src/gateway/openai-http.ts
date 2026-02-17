@@ -7,18 +7,13 @@ import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
-import {
-  readJsonBodyOrError,
-  sendJson,
-  sendMethodNotAllowed,
-  setSseHeaders,
-  writeDone,
-} from "./http-common.js";
+import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
@@ -151,33 +146,21 @@ export async function handleOpenAiHttpRequest(
   res: ServerResponse,
   opts: OpenAiHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname !== "/v1/chat/completions") {
-    return false;
-  }
-
-  if (req.method !== "POST") {
-    sendMethodNotAllowed(res);
-    return true;
-  }
-
-  const authorized = await authorizeGatewayBearerRequestOrReply({
-    req,
-    res,
+  const handled = await handleGatewayPostJsonEndpoint(req, res, {
+    pathname: "/v1/chat/completions",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     rateLimiter: opts.rateLimiter,
+    maxBodyBytes: opts.maxBodyBytes ?? 1024 * 1024,
   });
-  if (!authorized) {
+  if (handled === false) {
+    return false;
+  }
+  if (!handled) {
     return true;
   }
 
-  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 1024 * 1024);
-  if (body === undefined) {
-    return true;
-  }
-
-  const payload = coerceRequest(body);
+  const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
@@ -261,9 +244,7 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const delta = evt.data?.delta;
-      const text = evt.data?.text;
-      const content = typeof delta === "string" ? delta : typeof text === "string" ? text : "";
+      const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }

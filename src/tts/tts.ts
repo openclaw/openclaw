@@ -519,6 +519,14 @@ export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: Tts
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
+function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
+  const error = err instanceof Error ? err : new Error(String(err));
+  if (error.name === "AbortError") {
+    return `${provider}: request timed out`;
+  }
+  return `${provider}: ${error.message}`;
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -543,14 +551,14 @@ export async function textToSpeech(params: {
   const provider = overrideProvider ?? userProvider;
   const providers = resolveTtsProviderOrder(provider);
 
-  let lastError: string | undefined;
+  const errors: string[] = [];
 
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
       if (provider === "edge") {
         if (!config.edge.enabled) {
-          lastError = "edge: disabled";
+          errors.push("edge: disabled");
           continue;
         }
 
@@ -618,7 +626,7 @@ export async function textToSpeech(params: {
 
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
-        lastError = `No API key for ${provider}`;
+        errors.push(`${provider}: no API key`);
         continue;
       }
 
@@ -675,18 +683,13 @@ export async function textToSpeech(params: {
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
-      const error = err as Error;
-      if (error.name === "AbortError") {
-        lastError = `${provider}: request timed out`;
-      } else {
-        lastError = `${provider}: ${error.message}`;
-      }
+      errors.push(formatTtsProviderError(provider, err));
     }
   }
 
   return {
     success: false,
-    error: `TTS conversion failed: ${lastError || "no providers available"}`,
+    error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
   };
 }
 
@@ -708,19 +711,19 @@ export async function textToSpeechTelephony(params: {
   const userProvider = getTtsProvider(config, prefsPath);
   const providers = resolveTtsProviderOrder(userProvider);
 
-  let lastError: string | undefined;
+  const errors: string[] = [];
 
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
       if (provider === "edge") {
-        lastError = "edge: unsupported for telephony";
+        errors.push("edge: unsupported for telephony");
         continue;
       }
 
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
-        lastError = `No API key for ${provider}`;
+        errors.push(`${provider}: no API key`);
         continue;
       }
 
@@ -769,18 +772,13 @@ export async function textToSpeechTelephony(params: {
         sampleRate: output.sampleRate,
       };
     } catch (err) {
-      const error = err as Error;
-      if (error.name === "AbortError") {
-        lastError = `${provider}: request timed out`;
-      } else {
-        lastError = `${provider}: ${error.message}`;
-      }
+      errors.push(formatTtsProviderError(provider, err));
     }
   }
 
   return {
     success: false,
-    error: `TTS conversion failed: ${lastError || "no providers available"}`,
+    error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
   };
 }
 

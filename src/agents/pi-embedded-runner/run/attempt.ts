@@ -39,6 +39,7 @@ import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-strea
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
+  resolveBootstrapTotalMaxChars,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
@@ -48,7 +49,7 @@ import {
   resolveCompactionReserveTokensFloor,
 } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools } from "../../pi-tools.js";
+import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -462,6 +463,7 @@ export async function runEmbeddedAttempt(
       model: params.modelId,
       workspaceDir: effectiveWorkspace,
       bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
+      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(params.config),
       sandbox: (() => {
         const runtime = resolveSandboxRuntimeStatus({
           cfg: params.config,
@@ -542,6 +544,10 @@ export async function runEmbeddedAttempt(
 
       // Add client tools (OpenResponses hosted tools) to customTools
       let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      const clientToolLoopDetection = resolveToolLoopDetectionConfig({
+        cfg: params.config,
+        agentId: sessionAgentId,
+      });
       const clientToolDefs = params.clientTools
         ? toClientToolDefinitions(
             params.clientTools,
@@ -551,6 +557,7 @@ export async function runEmbeddedAttempt(
             {
               agentId: sessionAgentId,
               sessionKey: params.sessionKey,
+              loopDetection: clientToolLoopDetection,
             },
           )
         : [];
@@ -737,6 +744,7 @@ export async function runEmbeddedAttempt(
         shouldEmitToolOutput: params.shouldEmitToolOutput,
         onToolResult: params.onToolResult,
         onReasoningStream: params.onReasoningStream,
+        onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
         onBlockReplyFlush: params.onBlockReplyFlush,
         blockReplyBreak: params.blockReplyBreak,
@@ -755,7 +763,9 @@ export async function runEmbeddedAttempt(
         unsubscribe,
         waitForCompactionRetry,
         getMessagingToolSentTexts,
+        getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
+        getSuccessfulCronAdds,
         didSendViaMessagingTool,
         getLastToolError,
         getUsageTotals,
@@ -770,7 +780,7 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
-      setActiveEmbeddedRun(params.sessionId, queueHandle);
+      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
@@ -843,34 +853,41 @@ export async function runEmbeddedAttempt(
             }).sessionAgentId;
 
       let promptError: unknown = null;
+      let promptErrorSource: "prompt" | "compaction" | null = null;
       try {
         const promptStartedAt = Date.now();
 
-        // Run before_agent_start hooks to allow plugins to inject context
+        // Run before_agent_start hooks to allow plugins to inject context.
+        // If run.ts already fired the hook (for model override), reuse its result.
         let effectivePrompt = params.prompt;
-        if (hookRunner?.hasHooks("before_agent_start")) {
-          try {
-            const hookResult = await hookRunner.runBeforeAgentStart(
-              {
-                prompt: params.prompt,
-                messages: activeSession.messages,
-              },
-              {
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider ?? undefined,
-              },
+        const hookResult =
+          params.earlyHookResult ??
+          (hookRunner?.hasHooks("before_agent_start")
+            ? await hookRunner
+                .runBeforeAgentStart(
+                  {
+                    prompt: params.prompt,
+                    messages: activeSession.messages,
+                  },
+                  {
+                    agentId: hookAgentId,
+                    sessionKey: params.sessionKey,
+                    sessionId: params.sessionId,
+                    workspaceDir: params.workspaceDir,
+                    messageProvider: params.messageProvider ?? undefined,
+                  },
+                )
+                .catch((hookErr: unknown) => {
+                  log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
+                  return undefined;
+                })
+            : undefined);
+        {
+          if (hookResult?.prependContext) {
+            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+            log.debug(
+              `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
-            if (hookResult?.prependContext) {
-              effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
-              log.debug(
-                `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
-              );
-            }
-          } catch (hookErr) {
-            log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
           }
         }
 
@@ -954,6 +971,32 @@ export async function runEmbeddedAttempt(
             );
           }
 
+          if (hookRunner?.hasHooks("llm_input")) {
+            hookRunner
+              .runLlmInput(
+                {
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                  provider: params.provider,
+                  model: params.modelId,
+                  systemPrompt: systemPromptText,
+                  prompt: effectivePrompt,
+                  historyMessages: activeSession.messages,
+                  imagesCount: imageResult.images.length,
+                },
+                {
+                  agentId: hookAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                  messageProvider: params.messageProvider ?? undefined,
+                },
+              )
+              .catch((err) => {
+                log.warn(`llm_input hook failed: ${String(err)}`);
+              });
+          }
+
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
@@ -963,6 +1006,7 @@ export async function runEmbeddedAttempt(
           }
         } catch (err) {
           promptError = err;
+          promptErrorSource = "prompt";
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
@@ -985,6 +1029,7 @@ export async function runEmbeddedAttempt(
           if (isRunnerAbortError(err)) {
             if (!promptError) {
               promptError = err;
+              promptErrorSource = "compaction";
             }
             if (!isProbeSession) {
               log.debug(
@@ -1033,6 +1078,23 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
+
+        if (promptError && promptErrorSource === "prompt") {
+          try {
+            sessionManager.appendCustomEntry("openclaw:prompt-error", {
+              timestamp: Date.now(),
+              runId: params.runId,
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.modelId,
+              api: params.model.api,
+              error: describeUnknownError(promptError),
+            });
+          } catch (entryErr) {
+            log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+          }
+        }
+
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
           note: timedOutDuringCompaction
@@ -1087,7 +1149,7 @@ export async function runEmbeddedAttempt(
             `CRITICAL: unsubscribe failed, possible resource leak: runId=${params.runId} ${String(err)}`,
           );
         }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle);
+        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
@@ -1103,6 +1165,31 @@ export async function runEmbeddedAttempt(
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
+      if (hookRunner?.hasHooks("llm_output")) {
+        hookRunner
+          .runLlmOutput(
+            {
+              runId: params.runId,
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.modelId,
+              assistantTexts,
+              lastAssistant,
+              usage: getUsageTotals(),
+            },
+            {
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageProvider ?? undefined,
+            },
+          )
+          .catch((err) => {
+            log.warn(`llm_output hook failed: ${String(err)}`);
+          });
+      }
+
       return {
         aborted,
         timedOut,
@@ -1117,7 +1204,9 @@ export async function runEmbeddedAttempt(
         lastToolError: getLastToolError?.(),
         didSendViaMessagingTool: didSendViaMessagingTool(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
+        messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
+        successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),

@@ -8,7 +8,9 @@ import type {
   ChannelAgentPromptAdapter,
   ChannelMentionAdapter,
   ChannelPlugin,
+  ChannelThreadingContext,
   ChannelThreadingAdapter,
+  ChannelThreadingToolContext,
 } from "./plugins/types.js";
 import {
   resolveChannelGroupRequireMention,
@@ -16,6 +18,7 @@ import {
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
+import { resolveLinqAccount } from "../linq/accounts.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
@@ -79,6 +82,21 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
+
+function buildDirectOrGroupThreadToolContext(params: {
+  context: ChannelThreadingContext;
+  hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
+}): ChannelThreadingToolContext {
+  const isDirect = params.context.ChatType?.toLowerCase() === "direct";
+  const channelId =
+    (isDirect ? (params.context.From ?? params.context.To) : params.context.To)?.trim() ||
+    undefined;
+  return {
+    currentChannelId: channelId,
+    currentThreadTs: params.context.ReplyToId,
+    hasRepliedRef: params.hasRepliedRef,
+  };
+}
 // Channel docks: lightweight channel metadata/behavior for shared code paths.
 //
 // Rules:
@@ -201,7 +219,17 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           String(entry),
         );
       },
-      formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) =>
+            entry
+              .replace(/^discord:/i, "")
+              .replace(/^user:/i, "")
+              .replace(/^pk:/i, "")
+              .toLowerCase(),
+          ),
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,
@@ -404,16 +432,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           .filter(Boolean),
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => {
-        const isDirect = context.ChatType?.toLowerCase() === "direct";
-        const channelId =
-          (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
-        return {
-          currentChannelId: channelId,
-          currentThreadTs: context.ReplyToId,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: ({ context, hasRepliedRef }) =>
+        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
     },
   },
   imessage: {
@@ -437,16 +457,25 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveIMessageGroupToolPolicy,
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => {
-        const isDirect = context.ChatType?.toLowerCase() === "direct";
-        const channelId =
-          (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
-        return {
-          currentChannelId: channelId,
-          currentThreadTs: context.ReplyToId,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: ({ context, hasRepliedRef }) =>
+        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
+    },
+  },
+  linq: {
+    id: "linq",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      reactions: true,
+      media: true,
+    },
+    outbound: { textChunkLimit: 4000 },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        (resolveLinqAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+          String(entry),
+        ),
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
     },
   },
 };

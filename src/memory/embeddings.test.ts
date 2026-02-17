@@ -328,30 +328,42 @@ describe("local embedding normalization", () => {
     vi.unstubAllGlobals();
   });
 
-  it("normalizes local embeddings to magnitude ~1.0", async () => {
-    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
-    const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");
-
-    importNodeLlamaCppMock.mockResolvedValue({
-      getLlama: async () => ({
-        loadModel: vi.fn().mockResolvedValue({
-          createEmbeddingContext: vi.fn().mockResolvedValue({
-            getEmbeddingFor: vi.fn().mockResolvedValue({
-              vector: new Float32Array(unnormalizedVector),
-            }),
-          }),
-        }),
-      }),
-      resolveModelFile: resolveModelFileMock,
-      LlamaLogLevel: { error: 0 },
-    });
-
-    const result = await createEmbeddingProvider({
+  async function createLocalProviderForTest() {
+    return createEmbeddingProvider({
       config: {} as never,
       provider: "local",
       model: "",
       fallback: "none",
     });
+  }
+
+  function mockSingleLocalEmbeddingVector(
+    vector: number[],
+    resolveModelFile: (modelPath: string, modelDirectory?: string) => Promise<string> = async () =>
+      "/fake/model.gguf",
+  ): void {
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi.fn().mockResolvedValue({
+              vector: new Float32Array(vector),
+            }),
+          }),
+        }),
+      }),
+      resolveModelFile,
+      LlamaLogLevel: { error: 0 },
+    });
+  }
+
+  it("normalizes local embeddings to magnitude ~1.0", async () => {
+    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
+    const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");
+
+    mockSingleLocalEmbeddingVector(unnormalizedVector, resolveModelFileMock);
+
+    const result = await createLocalProviderForTest();
 
     const embedding = await result.provider.embedQuery("test query");
 
@@ -364,26 +376,9 @@ describe("local embedding normalization", () => {
   it("handles zero vector without division by zero", async () => {
     const zeroVector = [0, 0, 0, 0];
 
-    importNodeLlamaCppMock.mockResolvedValue({
-      getLlama: async () => ({
-        loadModel: vi.fn().mockResolvedValue({
-          createEmbeddingContext: vi.fn().mockResolvedValue({
-            getEmbeddingFor: vi.fn().mockResolvedValue({
-              vector: new Float32Array(zeroVector),
-            }),
-          }),
-        }),
-      }),
-      resolveModelFile: async () => "/fake/model.gguf",
-      LlamaLogLevel: { error: 0 },
-    });
+    mockSingleLocalEmbeddingVector(zeroVector);
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const result = await createLocalProviderForTest();
 
     const embedding = await result.provider.embedQuery("test");
 
@@ -394,26 +389,9 @@ describe("local embedding normalization", () => {
   it("sanitizes non-finite values before normalization", async () => {
     const nonFiniteVector = [1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
 
-    importNodeLlamaCppMock.mockResolvedValue({
-      getLlama: async () => ({
-        loadModel: vi.fn().mockResolvedValue({
-          createEmbeddingContext: vi.fn().mockResolvedValue({
-            getEmbeddingFor: vi.fn().mockResolvedValue({
-              vector: new Float32Array(nonFiniteVector),
-            }),
-          }),
-        }),
-      }),
-      resolveModelFile: async () => "/fake/model.gguf",
-      LlamaLogLevel: { error: 0 },
-    });
+    mockSingleLocalEmbeddingVector(nonFiniteVector);
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const result = await createLocalProviderForTest();
 
     const embedding = await result.provider.embedQuery("test");
 
@@ -444,12 +422,7 @@ describe("local embedding normalization", () => {
       LlamaLogLevel: { error: 0 },
     });
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
+    const result = await createLocalProviderForTest();
 
     const embeddings = await result.provider.embedBatch(["text1", "text2", "text3"]);
 
@@ -457,5 +430,65 @@ describe("local embedding normalization", () => {
       const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
       expect(magnitude).toBeCloseTo(1.0, 5);
     }
+  });
+});
+
+describe("FTS-only fallback when no provider available", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns null provider with reason when auto mode finds no providers", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
+      new Error('No API key found for provider "openai"'),
+    );
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "",
+      fallback: "none",
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.requestedProvider).toBe("auto");
+    expect(result.providerUnavailableReason).toBeDefined();
+    expect(result.providerUnavailableReason).toContain("No API key");
+  });
+
+  it("returns null provider when explicit provider fails with missing API key", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
+      new Error('No API key found for provider "openai"'),
+    );
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.requestedProvider).toBe("openai");
+    expect(result.providerUnavailableReason).toBeDefined();
+  });
+
+  it("returns null provider when both primary and fallback fail with missing API keys", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
+      new Error("No API key found for provider"),
+    );
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      fallback: "gemini",
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.requestedProvider).toBe("openai");
+    expect(result.fallbackFrom).toBe("openai");
+    expect(result.providerUnavailableReason).toContain("Fallback to gemini failed");
   });
 });

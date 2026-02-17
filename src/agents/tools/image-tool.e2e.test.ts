@@ -16,6 +16,68 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
   );
 }
 
+const ONE_PIXEL_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
+async function withTempWorkspacePng(
+  cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
+) {
+  const workspaceParent = await fs.mkdtemp(path.join(process.cwd(), ".openclaw-workspace-image-"));
+  try {
+    const workspaceDir = path.join(workspaceParent, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    await cb({ workspaceDir, imagePath });
+  } finally {
+    await fs.rm(workspaceParent, { recursive: true, force: true });
+  }
+}
+
+function stubMinimaxOkFetch() {
+  const fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: new Headers(),
+    json: async () => ({
+      content: "ok",
+      base_resp: { status_code: 0, status_msg: "" },
+    }),
+  });
+  // @ts-expect-error partial global
+  global.fetch = fetch;
+  vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+  return fetch;
+}
+
+function createMinimaxImageConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "minimax/MiniMax-M2.1" },
+        imageModel: { primary: "minimax/MiniMax-VL-01" },
+      },
+    },
+  };
+}
+
+async function expectImageToolExecOk(
+  tool: {
+    execute: (toolCallId: string, input: { prompt: string; image: string }) => Promise<unknown>;
+  },
+  image: string,
+) {
+  await expect(
+    tool.execute("t1", {
+      prompt: "Describe the image.",
+      image,
+    }),
+  ).resolves.toMatchObject({
+    content: [{ type: "text", text: "ok" }],
+  });
+}
+
 describe("image tool implicit imageModel config", () => {
   const priorFetch = global.fetch;
 
@@ -146,136 +208,64 @@ describe("image tool implicit imageModel config", () => {
     });
     const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
     expect(tool).not.toBeNull();
-    expect(tool?.description).toContain(
-      "Only use this tool when the image was NOT already provided",
-    );
+    expect(tool?.description).toContain("Only use this tool when images were NOT already provided");
   });
 
   it("allows workspace images outside default local media roots", async () => {
-    const workspaceParent = await fs.mkdtemp(
-      path.join(process.cwd(), ".openclaw-workspace-image-"),
-    );
-    try {
-      const workspaceDir = path.join(workspaceParent, "workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const imagePath = path.join(workspaceDir, "photo.png");
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-      await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
-
-      const fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers(),
-        json: async () => ({
-          content: "ok",
-          base_resp: { status_code: 0, status_msg: "" },
-        }),
-      });
-      // @ts-expect-error partial global
-      global.fetch = fetch;
-      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
       const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "minimax/MiniMax-M2.1" },
-            imageModel: { primary: "minimax/MiniMax-VL-01" },
-          },
-        },
-      };
+      try {
+        const cfg = createMinimaxImageConfig();
 
-      const withoutWorkspace = createImageTool({ config: cfg, agentDir });
-      expect(withoutWorkspace).not.toBeNull();
-      if (!withoutWorkspace) {
-        throw new Error("expected image tool");
+        const withoutWorkspace = createImageTool({ config: cfg, agentDir });
+        expect(withoutWorkspace).not.toBeNull();
+        if (!withoutWorkspace) {
+          throw new Error("expected image tool");
+        }
+        await expect(
+          withoutWorkspace.execute("t0", {
+            prompt: "Describe the image.",
+            image: imagePath,
+          }),
+        ).rejects.toThrow(/Local media path is not under an allowed directory/i);
+
+        const withWorkspace = createImageTool({ config: cfg, agentDir, workspaceDir });
+        expect(withWorkspace).not.toBeNull();
+        if (!withWorkspace) {
+          throw new Error("expected image tool");
+        }
+
+        await expectImageToolExecOk(withWorkspace, imagePath);
+
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
       }
-      await expect(
-        withoutWorkspace.execute("t0", {
-          prompt: "Describe the image.",
-          image: imagePath,
-        }),
-      ).rejects.toThrow(/Local media path is not under an allowed directory/i);
-
-      const withWorkspace = createImageTool({ config: cfg, agentDir, workspaceDir });
-      expect(withWorkspace).not.toBeNull();
-      if (!withWorkspace) {
-        throw new Error("expected image tool");
-      }
-
-      await expect(
-        withWorkspace.execute("t1", {
-          prompt: "Describe the image.",
-          image: imagePath,
-        }),
-      ).resolves.toMatchObject({
-        content: [{ type: "text", text: "ok" }],
-      });
-
-      expect(fetch).toHaveBeenCalledTimes(1);
-    } finally {
-      await fs.rm(workspaceParent, { recursive: true, force: true });
-    }
+    });
   });
 
   it("allows workspace images via createOpenClawCodingTools default workspace root", async () => {
-    const workspaceParent = await fs.mkdtemp(
-      path.join(process.cwd(), ".openclaw-workspace-image-"),
-    );
-    try {
-      const workspaceDir = path.join(workspaceParent, "workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const imagePath = path.join(workspaceDir, "photo.png");
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-      await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
-
-      const fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers(),
-        json: async () => ({
-          content: "ok",
-          base_resp: { status_code: 0, status_msg: "" },
-        }),
-      });
-      // @ts-expect-error partial global
-      global.fetch = fetch;
-      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-
+    await withTempWorkspacePng(async ({ imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
       const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "minimax/MiniMax-M2.1" },
-            imageModel: { primary: "minimax/MiniMax-VL-01" },
-          },
-        },
-      };
+      try {
+        const cfg = createMinimaxImageConfig();
 
-      const tools = createOpenClawCodingTools({ config: cfg, agentDir });
-      const tool = tools.find((candidate) => candidate.name === "image");
-      expect(tool).not.toBeNull();
-      if (!tool) {
-        throw new Error("expected image tool");
+        const tools = createOpenClawCodingTools({ config: cfg, agentDir });
+        const tool = tools.find((candidate) => candidate.name === "image");
+        expect(tool).not.toBeNull();
+        if (!tool) {
+          throw new Error("expected image tool");
+        }
+
+        await expectImageToolExecOk(tool, imagePath);
+
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
       }
-
-      await expect(
-        tool.execute("t1", {
-          prompt: "Describe the image.",
-          image: imagePath,
-        }),
-      ).resolves.toMatchObject({
-        content: [{ type: "text", text: "ok" }],
-      });
-
-      expect(fetch).toHaveBeenCalledTimes(1);
-    } finally {
-      await fs.rm(workspaceParent, { recursive: true, force: true });
-    }
+    });
   });
 
   it("sandboxes image paths like the read tool", async () => {
@@ -395,15 +385,15 @@ describe("image tool MiniMax VLM routing", () => {
     global.fetch = priorFetch;
   });
 
-  it("calls /v1/coding_plan/vlm for minimax image models", async () => {
+  async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
     const fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       statusText: "OK",
       headers: new Headers(),
       json: async () => ({
-        content: "ok",
-        base_resp: { status_code: 0, status_msg: "" },
+        content: baseResp.status_code === 0 ? "ok" : "",
+        base_resp: baseResp,
       }),
     });
     // @ts-expect-error partial global
@@ -419,6 +409,11 @@ describe("image tool MiniMax VLM routing", () => {
     if (!tool) {
       throw new Error("expected image tool");
     }
+    return { fetch, tool };
+  }
+
+  it("calls /v1/coding_plan/vlm for minimax image models", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
     const res = await tool.execute("t1", {
       prompt: "Describe the image.",
@@ -440,29 +435,7 @@ describe("image tool MiniMax VLM routing", () => {
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
-    const fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: new Headers(),
-      json: async () => ({
-        content: "",
-        base_resp: { status_code: 1004, status_msg: "bad key" },
-      }),
-    });
-    // @ts-expect-error partial global
-    global.fetch = fetch;
-
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
-    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
-    };
-    const tool = createImageTool({ config: cfg, agentDir });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("expected image tool");
-    }
+    const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
 
     await expect(
       tool.execute("t1", {

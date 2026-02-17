@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../infra/update-runner.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -34,46 +35,10 @@ vi.mock("../config/config.js", () => ({
   writeConfigFile: vi.fn(),
 }));
 
-vi.mock("../infra/update-check.js", () => {
-  const parseSemver = (
-    value: string | null,
-  ): { major: number; minor: number; patch: number } | null => {
-    if (!value) {
-      return null;
-    }
-    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(value);
-    if (!m) {
-      return null;
-    }
-    const major = Number(m[1]);
-    const minor = Number(m[2]);
-    const patch = Number(m[3]);
-    if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) {
-      return null;
-    }
-    return { major, minor, patch };
-  };
-
-  const compareSemverStrings = (a: string | null, b: string | null): number | null => {
-    const pa = parseSemver(a);
-    const pb = parseSemver(b);
-    if (!pa || !pb) {
-      return null;
-    }
-    if (pa.major !== pb.major) {
-      return pa.major < pb.major ? -1 : 1;
-    }
-    if (pa.minor !== pb.minor) {
-      return pa.minor < pb.minor ? -1 : 1;
-    }
-    if (pa.patch !== pb.patch) {
-      return pa.patch < pb.patch ? -1 : 1;
-    }
-    return 0;
-  };
-
+vi.mock("../infra/update-check.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-check.js")>();
   return {
-    compareSemverStrings,
+    ...actual,
     checkUpdateStatus: vi.fn(),
     fetchNpmTagVersion: vi.fn(),
     resolveNpmChannelTag: vi.fn(),
@@ -144,7 +109,7 @@ describe("update-cli", () => {
 
   const createCaseDir = async (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-    await fs.mkdir(dir, { recursive: true });
+    // Tests only need a stable path; the directory does not have to exist because all I/O is mocked.
     return dir;
   };
 
@@ -597,7 +562,7 @@ describe("update-cli", () => {
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
     const tempDir = await createCaseDir("openclaw-update-wizard");
-    const previousGitDir = process.env.OPENCLAW_GIT_DIR;
+    const envSnapshot = captureEnv(["OPENCLAW_GIT_DIR"]);
     try {
       setTty(true);
       process.env.OPENCLAW_GIT_DIR = tempDir;
@@ -627,7 +592,7 @@ describe("update-cli", () => {
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     } finally {
-      process.env.OPENCLAW_GIT_DIR = previousGitDir;
+      envSnapshot.restore();
     }
   });
 });

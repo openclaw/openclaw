@@ -99,6 +99,10 @@ describe("models cli", () => {
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();
+    program.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {},
+    });
     registerModelsCli(program);
 
     try {

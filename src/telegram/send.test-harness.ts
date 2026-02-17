@@ -3,10 +3,16 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
+    deleteMessage: vi.fn(),
+    editMessageText: vi.fn(),
     sendMessage: vi.fn(),
+    sendPoll: vi.fn(),
     sendPhoto: vi.fn(),
+    sendVoice: vi.fn(),
+    sendAudio: vi.fn(),
     sendVideo: vi.fn(),
     sendVideoNote: vi.fn(),
+    sendAnimation: vi.fn(),
     setMessageReaction: vi.fn(),
     sendSticker: vi.fn(),
   },
