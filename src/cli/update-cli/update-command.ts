@@ -9,9 +9,9 @@ import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js"
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   channelToNpmTag,
-  DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
   normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import {
   compareSemverStrings,
@@ -498,7 +498,15 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
   const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
   const defaultChannel =
-    updateInstallKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
+    updateInstallKind === "git"
+      ? resolveEffectiveUpdateChannel({
+          installKind: "git",
+          git: {
+            tag: updateStatus.git?.tag ?? null,
+            branch: updateStatus.git?.branch ?? null,
+          },
+        }).channel
+      : DEFAULT_PACKAGE_CHANNEL;
   const channel = requestedChannel ?? storedChannel ?? defaultChannel;
 
   const explicitTag = normalizeTag(opts.tag);
