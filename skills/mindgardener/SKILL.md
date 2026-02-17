@@ -35,6 +35,7 @@ Persistent memory for AI agents. Extracts entities from daily logs, builds a wik
 3. Initialize: `garden init`
 
 For local models (zero cost, no API key):
+
 ```bash
 garden init --provider ollama
 ```
@@ -51,20 +52,20 @@ garden consolidate
 
 ## Commands
 
-| Command | What it does |
-|---------|-------------|
-| `garden init` | Initialize workspace (config, dirs, daily file) |
-| `garden extract` | Extract entities from daily logs → wiki pages |
-| `garden surprise` | Two-stage prediction error scoring |
-| `garden consolidate` | Promote high-surprise events to MEMORY.md |
-| `garden recall "query"` | Fuzzy search with graph traversal |
-| `garden entities` | List all known entities by type |
-| `garden prune` | Archive stale entities |
-| `garden merge "a" "b"` | Merge duplicate entities |
-| `garden fix type "X" "tool"` | Fix LLM extraction mistakes |
-| `garden reindex` | Rebuild graph after manual edits |
-| `garden viz` | Mermaid knowledge graph |
-| `garden stats` | Overview statistics |
+| Command                      | What it does                                    |
+| ---------------------------- | ----------------------------------------------- |
+| `garden init`                | Initialize workspace (config, dirs, daily file) |
+| `garden extract`             | Extract entities from daily logs → wiki pages   |
+| `garden surprise`            | Two-stage prediction error scoring              |
+| `garden consolidate`         | Promote high-surprise events to MEMORY.md       |
+| `garden recall "query"`      | Fuzzy search with graph traversal               |
+| `garden entities`            | List all known entities by type                 |
+| `garden prune`               | Archive stale entities                          |
+| `garden merge "a" "b"`       | Merge duplicate entities                        |
+| `garden fix type "X" "tool"` | Fix LLM extraction mistakes                     |
+| `garden reindex`             | Rebuild graph after manual edits                |
+| `garden viz`                 | Mermaid knowledge graph                         |
+| `garden stats`               | Overview statistics                             |
 
 ## How It Works
 
@@ -80,11 +81,13 @@ All storage is Markdown + JSONL. No database. `cat`, `grep`, `git` compatible.
 ## Integration
 
 ### Nightly cron
+
 ```bash
 garden extract && garden surprise && garden consolidate
 ```
 
 ### Context retrieval
+
 ```bash
 garden recall "topic from user message"
 ```
@@ -94,7 +97,7 @@ garden recall "topic from user message"
 ```yaml
 # garden.yaml
 extraction:
-  provider: google    # google, openai, anthropic, ollama, compatible
+  provider: google # google, openai, anthropic, ollama, compatible
   model: gemini-2.0-flash
 consolidation:
   surprise_threshold: 0.5
