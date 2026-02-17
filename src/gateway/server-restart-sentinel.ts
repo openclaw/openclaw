@@ -86,10 +86,13 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     (origin?.threadId != null ? String(origin.threadId) : undefined);
   // FIX #10018: Write the restart message to the transcript BEFORE delivering.
   if (entry?.sessionId) {
-    await appendAssistantMessageToSessionTranscript({
+    const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: message,
     });
+    if (!result.ok) {
+      enqueueSystemEvent(`Transcript write failed: ${result.reason}`, { sessionKey });
+    }
   }
 
   try {
