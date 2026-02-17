@@ -1054,6 +1054,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       logConfigWriteAnomalies();
       await appendWriteAudit("rename");
     } catch (err) {
+      // Clean up tmp file on validation/write failure
+      await deps.fs.promises.unlink(tmp).catch(() => {});
       await appendWriteAudit("failed", err);
       throw err;
     }
