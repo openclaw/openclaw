@@ -91,25 +91,34 @@ describe("/model chat UX", () => {
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
   const allowedModelCatalog = [
-    { provider: "anthropic", id: "claude-opus-4-5" },
-    { provider: "openai", id: "gpt-4o" },
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+    { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
   ];
+  const sessionKey = "agent:main:dm:1";
+  const storePath = "/tmp/sessions.json";
 
-  it("shows success message when session state is available", async () => {
-    const directives = parseInlineDirectives("/model openai/gpt-4o");
-    const sessionEntry: SessionEntry = {
+  type HandleParams = Parameters<typeof handleDirectiveOnly>[0];
+
+  function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
+    return {
       sessionId: "s1",
       updatedAt: Date.now(),
+      ...overrides,
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+  }
 
-    const result = await handleDirectiveOnly({
+  function createHandleParams(overrides: Partial<HandleParams>): HandleParams {
+    const entryOverride = overrides.sessionEntry;
+    const storeOverride = overrides.sessionStore;
+    const entry = entryOverride ?? createSessionEntry();
+    const store = storeOverride ?? ({ [sessionKey]: entry } as const);
+    const { sessionEntry: _ignoredEntry, sessionStore: _ignoredStore, ...rest } = overrides;
+
+    return {
       cfg: baseConfig(),
-      directives,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:dm:1",
-      storePath: "/tmp/sessions.json",
+      directives: rest.directives ?? parseInlineDirectives(""),
+      sessionKey,
+      storePath,
       elevatedEnabled: false,
       elevatedAllowed: false,
       defaultProvider: "anthropic",
@@ -122,7 +131,21 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       model: "claude-opus-4-5",
       initialModelLabel: "anthropic/claude-opus-4-5",
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
-    });
+      ...rest,
+      sessionEntry: entry,
+      sessionStore: store,
+    };
+  }
+
+  it("shows success message when session state is available", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry();
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+      }),
+    );
 
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
@@ -131,32 +154,13 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   it("shows no model message when no /model directive", async () => {
     const directives = parseInlineDirectives("hello world");
-    const sessionEntry: SessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
-
-    const result = await handleDirectiveOnly({
-      cfg: baseConfig(),
-      directives,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:dm:1",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: false,
-      elevatedAllowed: false,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      allowedModelCatalog,
-      resetModelOverride: false,
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      initialModelLabel: "anthropic/claude-opus-4-5",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-    });
+    const sessionEntry = createSessionEntry();
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+      }),
+    );
 
     expect(result?.text ?? "").not.toContain("Model set to");
     expect(result?.text ?? "").not.toContain("failed");
@@ -164,33 +168,15 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   it("persists thinkingLevel=off (does not clear)", async () => {
     const directives = parseInlineDirectives("/think off");
-    const sessionEntry: SessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      thinkingLevel: "low",
-    };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
-
-    const result = await handleDirectiveOnly({
-      cfg: baseConfig(),
-      directives,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:dm:1",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: false,
-      elevatedAllowed: false,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      allowedModelCatalog,
-      resetModelOverride: false,
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      initialModelLabel: "anthropic/claude-opus-4-5",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-    });
+    const sessionEntry = createSessionEntry({ thinkingLevel: "low" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
 
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");

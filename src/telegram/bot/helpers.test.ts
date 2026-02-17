@@ -5,6 +5,7 @@ import {
   expandTextLinks,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
+  resolveTelegramThreadSpec,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -32,6 +33,34 @@ describe("resolveTelegramForumThreadId", () => {
   });
 });
 
+describe("resolveTelegramThreadSpec", () => {
+  it("returns dm scope for plain DM (no forum, no thread id)", () => {
+    expect(resolveTelegramThreadSpec({ isGroup: false })).toEqual({ scope: "dm" });
+  });
+
+  it("preserves thread id with dm scope when DM has thread id but is not a forum", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: false, isForum: false, messageThreadId: 42 }),
+    ).toEqual({ id: 42, scope: "dm" });
+  });
+
+  it("returns forum scope when DM has isForum and thread id", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: false, isForum: true, messageThreadId: 99 }),
+    ).toEqual({ id: 99, scope: "forum" });
+  });
+
+  it("falls back to dm scope when DM has isForum but no thread id", () => {
+    expect(resolveTelegramThreadSpec({ isGroup: false, isForum: true })).toEqual({ scope: "dm" });
+  });
+
+  it("delegates to group path for groups", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: true, isForum: true, messageThreadId: 50 }),
+    ).toEqual({ id: 50, scope: "forum" });
+  });
+});
+
 describe("buildTelegramThreadParams", () => {
   it("omits General topic thread id for message sends", () => {
     expect(buildTelegramThreadParams({ id: 1, scope: "forum" })).toBeUndefined();
@@ -43,9 +72,30 @@ describe("buildTelegramThreadParams", () => {
     });
   });
 
-  it("keeps thread id=1 for dm threads", () => {
+  it("includes thread id for dm topics", () => {
     expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
       message_thread_id: 1,
+    });
+    expect(buildTelegramThreadParams({ id: 2, scope: "dm" })).toEqual({
+      message_thread_id: 2,
+    });
+  });
+
+  it("normalizes dm thread ids and skips non-positive values", () => {
+    expect(buildTelegramThreadParams({ id: 0, scope: "dm" })).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: -1, scope: "dm" })).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: 1.9, scope: "dm" })).toEqual({
+      message_thread_id: 1,
+    });
+  });
+
+  it("handles thread id 0 for non-dm scopes", () => {
+    // id=0 should be included for forum and none scopes (not falsy)
+    expect(buildTelegramThreadParams({ id: 0, scope: "forum" })).toEqual({
+      message_thread_id: 0,
+    });
+    expect(buildTelegramThreadParams({ id: 0, scope: "none" })).toEqual({
+      message_thread_id: 0,
     });
   });
 

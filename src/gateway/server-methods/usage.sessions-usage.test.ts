@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -64,10 +65,20 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       cacheWriteCost: 0,
       missingCostEntries: 0,
     })),
+    loadSessionUsageTimeSeries: vi.fn(async () => ({
+      sessionId: "s-opus",
+      points: [],
+    })),
+    loadSessionLogs: vi.fn(async () => []),
   };
 });
 
-import { discoverAllSessions } from "../../infra/session-cost-usage.js";
+import {
+  discoverAllSessions,
+  loadSessionCostSummary,
+  loadSessionLogs,
+  loadSessionUsageTimeSeries,
+} from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
@@ -95,7 +106,9 @@ describe("sessions.usage", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<unknown> };
+    const result = respond.mock.calls[0]?.[1] as unknown as {
+      sessions: Array<{ key: string; agentId: string }>;
+    };
     expect(result.sessions).toHaveLength(2);
 
     // Sorted by most recent first (mtime=200 -> opus first).
@@ -108,7 +121,7 @@ describe("sessions.usage", () => {
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
@@ -148,12 +161,12 @@ describe("sessions.usage", () => {
       const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<{ key: string }> };
       expect(result.sessions).toHaveLength(1);
       expect(result.sessions[0]?.key).toBe(storeKey);
+      expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
+      expect(
+        vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
+      ).toBe(true);
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
+      envSnapshot.restore();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -175,5 +188,33 @@ describe("sessions.usage", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
     expect(error?.message).toContain("Invalid session reference");
+  });
+
+  it("passes parsed agentId into sessions.usage.timeseries", async () => {
+    const respond = vi.fn();
+
+    await usageHandlers["sessions.usage.timeseries"]({
+      respond,
+      params: {
+        key: "agent:opus:s-opus",
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
+
+    expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalled();
+    expect(vi.mocked(loadSessionUsageTimeSeries).mock.calls[0]?.[0]?.agentId).toBe("opus");
+  });
+
+  it("passes parsed agentId into sessions.usage.logs", async () => {
+    const respond = vi.fn();
+
+    await usageHandlers["sessions.usage.logs"]({
+      respond,
+      params: {
+        key: "agent:opus:s-opus",
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
+
+    expect(vi.mocked(loadSessionLogs)).toHaveBeenCalled();
+    expect(vi.mocked(loadSessionLogs).mock.calls[0]?.[0]?.agentId).toBe("opus");
   });
 });

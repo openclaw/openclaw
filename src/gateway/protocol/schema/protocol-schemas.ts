@@ -37,6 +37,8 @@ import {
 } from "./agents-models-skills.js";
 import {
   ChannelsLogoutParamsSchema,
+  TalkConfigParamsSchema,
+  TalkConfigResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   TalkModeParamsSchema,
@@ -101,6 +103,14 @@ import {
   LogsTailParamsSchema,
   LogsTailResultSchema,
 } from "./logs-chat.js";
+import {
+  MeshPlanAutoParamsSchema,
+  MeshPlanParamsSchema,
+  MeshRetryParamsSchema,
+  MeshRunParamsSchema,
+  MeshStatusParamsSchema,
+  MeshWorkflowPlanSchema,
+} from "./mesh.js";
 import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
@@ -191,6 +201,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   WizardStartResult: WizardStartResultSchema,
   WizardStatusResult: WizardStatusResultSchema,
   TalkModeParams: TalkModeParamsSchema,
+  TalkConfigParams: TalkConfigParamsSchema,
+  TalkConfigResult: TalkConfigResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
@@ -250,6 +262,12 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,
   ChatEvent: ChatEventSchema,
+  MeshPlanParams: MeshPlanParamsSchema,
+  MeshPlanAutoParams: MeshPlanAutoParamsSchema,
+  MeshWorkflowPlan: MeshWorkflowPlanSchema,
+  MeshRunParams: MeshRunParamsSchema,
+  MeshStatusParams: MeshStatusParamsSchema,
+  MeshRetryParams: MeshRetryParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,

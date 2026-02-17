@@ -1,15 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  ChannelCapabilities,
-  ChannelCommandAdapter,
-  ChannelElevatedAdapter,
-  ChannelGroupAdapter,
-  ChannelId,
-  ChannelAgentPromptAdapter,
-  ChannelMentionAdapter,
-  ChannelPlugin,
-  ChannelThreadingAdapter,
-} from "./plugins/types.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
@@ -39,6 +28,19 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
+import type {
+  ChannelCapabilities,
+  ChannelCommandAdapter,
+  ChannelElevatedAdapter,
+  ChannelGroupAdapter,
+  ChannelId,
+  ChannelAgentPromptAdapter,
+  ChannelMentionAdapter,
+  ChannelPlugin,
+  ChannelThreadingContext,
+  ChannelThreadingAdapter,
+  ChannelThreadingToolContext,
+} from "./plugins/types.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
 export type ChannelDock = {
@@ -79,6 +81,21 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
+
+function buildDirectOrGroupThreadToolContext(params: {
+  context: ChannelThreadingContext;
+  hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
+}): ChannelThreadingToolContext {
+  const isDirect = params.context.ChatType?.toLowerCase() === "direct";
+  const channelId =
+    (isDirect ? (params.context.From ?? params.context.To) : params.context.To)?.trim() ||
+    undefined;
+  return {
+    currentChannelId: channelId,
+    currentThreadTs: params.context.ReplyToId,
+    hasRepliedRef: params.hasRepliedRef,
+  };
+}
 // Channel docks: lightweight channel metadata/behavior for shared code paths.
 //
 // Rules:
@@ -115,7 +132,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveTelegramGroupToolPolicy,
     },
     threading: {
-      resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "first",
+      resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "off",
       buildToolContext: ({ context, hasRepliedRef }) => {
         const threadId = context.MessageThreadId ?? context.ReplyToId;
         return {
@@ -191,14 +208,27 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     elevated: {
-      allowFromFallback: ({ cfg }) => cfg.channels?.discord?.dm?.allowFrom,
+      allowFromFallback: ({ cfg }) =>
+        cfg.channels?.discord?.allowFrom ?? cfg.channels?.discord?.dm?.allowFrom,
     },
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom ?? []).map((entry) =>
+      resolveAllowFrom: ({ cfg, accountId }) => {
+        const account = resolveDiscordAccount({ cfg, accountId });
+        return (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map((entry) =>
           String(entry),
-        ),
-      formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
+        );
+      },
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) =>
+            entry
+              .replace(/^discord:/i, "")
+              .replace(/^user:/i, "")
+              .replace(/^pk:/i, "")
+              .toLowerCase(),
+          ),
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,
@@ -355,8 +385,12 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveSlackAccount({ cfg, accountId }).dm?.allowFrom ?? []).map((entry) => String(entry)),
+      resolveAllowFrom: ({ cfg, accountId }) => {
+        const account = resolveSlackAccount({ cfg, accountId });
+        return (account.config.allowFrom ?? account.dm?.allowFrom ?? []).map((entry) =>
+          String(entry),
+        );
+      },
       formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
     },
     groups: {
@@ -369,7 +403,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       resolveReplyToMode: ({ cfg, accountId, chatType }) =>
         resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
-      allowTagsWhenOff: true,
+      allowExplicitReplyTagsWhenOff: true,
       buildToolContext: (params) => buildSlackThreadingToolContext(params),
     },
   },
@@ -397,16 +431,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           .filter(Boolean),
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => {
-        const isDirect = context.ChatType?.toLowerCase() === "direct";
-        const channelId =
-          (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
-        return {
-          currentChannelId: channelId,
-          currentThreadTs: context.ReplyToId,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: ({ context, hasRepliedRef }) =>
+        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
     },
   },
   imessage: {
@@ -430,16 +456,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveIMessageGroupToolPolicy,
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => {
-        const isDirect = context.ChatType?.toLowerCase() === "direct";
-        const channelId =
-          (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
-        return {
-          currentChannelId: channelId,
-          currentThreadTs: context.ReplyToId,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: ({ context, hasRepliedRef }) =>
+        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
     },
   },
 };

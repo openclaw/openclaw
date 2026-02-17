@@ -1,4 +1,17 @@
 /**
+ * Relay abort without forwarding the Event argument as the abort reason.
+ * Using .bind() avoids closure scope capture (memory leak prevention).
+ */
+function relayAbort(this: AbortController) {
+  this.abort();
+}
+
+/** Returns a bound abort relay for use as an event listener. */
+export function bindAbortRelay(controller: AbortController): () => void {
+  return relayAbort.bind(controller);
+}
+
+/**
  * Fetch wrapper that adds timeout support via AbortController.
  *
  * @param url - The URL to fetch
@@ -15,7 +28,7 @@ export async function fetchWithTimeout(
   fetchFn: typeof fetch = fetch,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  const timer = setTimeout(controller.abort.bind(controller), Math.max(1, timeoutMs));
   try {
     return await fetchFn(url, { ...init, signal: controller.signal });
   } finally {

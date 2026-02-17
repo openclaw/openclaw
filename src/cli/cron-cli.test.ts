@@ -1,19 +1,21 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 
-const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-  if (method === "cron.status") {
-    return { enabled: true };
-  }
-  return { ok: true, params };
-});
+const callGatewayFromCli = vi.fn(
+  async (method: string, _opts: unknown, params?: unknown, _timeoutMs?: number) => {
+    if (method === "cron.status") {
+      return { enabled: true };
+    }
+    return { ok: true, params };
+  },
+);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
     callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      callGatewayFromCli(method, opts, params, extra),
+      callGatewayFromCli(method, opts, params, extra as number | undefined),
   };
 });
 
@@ -27,14 +29,35 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
+const { registerCronCli } = await import("./cron-cli.js");
+
+type CronUpdatePatch = {
+  patch?: {
+    payload?: { message?: string };
+    delivery?: { mode?: string; channel?: string; to?: string; bestEffort?: boolean };
+  };
+};
+
+function buildProgram() {
+  const program = new Command();
+  program.exitOverride();
+  registerCronCli(program);
+  return program;
+}
+
+async function runCronEditAndGetPatch(editArgs: string[]): Promise<CronUpdatePatch> {
+  callGatewayFromCli.mockClear();
+  const program = buildProgram();
+  await program.parseAsync(["cron", "edit", "job-1", ...editArgs], { from: "user" });
+  const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+  return (updateCall?.[2] ?? {}) as CronUpdatePatch;
+}
+
 describe("cron cli", () => {
   it("trims model and thinking on cron add", { timeout: 60_000 }, async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       [
@@ -68,10 +91,7 @@ describe("cron cli", () => {
   it("defaults isolated cron add to announce delivery", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       [
@@ -98,10 +118,7 @@ describe("cron cli", () => {
   it("infers sessionTarget from payload when --session is omitted", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       ["cron", "add", "--name", "Main reminder", "--cron", "* * * * *", "--system-event", "hi"],
@@ -129,10 +146,7 @@ describe("cron cli", () => {
   it("supports --keep-after-run on cron add", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       [
@@ -159,10 +173,7 @@ describe("cron cli", () => {
   it("sends agent id on cron add", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       [
@@ -190,10 +201,7 @@ describe("cron cli", () => {
   it("omits empty model and thinking on cron edit", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       ["cron", "edit", "job-1", "--message", "hello", "--model", "   ", "--thinking", "  "],
@@ -212,10 +220,7 @@ describe("cron cli", () => {
   it("trims model and thinking on cron edit", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       [
@@ -244,10 +249,7 @@ describe("cron cli", () => {
   it("sets and clears agent id on cron edit", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(["cron", "edit", "job-1", "--agent", " Ops ", "--message", "hello"], {
       from: "user",
@@ -269,10 +271,7 @@ describe("cron cli", () => {
   it("allows model/thinking updates without --message", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(["cron", "edit", "job-1", "--model", "opus", "--thinking", "low"], {
       from: "user",
@@ -291,10 +290,7 @@ describe("cron cli", () => {
   it("updates delivery settings without requiring --message", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(
       ["cron", "edit", "job-1", "--deliver", "--channel", "telegram", "--to", "19098680"],
@@ -319,10 +315,7 @@ describe("cron cli", () => {
   it("supports --no-deliver on cron edit", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     await program.parseAsync(["cron", "edit", "job-1", "--no-deliver"], { from: "user" });
 
@@ -338,10 +331,7 @@ describe("cron cli", () => {
   it("does not include undefined delivery fields when updating message", async () => {
     callGatewayFromCli.mockClear();
 
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
+    const program = buildProgram();
 
     // Update message without delivery flags - should NOT include undefined delivery fields
     await program.parseAsync(["cron", "edit", "job-1", "--message", "Updated message"], {
@@ -374,37 +364,15 @@ describe("cron cli", () => {
   });
 
   it("includes delivery fields when explicitly provided with message", async () => {
-    callGatewayFromCli.mockClear();
-
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
-
-    // Update message AND delivery - should include both
-    await program.parseAsync(
-      [
-        "cron",
-        "edit",
-        "job-1",
-        "--message",
-        "Updated message",
-        "--deliver",
-        "--channel",
-        "telegram",
-        "--to",
-        "19098680",
-      ],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: {
-        payload?: { message?: string };
-        delivery?: { mode?: string; channel?: string; to?: string };
-      };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "Updated message",
+      "--deliver",
+      "--channel",
+      "telegram",
+      "--to",
+      "19098680",
+    ]);
 
     // Should include everything
     expect(patch?.patch?.payload?.message).toBe("Updated message");
@@ -414,25 +382,11 @@ describe("cron cli", () => {
   });
 
   it("includes best-effort delivery when provided with message", async () => {
-    callGatewayFromCli.mockClear();
-
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
-
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--message", "Updated message", "--best-effort-deliver"],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: {
-        payload?: { message?: string };
-        delivery?: { bestEffort?: boolean; mode?: string };
-      };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "Updated message",
+      "--best-effort-deliver",
+    ]);
 
     expect(patch?.patch?.payload?.message).toBe("Updated message");
     expect(patch?.patch?.delivery?.mode).toBe("announce");
@@ -440,25 +394,11 @@ describe("cron cli", () => {
   });
 
   it("includes no-best-effort delivery when provided with message", async () => {
-    callGatewayFromCli.mockClear();
-
-    const { registerCronCli } = await import("./cron-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerCronCli(program);
-
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--message", "Updated message", "--no-best-effort-deliver"],
-      { from: "user" },
-    );
-
-    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
-    const patch = updateCall?.[2] as {
-      patch?: {
-        payload?: { message?: string };
-        delivery?: { bestEffort?: boolean; mode?: string };
-      };
-    };
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "Updated message",
+      "--no-best-effort-deliver",
+    ]);
 
     expect(patch?.patch?.payload?.message).toBe("Updated message");
     expect(patch?.patch?.delivery?.mode).toBe("announce");
