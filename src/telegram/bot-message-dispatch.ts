@@ -268,6 +268,7 @@ export const dispatchTelegramMessage = async ({
   const deliveryState = {
     delivered: false,
     skippedNonSilent: 0,
+    finalAttempted: false,
   };
   let finalizedViaPreviewMessage = false;
   const clearGroupHistory = () => {
@@ -299,6 +300,7 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         deliver: async (payload, info) => {
           if (info.kind === "final") {
+            deliveryState.finalAttempted = true;
             await flushDraft();
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             const previewMessageId = draftStream?.messageId();
@@ -461,7 +463,22 @@ export const dispatchTelegramMessage = async ({
     }
   }
   let sentFallback = false;
-  if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
+  // Send fallback if nothing was delivered AND either:
+  // 1. Something was skipped (non-silent), OR
+  // 2. No final reply was even attempted (possible bug in reply generation), OR
+  // 3. Draft stream was created but never sent a preview (streamMode active but no delivery)
+  const draftStreamCreatedButUnused = Boolean(draftStream && !hasStreamedMessage);
+  const shouldSendFallback =
+    !deliveryState.delivered &&
+    (deliveryState.skippedNonSilent > 0 ||
+      (!deliveryState.finalAttempted && queuedFinal) ||
+      draftStreamCreatedButUnused);
+  if (shouldSendFallback) {
+    logVerbose(
+      `telegram: sending fallback response (skippedNonSilent=${deliveryState.skippedNonSilent}, ` +
+        `finalAttempted=${deliveryState.finalAttempted}, queuedFinal=${queuedFinal}, ` +
+        `draftStreamCreatedButUnused=${draftStreamCreatedButUnused})`,
+    );
     const result = await deliverReplies({
       replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
       ...deliveryBaseOptions,

@@ -441,4 +441,45 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     );
   });
+
+  it("sends fallback when streamMode=partial but no streaming and no final delivery (#18195)", async () => {
+    const draftStream = createDraftStream(undefined); // No preview message sent
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async () => {
+      // Simulate: long tool-heavy run completes, but no onPartialReply calls (no streaming text)
+      // and no final reply delivered (empty or normalized away)
+      return { queuedFinal: false }; // No final reply queued
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // Should send fallback message because:
+    // - draftStream was created (streamMode=partial)
+    // - No streaming happened (hasStreamedMessage=false)
+    // - No final delivery (delivered=false)
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+  });
+
+  it("does not send fallback when streamMode=partial and final delivery succeeds", async () => {
+    const draftStream = createDraftStream(undefined);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Here is your answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // Should NOT send fallback because final delivery succeeded.
+    const fallbackCall = deliverReplies.mock.calls.find(
+      (call) => call[0]?.replies?.[0]?.text === "No response generated. Please try again.",
+    );
+    expect(fallbackCall).toBeUndefined();
+  });
 });
