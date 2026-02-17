@@ -1,6 +1,8 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
@@ -11,6 +13,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
+  normalizeAccountId as normalizeAccountIdFromSessionKey,
   sanitizeAgentId,
 } from "./session-key.js";
 
@@ -76,15 +79,42 @@ function normalizeAccountId(value: string | undefined | null): string {
   return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
 }
 
-function matchesAccountId(match: string | undefined, actual: string): boolean {
+function resolveChannelDefaultAccountIdForRoute(cfg: OpenClawConfig, channel: string): string {
+  try {
+    const plugin = getChannelPlugin(channel);
+    if (!plugin) {
+      return DEFAULT_ACCOUNT_ID;
+    }
+    return normalizeAccountIdFromSessionKey(resolveChannelDefaultAccountId({ plugin, cfg }));
+  } catch {
+    // Plugin registry not initialized - fall back to config introspection
+    const channelCfg = cfg.channels?.[channel];
+    if (channelCfg && typeof channelCfg === "object" && "accounts" in channelCfg) {
+      const accounts = (channelCfg as { accounts?: Record<string, unknown> }).accounts;
+      if (accounts && typeof accounts === "object") {
+        const accountIds = Object.keys(accounts);
+        if (accountIds.length === 1) {
+          return normalizeAccountIdFromSessionKey(accountIds[0]);
+        }
+      }
+    }
+    return DEFAULT_ACCOUNT_ID;
+  }
+}
+
+function matchesAccountId(
+  match: string | undefined,
+  actual: string,
+  channelDefaultAccountId: string,
+): boolean {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
-    return actual === DEFAULT_ACCOUNT_ID;
+    return actual === channelDefaultAccountId;
   }
   if (trimmed === "*") {
     return true;
   }
-  return trimmed === actual;
+  return normalizeAccountIdFromSessionKey(trimmed) === actual;
 }
 
 export function buildAgentSessionKey(params: {
@@ -180,6 +210,7 @@ function getEvaluatedBindingsForChannelAccount(
   cfg: OpenClawConfig,
   channel: string,
   accountId: string,
+  channelDefaultAccountId: string,
 ): EvaluatedBinding[] {
   const bindingsRef = cfg.bindings;
   const existing = evaluatedBindingsCacheByCfg.get(cfg);
@@ -191,7 +222,7 @@ function getEvaluatedBindingsForChannelAccount(
     evaluatedBindingsCacheByCfg.set(cfg, cache);
   }
 
-  const cacheKey = `${channel}\t${accountId}`;
+  const cacheKey = `${channel}\t${accountId}\t${channelDefaultAccountId}`;
   const hit = cache.byChannelAccount.get(cacheKey);
   if (hit) {
     return hit;
@@ -204,7 +235,7 @@ function getEvaluatedBindingsForChannelAccount(
     if (!matchesChannel(binding.match, channel)) {
       return [];
     }
-    if (!matchesAccountId(binding.match?.accountId, accountId)) {
+    if (!matchesAccountId(binding.match?.accountId, accountId, channelDefaultAccountId)) {
       return [];
     }
     return [{ binding, match: normalizeBindingMatch(binding.match) }];
@@ -295,13 +326,19 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
+  const channelDefaultAccountId = resolveChannelDefaultAccountIdForRoute(input.cfg, channel);
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
 
-  const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
+  const bindings = getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    channel,
+    accountId,
+    channelDefaultAccountId,
+  );
 
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
