@@ -64,16 +64,18 @@ describe("xmtpPlugin", () => {
       expect(ids).toContain("default");
     });
 
-    it("isConfigured returns false without walletKey", () => {
+    it("isConfigured returns false without walletKey", async () => {
       // #given
       const cfg = { channels: {} };
       const account = xmtpPlugin.config.resolveAccount(cfg, "default");
+      const isConfigured = xmtpPlugin.config.isConfigured;
+      if (!isConfigured) return;
 
       // #then
-      expect(xmtpPlugin.config.isConfigured(account)).toBe(false);
+      expect(await isConfigured(account, cfg)).toBe(false);
     });
 
-    it("isConfigured returns false without dbEncryptionKey", () => {
+    it("isConfigured returns false without dbEncryptionKey", async () => {
       // #given
       const cfg = {
         channels: {
@@ -83,9 +85,11 @@ describe("xmtpPlugin", () => {
         },
       };
       const account = xmtpPlugin.config.resolveAccount(cfg, "default");
+      const isConfigured = xmtpPlugin.config.isConfigured;
+      if (!isConfigured) return;
 
       // #then
-      expect(xmtpPlugin.config.isConfigured(account)).toBe(false);
+      expect(await isConfigured(account, cfg)).toBe(false);
     });
   });
 

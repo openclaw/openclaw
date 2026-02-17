@@ -5,6 +5,7 @@ import {
   createReplyPrefixOptions,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
   type OpenClawConfig,
   type ReplyPayload,
@@ -82,9 +83,9 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
       const bus = activeBuses.get(DEFAULT_ACCOUNT_ID);
       if (bus) {
         try {
-          await bus.sendText(id, "Your pairing request has been approved!");
+          await bus.sendText(id, PAIRING_APPROVED_MESSAGE);
         } catch {
-          // Best-effort: conversation ID may not match
+          // Best-effort: pairing notifications should never fail the approval flow.
         }
       }
     },
@@ -202,7 +203,7 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
         dbEncryptionKey: account.dbEncryptionKey,
         env: account.env,
         dbPath: account.config.dbPath,
-        onMessage: async ({ senderAddress, conversationId, text }) => {
+        onMessage: async ({ senderAddress, conversationId, text, messageId }) => {
           ctx.log?.debug?.(
             `[${account.accountId}] DM from ${senderAddress}: ${text.slice(0, 50)}...`,
           );
@@ -240,7 +241,8 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
             SenderId: senderAddress,
             Provider: "xmtp",
             Surface: "xmtp",
-            MessageSid: `xmtp-${Date.now()}`,
+            MessageSid: messageId,
+            MessageSidFull: messageId,
             OriginatingChannel: "xmtp",
             OriginatingTo: `xmtp:${account.address}`,
           });

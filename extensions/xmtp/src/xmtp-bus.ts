@@ -23,9 +23,63 @@ export interface XmtpBusOptions {
 }
 
 export interface XmtpBusHandle {
-  sendText(conversationId: string, text: string): Promise<void>;
+  sendText(target: string, text: string): Promise<void>;
   getAddress(): string;
   close(): Promise<void>;
+}
+
+type XmtpConversationHandle = {
+  sendText: (text: string) => Promise<unknown>;
+};
+
+type XmtpAgentHandle = Awaited<ReturnType<typeof Agent.create>>;
+
+function looksLikeEthAddress(value: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(value.trim());
+}
+
+async function resolveConversationForTarget(
+  agent: XmtpAgentHandle,
+  target: string,
+): Promise<XmtpConversationHandle> {
+  const trimmedTarget = target.trim();
+  if (!trimmedTarget) {
+    throw new Error("Target is required");
+  }
+
+  if (looksLikeEthAddress(trimmedTarget)) {
+    const normalizedAddress = normalizeEthAddress(trimmedTarget);
+    const agentWithAddressDm = agent as XmtpAgentHandle & {
+      createDmWithAddress?: (address: string) => Promise<XmtpConversationHandle | null>;
+    };
+    if (typeof agentWithAddressDm.createDmWithAddress === "function") {
+      const dmConversation = await agentWithAddressDm.createDmWithAddress(normalizedAddress);
+      if (dmConversation) {
+        return dmConversation;
+      }
+      throw new Error(`Conversation not found for address: ${normalizedAddress}`);
+    }
+
+    const conversationsWithAddressDm = agent.client.conversations as {
+      createDmWithAddress?: (address: string) => Promise<XmtpConversationHandle | null>;
+    };
+    if (typeof conversationsWithAddressDm.createDmWithAddress === "function") {
+      const dmConversation =
+        await conversationsWithAddressDm.createDmWithAddress(normalizedAddress);
+      if (dmConversation) {
+        return dmConversation;
+      }
+      throw new Error(`Conversation not found for address: ${normalizedAddress}`);
+    }
+
+    throw new Error("XMTP SDK does not support address-based DM creation");
+  }
+
+  const conversation = await agent.client.conversations.getConversationById(trimmedTarget);
+  if (!conversation) {
+    throw new Error(`Conversation not found: ${trimmedTarget}`);
+  }
+  return conversation as XmtpConversationHandle;
 }
 
 function resolveDbDirectory(env: string, configDbPath?: string): string {
@@ -71,7 +125,11 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
 
   agent.on("text", async (ctx) => {
     try {
-      const senderAddress = await ctx.getSenderAddress();
+      const senderAddressRaw = await ctx.getSenderAddress();
+      if (!senderAddressRaw) {
+        throw new Error("XMTP message missing sender address");
+      }
+      const senderAddress = senderAddressRaw.toLowerCase();
       const senderInboxId = ctx.message.senderInboxId;
       const conversationId = ctx.conversation.id;
       const isDm = ctx.isDm();
@@ -81,7 +139,7 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
       if (!isDm) return;
 
       await onMessage({
-        senderAddress: senderAddress.toLowerCase(),
+        senderAddress,
         senderInboxId,
         conversationId,
         isDm,
@@ -101,11 +159,8 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
   onConnect?.();
 
   return {
-    async sendText(conversationId: string, text: string): Promise<void> {
-      const conversation = await agent.client.conversations.getConversationById(conversationId);
-      if (!conversation) {
-        throw new Error(`Conversation not found: ${conversationId}`);
-      }
+    async sendText(target: string, text: string): Promise<void> {
+      const conversation = await resolveConversationForTarget(agent, target);
       await conversation.sendText(text);
     },
 
