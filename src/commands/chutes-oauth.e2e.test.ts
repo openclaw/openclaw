@@ -32,8 +32,8 @@ function createOAuthFetchFn(params: {
   refreshToken: string;
   username: string;
   passthrough?: boolean;
-}): typeof fetch {
-  return withFetchPreconnect(async (input, init) => {
+}) {
+  return withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = urlToString(input);
     if (url === CHUTES_TOKEN_ENDPOINT) {
       return new Response(
