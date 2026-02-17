@@ -1,19 +1,6 @@
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
-/**
- * Strip inline directive tags (`[[reply_to_current]]`, `[[reply_to:<id>]]`,
- * `[[audio_as_voice]]`) that should never be rendered to the user.
- * Matches the same patterns as `src/utils/directive-tags.ts`.
- */
-function stripDirectiveTags(text: string): string {
-  return text
-    .replace(/\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+|audio_as_voice)\s*\]\]/gi, "")
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
-}
-
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
@@ -22,10 +9,7 @@ export function extractText(message: unknown): string | null {
   const role = typeof m.role === "string" ? m.role : "";
   const content = m.content;
   if (typeof content === "string") {
-    let processed = role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
-    if (role === "assistant") {
-      processed = stripDirectiveTags(processed);
-    }
+    const processed = role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
     return processed;
   }
   if (Array.isArray(content)) {
@@ -40,18 +24,12 @@ export function extractText(message: unknown): string | null {
       .filter((v): v is string => typeof v === "string");
     if (parts.length > 0) {
       const joined = parts.join("\n");
-      let processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
-      if (role === "assistant") {
-        processed = stripDirectiveTags(processed);
-      }
+      const processed = role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
       return processed;
     }
   }
   if (typeof m.text === "string") {
-    let processed = role === "assistant" ? stripThinkingTags(m.text) : stripEnvelope(m.text);
-    if (role === "assistant") {
-      processed = stripDirectiveTags(processed);
-    }
+    const processed = role === "assistant" ? stripThinkingTags(m.text) : stripEnvelope(m.text);
     return processed;
   }
   return null;
