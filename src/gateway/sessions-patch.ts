@@ -286,34 +286,45 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      if (!params.loadGatewayModelCatalog) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
-        };
+      if (trimmed.toLowerCase() === "default") {
+        applyModelOverrideToSessionEntry({
+          entry: next,
+          selection: {
+            provider: resolvedDefault.provider,
+            model: resolvedDefault.model,
+            isDefault: true,
+          },
+        });
+      } else {
+        if (!params.loadGatewayModelCatalog) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          };
+        }
+        const catalog = await params.loadGatewayModelCatalog();
+        const resolved = resolveAllowedModelRef({
+          cfg,
+          catalog,
+          raw: trimmed,
+          defaultProvider: resolvedDefault.provider,
+          defaultModel: resolvedDefault.model,
+        });
+        if ("error" in resolved) {
+          return invalid(resolved.error);
+        }
+        const isDefault =
+          resolved.ref.provider === resolvedDefault.provider &&
+          resolved.ref.model === resolvedDefault.model;
+        applyModelOverrideToSessionEntry({
+          entry: next,
+          selection: {
+            provider: resolved.ref.provider,
+            model: resolved.ref.model,
+            isDefault,
+          },
+        });
       }
-      const catalog = await params.loadGatewayModelCatalog();
-      const resolved = resolveAllowedModelRef({
-        cfg,
-        catalog,
-        raw: trimmed,
-        defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
-      });
-      if ("error" in resolved) {
-        return invalid(resolved.error);
-      }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
-      applyModelOverrideToSessionEntry({
-        entry: next,
-        selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
-        },
-      });
     }
   }
 
