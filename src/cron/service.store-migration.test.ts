@@ -58,7 +58,7 @@ describe("CronService store migrations", () => {
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok", summary: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
     });
 
     await cron.start();
