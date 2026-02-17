@@ -7,6 +7,7 @@ import type {
   SandboxDockerSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
+import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelConfig =
@@ -28,6 +29,8 @@ export type AgentConfig = {
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
+  /** Per-agent QMD collection paths (appended to global `memory.qmd.paths`). */
+  qmd?: { paths?: MemoryQmdIndexPath[] };
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */

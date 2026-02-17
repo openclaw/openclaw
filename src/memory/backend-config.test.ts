@@ -130,6 +130,44 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(360_000);
   });
 
+  it("merges per-agent qmd.paths with global paths", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/workspace/root" },
+        list: [
+          {
+            id: "alice",
+            workspace: "/workspace/alice",
+            qmd: {
+              paths: [{ path: "~/alice/skills", name: "skills", pattern: "**/*.md" }],
+            },
+          },
+          { id: "bob", workspace: "/workspace/bob" },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          paths: [{ path: "~/shared/GUIDE.md", name: "shared-guide" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const aliceResolved = resolveMemoryBackendConfig({ cfg, agentId: "alice" });
+    const bobResolved = resolveMemoryBackendConfig({ cfg, agentId: "bob" });
+
+    const aliceNames = (aliceResolved.qmd?.collections ?? []).map((c) => c.name);
+    const bobNames = (bobResolved.qmd?.collections ?? []).map((c) => c.name);
+
+    // Alice should have global + per-agent paths
+    expect(aliceNames).toContain("shared-guide-alice");
+    expect(aliceNames).toContain("skills-alice");
+
+    // Bob should have global paths only (no per-agent qmd config)
+    expect(bobNames).toContain("shared-guide-bob");
+    expect(bobNames).not.toContain("skills-bob");
+  });
+
   it("resolves qmd search mode override", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },

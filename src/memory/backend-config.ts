@@ -273,9 +273,15 @@ export function resolveMemoryBackendConfig(params: {
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
+
+  // Per-agent QMD paths from agents.list[].qmd.paths (appended after global paths).
+  const agentCfg = params.cfg.agents?.list?.find((a) => a.id === params.agentId);
+  const perAgentPaths = agentCfg?.qmd?.paths;
+
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
     ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
+    ...resolveCustomPaths(perAgentPaths, workspaceDir, nameSet, params.agentId),
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
