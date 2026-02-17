@@ -12,10 +12,10 @@ import {
 import { sensitive } from "./zod-schema.sensitive.js";
 
 // Regex for validating domain patterns in urlAllowlist
-// Valid: example.com, *.github.com, *.example.co.uk
+// Valid: example.com, *.github.com, *.example.co.uk, localhost
 // Invalid: "", https://example.com, example.com/path, *, *.
 const DOMAIN_PATTERN_REGEX =
-  /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/;
+  /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/;
 
 export const HeartbeatSchema = z
   .object({
