@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
+import { loadSessionStore } from "../config/sessions.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseMessageWithAttachments } from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry,
@@ -178,6 +185,45 @@ function queueSessionStoreTouch(params: {
   });
 }
 
+function resolveFallbackDeliveryRoute(params: {
+  storePath: LoadedSessionEntry["storePath"];
+  preferredChannel?: string;
+}): { channel?: string; to?: string } {
+  const { storePath, preferredChannel } = params;
+  if (!storePath) {
+    return {};
+  }
+
+  const targetChannel = preferredChannel?.trim().toLowerCase();
+  const store = loadSessionStore(storePath);
+  const candidates = Object.values(store)
+    .filter((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      const channel = typeof entry.lastChannel === "string" ? entry.lastChannel.trim() : "";
+      const to = typeof entry.lastTo === "string" ? entry.lastTo.trim() : "";
+      if (!channel || !to) {
+        return false;
+      }
+      if (targetChannel && channel.toLowerCase() !== targetChannel) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  const winner = candidates[0];
+  if (!winner) {
+    return {};
+  }
+
+  return {
+    channel: typeof winner.lastChannel === "string" ? winner.lastChannel.trim() : undefined,
+    to: typeof winner.lastTo === "string" ? winner.lastTo.trim() : undefined,
+  };
+}
+
 function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   let payload: unknown;
   try {
@@ -191,6 +237,35 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   const obj = payload as Record<string, unknown>;
   const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
   return sessionKey.length > 0 ? sessionKey : null;
+}
+
+async function sendReceiptAck(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  deps: NodeEventContext["deps"];
+  sessionKey: string;
+  channel: string;
+  to: string;
+  text: string;
+}) {
+  const resolved = resolveOutboundTarget({
+    channel: params.channel,
+    to: params.to,
+    cfg: params.cfg,
+    mode: "explicit",
+  });
+  if (!resolved.ok) {
+    throw new Error(String(resolved.error));
+  }
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+  await deliverOutboundPayloads({
+    cfg: params.cfg,
+    channel: params.channel,
+    to: resolved.to,
+    payloads: [{ text: params.text }],
+    agentId,
+    bestEffort: true,
+    deps: createOutboundSendDeps(params.deps),
+  });
 }
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
@@ -273,6 +348,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey?: string | null;
         thinking?: string | null;
         deliver?: boolean;
+        attachments?: Array<{
+          type?: string;
+          mimeType?: string;
+          fileName?: string;
+          content?: unknown;
+        }> | null;
+        receipt?: boolean;
+        receiptText?: string | null;
         to?: string | null;
         channel?: string | null;
         timeoutSeconds?: number | null;
@@ -284,7 +367,23 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       } catch {
         return;
       }
-      const message = (link?.message ?? "").trim();
+      let message = (link?.message ?? "").trim();
+      const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
+        link?.attachments ?? undefined,
+      );
+      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      if (normalizedAttachments.length > 0) {
+        try {
+          const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
+            maxBytes: 5_000_000,
+            log: ctx.logGateway,
+          });
+          message = parsed.message.trim();
+          images = parsed.images;
+        } catch {
+          return;
+        }
+      }
       if (!message) {
         return;
       }
@@ -293,9 +392,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
-      const channel = normalizeChannelId(channelRaw) ?? undefined;
-      const to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
-      const deliver = Boolean(link?.deliver) && Boolean(channel);
+      let channel = normalizeChannelId(channelRaw) ?? undefined;
+      let to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
+      const deliver = Boolean(link?.deliver);
+      const wantsReceipt = Boolean(link?.receipt);
+      const receiptTextRaw = typeof link?.receiptText === "string" ? link.receiptText.trim() : "";
+      const receiptText =
+        receiptTextRaw || "Just received your iOS share + request, working on it.";
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
@@ -305,9 +408,53 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionId = entry?.sessionId ?? randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
 
+      if (deliver && (!channel || !to)) {
+        const entryChannel =
+          typeof entry?.lastChannel === "string"
+            ? normalizeChannelId(entry.lastChannel)
+            : undefined;
+        const entryTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
+        if (!channel && entryChannel) {
+          channel = entryChannel;
+        }
+        if (!to && entryTo) {
+          to = entryTo;
+        }
+      }
+      if (deliver && (!channel || !to)) {
+        const fallback = resolveFallbackDeliveryRoute({
+          storePath,
+          preferredChannel: channel ?? cfg.channels?.default ?? "telegram",
+        });
+        if (!channel && fallback.channel) {
+          channel = normalizeChannelId(fallback.channel) ?? channel;
+        }
+        if (!to && fallback.to) {
+          to = fallback.to;
+        }
+      }
+
+      if (wantsReceipt && channel && to) {
+        void sendReceiptAck({
+          cfg,
+          deps: ctx.deps,
+          sessionKey: canonicalKey,
+          channel,
+          to,
+          text: receiptText,
+        }).catch((err) => {
+          ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
+        });
+      } else if (wantsReceipt) {
+        ctx.logGateway.warn(
+          `agent receipt skipped node=${nodeId}: missing delivery route (channel=${channel ?? "-"} to=${to ?? "-"})`,
+        );
+      }
+
       void agentCommand(
         {
           message,
+          images,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
