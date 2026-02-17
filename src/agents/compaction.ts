@@ -13,6 +13,16 @@ const DEFAULT_PARTS = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
+const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
+  "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
+  "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file names.";
+
+export function buildCompactionSummarizationInstructions(customInstructions?: string): string {
+  if (!customInstructions || customInstructions.trim().length === 0) {
+    return IDENTIFIER_PRESERVATION_INSTRUCTIONS;
+  }
+  return `${IDENTIFIER_PRESERVATION_INSTRUCTIONS}\n\nAdditional focus:\n${customInstructions}`;
+}
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
@@ -160,6 +170,9 @@ async function summarizeChunks(params: {
   let summary = params.previousSummary;
 
   for (const chunk of chunks) {
+    const effectiveInstructions = buildCompactionSummarizationInstructions(
+      params.customInstructions,
+    );
     summary = await retryAsync(
       () =>
         generateSummary(
@@ -168,7 +181,7 @@ async function summarizeChunks(params: {
           params.reserveTokens,
           params.apiKey,
           params.signal,
-          params.customInstructions,
+          effectiveInstructions,
           summary,
         ),
       {
