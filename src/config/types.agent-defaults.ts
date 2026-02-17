@@ -18,8 +18,6 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
-  /** Per-model default thinking level (overrides global thinkingDefault). */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 };
 
 export type AgentModelListConfig = {
