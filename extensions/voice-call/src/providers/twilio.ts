@@ -19,6 +19,7 @@ import { chunkAudio } from "../telephony-audio.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
+import { parseProviderDirection } from "./direction.js";
 
 /**
  * Twilio Voice API provider implementation.
@@ -230,19 +231,6 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   /**
-   * Parse Twilio direction to normalized format.
-   */
-  private static parseDirection(direction: string | null): "inbound" | "outbound" | undefined {
-    if (direction === "inbound") {
-      return "inbound";
-    }
-    if (direction === "outbound-api" || direction === "outbound-dial") {
-      return "outbound";
-    }
-    return undefined;
-  }
-
-  /**
    * Convert Twilio webhook params to normalized event format.
    */
   private normalizeEvent(params: URLSearchParams, callIdOverride?: string): NormalizedEvent | null {
@@ -253,7 +241,7 @@ export class TwilioProvider implements VoiceCallProvider {
       callId: callIdOverride || callSid,
       providerCallId: callSid,
       timestamp: Date.now(),
-      direction: TwilioProvider.parseDirection(params.get("Direction")),
+      direction: parseProviderDirection(params.get("Direction")),
       from: params.get("From") || undefined,
       to: params.get("To") || undefined,
     };

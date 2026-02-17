@@ -249,4 +249,57 @@ describe("processEvent (functional)", () => {
     expect(() => processEvent(ctx, event)).not.toThrow();
     expect(ctx.activeCalls.size).toBe(0);
   });
+
+  it("infers inbound direction from endpoints when provider omits direction", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-infer-inbound",
+      type: "call.initiated",
+      callId: "prov-infer",
+      providerCallId: "prov-infer",
+      timestamp: Date.now(),
+      from: "+15559999999",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.activeCalls.size).toBe(1);
+    const call = Array.from(ctx.activeCalls.values())[0];
+    expect(call?.direction).toBe("inbound");
+    expect(call?.providerCallId).toBe("prov-infer");
+    expect(event.direction).toBe("inbound");
+  });
+
+  it("does not infer inbound direction when destination does not match configured number", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-infer-miss",
+      type: "call.initiated",
+      callId: "prov-miss",
+      providerCallId: "prov-miss",
+      timestamp: Date.now(),
+      from: "+15557777777",
+      to: "+15558888888",
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.activeCalls.size).toBe(0);
+    expect(event.direction).not.toBe("inbound");
+  });
 });

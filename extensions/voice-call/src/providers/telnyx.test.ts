@@ -104,3 +104,69 @@ describe("TelnyxProvider.verifyWebhook", () => {
     expectWebhookVerificationSucceeds({ publicKey: spkiDerBase64, privateKey });
   });
 });
+
+describe("TelnyxProvider.parseWebhookEvent", () => {
+  it("keeps inbound call direction and endpoint numbers on call.initiated", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: "public-key",
+    });
+
+    const rawBody = JSON.stringify({
+      data: {
+        id: "evt_telnyx_1",
+        event_type: "call.initiated",
+        payload: {
+          call_control_id: "call-123",
+          direction: "incoming",
+          from: { phone_number: "+15559990000" },
+          to: { phone_number: "+15550001111" },
+        },
+      },
+    });
+
+    const result = provider.parseWebhookEvent(createCtx({ rawBody }));
+    expect(result.statusCode).toBe(200);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      type: "call.initiated",
+      providerCallId: "call-123",
+      direction: "inbound",
+      from: "+15559990000",
+      to: "+15550001111",
+    });
+  });
+
+  it("normalizes outgoing direction aliases", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: "public-key",
+    });
+
+    const rawBody = JSON.stringify({
+      data: {
+        id: "evt_telnyx_2",
+        event_type: "call.initiated",
+        payload: {
+          call_control_id: "call-456",
+          direction: "outgoing",
+          from: "+15550001111",
+          to: "+15559990000",
+        },
+      },
+    });
+
+    const result = provider.parseWebhookEvent(createCtx({ rawBody }));
+    expect(result.statusCode).toBe(200);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      type: "call.initiated",
+      providerCallId: "call-456",
+      direction: "outbound",
+      from: "+15550001111",
+      to: "+15559990000",
+    });
+  });
+});
