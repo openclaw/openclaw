@@ -83,7 +83,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Mattermost react requires emoji");
     }
 
-    const remove = Boolean((params as any)?.remove);
+    const remove = (params as any)?.remove === true;
     if (remove) {
       const result = await removeMattermostReaction({
         cfg,
