@@ -7,9 +7,9 @@ read_when:
 
 # MegaNova AI
 
-[MegaNova AI](https://meganova.ai) provides access to 30+ leading models through
-an OpenAI-compatible API, including frontier models (Claude, GPT-5, Gemini),
-open-source models (DeepSeek, Llama, Qwen), and reasoning models (GLM-5, DeepSeek-R1).
+[MegaNova AI](https://meganova.ai) provides access to 15+ open-source and reasoning
+models through an OpenAI-compatible API, including reasoning models (GLM-5,
+DeepSeek-R1, Kimi-K2) and open-source models (DeepSeek, Llama, Qwen).
 
 - Provider: `meganova`
 - Auth: `MEGANOVA_API_KEY`
@@ -54,14 +54,12 @@ is available to that process (for example, in `~/.clawdbot/.env` or via
 
 ## Available models
 
-MegaNova provides access to a wide range of models:
+MegaNova provides access to open-source and reasoning models:
 
 - **GLM 5** (default) - reasoning model, 202K context
-- **Claude Opus 4.6 / Sonnet 4.5 / Haiku 4.5** - Anthropic frontier models
-- **GPT-5.2 / 5.1 / 5 / 5-mini / 5-nano** - OpenAI frontier models
-- **Gemini 3 Pro / Flash, 2.5 Pro / Flash** - Google models with 1M context
-- **Grok 4 Fast** - xAI model with 2M context
-- **DeepSeek V3.2 / V3.1 / V3-0324 / R1-0528** - Open-weight reasoning and coding models
+- **GLM 4.7 / 4.6** - reasoning models
+- **DeepSeek R1-0528 / V3.1** - reasoning models
+- **DeepSeek V3.2 / V3-0324** - open-source coding models
 - **Kimi K2 Thinking / K2.5** - Moonshot reasoning models
 - **Qwen3 235B** - Alibaba multilingual model
 - **Llama 3.3 70B Instruct** - Meta open-source model
