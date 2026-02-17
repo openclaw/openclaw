@@ -332,7 +332,7 @@ export const VoiceCallConfigSchema = z
     /** STT configuration */
     stt: SttConfigSchema,
 
-    /** TTS override (deep-merges with core messages.tts) */
+    /** TTS config for voice calls (does NOT read or merge core messages.tts) */
     tts: TtsConfigSchema,
 
     /** Store path for call logs */
