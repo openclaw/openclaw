@@ -1,7 +1,7 @@
-import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
-import { normalizeAccountId } from "../routing/session-key.js";
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
@@ -14,7 +14,24 @@ export type ResolvedDiscordAccount = {
 };
 
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
-export const listDiscordAccountIds = listAccountIds;
+
+/**
+ * List all Discord account IDs, ensuring the implicit default account is
+ * included when a top-level discord token is configured. Without this,
+ * adding named sub-accounts under `channels.discord.accounts` silently
+ * drops the default account because it has no explicit entry.
+ */
+export function listDiscordAccountIds(cfg: OpenClawConfig): string[] {
+  const ids = listAccountIds(cfg);
+  if (!ids.includes(DEFAULT_ACCOUNT_ID)) {
+    const { token } = resolveDiscordToken(cfg, {});
+    if (token) {
+      return [...ids, DEFAULT_ACCOUNT_ID].toSorted((a, b) => a.localeCompare(b));
+    }
+  }
+  return ids;
+}
+
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
 function resolveAccountConfig(

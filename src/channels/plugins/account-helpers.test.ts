@@ -53,6 +53,14 @@ describe("createAccountListHelpers", () => {
     it("returns sorted ids", () => {
       expect(listAccountIds(cfg({ z: {}, a: {}, m: {} }))).toEqual(["a", "m", "z"]);
     });
+
+    it("includes bound account ids from bindings", () => {
+      const config = {
+        channels: { testchannel: { accounts: { work: {} } } },
+        bindings: [{ match: { channel: "testchannel", accountId: "personal" }, agentId: "helper" }],
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["personal", "work"]);
+    });
   });
 
   describe("resolveDefaultAccountId", () => {

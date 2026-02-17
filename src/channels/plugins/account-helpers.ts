@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { listBoundAccountIds } from "../../routing/bindings.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 export function createAccountListHelpers(channelKey: string) {
@@ -12,7 +13,9 @@ export function createAccountListHelpers(channelKey: string) {
   }
 
   function listAccountIds(cfg: OpenClawConfig): string[] {
-    const ids = listConfiguredAccountIds(cfg);
+    const ids = Array.from(
+      new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, channelKey)]),
+    );
     if (ids.length === 0) {
       return [DEFAULT_ACCOUNT_ID];
     }
