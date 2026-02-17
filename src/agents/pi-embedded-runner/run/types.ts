@@ -19,6 +19,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
+  /** Pre-computed hook result from run.ts to avoid double-firing before_agent_start. */
+  earlyHookResult?: PluginHookBeforeAgentStartResult;
 };
 
 export type EmbeddedRunAttemptResult = {

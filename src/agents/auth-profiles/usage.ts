@@ -331,18 +331,9 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
-  } else if (params.modelId && (params.reason === "rate_limit" || params.reason === "timeout")) {
-    // Per-model cooldown: short fixed duration, not exponential.
-    // By the time an error reaches OpenClaw, the provider SDK/transport
-    // layer has already exhausted its own retries. A brief 15s pause is
-    // enough for transient rate limits to clear — matching VS Code
-    // Copilot's ~10s strategy. Model fallback tries other models
-    // immediately while the rate-limited one cools off.
-    const MODEL_COOLDOWN_MS = 15_000;
-    const modelCooldowns = { ...updatedStats.modelCooldowns };
-    modelCooldowns[params.modelId] = params.now + MODEL_COOLDOWN_MS;
-    updatedStats.modelCooldowns = modelCooldowns;
-  } else {
+  } else if (params.reason !== "timeout") {
+    // Timeouts are not auth/rate failures — don't cooldown the profile.
+    // The LLM was just slow; retrying immediately is fine.
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;
   }
