@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import { normalizeProviderId } from "./model-selection.js";
 
 type AuthJsonCredential =
   | {
@@ -48,6 +49,13 @@ function convertCredential(cred: AuthProfileCredential): AuthJsonCredential | nu
     // pi-coding-agent treats static tokens as api_key type
     const token = typeof cred.token === "string" ? cred.token.trim() : "";
     if (!token) {
+      return null;
+    }
+    const expires =
+      typeof (cred as { expires?: unknown }).expires === "number"
+        ? (cred as { expires: number }).expires
+        : Number.NaN;
+    if (Number.isFinite(expires) && expires > 0 && Date.now() >= expires) {
       return null;
     }
     return { type: "api_key", key: token };
@@ -114,7 +122,7 @@ export async function ensurePiAuthJsonFromAuthProfiles(agentDir: string): Promis
   const providerCredentials = new Map<string, AuthJsonCredential>();
 
   for (const [, cred] of Object.entries(store.profiles)) {
-    const provider = cred.provider;
+    const provider = normalizeProviderId(String(cred.provider ?? "")).trim();
     if (!provider || providerCredentials.has(provider)) {
       continue;
     }
