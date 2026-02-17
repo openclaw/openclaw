@@ -1,4 +1,8 @@
 import type { Bot } from "grammy";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -16,17 +20,14 @@ import {
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
-import type { MsgContext } from "../auto-reply/templating.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
@@ -56,7 +57,6 @@ import {
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
-import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 
 export type TelegramMediaRef = {
@@ -389,12 +389,11 @@ export const buildTelegramMessageContext = async ({
   let bodyText = rawBody;
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
-  // Audio transcription: transcribe voice notes before they reach the agent.
-  // In groups: enables mention detection in voice notes.
-  // In DMs: replaces <media:audio> placeholder with transcript text.
+  // Preflight audio transcription for mention detection in groups
+  // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
-    hasAudio && !hasUserText && (!isGroup || (requireMention && mentionRegexes.length > 0));
+    isGroup && requireMention && hasAudio && !hasUserText && mentionRegexes.length > 0;
 
   if (needsPreflightTranscription) {
     try {
@@ -414,53 +413,6 @@ export const buildTelegramMessageContext = async ({
       });
     } catch (err) {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
-    }
-
-    // Fallback: if the media pipeline returned nothing, try calling whisper-cli directly.
-    // This handles cases where the pipeline's attachment normalization or model resolution
-    // silently produces no output (e.g. format mismatch, missing config fields).
-    if (!preflightTranscript && allMedia.length > 0) {
-      const audioMedia = allMedia.find((m) => m.contentType?.startsWith("audio/"));
-      if (audioMedia?.path) {
-        try {
-          const { execFile } = await import("node:child_process");
-          const { promisify } = await import("node:util");
-          const { mkdtemp, readFile, rm } = await import("node:fs/promises");
-          const { tmpdir } = await import("node:os");
-          const pathMod = await import("node:path");
-          const execFileAsync = promisify(execFile);
-
-          const audioModels = cfg.tools?.media?.audio?.models;
-          const cliEntry = audioModels?.find(
-            (m: { type?: string; command?: string }) => m.type === "cli" || m.command,
-          );
-          if (cliEntry?.command) {
-            const outputDir = await mkdtemp(pathMod.join(tmpdir(), "openclaw-audio-fallback-"));
-            const outputBase = pathMod.join(outputDir, "out");
-            const resolvedArgs = (cliEntry.args ?? []).map((a: string) =>
-              a.replace("{{MediaPath}}", audioMedia.path).replace("{{OutputBase}}", outputBase),
-            );
-            try {
-              await execFileAsync(cliEntry.command, resolvedArgs, {
-                timeout: 30_000,
-                maxBuffer: 1024 * 1024,
-              });
-              const outputFile = outputBase + ".txt";
-              const text = (await readFile(outputFile, "utf-8")).trim();
-              if (text) {
-                preflightTranscript = text;
-                logVerbose(
-                  `telegram: audio fallback transcription succeeded (${text.length} chars)`,
-                );
-              }
-            } finally {
-              await rm(outputDir, { recursive: true, force: true }).catch(() => {});
-            }
-          }
-        } catch (fallbackErr) {
-          logVerbose(`telegram: audio fallback transcription failed: ${String(fallbackErr)}`);
-        }
-      }
     }
   }
 
