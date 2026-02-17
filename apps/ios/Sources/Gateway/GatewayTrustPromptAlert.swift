@@ -6,10 +6,10 @@ struct GatewayTrustPromptAlert: ViewModifier {
     private var promptBinding: Binding<GatewayConnectionController.TrustPrompt?> {
         Binding(
             get: { self.gatewayController.pendingTrustPrompt },
-            set: { _ in
-                // Keep pending trust state until explicit user action.
-                // `alert(item:)` may set the binding to nil during dismissal, which can race with
-                // the button handler and cause accept to no-op.
+            set: { newValue in
+                if newValue == nil {
+                    self.gatewayController.clearPendingTrustPrompt()
+                }
             })
     }
 
@@ -39,3 +39,4 @@ extension View {
         self.modifier(GatewayTrustPromptAlert())
     }
 }
+

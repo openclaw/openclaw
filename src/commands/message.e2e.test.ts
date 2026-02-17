@@ -20,33 +20,33 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
-  callGateway: callGatewayMock,
+  callGateway: (...args: unknown[]) => callGatewayMock(...args),
   randomIdempotencyKey: () => "idem-1",
 }));
 
 const webAuthExists = vi.fn(async () => false);
 vi.mock("../web/session.js", () => ({
-  webAuthExists,
+  webAuthExists: (...args: unknown[]) => webAuthExists(...args),
 }));
 
-const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleDiscordAction = vi.fn(async () => ({ details: { ok: true } }));
 vi.mock("../agents/tools/discord-actions.js", () => ({
-  handleDiscordAction,
+  handleDiscordAction: (...args: unknown[]) => handleDiscordAction(...args),
 }));
 
-const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleSlackAction = vi.fn(async () => ({ details: { ok: true } }));
 vi.mock("../agents/tools/slack-actions.js", () => ({
-  handleSlackAction,
+  handleSlackAction: (...args: unknown[]) => handleSlackAction(...args),
 }));
 
-const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleTelegramAction = vi.fn(async () => ({ details: { ok: true } }));
 vi.mock("../agents/tools/telegram-actions.js", () => ({
-  handleTelegramAction,
+  handleTelegramAction: (...args: unknown[]) => handleTelegramAction(...args),
 }));
 
-const handleWhatsAppAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleWhatsAppAction = vi.fn(async () => ({ details: { ok: true } }));
 vi.mock("../agents/tools/whatsapp-actions.js", () => ({
-  handleWhatsAppAction,
+  handleWhatsAppAction: (...args: unknown[]) => handleWhatsAppAction(...args),
 }));
 
 const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -117,53 +117,26 @@ const createStubPlugin = (params: {
   outbound: params.outbound,
 });
 
-type ChannelActionParams = Parameters<
-  NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>
->[0];
-
-const createDiscordPollPluginRegistration = () => ({
-  pluginId: "discord",
-  source: "test",
-  plugin: createStubPlugin({
-    id: "discord",
-    label: "Discord",
-    actions: {
-      listActions: () => ["poll"],
-      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
-        return await handleDiscordAction(
-          { action, to: params.to, accountId: accountId ?? undefined },
-          cfg,
-        );
-      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
-    },
-  }),
-});
-
-const createTelegramSendPluginRegistration = () => ({
-  pluginId: "telegram",
-  source: "test",
-  plugin: createStubPlugin({
-    id: "telegram",
-    label: "Telegram",
-    actions: {
-      listActions: () => ["send"],
-      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
-        return await handleTelegramAction(
-          { action, to: params.to, accountId: accountId ?? undefined },
-          cfg,
-        );
-      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
-    },
-  }),
-});
-
 describe("messageCommand", () => {
   it("defaults channel when only one configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
     await setRegistry(
       createTestRegistry([
         {
-          ...createTelegramSendPluginRegistration(),
+          pluginId: "telegram",
+          source: "test",
+          plugin: createStubPlugin({
+            id: "telegram",
+            label: "Telegram",
+            actions: {
+              listActions: () => ["send"],
+              handleAction: async ({ action, params, cfg, accountId }) =>
+                await handleTelegramAction(
+                  { action, to: params.to, accountId: accountId ?? undefined },
+                  cfg,
+                ),
+            },
+          }),
         },
       ]),
     );
@@ -186,10 +159,36 @@ describe("messageCommand", () => {
     await setRegistry(
       createTestRegistry([
         {
-          ...createTelegramSendPluginRegistration(),
+          pluginId: "telegram",
+          source: "test",
+          plugin: createStubPlugin({
+            id: "telegram",
+            label: "Telegram",
+            actions: {
+              listActions: () => ["send"],
+              handleAction: async ({ action, params, cfg, accountId }) =>
+                await handleTelegramAction(
+                  { action, to: params.to, accountId: accountId ?? undefined },
+                  cfg,
+                ),
+            },
+          }),
         },
         {
-          ...createDiscordPollPluginRegistration(),
+          pluginId: "discord",
+          source: "test",
+          plugin: createStubPlugin({
+            id: "discord",
+            label: "Discord",
+            actions: {
+              listActions: () => ["poll"],
+              handleAction: async ({ action, params, cfg, accountId }) =>
+                await handleDiscordAction(
+                  { action, to: params.to, accountId: accountId ?? undefined },
+                  cfg,
+                ),
+            },
+          }),
         },
       ]),
     );
@@ -243,7 +242,20 @@ describe("messageCommand", () => {
     await setRegistry(
       createTestRegistry([
         {
-          ...createDiscordPollPluginRegistration(),
+          pluginId: "discord",
+          source: "test",
+          plugin: createStubPlugin({
+            id: "discord",
+            label: "Discord",
+            actions: {
+              listActions: () => ["poll"],
+              handleAction: async ({ action, params, cfg, accountId }) =>
+                await handleDiscordAction(
+                  { action, to: params.to, accountId: accountId ?? undefined },
+                  cfg,
+                ),
+            },
+          }),
         },
       ]),
     );

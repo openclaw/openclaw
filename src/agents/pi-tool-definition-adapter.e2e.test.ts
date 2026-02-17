@@ -1,10 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
-
-type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
-const extensionContext = {} as Parameters<ToolExecute>[4];
 
 describe("pi tool definition adapter", () => {
   it("wraps tool errors into a tool result", async () => {
@@ -12,19 +8,14 @@ describe("pi tool definition adapter", () => {
       name: "boom",
       label: "Boom",
       description: "throws",
-      parameters: Type.Object({}),
+      parameters: {},
       execute: async () => {
         throw new Error("nope");
       },
-    } satisfies AgentTool;
+    } satisfies AgentTool<unknown, unknown>;
 
     const defs = toToolDefinitions([tool]);
-    const def = defs[0];
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
-    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
-    const result = await execute("call1", {}, undefined, undefined, extensionContext);
+    const result = await defs[0].execute("call1", {}, undefined, undefined);
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -39,19 +30,14 @@ describe("pi tool definition adapter", () => {
       name: "bash",
       label: "Bash",
       description: "throws",
-      parameters: Type.Object({}),
+      parameters: {},
       execute: async () => {
         throw new Error("nope");
       },
-    } satisfies AgentTool;
+    } satisfies AgentTool<unknown, unknown>;
 
     const defs = toToolDefinitions([tool]);
-    const def = defs[0];
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
-    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
-    const result = await execute("call2", {}, undefined, undefined, extensionContext);
+    const result = await defs[0].execute("call2", {}, undefined, undefined);
 
     expect(result.details).toMatchObject({
       status: "error",

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileConfig } from "../../config/types.js";
-import { findNormalizedProviderKey, normalizeProviderId } from "../model-selection.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
+import { normalizeProviderId } from "../model-selection.js";
+import { listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
 
 function getProfileSuffix(profileId: string): string {
@@ -128,7 +128,7 @@ export function repairOAuthProfileIdMismatch(params: {
     if (!order) {
       return undefined;
     }
-    const resolvedKey = findNormalizedProviderKey(order, providerKey);
+    const resolvedKey = Object.keys(order).find((key) => normalizeProviderId(key) === providerKey);
     if (!resolvedKey) {
       return order;
     }
@@ -139,7 +139,12 @@ export function repairOAuthProfileIdMismatch(params: {
     const replaced = existing
       .map((id) => (id === legacyProfileId ? toProfileId : id))
       .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
-    const deduped = dedupeProfileIds(replaced);
+    const deduped: string[] = [];
+    for (const entry of replaced) {
+      if (!deduped.includes(entry)) {
+        deduped.push(entry);
+      }
+    }
     return { ...order, [resolvedKey]: deduped };
   })();
 

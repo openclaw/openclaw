@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { postMultipartFormData } from "./multipart.js";
+import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
@@ -54,7 +53,19 @@ function resolveVoiceInfo(filename: string, contentType?: string) {
 }
 
 function resolveAccount(params: BlueBubblesAttachmentOpts) {
-  return resolveBlueBubblesServerAccount(params);
+  const account = resolveBlueBubblesAccount({
+    cfg: params.cfg ?? {},
+    accountId: params.accountId,
+  });
+  const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
+  const password = params.password?.trim() || account.config.password?.trim();
+  if (!baseUrl) {
+    throw new Error("BlueBubbles serverUrl is required");
+  }
+  if (!password) {
+    throw new Error("BlueBubbles password is required");
+  }
+  return { baseUrl, password, accountId: account.accountId };
 }
 
 export async function downloadBlueBubblesAttachment(
@@ -208,12 +219,26 @@ export async function sendBlueBubblesAttachment(params: {
   // Close the multipart body
   parts.push(encoder.encode(`--${boundary}--\r\n`));
 
-  const res = await postMultipartFormData({
+  // Combine all parts into a single buffer
+  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
+  const body = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    body.set(part, offset);
+    offset += part.length;
+  }
+
+  const res = await blueBubblesFetchWithTimeout(
     url,
-    boundary,
-    parts,
-    timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-  });
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    },
+    opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+  );
 
   if (!res.ok) {
     const errorText = await res.text();

@@ -26,12 +26,8 @@ vi.mock("../../slack/scopes.js", () => ({
 }));
 
 const runtime = {
-  log: (...args: unknown[]) => {
-    logs.push(args.map(String).join(" "));
-  },
-  error: (...args: unknown[]) => {
-    errors.push(args.map(String).join(" "));
-  },
+  log: (value: string) => logs.push(value),
+  error: (value: string) => errors.push(value),
   exit: (code: number) => {
     throw new Error(`exit:${code}`);
   },

@@ -8,8 +8,8 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
  * but before runtime defaults), so runtime defaults don't leak into the written config.
  */
 
-const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
-const mockWriteConfigFile = vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async () => {});
+const mockReadConfigFileSnapshot = vi.fn<[], Promise<ConfigFileSnapshot>>();
+const mockWriteConfigFile = vi.fn<[OpenClawConfig], Promise<void>>(async () => {});
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
@@ -49,18 +49,6 @@ function buildSnapshot(params: {
   };
 }
 
-function setSnapshot(resolved: OpenClawConfig, config: OpenClawConfig) {
-  mockReadConfigFileSnapshot.mockResolvedValueOnce(buildSnapshot({ resolved, config }));
-}
-
-async function runConfigCommand(args: string[]) {
-  const { registerConfigCli } = await import("./config-cli.js");
-  const program = new Command();
-  program.exitOverride();
-  registerConfigCli(program);
-  await program.parseAsync(args, { from: "user" });
-}
-
 describe("config cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -89,9 +77,16 @@ describe("config cli", () => {
           } as never,
         } as never,
       };
-      setSnapshot(resolved, runtimeMerged);
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: runtimeMerged }),
+      );
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(["config", "set", "gateway.auth.mode", "token"], { from: "user" });
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = mockWriteConfigFile.mock.calls[0]?.[0];
@@ -107,7 +102,7 @@ describe("config cli", () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
       };
-      const runtimeMerged = {
+      const runtimeMerged: OpenClawConfig = {
         ...resolved,
         agents: {
           defaults: {
@@ -118,10 +113,17 @@ describe("config cli", () => {
         } as never,
         messages: { ackReaction: "✅" } as never,
         sessions: { persistence: { enabled: true } } as never,
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, runtimeMerged);
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: runtimeMerged }),
+      );
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(["config", "set", "gateway.auth.mode", "token"], { from: "user" });
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = mockWriteConfigFile.mock.calls[0]?.[0];
@@ -155,9 +157,16 @@ describe("config cli", () => {
           },
         } as never,
       };
-      setSnapshot(resolved, runtimeMerged);
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: runtimeMerged }),
+      );
 
-      await runConfigCommand(["config", "unset", "tools.alsoAllow"]);
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(["config", "unset", "tools.alsoAllow"], { from: "user" });
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = mockWriteConfigFile.mock.calls[0]?.[0];

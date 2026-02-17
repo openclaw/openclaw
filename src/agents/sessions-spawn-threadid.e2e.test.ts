@@ -1,10 +1,28 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const callGatewayMock = vi.fn();
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+  session: {
+    mainKey: "main",
+    scope: "per-sender",
+  },
+};
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => configOverride,
+    resolveGatewayPort: () => 18789,
+  };
+});
+
 import "./test-helpers/fast-core-tools.js";
-import {
-  callGatewayMock,
-  setSubagentsConfigOverride,
-} from "./openclaw-tools.subagents.test-harness.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
@@ -14,12 +32,12 @@ describe("sessions_spawn requesterOrigin threading", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    setSubagentsConfigOverride({
+    configOverride = {
       session: {
         mainKey: "main",
         scope: "per-sender",
       },
-    });
+    };
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const req = opts as { method?: string };

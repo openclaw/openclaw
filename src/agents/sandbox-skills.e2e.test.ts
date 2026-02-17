@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { captureFullEnv } from "../test-utils/env.js";
 import { resolveSandboxContext } from "./sandbox.js";
 
 vi.mock("./sandbox/docker.js", () => ({
@@ -28,15 +27,30 @@ async function writeSkill(params: { dir: string; name: string; description: stri
   );
 }
 
+function restoreEnv(snapshot: Record<string, string | undefined>) {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in snapshot)) {
+      delete process.env[key];
+    }
+  }
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
 describe("sandbox skill mirroring", () => {
-  let envSnapshot: ReturnType<typeof captureFullEnv>;
+  let envSnapshot: Record<string, string | undefined>;
 
   beforeEach(() => {
-    envSnapshot = captureFullEnv();
+    envSnapshot = { ...process.env };
   });
 
   afterEach(() => {
-    envSnapshot.restore();
+    restoreEnv(envSnapshot);
   });
 
   const runContext = async (workspaceAccess: "none" | "ro") => {

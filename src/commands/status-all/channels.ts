@@ -211,15 +211,14 @@ function summarizeTokenConfig(params: {
   }
 
   const accountRecs = enabled.map((a) => asRecord(a.account));
-  const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
-  const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
+  const hasBotOrAppTokenFields = accountRecs.some((r) => "botToken" in r || "appToken" in r);
   const hasTokenField = accountRecs.some((r) => "token" in r);
 
-  if (!hasBotTokenField && !hasAppTokenField && !hasTokenField) {
+  if (!hasBotOrAppTokenFields && !hasTokenField) {
     return { state: null, detail: null };
   }
 
-  if (hasBotTokenField && hasAppTokenField) {
+  if (hasBotOrAppTokenFields) {
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
       const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
@@ -263,30 +262,6 @@ function summarizeTokenConfig(params: {
     return {
       state: "ok",
       detail: `tokens ok (bot ${botSources.label}, app ${appSources.label})${hint} · accounts ${ready.length}/${enabled.length || 1}`,
-    };
-  }
-
-  if (hasBotTokenField) {
-    const ready = enabled.filter((a) => {
-      const rec = asRecord(a.account);
-      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
-      return Boolean(bot);
-    });
-
-    if (ready.length === 0) {
-      return { state: "setup", detail: "no bot token" };
-    }
-
-    const sample = ready[0]?.account ? asRecord(ready[0].account) : {};
-    const botToken = typeof sample.botToken === "string" ? sample.botToken : "";
-    const botHint = botToken.trim()
-      ? formatTokenHint(botToken, { showSecrets: params.showSecrets })
-      : "";
-    const hint = botHint ? ` (${botHint})` : "";
-
-    return {
-      state: "ok",
-      detail: `bot token config${hint} · accounts ${ready.length}/${enabled.length || 1}`,
     };
   }
 

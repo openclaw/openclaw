@@ -37,9 +37,6 @@ vi.mock("./qr-image.js", () => ({
 
 const { startWebLoginWithQr, waitForWebLogin } = await import("./login-qr.js");
 const { createWaSocket, waitForWaConnection, logoutWeb } = await import("./session.js");
-const createWaSocketMock = vi.mocked(createWaSocket);
-const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const logoutWebMock = vi.mocked(logoutWeb);
 
 describe("login-qr", () => {
   beforeEach(() => {
@@ -47,7 +44,7 @@ describe("login-qr", () => {
   });
 
   it("restarts login once on status 515 and completes", async () => {
-    waitForWaConnectionMock
+    waitForWaConnection
       .mockRejectedValueOnce({ output: { statusCode: 515 } })
       .mockResolvedValueOnce(undefined);
 
@@ -57,7 +54,7 @@ describe("login-qr", () => {
     const result = await waitForWebLogin({ timeoutMs: 5000 });
 
     expect(result.connected).toBe(true);
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(logoutWebMock).not.toHaveBeenCalled();
+    expect(createWaSocket).toHaveBeenCalledTimes(2);
+    expect(logoutWeb).not.toHaveBeenCalled();
   });
 });

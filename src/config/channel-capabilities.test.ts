@@ -115,7 +115,7 @@ describe("resolveChannelCapabilities", () => {
           capabilities: { inlineButtons: "dm" },
         },
       },
-    } as unknown as Partial<OpenClawConfig>;
+    };
 
     // Should return undefined (not crash), allowing channel-specific handlers to process it.
     expect(
@@ -130,9 +130,6 @@ describe("resolveChannelCapabilities", () => {
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
   plugins: [],
   tools: [],
-  hooks: [],
-  typedHooks: [],
-  commands: [],
   channels,
   providers: [],
   gatewayHandlers: {},

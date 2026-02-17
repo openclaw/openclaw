@@ -1,31 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
+type StubSession = {
+  subscribe: (fn: (evt: unknown) => void) => () => void;
+};
+
 describe("subscribeEmbeddedPiSession", () => {
-  function createTextEndHarness(chunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "newline";
-  }) {
-    const { session, emit } = createStubSessionHarness();
+  const _THINKING_TAG_CASES = [
+    { tag: "think", open: "<think>", close: "</think>" },
+    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+    { tag: "thought", open: "<thought>", close: "</thought>" },
+    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+  ] as const;
+
+  it("does not duplicate when text_end repeats full content", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
     const onBlockReply = vi.fn();
 
     const subscription = subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "text_end",
-      blockReplyChunking: chunking,
     });
 
-    return { emit, onBlockReply, subscription };
-  }
-
-  it("does not duplicate when text_end repeats full content", () => {
-    const { emit, onBlockReply, subscription } = createTextEndHarness();
-
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -34,7 +40,7 @@ describe("subscribeEmbeddedPiSession", () => {
       },
     });
 
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -47,15 +53,31 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Good morning!"]);
   });
   it("does not duplicate block chunks when text_end repeats full content", () => {
-    const { emit, onBlockReply } = createTextEndHarness({
-      minChars: 5,
-      maxChars: 40,
-      breakPreference: "newline",
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: {
+        minChars: 5,
+        maxChars: 40,
+        breakPreference: "newline",
+      },
     });
 
     const fullText = "First line\nSecond line\nThird line\n";
 
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -67,7 +89,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const callsAfterDelta = onBlockReply.mock.calls.length;
     expect(callsAfterDelta).toBeGreaterThan(0);
 
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {

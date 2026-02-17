@@ -22,7 +22,10 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
-function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
+export function createMemorySearchTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
   const cfg = options.config;
   if (!cfg) {
     return null;
@@ -34,18 +37,6 @@ function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessi
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;
   }
-  return { cfg, agentId };
-}
-
-export function createMemorySearchTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool | null {
-  const ctx = resolveMemoryToolContext(options);
-  if (!ctx) {
-    return null;
-  }
-  const { cfg, agentId } = ctx;
   return {
     label: "Memory Search",
     name: "memory_search",
@@ -81,14 +72,12 @@ export function createMemorySearchTool(options: {
           status.backend === "qmd"
             ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
             : decorated;
-        const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
         return jsonResult({
           results,
           provider: status.provider,
           model: status.model,
           fallback: status.fallback,
           citations: citationsMode,
-          mode: searchMode,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -102,11 +91,17 @@ export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
-  const ctx = resolveMemoryToolContext(options);
-  if (!ctx) {
+  const cfg = options.config;
+  if (!cfg) {
     return null;
   }
-  const { cfg, agentId } = ctx;
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  if (!resolveMemorySearchConfig(cfg, agentId)) {
+    return null;
+  }
   return {
     label: "Memory Get",
     name: "memory_get",

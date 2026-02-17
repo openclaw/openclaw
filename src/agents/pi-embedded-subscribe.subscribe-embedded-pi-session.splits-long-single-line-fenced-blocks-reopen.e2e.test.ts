@@ -1,28 +1,67 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createParagraphChunkedBlockReplyHarness,
-  emitAssistantTextDeltaAndEnd,
-  expectFencedChunks,
-} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
-type SessionEventHandler = (evt: unknown) => void;
+type StubSession = {
+  subscribe: (fn: (evt: unknown) => void) => () => void;
+};
 
 describe("subscribeEmbeddedPiSession", () => {
+  const _THINKING_TAG_CASES = [
+    { tag: "think", open: "<think>", close: "</think>" },
+    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+    { tag: "thought", open: "<thought>", close: "</thought>" },
+    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+  ] as const;
+
   it("splits long single-line fenced blocks with reopen/close", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
     const onBlockReply = vi.fn();
-    const { emit } = createParagraphChunkedBlockReplyHarness({
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
       onBlockReply,
-      chunking: {
+      blockReplyBreak: "message_end",
+      blockReplyChunking: {
         minChars: 10,
         maxChars: 40,
+        breakPreference: "paragraph",
       },
     });
 
     const text = `\`\`\`json\n${"x".repeat(120)}\n\`\`\``;
-    emitAssistantTextDeltaAndEnd({ emit, text });
-    expectFencedChunks(onBlockReply.mock.calls, "```json");
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: text,
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply.mock.calls.length).toBeGreaterThan(1);
+    for (const call of onBlockReply.mock.calls) {
+      const chunk = call[0].text as string;
+      expect(chunk.startsWith("```json")).toBe(true);
+      const fenceCount = chunk.match(/```/g)?.length ?? 0;
+      expect(fenceCount).toBeGreaterThanOrEqual(2);
+    }
   });
   it("waits for auto-compaction retry and clears buffered text", async () => {
     const listeners: SessionEventHandler[] = [];

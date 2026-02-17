@@ -254,7 +254,7 @@ describe("status", () => {
     it("should skip non-Twitch accounts gracefully", () => {
       const snapshots: ChannelAccountSnapshot[] = [
         {
-          accountId: "unknown",
+          accountId: undefined,
           configured: false,
           enabled: true,
           running: false,

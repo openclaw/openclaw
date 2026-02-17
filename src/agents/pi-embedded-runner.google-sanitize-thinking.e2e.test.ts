@@ -3,63 +3,85 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 
-type AssistantThinking = { type?: string; thinking?: string; thinkingSignature?: string };
-
-function getAssistantMessage(out: AgentMessage[]) {
-  const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as
-    | { content?: AssistantThinking[] }
-    | undefined;
-  if (!assistant) {
-    throw new Error("Expected assistant message in sanitized history");
-  }
-  return assistant;
-}
-
-async function sanitizeGoogleAssistantWithContent(content: unknown[]) {
-  const sessionManager = SessionManager.inMemory();
-  const input = [
-    {
-      role: "user",
-      content: "hi",
-    },
-    {
-      role: "assistant",
-      content,
-    },
-  ] as unknown as AgentMessage[];
-
-  const out = await sanitizeSessionHistory({
-    messages: input,
-    modelApi: "google-antigravity",
-    sessionManager,
-    sessionId: "session:google",
-  });
-
-  return getAssistantMessage(out);
-}
-
 describe("sanitizeSessionHistory (google thinking)", () => {
   it("keeps thinking blocks without signatures for Google models", async () => {
-    const assistant = await sanitizeGoogleAssistantWithContent([
-      { type: "thinking", thinking: "reasoning" },
-    ]);
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "reasoning" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      sessionManager,
+      sessionId: "session:google",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; thinking?: string }>;
+    };
     expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
     expect(assistant.content?.[0]?.thinking).toBe("reasoning");
   });
 
   it("keeps thinking blocks with signatures for Google models", async () => {
-    const assistant = await sanitizeGoogleAssistantWithContent([
-      { type: "thinking", thinking: "reasoning", thinkingSignature: "sig" },
-    ]);
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "sig" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      sessionManager,
+      sessionId: "session:google",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; thinking?: string; thinkingSignature?: string }>;
+    };
     expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
     expect(assistant.content?.[0]?.thinking).toBe("reasoning");
     expect(assistant.content?.[0]?.thinkingSignature).toBe("sig");
   });
 
   it("keeps thinking blocks with Anthropic-style signatures for Google models", async () => {
-    const assistant = await sanitizeGoogleAssistantWithContent([
-      { type: "thinking", thinking: "reasoning", signature: "sig" },
-    ]);
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "reasoning", signature: "sig" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      sessionManager,
+      sessionId: "session:google",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; thinking?: string }>;
+    };
     expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
     expect(assistant.content?.[0]?.thinking).toBe("reasoning");
   });
@@ -75,7 +97,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning" }],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -100,7 +122,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning", signature: "c2ln" }],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -133,7 +155,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
           { type: "text", text: "world" },
         ],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -177,7 +199,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
           },
         ],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -229,7 +251,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
           { type: "thinking", thinking: "unsigned" },
         ],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -257,7 +279,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "   " }],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -283,7 +305,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning" }],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -312,7 +334,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
       },
-    ] as unknown as AgentMessage[];
+    ] satisfies AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,

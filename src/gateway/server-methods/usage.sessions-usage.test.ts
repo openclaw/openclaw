@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -106,9 +105,7 @@ describe("sessions.usage", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const result = respond.mock.calls[0]?.[1] as unknown as {
-      sessions: Array<{ key: string; agentId: string }>;
-    };
+    const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<unknown> };
     expect(result.sessions).toHaveLength(2);
 
     // Sorted by most recent first (mtime=200 -> opus first).
@@ -121,7 +118,7 @@ describe("sessions.usage", () => {
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
@@ -166,7 +163,11 @@ describe("sessions.usage", () => {
         vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
       ).toBe(true);
     } finally {
-      envSnapshot.restore();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });

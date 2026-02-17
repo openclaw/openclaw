@@ -61,14 +61,8 @@ function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-function normalizeId(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value).trim();
-  }
-  return "";
+function normalizeId(value: string | undefined | null): string {
+  return (value ?? "").trim();
 }
 
 function normalizeAccountId(value: string | undefined | null): string {

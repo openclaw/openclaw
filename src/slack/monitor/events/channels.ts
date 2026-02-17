@@ -15,35 +15,6 @@ import type {
 export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
 
-  const enqueueChannelSystemEvent = (params: {
-    kind: "created" | "renamed";
-    channelId: string | undefined;
-    channelName: string | undefined;
-  }) => {
-    if (
-      !ctx.isChannelAllowed({
-        channelId: params.channelId,
-        channelName: params.channelName,
-        channelType: "channel",
-      })
-    ) {
-      return;
-    }
-
-    const label = resolveSlackChannelLabel({
-      channelId: params.channelId,
-      channelName: params.channelName,
-    });
-    const sessionKey = ctx.resolveSlackSystemEventSessionKey({
-      channelId: params.channelId,
-      channelType: "channel",
-    });
-    enqueueSystemEvent(`Slack channel ${params.kind}: ${label}.`, {
-      sessionKey,
-      contextKey: `slack:channel:${params.kind}:${params.channelId ?? params.channelName ?? "unknown"}`,
-    });
-  };
-
   ctx.app.event(
     "channel_created",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_created">) => {
@@ -55,7 +26,24 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
         const payload = event as SlackChannelCreatedEvent;
         const channelId = payload.channel?.id;
         const channelName = payload.channel?.name;
-        enqueueChannelSystemEvent({ kind: "created", channelId, channelName });
+        if (
+          !ctx.isChannelAllowed({
+            channelId,
+            channelName,
+            channelType: "channel",
+          })
+        ) {
+          return;
+        }
+        const label = resolveSlackChannelLabel({ channelId, channelName });
+        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+          channelId,
+          channelType: "channel",
+        });
+        enqueueSystemEvent(`Slack channel created: ${label}.`, {
+          sessionKey,
+          contextKey: `slack:channel:created:${channelId ?? channelName ?? "unknown"}`,
+        });
       } catch (err) {
         ctx.runtime.error?.(danger(`slack channel created handler failed: ${String(err)}`));
       }
@@ -73,7 +61,24 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
         const payload = event as SlackChannelRenamedEvent;
         const channelId = payload.channel?.id;
         const channelName = payload.channel?.name_normalized ?? payload.channel?.name;
-        enqueueChannelSystemEvent({ kind: "renamed", channelId, channelName });
+        if (
+          !ctx.isChannelAllowed({
+            channelId,
+            channelName,
+            channelType: "channel",
+          })
+        ) {
+          return;
+        }
+        const label = resolveSlackChannelLabel({ channelId, channelName });
+        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+          channelId,
+          channelType: "channel",
+        });
+        enqueueSystemEvent(`Slack channel renamed: ${label}.`, {
+          sessionKey,
+          contextKey: `slack:channel:renamed:${channelId ?? channelName ?? "unknown"}`,
+        });
       } catch (err) {
         ctx.runtime.error?.(danger(`slack channel rename handler failed: ${String(err)}`));
       }

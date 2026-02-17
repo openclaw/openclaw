@@ -6,7 +6,6 @@ import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
-import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -357,15 +356,31 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           if (pendingRows.length > 0) {
-            const rendered = renderPendingPairingRequestsTable({
-              pending: pendingRows,
-              now,
-              tableWidth,
-              theme: { heading, warn, muted },
-            });
+            const pendingRowsRendered = pendingRows.map((r) => ({
+              Request: r.requestId,
+              Node: r.displayName?.trim() ? r.displayName.trim() : r.nodeId,
+              IP: r.remoteIp ?? "",
+              Requested:
+                typeof r.ts === "number"
+                  ? formatTimeAgo(Math.max(0, now - r.ts))
+                  : muted("unknown"),
+              Repair: r.isRepair ? warn("yes") : "",
+            }));
             defaultRuntime.log("");
-            defaultRuntime.log(rendered.heading);
-            defaultRuntime.log(rendered.table);
+            defaultRuntime.log(heading("Pending"));
+            defaultRuntime.log(
+              renderTable({
+                width: tableWidth,
+                columns: [
+                  { key: "Request", header: "Request", minWidth: 8 },
+                  { key: "Node", header: "Node", minWidth: 14, flex: true },
+                  { key: "IP", header: "IP", minWidth: 10 },
+                  { key: "Requested", header: "Requested", minWidth: 12 },
+                  { key: "Repair", header: "Repair", minWidth: 6 },
+                ],
+                rows: pendingRowsRendered,
+              }).trimEnd(),
+            );
           }
 
           if (filteredPaired.length > 0) {

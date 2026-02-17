@@ -12,6 +12,7 @@ describe("web_fetch firecrawl apiKey normalization", () => {
   const priorFetch = global.fetch;
 
   afterEach(() => {
+    // @ts-expect-error restore
     global.fetch = priorFetch;
     vi.restoreAllMocks();
   });
@@ -33,6 +34,7 @@ describe("web_fetch firecrawl apiKey normalization", () => {
       );
     });
 
+    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const { createWebFetchTool } = await import("./web-tools.js");

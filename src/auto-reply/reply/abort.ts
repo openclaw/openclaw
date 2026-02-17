@@ -1,9 +1,6 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
-import {
-  listSubagentRunsForRequester,
-  markSubagentRunTerminated,
-} from "../../agents/subagent-registry.js";
+import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -18,7 +15,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
+import { normalizeCommandBody } from "../commands-registry.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
@@ -33,17 +30,6 @@ export function isAbortTrigger(text?: string): boolean {
   }
   const normalized = text.trim().toLowerCase();
   return ABORT_TRIGGERS.has(normalized);
-}
-
-export function isAbortRequestText(text?: string, options?: CommandNormalizeOptions): boolean {
-  if (!text) {
-    return false;
-  }
-  const normalized = normalizeCommandBody(text, options).trim();
-  if (!normalized) {
-    return false;
-  }
-  return normalized.toLowerCase() === "/stop" || isAbortTrigger(normalized);
 }
 
 export function getAbortMemory(key: string): boolean | undefined {
@@ -155,42 +141,30 @@ export function stopSubagentsForRequester(params: {
   let stopped = 0;
 
   for (const run of runs) {
+    if (run.endedAt) {
+      continue;
+    }
     const childKey = run.childSessionKey?.trim();
     if (!childKey || seenChildKeys.has(childKey)) {
       continue;
     }
     seenChildKeys.add(childKey);
 
-    if (!run.endedAt) {
-      const cleared = clearSessionQueues([childKey]);
-      const parsed = parseAgentSessionKey(childKey);
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
-      let store = storeCache.get(storePath);
-      if (!store) {
-        store = loadSessionStore(storePath);
-        storeCache.set(storePath, store);
-      }
-      const entry = store[childKey];
-      const sessionId = entry?.sessionId;
-      const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
-      const markedTerminated =
-        markSubagentRunTerminated({
-          runId: run.runId,
-          childSessionKey: childKey,
-          reason: "killed",
-        }) > 0;
-
-      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-        stopped += 1;
-      }
+    const cleared = clearSessionQueues([childKey]);
+    const parsed = parseAgentSessionKey(childKey);
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
+    let store = storeCache.get(storePath);
+    if (!store) {
+      store = loadSessionStore(storePath);
+      storeCache.set(storePath, store);
     }
+    const entry = store[childKey];
+    const sessionId = entry?.sessionId;
+    const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
 
-    // Cascade: also stop any sub-sub-agents spawned by this child.
-    const cascadeResult = stopSubagentsForRequester({
-      cfg: params.cfg,
-      requesterSessionKey: childKey,
-    });
-    stopped += cascadeResult.stopped;
+    if (aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      stopped += 1;
+    }
   }
 
   if (stopped > 0) {
@@ -213,7 +187,8 @@ export async function tryFastAbortFromMessage(params: {
   const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
-  const abortRequested = isAbortRequestText(stripped);
+  const normalized = normalizeCommandBody(stripped);
+  const abortRequested = normalized === "/stop" || isAbortTrigger(stripped);
   if (!abortRequested) {
     return { handled: false, aborted: false };
   }

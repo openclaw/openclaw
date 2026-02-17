@@ -1,52 +1,41 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
-import {
-  createAuthTestLifecycle,
-  createExitThrowingRuntime,
-  createWizardPrompter,
-  readAuthProfilesForAgent,
-  setupAuthTestEnv,
-} from "./test-wizard-helpers.js";
 
-function createHuggingfacePrompter(params: {
-  text: WizardPrompter["text"];
-  select: WizardPrompter["select"];
-  confirm?: WizardPrompter["confirm"];
-}): WizardPrompter {
-  const overrides: Partial<WizardPrompter> = {
-    text: params.text,
-    select: params.select,
-  };
-  if (params.confirm) {
-    overrides.confirm = params.confirm;
-  }
-  return createWizardPrompter(overrides, { defaultSelect: "" });
-}
+const noopAsync = async () => {};
+const noop = () => {};
+const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
 
 describe("applyAuthChoiceHuggingface", () => {
-  const lifecycle = createAuthTestLifecycle([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-    "HF_TOKEN",
-    "HUGGINGFACE_HUB_TOKEN",
-  ]);
-
-  async function setupTempState() {
-    const env = await setupAuthTestEnv("openclaw-hf-");
-    lifecycle.setStateDir(env.stateDir);
-    return env.agentDir;
-  }
-
-  async function readAuthProfiles(agentDir: string) {
-    return await readAuthProfilesForAgent<{
-      profiles?: Record<string, { key?: string }>;
-    }>(agentDir);
-  }
+  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+  const previousHfToken = process.env.HF_TOKEN;
+  const previousHubToken = process.env.HUGGINGFACE_HUB_TOKEN;
+  let tempStateDir: string | null = null;
 
   afterEach(async () => {
-    await lifecycle.cleanup();
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true });
+      tempStateDir = null;
+    }
+    if (previousAgentDir === undefined) {
+      delete process.env.OPENCLAW_AGENT_DIR;
+    } else {
+      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+    }
+    if (previousHfToken === undefined) {
+      delete process.env.HF_TOKEN;
+    } else {
+      process.env.HF_TOKEN = previousHfToken;
+    }
+    if (previousHubToken === undefined) {
+      delete process.env.HUGGINGFACE_HUB_TOKEN;
+    } else {
+      process.env.HUGGINGFACE_HUB_TOKEN = previousHubToken;
+    }
   });
 
   it("returns null when authChoice is not huggingface-api-key", async () => {
@@ -54,21 +43,39 @@ describe("applyAuthChoiceHuggingface", () => {
       authChoice: "openrouter-api-key",
       config: {},
       prompter: {} as WizardPrompter,
-      runtime: createExitThrowingRuntime(),
+      runtime: {} as RuntimeEnv,
       setDefaultModel: false,
     });
     expect(result).toBeNull();
   });
 
   it("prompts for key and model, then writes config and auth profile", async () => {
-    const agentDir = await setupTempState();
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hf-"));
+    const agentDir = path.join(tempStateDir, "agent");
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    await fs.mkdir(agentDir, { recursive: true });
 
     const text = vi.fn().mockResolvedValue("hf-test-token");
     const select: WizardPrompter["select"] = vi.fn(
       async (params) => params.options?.[0]?.value as never,
     );
-    const prompter = createHuggingfacePrompter({ text, select });
-    const runtime = createExitThrowingRuntime();
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select,
+      multiselect: vi.fn(async () => []),
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
 
     const result = await applyAuthChoiceHuggingface({
       authChoice: "huggingface-api-key",
@@ -91,22 +98,44 @@ describe("applyAuthChoiceHuggingface", () => {
       expect.objectContaining({ message: "Default Hugging Face model" }),
     );
 
-    const parsed = await readAuthProfiles(agentDir);
+    const authProfilePath = authProfilePathFor(agentDir);
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
     expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-test-token");
   });
 
   it("does not prompt to reuse env token when opts.token already provided", async () => {
-    const agentDir = await setupTempState();
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hf-"));
+    const agentDir = path.join(tempStateDir, "agent");
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.HF_TOKEN = "hf-env-token";
     delete process.env.HUGGINGFACE_HUB_TOKEN;
+    await fs.mkdir(agentDir, { recursive: true });
 
     const text = vi.fn().mockResolvedValue("hf-text-token");
     const select: WizardPrompter["select"] = vi.fn(
       async (params) => params.options?.[0]?.value as never,
     );
     const confirm = vi.fn(async () => true);
-    const prompter = createHuggingfacePrompter({ text, select, confirm });
-    const runtime = createExitThrowingRuntime();
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select,
+      multiselect: vi.fn(async () => []),
+      text,
+      confirm,
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
 
     const result = await applyAuthChoiceHuggingface({
       authChoice: "huggingface-api-key",
@@ -124,7 +153,11 @@ describe("applyAuthChoiceHuggingface", () => {
     expect(confirm).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
 
-    const parsed = await readAuthProfiles(agentDir);
+    const authProfilePath = authProfilePathFor(agentDir);
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
     expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-opts-token");
   });
 });

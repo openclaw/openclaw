@@ -3,24 +3,18 @@ export type HeartbeatRunResult =
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
 
-export type HeartbeatWakeHandler = (opts: {
-  reason?: string;
-  agentId?: string;
-  sessionKey?: string;
-}) => Promise<HeartbeatRunResult>;
+export type HeartbeatWakeHandler = (opts: { reason?: string }) => Promise<HeartbeatRunResult>;
 
 type WakeTimerKind = "normal" | "retry";
 type PendingWakeReason = {
   reason: string;
   priority: number;
   requestedAt: number;
-  agentId?: string;
-  sessionKey?: string;
 };
 
 let handler: HeartbeatWakeHandler | null = null;
 let handlerGeneration = 0;
-const pendingWakes = new Map<string, PendingWakeReason>();
+let pendingWake: PendingWakeReason | null = null;
 let scheduled = false;
 let running = false;
 let timer: NodeJS.Timeout | null = null;
@@ -62,49 +56,23 @@ function normalizeWakeReason(reason?: string): string {
   return trimmed.length > 0 ? trimmed : "requested";
 }
 
-function normalizeWakeTarget(value?: string): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed || undefined;
-}
-
-function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
-  const agentId = normalizeWakeTarget(params.agentId);
-  const sessionKey = normalizeWakeTarget(params.sessionKey);
-  return `${agentId ?? ""}::${sessionKey ?? ""}`;
-}
-
-function queuePendingWakeReason(params?: {
-  reason?: string;
-  requestedAt?: number;
-  agentId?: string;
-  sessionKey?: string;
-}) {
-  const requestedAt = params?.requestedAt ?? Date.now();
-  const normalizedReason = normalizeWakeReason(params?.reason);
-  const normalizedAgentId = normalizeWakeTarget(params?.agentId);
-  const normalizedSessionKey = normalizeWakeTarget(params?.sessionKey);
-  const wakeTargetKey = getWakeTargetKey({
-    agentId: normalizedAgentId,
-    sessionKey: normalizedSessionKey,
-  });
+function queuePendingWakeReason(reason?: string, requestedAt = Date.now()) {
+  const normalizedReason = normalizeWakeReason(reason);
   const next: PendingWakeReason = {
     reason: normalizedReason,
     priority: resolveReasonPriority(normalizedReason),
     requestedAt,
-    agentId: normalizedAgentId,
-    sessionKey: normalizedSessionKey,
   };
-  const previous = pendingWakes.get(wakeTargetKey);
-  if (!previous) {
-    pendingWakes.set(wakeTargetKey, next);
+  if (!pendingWake) {
+    pendingWake = next;
     return;
   }
-  if (next.priority > previous.priority) {
-    pendingWakes.set(wakeTargetKey, next);
+  if (next.priority > pendingWake.priority) {
+    pendingWake = next;
     return;
   }
-  if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
-    pendingWakes.set(wakeTargetKey, next);
+  if (next.priority === pendingWake.priority && next.requestedAt >= pendingWake.requestedAt) {
+    pendingWake = next;
   }
 }
 
@@ -144,40 +112,23 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       return;
     }
 
-    const pendingBatch = Array.from(pendingWakes.values());
-    pendingWakes.clear();
+    const reason = pendingWake?.reason;
+    pendingWake = null;
     running = true;
     try {
-      for (const pendingWake of pendingBatch) {
-        const wakeOpts = {
-          reason: pendingWake.reason ?? undefined,
-          ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
-          ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
-        };
-        const res = await active(wakeOpts);
-        if (res.status === "skipped" && res.reason === "requests-in-flight") {
-          // The main lane is busy; retry this wake target soon.
-          queuePendingWakeReason({
-            reason: pendingWake.reason ?? "retry",
-            agentId: pendingWake.agentId,
-            sessionKey: pendingWake.sessionKey,
-          });
-          schedule(DEFAULT_RETRY_MS, "retry");
-        }
+      const res = await active({ reason: reason ?? undefined });
+      if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        // The main lane is busy; retry soon.
+        queuePendingWakeReason(reason ?? "retry");
+        schedule(DEFAULT_RETRY_MS, "retry");
       }
     } catch {
       // Error is already logged by the heartbeat runner; schedule a retry.
-      for (const pendingWake of pendingBatch) {
-        queuePendingWakeReason({
-          reason: pendingWake.reason ?? "retry",
-          agentId: pendingWake.agentId,
-          sessionKey: pendingWake.sessionKey,
-        });
-      }
+      queuePendingWakeReason(reason ?? "retry");
       schedule(DEFAULT_RETRY_MS, "retry");
     } finally {
       running = false;
-      if (pendingWakes.size > 0 || scheduled) {
+      if (pendingWake || scheduled) {
         schedule(delay, "normal");
       }
     }
@@ -212,7 +163,7 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
     running = false;
     scheduled = false;
   }
-  if (handler && pendingWakes.size > 0) {
+  if (handler && pendingWake) {
     schedule(DEFAULT_COALESCE_MS, "normal");
   }
   return () => {
@@ -227,17 +178,8 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
   };
 }
 
-export function requestHeartbeatNow(opts?: {
-  reason?: string;
-  coalesceMs?: number;
-  agentId?: string;
-  sessionKey?: string;
-}) {
-  queuePendingWakeReason({
-    reason: opts?.reason,
-    agentId: opts?.agentId,
-    sessionKey: opts?.sessionKey,
-  });
+export function requestHeartbeatNow(opts?: { reason?: string; coalesceMs?: number }) {
+  queuePendingWakeReason(opts?.reason);
   schedule(opts?.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
 }
 
@@ -246,7 +188,7 @@ export function hasHeartbeatWakeHandler() {
 }
 
 export function hasPendingHeartbeatWake() {
-  return pendingWakes.size > 0 || Boolean(timer) || scheduled;
+  return pendingWake !== null || Boolean(timer) || scheduled;
 }
 
 export function resetHeartbeatWakeStateForTests() {
@@ -256,7 +198,7 @@ export function resetHeartbeatWakeStateForTests() {
   timer = null;
   timerDueAt = null;
   timerKind = null;
-  pendingWakes.clear();
+  pendingWake = null;
   scheduled = false;
   running = false;
   handlerGeneration += 1;

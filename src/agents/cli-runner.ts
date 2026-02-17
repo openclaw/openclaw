@@ -5,20 +5,20 @@ import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
   appendImagePathsToPrompt,
-  buildCliSupervisorScopeKey,
   buildCliArgs,
   buildSystemPrompt,
+  cleanupResumeProcesses,
+  cleanupSuspendedCliProcesses,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
-  resolveCliNoOutputTimeoutMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -226,32 +226,19 @@ export async function runCliAgent(params: {
         }
         return next;
       })();
-      const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
-        backend,
-        timeoutMs: params.timeoutMs,
-        useResume,
-      });
-      const supervisor = getProcessSupervisor();
-      const scopeKey = buildCliSupervisorScopeKey({
-        backend,
-        backendId: backendResolved.id,
-        cliSessionId: useResume ? cliSessionIdToSend : undefined,
-      });
 
-      const managedRun = await supervisor.spawn({
-        sessionId: params.sessionId,
-        backendId: backendResolved.id,
-        scopeKey,
-        replaceExistingScope: Boolean(useResume && scopeKey),
-        mode: "child",
-        argv: [backend.command, ...args],
+      // Cleanup suspended processes that have accumulated (regardless of sessionId)
+      await cleanupSuspendedCliProcesses(backend);
+      if (useResume && cliSessionIdToSend) {
+        await cleanupResumeProcesses(backend, cliSessionIdToSend);
+      }
+
+      const result = await runCommandWithTimeout([backend.command, ...args], {
         timeoutMs: params.timeoutMs,
-        noOutputTimeoutMs,
         cwd: workspaceDir,
         env,
         input: stdinPayload,
       });
-      const result = await managedRun.wait();
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
@@ -272,28 +259,7 @@ export async function runCliAgent(params: {
         }
       }
 
-      if (result.exitCode !== 0 || result.reason !== "exit") {
-        if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
-          const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
-          log.warn(
-            `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${cliSessionIdToSend ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
-          );
-          throw new FailoverError(timeoutReason, {
-            reason: "timeout",
-            provider: params.provider,
-            model: modelId,
-            status: resolveFailoverStatus("timeout"),
-          });
-        }
-        if (result.reason === "overall-timeout") {
-          const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
-          throw new FailoverError(timeoutReason, {
-            reason: "timeout",
-            provider: params.provider,
-            model: modelId,
-            status: resolveFailoverStatus("timeout"),
-          });
-        }
+      if (result.code !== 0) {
         const err = stderr || stdout || "CLI failed.";
         const reason = classifyFailoverReason(err) ?? "unknown";
         const status = resolveFailoverStatus(reason);

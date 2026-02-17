@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
+import type { RequestClient } from "@buape/carbon";
 import type { APIChannel } from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
@@ -17,7 +17,6 @@ import type { PollInput } from "../polls.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
-  buildDiscordMessagePayload,
   buildDiscordSendError,
   buildDiscordTextChunks,
   createDiscordClient,
@@ -25,14 +24,9 @@ import {
   normalizeStickerIds,
   parseAndResolveRecipient,
   resolveChannelId,
-  resolveDiscordSendComponents,
-  resolveDiscordSendEmbeds,
   sendDiscordMedia,
   sendDiscordText,
-  stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
-  type DiscordSendComponents,
-  type DiscordSendEmbeds,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
 import {
@@ -45,13 +39,11 @@ type DiscordSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
   retry?: RetryConfig;
-  components?: DiscordSendComponents;
-  embeds?: DiscordSendEmbeds;
+  embeds?: unknown[];
   silent?: boolean;
 };
 
@@ -110,19 +102,7 @@ export async function sendMessageDiscord(
       chunkMode,
     });
     const starterContent = chunks[0]?.trim() ? chunks[0] : threadName;
-    const starterComponents = resolveDiscordSendComponents({
-      components: opts.components,
-      text: starterContent,
-      isFirst: true,
-    });
-    const starterEmbeds = resolveDiscordSendEmbeds({ embeds: opts.embeds, isFirst: true });
-    const silentFlags = opts.silent ? 1 << 12 : undefined;
-    const starterPayload: MessagePayloadObject = buildDiscordMessagePayload({
-      text: starterContent,
-      components: starterComponents,
-      embeds: starterEmbeds,
-      flags: silentFlags,
-    });
+    const starterEmbeds = opts.embeds?.length ? opts.embeds : undefined;
     let threadRes: { id: string; message?: { id: string; channel_id: string } };
     try {
       threadRes = (await request(
@@ -130,7 +110,10 @@ export async function sendMessageDiscord(
           rest.post(Routes.threads(channelId), {
             body: {
               name: threadName,
-              message: stripUndefinedFields(serializePayload(starterPayload)),
+              message: {
+                content: starterContent,
+                ...(starterEmbeds ? { embeds: starterEmbeds } : {}),
+              },
             },
           }) as Promise<{ id: string; message?: { id: string; channel_id: string } }>,
         "forum-thread",
@@ -157,11 +140,9 @@ export async function sendMessageDiscord(
           threadId,
           mediaCaption ?? "",
           opts.mediaUrl,
-          opts.mediaLocalRoots,
           undefined,
           request,
           accountInfo.config.maxLinesPerMessage,
-          undefined,
           undefined,
           chunkMode,
           opts.silent,
@@ -174,7 +155,6 @@ export async function sendMessageDiscord(
             undefined,
             request,
             accountInfo.config.maxLinesPerMessage,
-            undefined,
             undefined,
             chunkMode,
             opts.silent,
@@ -189,7 +169,6 @@ export async function sendMessageDiscord(
             undefined,
             request,
             accountInfo.config.maxLinesPerMessage,
-            undefined,
             undefined,
             chunkMode,
             opts.silent,
@@ -224,11 +203,9 @@ export async function sendMessageDiscord(
         channelId,
         textWithTables,
         opts.mediaUrl,
-        opts.mediaLocalRoots,
         opts.replyTo,
         request,
         accountInfo.config.maxLinesPerMessage,
-        opts.components,
         opts.embeds,
         chunkMode,
         opts.silent,
@@ -241,7 +218,6 @@ export async function sendMessageDiscord(
         opts.replyTo,
         request,
         accountInfo.config.maxLinesPerMessage,
-        opts.components,
         opts.embeds,
         chunkMode,
         opts.silent,

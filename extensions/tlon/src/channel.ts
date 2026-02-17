@@ -10,7 +10,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "openclaw/plugin-sdk";
-import { buildTlonAccountFields } from "./account-fields.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonOnboardingAdapter } from "./onboarding.js";
@@ -48,7 +47,19 @@ function applyTlonSetupConfig(params: {
   });
   const base = namedConfig.channels?.tlon ?? {};
 
-  const payload = buildTlonAccountFields(input);
+  const payload = {
+    ...(input.ship ? { ship: input.ship } : {}),
+    ...(input.url ? { url: input.url } : {}),
+    ...(input.code ? { code: input.code } : {}),
+    ...(typeof input.allowPrivateNetwork === "boolean"
+      ? { allowPrivateNetwork: input.allowPrivateNetwork }
+      : {}),
+    ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
+    ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),
+    ...(typeof input.autoDiscoverChannels === "boolean"
+      ? { autoDiscoverChannels: input.autoDiscoverChannels }
+      : {}),
+  };
 
   if (useDefault) {
     return {

@@ -2,23 +2,6 @@ import { describe, expect, it } from "vitest";
 import { redactSensitiveStatusSummary } from "./status.summary.js";
 import type { StatusSummary } from "./status.types.js";
 
-function createRecentSessionRow() {
-  return {
-    key: "main",
-    kind: "direct" as const,
-    sessionId: "sess-1",
-    updatedAt: 1,
-    age: 2,
-    totalTokens: 3,
-    totalTokensFresh: true,
-    remainingTokens: 4,
-    percentUsed: 5,
-    model: "gpt-5",
-    contextTokens: 200_000,
-    flags: ["id:sess-1"],
-  };
-}
-
 describe("redactSensitiveStatusSummary", () => {
   it("removes sensitive session and path details while preserving summary structure", () => {
     const input: StatusSummary = {
@@ -32,13 +15,43 @@ describe("redactSensitiveStatusSummary", () => {
         paths: ["/tmp/openclaw/sessions.json"],
         count: 1,
         defaults: { model: "gpt-5", contextTokens: 200_000 },
-        recent: [createRecentSessionRow()],
+        recent: [
+          {
+            key: "main",
+            kind: "direct",
+            sessionId: "sess-1",
+            updatedAt: 1,
+            age: 2,
+            totalTokens: 3,
+            totalTokensFresh: true,
+            remainingTokens: 4,
+            percentUsed: 5,
+            model: "gpt-5",
+            contextTokens: 200_000,
+            flags: ["id:sess-1"],
+          },
+        ],
         byAgent: [
           {
             agentId: "main",
             path: "/tmp/openclaw/main-sessions.json",
             count: 1,
-            recent: [createRecentSessionRow()],
+            recent: [
+              {
+                key: "main",
+                kind: "direct",
+                sessionId: "sess-1",
+                updatedAt: 1,
+                age: 2,
+                totalTokens: 3,
+                totalTokensFresh: true,
+                remainingTokens: 4,
+                percentUsed: 5,
+                model: "gpt-5",
+                contextTokens: 200_000,
+                flags: ["id:sess-1"],
+              },
+            ],
           },
         ],
       },

@@ -1,13 +1,41 @@
 import { convertMessages } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
-import type { Context } from "@mariozechner/pi-ai/dist/types.js";
+import type { Context, Model } from "@mariozechner/pi-ai/dist/types.js";
 import { describe, expect, it } from "vitest";
-import {
-  asRecord,
-  makeGeminiCliAssistantMessage,
-  makeGeminiCliModel,
-  makeGoogleAssistantMessage,
-  makeModel,
-} from "./google-shared.test-helpers.js";
+
+const asRecord = (value: unknown): Record<string, unknown> => {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+};
+
+const makeModel = (id: string): Model<"google-generative-ai"> =>
+  ({
+    id,
+    name: id,
+    api: "google-generative-ai",
+    provider: "google",
+    baseUrl: "https://example.invalid",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+  }) as Model<"google-generative-ai">;
+
+const makeGeminiCliModel = (id: string): Model<"google-gemini-cli"> =>
+  ({
+    id,
+    name: id,
+    api: "google-gemini-cli",
+    provider: "google-gemini-cli",
+    baseUrl: "https://example.invalid",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+  }) as Model<"google-gemini-cli">;
 
 describe("google-shared convertTools", () => {
   it("ensures function call comes after user turn, not after model turn", () => {
@@ -18,15 +46,59 @@ describe("google-shared convertTools", () => {
           role: "user",
           content: "Hello",
         },
-        makeGoogleAssistantMessage(model.id, [{ type: "text", text: "Hi!" }]),
-        makeGoogleAssistantMessage(model.id, [
-          {
-            type: "toolCall",
-            id: "call_1",
-            name: "myTool",
-            arguments: {},
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi!" }],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
           },
-        ]),
+          stopReason: "stop",
+          timestamp: 0,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "myTool",
+              arguments: {},
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
       ],
     } as unknown as Context;
 
@@ -50,15 +122,37 @@ describe("google-shared convertTools", () => {
           role: "user",
           content: "Use a tool",
         },
-        makeGeminiCliAssistantMessage(model.id, [
-          {
-            type: "toolCall",
-            id: "call_1",
-            name: "myTool",
-            arguments: { arg: "value" },
-            thoughtSignature: "dGVzdA==",
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "myTool",
+              arguments: { arg: "value" },
+              thoughtSignature: "dGVzdA==",
+            },
+          ],
+          api: "google-gemini-cli",
+          provider: "google-gemini-cli",
+          model: "gemini-3-flash",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
           },
-        ]),
+          stopReason: "stop",
+          timestamp: 0,
+        },
         {
           role: "toolResult",
           toolCallId: "call_1",

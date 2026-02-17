@@ -5,18 +5,12 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
   return await promptAccountIdSdk(params);
 };
 
-export function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
+export function addWildcardAllowFrom(
+  allowFrom?: Array<string | number> | null,
+): Array<string | number> {
   const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
   if (!next.includes("*")) {
     next.push("*");
   }
   return next;
-}
-
-export function mergeAllowFromEntries(
-  current: Array<string | number> | null | undefined,
-  additions: Array<string | number>,
-): string[] {
-  const merged = [...(current ?? []), ...additions].map((v) => String(v).trim()).filter(Boolean);
-  return [...new Set(merged)];
 }

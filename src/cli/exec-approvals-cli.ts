@@ -95,14 +95,6 @@ function exitWithError(message: string): never {
   throw new Error(message);
 }
 
-function requireTrimmedNonEmpty(value: string, message: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    exitWithError(message);
-  }
-  return trimmed;
-}
-
 async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   snapshot: ExecApprovalsSnapshot;
   nodeId: string | null;
@@ -270,28 +262,6 @@ function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
   );
 }
 
-async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
-  nodeId: string | null;
-  source: "gateway" | "node" | "local";
-  targetLabel: string;
-  baseHash: string;
-  file: ExecApprovalsFile;
-  agentKey: string;
-  agent: ExecApprovalsAgent;
-  allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
-}> {
-  const { snapshot, nodeId, source, targetLabel, baseHash } =
-    await loadWritableSnapshotTarget(opts);
-  const file = snapshot.file ?? { version: 1 };
-  file.version = 1;
-
-  const agentKey = resolveAgentKey(opts.agent);
-  const agent = ensureAgent(file, agentKey);
-  const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
-
-  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
-}
-
 export function registerExecApprovalsCli(program: Command) {
   const formatExample = (cmd: string, desc: string) =>
     `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`;
@@ -394,9 +364,17 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--agent <id>", 'Agent id (defaults to "*")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
       try {
-        const trimmed = requireTrimmedNonEmpty(pattern, "Pattern required.");
-        const { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries } =
-          await loadWritableAllowlistAgent(opts);
+        const trimmed = pattern.trim();
+        if (!trimmed) {
+          exitWithError("Pattern required.");
+        }
+        const { snapshot, nodeId, source, targetLabel, baseHash } =
+          await loadWritableSnapshotTarget(opts);
+        const file = snapshot.file ?? { version: 1 };
+        file.version = 1;
+        const agentKey = resolveAgentKey(opts.agent);
+        const agent = ensureAgent(file, agentKey);
+        const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
         if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmed)) {
           defaultRuntime.log("Already allowlisted.");
           return;
@@ -420,9 +398,17 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--agent <id>", 'Agent id (defaults to "*")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
       try {
-        const trimmed = requireTrimmedNonEmpty(pattern, "Pattern required.");
-        const { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries } =
-          await loadWritableAllowlistAgent(opts);
+        const trimmed = pattern.trim();
+        if (!trimmed) {
+          exitWithError("Pattern required.");
+        }
+        const { snapshot, nodeId, source, targetLabel, baseHash } =
+          await loadWritableSnapshotTarget(opts);
+        const file = snapshot.file ?? { version: 1 };
+        file.version = 1;
+        const agentKey = resolveAgentKey(opts.agent);
+        const agent = ensureAgent(file, agentKey);
+        const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
         const nextEntries = allowlistEntries.filter(
           (entry) => normalizeAllowlistEntry(entry) !== trimmed,
         );

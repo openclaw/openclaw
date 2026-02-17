@@ -1,5 +1,4 @@
 import { html } from "lit";
-import { t, i18n, type Locale } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { formatNextRun } from "../presenter.ts";
@@ -31,13 +30,10 @@ export function renderOverview(props: OverviewProps) {
         authMode?: "none" | "token" | "password" | "trusted-proxy";
       }
     | undefined;
-  const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
-  const tick = snapshot?.policy?.tickIntervalMs
-    ? `${snapshot.policy.tickIntervalMs}ms`
-    : t("common.na");
+  const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : "n/a";
+  const tick = snapshot?.policy?.tickIntervalMs ? `${snapshot.policy.tickIntervalMs}ms` : "n/a";
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
-
   const authHint = (() => {
     if (props.connected || !props.lastError) {
       return null;
@@ -52,9 +48,9 @@ export function renderOverview(props: OverviewProps) {
     if (!hasToken && !hasPassword) {
       return html`
         <div class="muted" style="margin-top: 8px">
-          ${t("overview.auth.required")}
+          This gateway requires auth. Add a token or password, then click Connect.
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
+            <span class="mono">openclaw dashboard --no-open</span> → open the Control UI<br />
             <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
           </div>
           <div style="margin-top: 6px">
@@ -72,7 +68,7 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        ${t("overview.auth.failed", { command: "openclaw dashboard --no-open" })}
+        Auth failed. Update the token or password in Control UI settings, then click Connect.
         <div style="margin-top: 6px">
           <a
             class="session-link"
@@ -86,7 +82,6 @@ export function renderOverview(props: OverviewProps) {
       </div>
     `;
   })();
-
   const insecureContextHint = (() => {
     if (props.connected || !props.lastError) {
       return null;
@@ -101,9 +96,11 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        ${t("overview.insecure.hint", { url: "http://127.0.0.1:18789" })}
+        This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open
+        <span class="mono">http://127.0.0.1:18789</span> on the gateway host.
         <div style="margin-top: 6px">
-          ${t("overview.insecure.stayHttp", { config: "gateway.controlUi.allowInsecureAuth: true" })}
+          If you must stay on HTTP, set
+          <span class="mono">gateway.controlUi.allowInsecureAuth: true</span> (token-only).
         </div>
         <div style="margin-top: 6px">
           <a
@@ -128,16 +125,14 @@ export function renderOverview(props: OverviewProps) {
     `;
   })();
 
-  const currentLocale = i18n.getLocale();
-
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
-        <div class="card-title">${t("overview.access.title")}</div>
-        <div class="card-sub">${t("overview.access.subtitle")}</div>
+        <div class="card-title">Gateway Access</div>
+        <div class="card-sub">Where the dashboard connects and how it authenticates.</div>
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
-            <span>${t("overview.access.wsUrl")}</span>
+            <span>WebSocket URL</span>
             <input
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
@@ -152,7 +147,7 @@ export function renderOverview(props: OverviewProps) {
               ? ""
               : html`
                 <label class="field">
-                  <span>${t("overview.access.token")}</span>
+                  <span>Gateway Token</span>
                   <input
                     .value=${props.settings.token}
                     @input=${(e: Event) => {
@@ -163,7 +158,7 @@ export function renderOverview(props: OverviewProps) {
                   />
                 </label>
                 <label class="field">
-                  <span>${t("overview.access.password")}</span>
+                  <span>Password (not stored)</span>
                   <input
                     type="password"
                     .value=${props.password}
@@ -177,7 +172,7 @@ export function renderOverview(props: OverviewProps) {
               `
           }
           <label class="field">
-            <span>${t("overview.access.sessionKey")}</span>
+            <span>Default Session Key</span>
             <input
               .value=${props.settings.sessionKey}
               @input=${(e: Event) => {
@@ -186,54 +181,36 @@ export function renderOverview(props: OverviewProps) {
               }}
             />
           </label>
-          <label class="field">
-            <span>${t("overview.access.language")}</span>
-            <select
-              .value=${currentLocale}
-              @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
-              }}
-            >
-              <option value="en">${t("languages.en")}</option>
-              <option value="zh-CN">${t("languages.zhCN")}</option>
-              <option value="zh-TW">${t("languages.zhTW")}</option>
-              <option value="pt-BR">${t("languages.ptBR")}</option>
-            </select>
-          </label>
         </div>
         <div class="row" style="margin-top: 14px;">
-          <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-          <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-          <span class="muted">${
-            isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
-          }</span>
+          <button class="btn" @click=${() => props.onConnect()}>Connect</button>
+          <button class="btn" @click=${() => props.onRefresh()}>Refresh</button>
+          <span class="muted">${isTrustedProxy ? "Authenticated via trusted proxy." : "Click Connect to apply connection changes."}</span>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-title">${t("overview.snapshot.title")}</div>
-        <div class="card-sub">${t("overview.snapshot.subtitle")}</div>
+        <div class="card-title">Snapshot</div>
+        <div class="card-sub">Latest gateway handshake information.</div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.status")}</div>
+            <div class="stat-label">Status</div>
             <div class="stat-value ${props.connected ? "ok" : "warn"}">
-              ${props.connected ? t("common.ok") : t("common.offline")}
+              ${props.connected ? "Connected" : "Disconnected"}
             </div>
           </div>
           <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.uptime")}</div>
+            <div class="stat-label">Uptime</div>
             <div class="stat-value">${uptime}</div>
           </div>
           <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.tickInterval")}</div>
+            <div class="stat-label">Tick Interval</div>
             <div class="stat-value">${tick}</div>
           </div>
           <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
+            <div class="stat-label">Last Channels Refresh</div>
             <div class="stat-value">
-              ${props.lastChannelsRefresh ? formatRelativeTimestamp(props.lastChannelsRefresh) : t("common.na")}
+              ${props.lastChannelsRefresh ? formatRelativeTimestamp(props.lastChannelsRefresh) : "n/a"}
             </div>
           </div>
         </div>
@@ -246,7 +223,7 @@ export function renderOverview(props: OverviewProps) {
             </div>`
             : html`
                 <div class="callout" style="margin-top: 14px">
-                  ${t("overview.snapshot.channelsHint")}
+                  Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
                 </div>
               `
         }
@@ -255,41 +232,41 @@ export function renderOverview(props: OverviewProps) {
 
     <section class="grid grid-cols-3" style="margin-top: 18px;">
       <div class="card stat-card">
-        <div class="stat-label">${t("overview.stats.instances")}</div>
+        <div class="stat-label">Instances</div>
         <div class="stat-value">${props.presenceCount}</div>
-        <div class="muted">${t("overview.stats.instancesHint")}</div>
+        <div class="muted">Presence beacons in the last 5 minutes.</div>
       </div>
       <div class="card stat-card">
-        <div class="stat-label">${t("overview.stats.sessions")}</div>
-        <div class="stat-value">${props.sessionsCount ?? t("common.na")}</div>
-        <div class="muted">${t("overview.stats.sessionsHint")}</div>
+        <div class="stat-label">Sessions</div>
+        <div class="stat-value">${props.sessionsCount ?? "n/a"}</div>
+        <div class="muted">Recent session keys tracked by the gateway.</div>
       </div>
       <div class="card stat-card">
-        <div class="stat-label">${t("overview.stats.cron")}</div>
+        <div class="stat-label">Cron</div>
         <div class="stat-value">
-          ${props.cronEnabled == null ? t("common.na") : props.cronEnabled ? t("common.enabled") : t("common.disabled")}
+          ${props.cronEnabled == null ? "n/a" : props.cronEnabled ? "Enabled" : "Disabled"}
         </div>
-        <div class="muted">${t("overview.stats.cronNext", { time: formatNextRun(props.cronNext) })}</div>
+        <div class="muted">Next wake ${formatNextRun(props.cronNext)}</div>
       </div>
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">${t("overview.notes.title")}</div>
-      <div class="card-sub">${t("overview.notes.subtitle")}</div>
+      <div class="card-title">Notes</div>
+      <div class="card-sub">Quick reminders for remote control setups.</div>
       <div class="note-grid" style="margin-top: 14px;">
         <div>
-          <div class="note-title">${t("overview.notes.tailscaleTitle")}</div>
+          <div class="note-title">Tailscale serve</div>
           <div class="muted">
-            ${t("overview.notes.tailscaleText")}
+            Prefer serve mode to keep the gateway on loopback with tailnet auth.
           </div>
         </div>
         <div>
-          <div class="note-title">${t("overview.notes.sessionTitle")}</div>
-          <div class="muted">${t("overview.notes.sessionText")}</div>
+          <div class="note-title">Session hygiene</div>
+          <div class="muted">Use /new or sessions.patch to reset context.</div>
         </div>
         <div>
-          <div class="note-title">${t("overview.notes.cronTitle")}</div>
-          <div class="muted">${t("overview.notes.cronText")}</div>
+          <div class="note-title">Cron reminders</div>
+          <div class="muted">Use isolated sessions for recurring runs.</div>
         </div>
       </div>
     </section>

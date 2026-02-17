@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
-import { buildOpenAiResponsesProviderConfig } from "../src/gateway/test-openai-responses-model.js";
+import { GatewayClient } from "../src/gateway/client.js";
+import { startGatewayServer } from "../src/gateway/server.js";
+import { getDeterministicFreePortBlock } from "../src/test-utils/ports.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 
 type OpenAIResponseStreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
@@ -75,6 +77,44 @@ function extractPayloadText(result: unknown): string {
   return texts.join("\n").trim();
 }
 
+async function connectClient(params: { url: string; token: string }) {
+  return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
+    let settled = false;
+    const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(client as InstanceType<typeof GatewayClient>);
+      }
+    };
+    const client = new GatewayClient({
+      url: params.url,
+      connectDelayMs: 0,
+      token: params.token,
+      clientName: GATEWAY_CLIENT_NAMES.TEST,
+      clientDisplayName: "vitest-timeout-fallback",
+      clientVersion: "dev",
+      mode: GATEWAY_CLIENT_MODES.TEST,
+      onHelloOk: () => stop(undefined, client),
+      onConnectError: (err) => stop(err),
+      onClose: (code, reason) =>
+        stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
+    });
+    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
+    timer.unref();
+    client.start();
+  });
+}
+
+async function getFreeGatewayPort(): Promise<number> {
+  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
+}
+
 describe("provider timeouts (e2e)", () => {
   it(
     "falls back when the primary provider aborts with a timeout-like AbortError",
@@ -143,18 +183,58 @@ describe("provider timeouts (e2e)", () => {
         models: {
           mode: "replace",
           providers: {
-            primary: buildOpenAiResponsesProviderConfig(primaryBaseUrl),
-            fallback: buildOpenAiResponsesProviderConfig(fallbackBaseUrl),
+            primary: {
+              baseUrl: primaryBaseUrl,
+              apiKey: "test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.2",
+                  name: "gpt-5.2",
+                  api: "openai-responses",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+            fallback: {
+              baseUrl: fallbackBaseUrl,
+              apiKey: "test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.2",
+                  name: "gpt-5.2",
+                  api: "openai-responses",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
           },
         },
         gateway: { auth: { token } },
       };
 
-      const { server, client } = await startGatewayWithClient({
-        cfg,
-        configPath,
+      await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+
+      const client = await connectClient({
+        url: `ws://127.0.0.1:${port}`,
         token,
-        clientDisplayName: "vitest-timeout-fallback",
       });
 
       try {

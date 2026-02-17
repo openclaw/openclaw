@@ -28,12 +28,6 @@ protocol LocationServicing: Sendable {
         desiredAccuracy: OpenClawLocationAccuracy,
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
-    func startLocationUpdates(
-        desiredAccuracy: OpenClawLocationAccuracy,
-        significantChangesOnly: Bool) -> AsyncStream<CLLocation>
-    func stopLocationUpdates()
-    func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
-    func stopMonitoringSignificantLocationChanges()
 }
 
 protocol DeviceStatusServicing: Sendable {

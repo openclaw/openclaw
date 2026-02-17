@@ -15,8 +15,6 @@ export type UsageState = {
   usageSelectedDays: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesLoading: boolean;
-  usageTimeSeriesCursorStart: number | null;
-  usageTimeSeriesCursorEnd: number | null;
   usageSessionLogs: SessionLogEntry[] | null;
   usageSessionLogsLoading: boolean;
 };
@@ -96,10 +94,7 @@ export async function loadSessionLogs(state: UsageState, sessionKey: string) {
   state.usageSessionLogsLoading = true;
   state.usageSessionLogs = null;
   try {
-    const res = await state.client.request("sessions.usage.logs", {
-      key: sessionKey,
-      limit: 1000,
-    });
+    const res = await state.client.request("sessions.usage.logs", { key: sessionKey, limit: 500 });
     if (res && Array.isArray((res as { logs: SessionLogEntry[] }).logs)) {
       state.usageSessionLogs = (res as { logs: SessionLogEntry[] }).logs;
     }

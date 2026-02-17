@@ -1,12 +1,11 @@
 import { vi } from "vitest";
-import type { ModelDefinitionConfig } from "../../config/types.js";
 import { discoverModels } from "../pi-model-discovery.js";
 
-export const makeModel = (id: string): ModelDefinitionConfig => ({
+export const makeModel = (id: string) => ({
   id,
   name: id,
   reasoning: false,
-  input: ["text"],
+  input: ["text"] as const,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1,
   maxTokens: 1,

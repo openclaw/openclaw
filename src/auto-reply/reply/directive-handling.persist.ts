@@ -19,7 +19,7 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
+import { formatElevatedEvent, formatReasoningEvent } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export async function persistInlineDirectives(params: {
@@ -199,13 +199,20 @@ export async function persistInlineDirectives(params: {
           store[sessionKey] = sessionEntry;
         });
       }
-      enqueueModeSwitchEvents({
-        enqueueSystemEvent,
-        sessionEntry,
-        sessionKey,
-        elevatedChanged,
-        reasoningChanged,
-      });
+      if (elevatedChanged) {
+        const nextElevated = (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+        enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+          sessionKey,
+          contextKey: "mode:elevated",
+        });
+      }
+      if (reasoningChanged) {
+        const nextReasoning = (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+        enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+          sessionKey,
+          contextKey: "mode:reasoning",
+        });
+      }
     }
   }
 

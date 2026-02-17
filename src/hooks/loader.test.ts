@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
@@ -12,19 +12,13 @@ import {
 import { loadInternalHooks } from "./loader.js";
 
 describe("loader", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let tmpDir: string;
   let originalBundledDir: string | undefined;
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
-  });
 
   beforeEach(async () => {
     clearInternalHooks();
     // Create a temp directory for test modules
-    tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
+    tmpDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
@@ -40,13 +34,12 @@ describe("loader", () => {
     } else {
       process.env.OPENCLAW_BUNDLED_HOOKS_DIR = originalBundledDir;
     }
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
+    // Clean up temp directory
+    try {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
     }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   describe("loadInternalHooks", () => {

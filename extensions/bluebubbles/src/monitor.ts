@@ -2,11 +2,6 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
-  registerWebhookTarget,
-  rejectNonPostWebhookRequest,
-  resolveWebhookTargets,
-} from "openclaw/plugin-sdk";
-import {
   normalizeWebhookMessage,
   normalizeWebhookReaction,
   type NormalizedWebhookMessage,
@@ -231,11 +226,20 @@ function removeDebouncer(target: WebhookTarget): void {
 }
 
 export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
-  const registered = registerWebhookTarget(webhookTargets, target);
+  const key = normalizeWebhookPath(target.path);
+  const normalizedTarget = { ...target, path: key };
+  const existing = webhookTargets.get(key) ?? [];
+  const next = [...existing, normalizedTarget];
+  webhookTargets.set(key, next);
   return () => {
-    registered.unregister();
+    const updated = (webhookTargets.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
+    if (updated.length > 0) {
+      webhookTargets.set(key, updated);
+    } else {
+      webhookTargets.delete(key);
+    }
     // Clean up debouncer when target is unregistered
-    removeDebouncer(registered.target);
+    removeDebouncer(normalizedTarget);
   };
 }
 
@@ -383,14 +387,17 @@ export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const resolved = resolveWebhookTargets(req, webhookTargets);
-  if (!resolved) {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const path = normalizeWebhookPath(url.pathname);
+  const targets = webhookTargets.get(path);
+  if (!targets || targets.length === 0) {
     return false;
   }
-  const { path, targets } = resolved;
-  const url = new URL(req.url ?? "/", "http://localhost");
 
-  if (rejectNonPostWebhookRequest(req, res)) {
+  if (req.method !== "POST") {
+    res.statusCode = 405;
+    res.setHeader("Allow", "POST");
+    res.end("Method Not Allowed");
     return true;
   }
 

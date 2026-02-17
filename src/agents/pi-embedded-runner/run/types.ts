@@ -42,9 +42,7 @@ export type EmbeddedRunAttemptResult = {
   };
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
-  messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
-  successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;

@@ -14,7 +14,6 @@
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml/",
-    "src/auto-reply/reply/export-html/",
     "Swabble/",
     "vendor/",
   ],

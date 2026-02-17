@@ -6,7 +6,7 @@ import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/no
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const CANVAS_ACTIONS = [
@@ -58,7 +58,11 @@ export function createCanvasTool(): AnyAgentTool {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const gatewayOpts = readGatewayCallOptions(params);
+      const gatewayOpts: GatewayCallOptions = {
+        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+      };
 
       const nodeId = await resolveNodeId(
         gatewayOpts,
@@ -83,13 +87,8 @@ export function createCanvasTool(): AnyAgentTool {
             height: typeof params.height === "number" ? params.height : undefined,
           };
           const invokeParams: Record<string, unknown> = {};
-          // Accept both `target` and `url` for present to match common caller expectations.
-          // `target` remains the canonical field for CLI compatibility.
-          const presentTarget =
-            readStringParam(params, "target", { trim: true }) ??
-            readStringParam(params, "url", { trim: true });
-          if (presentTarget) {
-            invokeParams.url = presentTarget;
+          if (typeof params.target === "string" && params.target.trim()) {
+            invokeParams.url = params.target.trim();
           }
           if (
             Number.isFinite(placement.x) ||
@@ -106,10 +105,7 @@ export function createCanvasTool(): AnyAgentTool {
           await invoke("canvas.hide", undefined);
           return jsonResult({ ok: true });
         case "navigate": {
-          // Support `target` as an alias so callers can reuse the same field across present/navigate.
-          const url =
-            readStringParam(params, "url", { trim: true }) ??
-            readStringParam(params, "target", { required: true, trim: true, label: "url" });
+          const url = readStringParam(params, "url", { required: true });
           await invoke("canvas.navigate", { url });
           return jsonResult({ ok: true });
         }

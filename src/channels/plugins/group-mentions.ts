@@ -120,24 +120,6 @@ function resolveDiscordGuildEntry(guilds: DiscordConfig["guilds"], groupSpace?: 
   return guilds["*"] ?? null;
 }
 
-function resolveDiscordChannelEntry<TEntry>(
-  channelEntries: Record<string, TEntry> | undefined,
-  params: { groupId?: string | null; groupChannel?: string | null },
-): TEntry | undefined {
-  if (!channelEntries || Object.keys(channelEntries).length === 0) {
-    return undefined;
-  }
-  const groupChannel = params.groupChannel;
-  const channelSlug = normalizeDiscordSlug(groupChannel);
-  return (
-    (params.groupId ? channelEntries[params.groupId] : undefined) ??
-    (channelSlug
-      ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
-      : undefined) ??
-    (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined)
-  );
-}
-
 export function resolveTelegramGroupRequireMention(
   params: GroupMentionParams,
 ): boolean | undefined {
@@ -183,7 +165,14 @@ export function resolveDiscordGroupRequireMention(params: GroupMentionParams): b
   );
   const channelEntries = guildEntry?.channels;
   if (channelEntries && Object.keys(channelEntries).length > 0) {
-    const entry = resolveDiscordChannelEntry(channelEntries, params);
+    const groupChannel = params.groupChannel;
+    const channelSlug = normalizeDiscordSlug(groupChannel);
+    const entry =
+      (params.groupId ? channelEntries[params.groupId] : undefined) ??
+      (channelSlug
+        ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
+        : undefined) ??
+      (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined);
     if (entry && typeof entry.requireMention === "boolean") {
       return entry.requireMention;
     }
@@ -317,7 +306,14 @@ export function resolveDiscordGroupToolPolicy(
   );
   const channelEntries = guildEntry?.channels;
   if (channelEntries && Object.keys(channelEntries).length > 0) {
-    const entry = resolveDiscordChannelEntry(channelEntries, params);
+    const groupChannel = params.groupChannel;
+    const channelSlug = normalizeDiscordSlug(groupChannel);
+    const entry =
+      (params.groupId ? channelEntries[params.groupId] : undefined) ??
+      (channelSlug
+        ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
+        : undefined) ??
+      (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined);
     const senderPolicy = resolveToolsBySender({
       toolsBySender: entry?.toolsBySender,
       senderId: params.senderId,

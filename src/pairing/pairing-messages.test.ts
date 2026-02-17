@@ -1,17 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
 describe("buildPairingReply", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let previousProfile: string | undefined;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
+    previousProfile = process.env.OPENCLAW_PROFILE;
     process.env.OPENCLAW_PROFILE = "isolated";
   });
 
   afterEach(() => {
-    envSnapshot.restore();
+    if (previousProfile === undefined) {
+      delete process.env.OPENCLAW_PROFILE;
+      return;
+    }
+    process.env.OPENCLAW_PROFILE = previousProfile;
   });
 
   const cases = [

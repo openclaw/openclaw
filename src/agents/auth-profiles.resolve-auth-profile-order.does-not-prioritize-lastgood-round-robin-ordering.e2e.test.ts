@@ -1,14 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles.js";
-import {
-  ANTHROPIC_CFG,
-  ANTHROPIC_STORE,
-} from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("resolveAuthProfileOrder", () => {
-  const store = ANTHROPIC_STORE;
-  const cfg = ANTHROPIC_CFG;
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-default",
+      },
+      "anthropic:work": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-work",
+      },
+    },
+  };
+  const cfg = {
+    auth: {
+      profiles: {
+        "anthropic:default": { provider: "anthropic", mode: "api_key" },
+        "anthropic:work": { provider: "anthropic", mode: "api_key" },
+      },
+    },
+  };
 
   it("does not prioritize lastGood over round-robin ordering", () => {
     const order = resolveAuthProfileOrder({
@@ -38,7 +54,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:work", "anthropic:default"] },
-          profiles: cfg.auth?.profiles,
+          profiles: cfg.auth.profiles,
         },
       },
       store,
@@ -51,7 +67,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth?.profiles,
+          profiles: cfg.auth.profiles,
         },
       },
       store: {
@@ -83,7 +99,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth?.profiles,
+          profiles: cfg.auth.profiles,
         },
       },
       store: {
@@ -121,7 +137,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth?.profiles,
+          profiles: cfg.auth.profiles,
         },
       },
       store: {

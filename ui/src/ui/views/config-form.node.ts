@@ -500,39 +500,35 @@ function renderObject(params: {
   const additional = schema.additionalProperties;
   const allowExtra = Boolean(additional) && typeof additional === "object";
 
-  const fields = html`
-    ${sorted.map(([propKey, node]) =>
-      renderNode({
-        schema: node,
-        value: obj[propKey],
-        path: [...path, propKey],
-        hints,
-        unsupported,
-        disabled,
-        onPatch,
-      }),
-    )}
-    ${
-      allowExtra
-        ? renderMapField({
-            schema: additional,
-            value: obj,
-            path,
-            hints,
-            unsupported,
-            disabled,
-            reservedKeys: reserved,
-            onPatch,
-          })
-        : nothing
-    }
-  `;
-
   // For top-level, don't wrap in collapsible
   if (path.length === 1) {
     return html`
       <div class="cfg-fields">
-        ${fields}
+        ${sorted.map(([propKey, node]) =>
+          renderNode({
+            schema: node,
+            value: obj[propKey],
+            path: [...path, propKey],
+            hints,
+            unsupported,
+            disabled,
+            onPatch,
+          }),
+        )}
+        ${
+          allowExtra
+            ? renderMapField({
+                schema: additional,
+                value: obj,
+                path,
+                hints,
+                unsupported,
+                disabled,
+                reservedKeys: reserved,
+                onPatch,
+              })
+            : nothing
+        }
       </div>
     `;
   }
@@ -546,7 +542,31 @@ function renderObject(params: {
       </summary>
       ${help ? html`<div class="cfg-object__help">${help}</div>` : nothing}
       <div class="cfg-object__content">
-        ${fields}
+        ${sorted.map(([propKey, node]) =>
+          renderNode({
+            schema: node,
+            value: obj[propKey],
+            path: [...path, propKey],
+            hints,
+            unsupported,
+            disabled,
+            onPatch,
+          }),
+        )}
+        ${
+          allowExtra
+            ? renderMapField({
+                schema: additional,
+                value: obj,
+                path,
+                hints,
+                unsupported,
+                disabled,
+                reservedKeys: reserved,
+                onPatch,
+              })
+            : nothing
+        }
       </div>
     </details>
   `;

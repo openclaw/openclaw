@@ -86,7 +86,7 @@ describe("TwitchClientManager", () => {
 
   const testAccount: TwitchAccountConfig = {
     username: "testbot",
-    accessToken: "test123456",
+    token: "oauth:test123456",
     clientId: "test-client-id",
     channel: "testchannel",
     enabled: true,
@@ -94,7 +94,7 @@ describe("TwitchClientManager", () => {
 
   const testAccount2: TwitchAccountConfig = {
     username: "testbot2",
-    accessToken: "test789",
+    token: "oauth:test789",
     clientId: "test-client-id-2",
     channel: "testchannel2",
     enabled: true,
@@ -145,8 +145,8 @@ describe("TwitchClientManager", () => {
     it("should use account username as default channel when channel not specified", async () => {
       const accountWithoutChannel: TwitchAccountConfig = {
         ...testAccount,
-        channel: "",
-      } as unknown as TwitchAccountConfig;
+        channel: undefined,
+      };
 
       await manager.getClient(accountWithoutChannel);
 
@@ -172,7 +172,7 @@ describe("TwitchClientManager", () => {
     it("should normalize token by removing oauth: prefix", async () => {
       const accountWithPrefix: TwitchAccountConfig = {
         ...testAccount,
-        accessToken: "oauth:actualtoken123",
+        token: "oauth:actualtoken123",
       };
 
       // Override the mock to return a specific token for this test
@@ -207,8 +207,8 @@ describe("TwitchClientManager", () => {
     it("should throw error when clientId is missing", async () => {
       const accountWithoutClientId: TwitchAccountConfig = {
         ...testAccount,
-        clientId: "" as unknown as string,
-      } as unknown as TwitchAccountConfig;
+        clientId: undefined,
+      };
 
       await expect(manager.getClient(accountWithoutClientId)).rejects.toThrow(
         "Missing Twitch client ID",

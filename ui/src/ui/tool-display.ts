@@ -4,10 +4,7 @@ import {
   normalizeVerb,
   resolveActionSpec,
   resolveDetailFromKeys,
-  resolveExecDetail,
   resolveReadDetail,
-  resolveWebFetchDetail,
-  resolveWebSearchDetail,
   resolveWriteDetail,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
@@ -68,38 +65,21 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? title;
+  const label = spec?.label ?? name;
   const actionRaw =
     params.args && typeof params.args === "object"
       ? ((params.args as Record<string, unknown>).action as string | undefined)
       : undefined;
   const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
   const actionSpec = resolveActionSpec(spec, action);
-  const fallbackVerb =
-    key === "web_search"
-      ? "search"
-      : key === "web_fetch"
-        ? "fetch"
-        : key.replace(/_/g, " ").replace(/\./g, " ");
-  const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
+  const verb = normalizeVerb(actionSpec?.label ?? action);
 
   let detail: string | undefined;
-  if (key === "exec") {
-    detail = resolveExecDetail(params.args);
-  }
-  if (!detail && key === "read") {
+  if (key === "read") {
     detail = resolveReadDetail(params.args);
   }
   if (!detail && (key === "write" || key === "edit" || key === "attach")) {
-    detail = resolveWriteDetail(key, params.args);
-  }
-
-  if (!detail && key === "web_search") {
-    detail = resolveWebSearchDetail(params.args);
-  }
-
-  if (!detail && key === "web_fetch") {
-    detail = resolveWebFetchDetail(params.args);
+    detail = resolveWriteDetail(params.args);
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
@@ -129,18 +109,17 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  if (!display.detail) {
+  const parts: string[] = [];
+  if (display.verb) {
+    parts.push(display.verb);
+  }
+  if (display.detail) {
+    parts.push(display.detail);
+  }
+  if (parts.length === 0) {
     return undefined;
   }
-  if (display.detail.includes(" · ")) {
-    const compact = display.detail
-      .split(" · ")
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .join(", ");
-    return compact ? `with ${compact}` : undefined;
-  }
-  return display.detail;
+  return parts.join(" · ");
 }
 
 export function formatToolSummary(display: ToolDisplay): string {

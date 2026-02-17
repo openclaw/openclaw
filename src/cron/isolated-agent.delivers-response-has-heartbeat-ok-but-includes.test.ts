@@ -1,8 +1,12 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
+import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
 import type { CliDeps } from "../cli/deps.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -10,11 +14,22 @@ import {
   withTempCronHome,
   writeSessionStore,
 } from "./isolated-agent.test-harness.js";
-import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    setupIsolatedAgentTurnMocks({ fast: true });
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(runEmbeddedPiAgent).mockReset();
+    vi.mocked(loadModelCatalog).mockResolvedValue([]);
+    vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+          source: "test",
+        },
+      ]),
+    );
   });
 
   it("handles media heartbeat delivery and announce cleanup modes", async () => {
@@ -25,7 +40,6 @@ describe("runCronIsolatedAgentTurn", () => {
         lastTo: "123",
       });
       const deps: CliDeps = {
-        sendMessageSlack: vi.fn(),
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn().mockResolvedValue({
           messageId: "t1",

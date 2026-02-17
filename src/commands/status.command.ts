@@ -6,7 +6,11 @@ import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { formatUsageReportLines, loadProviderUsageSummary } from "../infra/provider-usage.js";
-import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
+import {
+  formatUpdateChannelLabel,
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+} from "../infra/update-channels.js";
 import { formatGitInstallLabel } from "../infra/update-check.js";
 import {
   resolveMemoryCacheSummary,
@@ -128,11 +132,10 @@ export async function statusCommand(
       : null;
 
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
-  const channelInfo = resolveUpdateChannelDisplay({
+  const channelInfo = resolveEffectiveUpdateChannel({
     configChannel,
     installKind: update.installKind,
-    gitTag: update.git?.tag ?? null,
-    gitBranch: update.git?.branch ?? null,
+    git: update.git ? { tag: update.git.tag, branch: update.git.branch } : undefined,
   });
 
   if (opts.json) {
@@ -349,7 +352,12 @@ export async function statusCommand(
 
   const updateAvailability = resolveUpdateAvailability(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
-  const channelLabel = channelInfo.label;
+  const channelLabel = formatUpdateChannelLabel({
+    channel: channelInfo.channel,
+    source: channelInfo.source,
+    gitTag: update.git?.tag ?? null,
+    gitBranch: update.git?.branch ?? null,
+  });
   const gitLabel = formatGitInstallLabel(update);
 
   const overviewRows = [

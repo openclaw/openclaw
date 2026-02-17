@@ -4,9 +4,8 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
-import { captureEnv } from "../test-utils/env.js";
 
-const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
+const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 beforeAll(() => {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(
@@ -16,16 +15,30 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  bundledPluginsDirSnapshot.restore();
+  if (previousBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+  }
 });
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
   return {
     ...mod,
-    getShellPathFromLoginShell: vi.fn(() => null),
+    getShellPathFromLoginShell: vi.fn(() => "/usr/bin:/bin"),
     resolveShellEnvFallbackTimeoutMs: vi.fn(() => 500),
   };
+});
+
+vi.mock("../plugins/tools.js", () => ({
+  getPluginToolMeta: () => undefined,
+  resolvePluginTools: () => [],
+}));
+
+vi.mock("../infra/shell-env.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+  return { ...mod, getShellPathFromLoginShell: () => null };
 });
 
 vi.mock("../plugins/tools.js", () => ({
@@ -96,22 +109,25 @@ describe("createOpenClawCodingTools safeBins", () => {
     expect(execTool).toBeDefined();
 
     const marker = `safe-bins-${Date.now()}`;
-    const envSnapshot = captureEnv(["OPENCLAW_SHELL_ENV_TIMEOUT_MS"]);
+    const prevShellEnvTimeoutMs = process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
+    process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = "1000";
     const result = await (async () => {
       try {
-        process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = "1000";
         return await execTool!.execute("call1", {
           command: `echo ${marker}`,
           workdir: tmpDir,
         });
       } finally {
-        envSnapshot.restore();
+        if (prevShellEnvTimeoutMs === undefined) {
+          delete process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = prevShellEnvTimeoutMs;
+        }
       }
     })();
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
-    const resultDetails = result.details as { status?: string };
-    expect(resultDetails.status).toBe("completed");
+    expect(result.details.status).toBe("completed");
     expect(text).toContain(marker);
   });
 
@@ -153,8 +169,7 @@ describe("createOpenClawCodingTools safeBins", () => {
     });
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
-    const blockedResultDetails = result.details as { status?: string };
-    expect(blockedResultDetails.status).toBe("completed");
+    expect(result.details.status).toBe("completed");
     expect(text).not.toContain(secret);
   });
 });

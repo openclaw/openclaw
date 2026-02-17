@@ -1,12 +1,48 @@
 import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
-import type { Context, Tool } from "@mariozechner/pi-ai/dist/types.js";
+import type { Context, Model, Tool } from "@mariozechner/pi-ai/dist/types.js";
 import { describe, expect, it } from "vitest";
-import {
-  asRecord,
-  getFirstToolParameters,
-  makeGoogleAssistantMessage,
-  makeModel,
-} from "./google-shared.test-helpers.js";
+
+const asRecord = (value: unknown): Record<string, unknown> => {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+};
+
+const getFirstToolParameters = (
+  converted: ReturnType<typeof convertTools>,
+): Record<string, unknown> => {
+  const functionDeclaration = asRecord(converted?.[0]?.functionDeclarations?.[0]);
+  return asRecord(functionDeclaration.parametersJsonSchema ?? functionDeclaration.parameters);
+};
+
+const makeModel = (id: string): Model<"google-generative-ai"> =>
+  ({
+    id,
+    name: id,
+    api: "google-generative-ai",
+    provider: "google",
+    baseUrl: "https://example.invalid",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+  }) as Model<"google-generative-ai">;
+
+const _makeGeminiCliModel = (id: string): Model<"google-gemini-cli"> =>
+  ({
+    id,
+    name: id,
+    api: "google-gemini-cli",
+    provider: "google-gemini-cli",
+    baseUrl: "https://example.invalid",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+  }) as Model<"google-gemini-cli">;
 
 describe("google-shared convertTools", () => {
   it("preserves parameters when type is missing", () => {
@@ -24,9 +60,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(
-      converted as Parameters<typeof getFirstToolParameters>[0],
-    );
+    const params = getFirstToolParameters(converted);
 
     expect(params.type).toBeUndefined();
     expect(params.properties).toBeDefined();
@@ -66,9 +100,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(
-      converted as Parameters<typeof getFirstToolParameters>[0],
-    );
+    const params = getFirstToolParameters(converted);
     const properties = asRecord(params.properties);
     const mode = asRecord(properties.mode);
     const options = asRecord(properties.options);
@@ -109,9 +141,7 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(
-      converted as Parameters<typeof getFirstToolParameters>[0],
-    );
+    const params = getFirstToolParameters(converted);
     const config = asRecord(asRecord(params.properties).config);
     const configProps = asRecord(config.properties);
     const retries = asRecord(configProps.retries);
@@ -129,44 +159,39 @@ describe("google-shared convertTools", () => {
 });
 
 describe("google-shared convertMessages", () => {
-  function expectConsecutiveMessagesNotMerged(params: {
-    modelId: string;
-    first: string;
-    second: string;
-  }) {
-    const model = makeModel(params.modelId);
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: params.first,
-        },
-        {
-          role: "user",
-          content: params.second,
-        },
-      ],
-    } as unknown as Context;
-
-    const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(2);
-    expect(contents[0].role).toBe("user");
-    expect(contents[1].role).toBe("user");
-    expect(contents[0].parts).toHaveLength(1);
-    expect(contents[1].parts).toHaveLength(1);
-  }
-
   it("keeps thinking blocks when provider/model match", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
       messages: [
-        makeGoogleAssistantMessage(model.id, [
-          {
-            type: "thinking",
-            thinking: "hidden",
-            thinkingSignature: "c2ln",
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "hidden",
+              thinkingSignature: "c2ln",
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
           },
-        ]),
+          stopReason: "stop",
+          timestamp: 0,
+        },
       ],
     } as unknown as Context;
 
@@ -183,13 +208,35 @@ describe("google-shared convertMessages", () => {
     const model = makeModel("claude-3-opus");
     const context = {
       messages: [
-        makeGoogleAssistantMessage(model.id, [
-          {
-            type: "thinking",
-            thinking: "structured",
-            thinkingSignature: "c2ln",
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "structured",
+              thinkingSignature: "c2ln",
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "claude-3-opus",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
           },
-        ]),
+          stopReason: "stop",
+          timestamp: 0,
+        },
       ],
     } as unknown as Context;
 
@@ -203,19 +250,49 @@ describe("google-shared convertMessages", () => {
   });
 
   it("does not merge consecutive user messages for Gemini", () => {
-    expectConsecutiveMessagesNotMerged({
-      modelId: "gemini-1.5-pro",
-      first: "Hello",
-      second: "How are you?",
-    });
+    const model = makeModel("gemini-1.5-pro");
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: "Hello",
+        },
+        {
+          role: "user",
+          content: "How are you?",
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    expect(contents).toHaveLength(2);
+    expect(contents[0].role).toBe("user");
+    expect(contents[1].role).toBe("user");
+    expect(contents[0].parts).toHaveLength(1);
+    expect(contents[1].parts).toHaveLength(1);
   });
 
   it("does not merge consecutive user messages for non-Gemini Google models", () => {
-    expectConsecutiveMessagesNotMerged({
-      modelId: "claude-3-opus",
-      first: "First",
-      second: "Second",
-    });
+    const model = makeModel("claude-3-opus");
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: "First",
+        },
+        {
+          role: "user",
+          content: "Second",
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    expect(contents).toHaveLength(2);
+    expect(contents[0].role).toBe("user");
+    expect(contents[1].role).toBe("user");
+    expect(contents[0].parts).toHaveLength(1);
+    expect(contents[1].parts).toHaveLength(1);
   });
 
   it("does not merge consecutive model messages for Gemini", () => {
@@ -226,8 +303,52 @@ describe("google-shared convertMessages", () => {
           role: "user",
           content: "Hello",
         },
-        makeGoogleAssistantMessage(model.id, [{ type: "text", text: "Hi there!" }]),
-        makeGoogleAssistantMessage(model.id, [{ type: "text", text: "How can I help?" }]),
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi there!" }],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "How can I help?" }],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
       ],
     } as unknown as Context;
 
@@ -248,14 +369,36 @@ describe("google-shared convertMessages", () => {
           role: "user",
           content: "Use a tool",
         },
-        makeGoogleAssistantMessage(model.id, [
-          {
-            type: "toolCall",
-            id: "call_1",
-            name: "myTool",
-            arguments: { arg: "value" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "myTool",
+              arguments: { arg: "value" },
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
           },
-        ]),
+          stopReason: "stop",
+          timestamp: 0,
+        },
         {
           role: "toolResult",
           toolCallId: "call_1",

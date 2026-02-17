@@ -36,45 +36,6 @@ export class MissingEnvVarError extends Error {
   }
 }
 
-type EnvToken =
-  | { kind: "escaped"; name: string; end: number }
-  | { kind: "substitution"; name: string; end: number };
-
-function parseEnvTokenAt(value: string, index: number): EnvToken | null {
-  if (value[index] !== "$") {
-    return null;
-  }
-
-  const next = value[index + 1];
-  const afterNext = value[index + 2];
-
-  // Escaped: $${VAR} -> ${VAR}
-  if (next === "$" && afterNext === "{") {
-    const start = index + 3;
-    const end = value.indexOf("}", start);
-    if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "escaped", name, end };
-      }
-    }
-  }
-
-  // Substitution: ${VAR} -> value
-  if (next === "{") {
-    const start = index + 2;
-    const end = value.indexOf("}", start);
-    if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "substitution", name, end };
-      }
-    }
-  }
-
-  return null;
-}
-
 function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
   if (!value.includes("$")) {
     return value;
@@ -89,20 +50,39 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
       continue;
     }
 
-    const token = parseEnvTokenAt(value, i);
-    if (token?.kind === "escaped") {
-      chunks.push(`\${${token.name}}`);
-      i = token.end;
-      continue;
-    }
-    if (token?.kind === "substitution") {
-      const envValue = env[token.name];
-      if (envValue === undefined || envValue === "") {
-        throw new MissingEnvVarError(token.name, configPath);
+    const next = value[i + 1];
+    const afterNext = value[i + 2];
+
+    // Escaped: $${VAR} -> ${VAR}
+    if (next === "$" && afterNext === "{") {
+      const start = i + 3;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          chunks.push(`\${${name}}`);
+          i = end;
+          continue;
+        }
       }
-      chunks.push(envValue);
-      i = token.end;
-      continue;
+    }
+
+    // Substitution: ${VAR} -> value
+    if (next === "{") {
+      const start = i + 2;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          const envValue = env[name];
+          if (envValue === undefined || envValue === "") {
+            throw new MissingEnvVarError(name, configPath);
+          }
+          chunks.push(envValue);
+          i = end;
+          continue;
+        }
+      }
     }
 
     // Leave untouched if not a recognized pattern
@@ -123,13 +103,32 @@ export function containsEnvVarReference(value: string): boolean {
       continue;
     }
 
-    const token = parseEnvTokenAt(value, i);
-    if (token?.kind === "escaped") {
-      i = token.end;
-      continue;
+    const next = value[i + 1];
+    const afterNext = value[i + 2];
+
+    // Escaped: $${VAR} -> ${VAR}
+    if (next === "$" && afterNext === "{") {
+      const start = i + 3;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          i = end;
+          continue;
+        }
+      }
     }
-    if (token?.kind === "substitution") {
-      return true;
+
+    // Substitution: ${VAR} -> value
+    if (next === "{") {
+      const start = i + 2;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          return true;
+        }
+      }
     }
   }
 

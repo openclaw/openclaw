@@ -15,15 +15,9 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
-import {
-  buildEmbeddedContextFromTemplate,
-  buildTemplateSenderContext,
-  resolveRunAuthProfile,
-} from "./agent-runner-utils.js";
-import { resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
-  resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
@@ -112,31 +106,43 @@ export async function runMemoryFlushIfNeeded(params: {
         resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
       ),
       run: (provider, model) => {
-        const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
-        const embeddedContext = buildEmbeddedContextFromTemplate({
-          run: params.followupRun.run,
-          sessionCtx: params.sessionCtx,
-          hasRepliedRef: params.opts?.hasRepliedRef,
-        });
-        const senderContext = buildTemplateSenderContext(params.sessionCtx);
+        const authProfileId =
+          provider === params.followupRun.run.provider
+            ? params.followupRun.run.authProfileId
+            : undefined;
         return runEmbeddedPiAgent({
-          ...embeddedContext,
-          ...senderContext,
+          sessionId: params.followupRun.run.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.followupRun.run.agentId,
+          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+          agentAccountId: params.sessionCtx.AccountId,
+          messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
+          messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+          // Provider threading context for tool auto-injection
+          ...buildThreadingToolContext({
+            sessionCtx: params.sessionCtx,
+            config: params.followupRun.run.config,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+          }),
+          senderId: params.sessionCtx.SenderId?.trim() || undefined,
+          senderName: params.sessionCtx.SenderName?.trim() || undefined,
+          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
+          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
           sessionFile: params.followupRun.run.sessionFile,
           workspaceDir: params.followupRun.run.workspaceDir,
           agentDir: params.followupRun.run.agentDir,
           config: params.followupRun.run.config,
           skillsSnapshot: params.followupRun.run.skillsSnapshot,
-          prompt: resolveMemoryFlushPromptForRun({
-            prompt: memoryFlushSettings.prompt,
-            cfg: params.cfg,
-          }),
+          prompt: memoryFlushSettings.prompt,
           extraSystemPrompt: flushSystemPrompt,
           ownerNumbers: params.followupRun.run.ownerNumbers,
           enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
           provider,
           model,
-          ...authProfile,
+          authProfileId,
+          authProfileIdSource: authProfileId
+            ? params.followupRun.run.authProfileIdSource
+            : undefined,
           thinkLevel: params.followupRun.run.thinkLevel,
           verboseLevel: params.followupRun.run.verboseLevel,
           reasoningLevel: params.followupRun.run.reasoningLevel,
@@ -147,7 +153,8 @@ export async function runMemoryFlushIfNeeded(params: {
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              const willRetry = Boolean(evt.data.willRetry);
+              if (phase === "end" && !willRetry) {
                 memoryCompactionCompleted = true;
               }
             }

@@ -12,14 +12,6 @@ vi.mock("./gateway-rpc.js", async () => {
   };
 });
 
-async function runLogsCli(argv: string[]) {
-  const { registerLogsCli } = await import("./logs-cli.js");
-  const program = new Command();
-  program.exitOverride();
-  registerLogsCli(program);
-  await program.parseAsync(argv, { from: "user" });
-}
-
 describe("logs cli", () => {
   afterEach(() => {
     callGatewayFromCli.mockReset();
@@ -46,7 +38,12 @@ describe("logs cli", () => {
       return true;
     });
 
-    await runLogsCli(["logs"]);
+    const { registerLogsCli } = await import("./logs-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerLogsCli(program);
+
+    await program.parseAsync(["logs"], { from: "user" });
 
     stdoutSpy.mockRestore();
     stderrSpy.mockRestore();
@@ -75,7 +72,12 @@ describe("logs cli", () => {
       return true;
     });
 
-    await runLogsCli(["logs", "--local-time", "--plain"]);
+    const { registerLogsCli } = await import("./logs-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerLogsCli(program);
+
+    await program.parseAsync(["logs", "--local-time", "--plain"], { from: "user" });
 
     stdoutSpy.mockRestore();
 
@@ -103,7 +105,12 @@ describe("logs cli", () => {
       return true;
     });
 
-    await runLogsCli(["logs"]);
+    const { registerLogsCli } = await import("./logs-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerLogsCli(program);
+
+    await program.parseAsync(["logs"], { from: "user" });
 
     stdoutSpy.mockRestore();
     stderrSpy.mockRestore();

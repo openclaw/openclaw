@@ -85,7 +85,6 @@ describe("deliverWebReply", () => {
 
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
-    const mediaLocalRoots = ["/tmp/workspace-work"];
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
     ).mockResolvedValueOnce({
@@ -97,16 +96,10 @@ describe("deliverWebReply", () => {
     await deliverWebReply({
       replyResult: { text: "aaaaaa", mediaUrl: "http://example.com/img.jpg" },
       msg,
-      mediaLocalRoots,
       maxMediaBytes: 1024 * 1024,
       textLimit: 3,
       replyLogger,
       skipLog: true,
-    });
-
-    expect(loadWebMedia).toHaveBeenCalledWith("http://example.com/img.jpg", {
-      maxBytes: 1024 * 1024,
-      localRoots: mediaLocalRoots,
     });
 
     expect(msg.sendMedia).toHaveBeenCalledWith(

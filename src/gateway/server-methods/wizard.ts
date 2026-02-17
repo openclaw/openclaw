@@ -4,38 +4,26 @@ import { WizardSession } from "../../wizard/session.js";
 import {
   ErrorCodes,
   errorShape,
+  formatValidationErrors,
   validateWizardCancelParams,
   validateWizardNextParams,
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
-
-function readWizardStatus(session: WizardSession) {
-  return {
-    status: session.getStatus(),
-    error: session.getError(),
-  };
-}
-
-function findWizardSessionOrRespond(params: {
-  context: GatewayRequestContext;
-  respond: RespondFn;
-  sessionId: string;
-}): WizardSession | null {
-  const session = params.context.wizardSessions.get(params.sessionId);
-  if (!session) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
-    return null;
-  }
-  return session;
-}
+import type { GatewayRequestHandlers } from "./types.js";
 
 export const wizardHandlers: GatewayRequestHandlers = {
   "wizard.start": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
+    if (!validateWizardStartParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid wizard.start params: ${formatValidationErrors(validateWizardStartParams.errors)}`,
+        ),
+      );
       return;
     }
     const running = context.findRunningWizard();
@@ -59,12 +47,21 @@ export const wizardHandlers: GatewayRequestHandlers = {
     respond(true, { sessionId, ...result }, undefined);
   },
   "wizard.next": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
+    if (!validateWizardNextParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid wizard.next params: ${formatValidationErrors(validateWizardNextParams.errors)}`,
+        ),
+      );
       return;
     }
     const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
+    const session = context.wizardSessions.get(sessionId);
     if (!session) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
       return;
     }
     const answer = params.answer as { stepId?: string; value?: unknown } | undefined;
@@ -87,29 +84,53 @@ export const wizardHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "wizard.cancel": ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
+    if (!validateWizardCancelParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid wizard.cancel params: ${formatValidationErrors(validateWizardCancelParams.errors)}`,
+        ),
+      );
       return;
     }
     const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
+    const session = context.wizardSessions.get(sessionId);
     if (!session) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
       return;
     }
     session.cancel();
-    const status = readWizardStatus(session);
+    const status = {
+      status: session.getStatus(),
+      error: session.getError(),
+    };
     context.wizardSessions.delete(sessionId);
     respond(true, status, undefined);
   },
   "wizard.status": ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
+    if (!validateWizardStatusParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid wizard.status params: ${formatValidationErrors(validateWizardStatusParams.errors)}`,
+        ),
+      );
       return;
     }
     const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
+    const session = context.wizardSessions.get(sessionId);
     if (!session) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
       return;
     }
-    const status = readWizardStatus(session);
+    const status = {
+      status: session.getStatus(),
+      error: session.getError(),
+    };
     if (status.status !== "running") {
       context.wizardSessions.delete(sessionId);
     }

@@ -125,7 +125,6 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async () => {},
-        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -155,7 +154,6 @@ describe("msteams messenger", () => {
             },
           });
         },
-        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -193,7 +191,6 @@ describe("msteams messenger", () => {
 
         const adapter: MSTeamsAdapter = {
           continueConversation: async () => {},
-          process: async () => {},
         };
 
         const ids = await sendMSTeamsMessages({
@@ -253,7 +250,6 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async () => {},
-        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -281,7 +277,6 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async () => {},
-        process: async () => {},
       };
 
       await expect(
@@ -315,7 +310,6 @@ describe("msteams messenger", () => {
             },
           });
         },
-        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({

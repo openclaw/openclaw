@@ -1,15 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
+import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+
+type StubSession = {
+  subscribe: (fn: (evt: unknown) => void) => () => void;
+};
 
 describe("subscribeEmbeddedPiSession", () => {
+  const _THINKING_TAG_CASES = [
+    { tag: "think", open: "<think>", close: "</think>" },
+    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+    { tag: "thought", open: "<thought>", close: "</thought>" },
+    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+  ] as const;
+
   it("waits for multiple compaction retries before resolving", async () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const listeners: SessionEventHandler[] = [];
+    const session = {
+      subscribe: (listener: SessionEventHandler) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
       runId: "run-3",
     });
 
-    emit({ type: "auto_compaction_end", willRetry: true });
-    emit({ type: "auto_compaction_end", willRetry: true });
+    for (const listener of listeners) {
+      listener({ type: "auto_compaction_end", willRetry: true });
+      listener({ type: "auto_compaction_end", willRetry: true });
+    }
 
     let resolved = false;
     const waitPromise = subscription.waitForCompactionRetry().then(() => {
@@ -19,21 +41,30 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
     expect(resolved).toBe(false);
 
-    emit({ type: "agent_end" });
+    for (const listener of listeners) {
+      listener({ type: "agent_end" });
+    }
 
     await Promise.resolve();
     expect(resolved).toBe(false);
 
-    emit({ type: "agent_end" });
+    for (const listener of listeners) {
+      listener({ type: "agent_end" });
+    }
 
     await waitPromise;
     expect(resolved).toBe(true);
   });
 
   it("emits compaction events on the agent event bus", async () => {
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-compaction",
-    });
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
     const events: Array<{ phase: string; willRetry?: boolean }> = [];
     const stop = onAgentEvent((evt) => {
       if (evt.runId !== "run-compaction") {
@@ -49,9 +80,14 @@ describe("subscribeEmbeddedPiSession", () => {
       });
     });
 
-    emit({ type: "auto_compaction_start" });
-    emit({ type: "auto_compaction_end", willRetry: true });
-    emit({ type: "auto_compaction_end", willRetry: false });
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-compaction",
+    });
+
+    handler?.({ type: "auto_compaction_start" });
+    handler?.({ type: "auto_compaction_end", willRetry: true });
+    handler?.({ type: "auto_compaction_end", willRetry: false });
 
     stop();
 
@@ -63,13 +99,25 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("rejects compaction wait with AbortError when unsubscribed", async () => {
+    const listeners: SessionEventHandler[] = [];
     const abortCompaction = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const session = {
+      isCompacting: true,
+      abortCompaction,
+      subscribe: (listener: SessionEventHandler) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
       runId: "run-abort-on-unsubscribe",
-      sessionExtras: { isCompacting: true, abortCompaction },
     });
 
-    emit({ type: "auto_compaction_start" });
+    for (const listener of listeners) {
+      listener({ type: "auto_compaction_start" });
+    }
 
     const waitPromise = subscription.waitForCompactionRetry();
     subscription.unsubscribe();
@@ -82,14 +130,24 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("emits tool summaries at tool start when verbose is on", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
     const onToolResult = vi.fn();
-    const toolHarness = createSubscribedSessionHarness({
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-tool",
       verboseLevel: "on",
       onToolResult,
     });
 
-    toolHarness.emit({
+    handler?.({
       type: "tool_execution_start",
       toolName: "read",
       toolCallId: "tool-1",
@@ -103,7 +161,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const payload = onToolResult.mock.calls[0][0];
     expect(payload.text).toContain("/tmp/a.txt");
 
-    toolHarness.emit({
+    handler?.({
       type: "tool_execution_end",
       toolName: "read",
       toolCallId: "tool-1",
@@ -114,15 +172,24 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
   it("includes browser action metadata in tool summaries", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
     const onToolResult = vi.fn();
 
-    const toolHarness = createSubscribedSessionHarness({
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-browser-tool",
       verboseLevel: "on",
       onToolResult,
     });
 
-    toolHarness.emit({
+    handler?.({
       type: "tool_execution_start",
       toolName: "browser",
       toolCallId: "tool-browser-1",
@@ -141,15 +208,24 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("emits exec output in full verbose mode and includes PTY indicator", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
     const onToolResult = vi.fn();
 
-    const toolHarness = createSubscribedSessionHarness({
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-exec-full",
       verboseLevel: "full",
       onToolResult,
     });
 
-    toolHarness.emit({
+    handler?.({
       type: "tool_execution_start",
       toolName: "exec",
       toolCallId: "tool-exec-1",
@@ -163,7 +239,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(summary.text).toContain("Exec");
     expect(summary.text).toContain("pty");
 
-    toolHarness.emit({
+    handler?.({
       type: "tool_execution_end",
       toolName: "exec",
       toolCallId: "tool-exec-1",
@@ -178,7 +254,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(output.text).toContain("hello");
     expect(output.text).toContain("```txt");
 
-    toolHarness.emit({
+    handler?.({
       type: "tool_execution_end",
       toolName: "read",
       toolCallId: "tool-read-1",

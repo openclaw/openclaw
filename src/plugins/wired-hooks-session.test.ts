@@ -5,12 +5,36 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import type { PluginRegistry } from "./registry.js";
+
+function createMockRegistry(
+  hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
+): PluginRegistry {
+  return {
+    hooks: hooks as never[],
+    typedHooks: hooks.map((h) => ({
+      pluginId: "test-plugin",
+      hookName: h.hookName,
+      handler: h.handler,
+      priority: 0,
+      source: "test",
+    })),
+    tools: [],
+    httpHandlers: [],
+    httpRoutes: [],
+    channelRegistrations: [],
+    gatewayHandlers: {},
+    cliRegistrars: [],
+    services: [],
+    providers: [],
+    commands: [],
+  } as unknown as PluginRegistry;
+}
 
 describe("session hook runner methods", () => {
   it("runSessionStart invokes registered session_start hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "session_start", handler }]);
+    const registry = createMockRegistry([{ hookName: "session_start", handler }]);
     const runner = createHookRunner(registry);
 
     await runner.runSessionStart(
@@ -26,7 +50,7 @@ describe("session hook runner methods", () => {
 
   it("runSessionEnd invokes registered session_end hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "session_end", handler }]);
+    const registry = createMockRegistry([{ hookName: "session_end", handler }]);
     const runner = createHookRunner(registry);
 
     await runner.runSessionEnd(
@@ -41,7 +65,7 @@ describe("session hook runner methods", () => {
   });
 
   it("hasHooks returns true for registered session hooks", () => {
-    const registry = createMockPluginRegistry([{ hookName: "session_start", handler: vi.fn() }]);
+    const registry = createMockRegistry([{ hookName: "session_start", handler: vi.fn() }]);
     const runner = createHookRunner(registry);
 
     expect(runner.hasHooks("session_start")).toBe(true);

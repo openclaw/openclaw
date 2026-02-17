@@ -34,7 +34,6 @@ export type DiscordMessagePreflightContext = {
   data: DiscordMessageEvent;
   client: Client;
   message: DiscordMessageEvent["message"];
-  messageChannelId: string;
   author: User;
   sender: DiscordSenderIdentity;
 
@@ -95,8 +94,8 @@ export type DiscordMessagePreflightParams = {
   replyToMode: ReplyToMode;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
-  groupDmChannels?: string[];
-  allowFrom?: string[];
+  groupDmChannels?: Array<string | number>;
+  allowFrom?: Array<string | number>;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];
   groupPolicy: DiscordMessagePreflightContext["groupPolicy"];

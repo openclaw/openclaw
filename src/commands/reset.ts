@@ -1,11 +1,21 @@
 import { cancel, confirm, isCancel, select } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isNixMode } from "../config/config.js";
+import {
+  isNixMode,
+  loadConfig,
+  resolveConfigPath,
+  resolveOAuthDir,
+  resolveStateDir,
+} from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
-import { listAgentSessionDirs, removePath } from "./cleanup-utils.js";
+import {
+  collectWorkspaceDirs,
+  isPathWithin,
+  listAgentSessionDirs,
+  removePath,
+} from "./cleanup-utils.js";
 
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 
@@ -109,8 +119,13 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    resolveCleanupPlanFromDisk();
+  const cfg = loadConfig();
+  const stateDir = resolveStateDir();
+  const configPath = resolveConfigPath();
+  const oauthDir = resolveOAuthDir();
+  const configInsideState = isPathWithin(configPath, stateDir);
+  const oauthInsideState = isPathWithin(oauthDir, stateDir);
+  const workspaceDirs = collectWorkspaceDirs(cfg);
 
   if (scope !== "config") {
     if (dryRun) {

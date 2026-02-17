@@ -7,12 +7,36 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry } from "./hooks.test-helpers.js";
+import type { PluginRegistry } from "./registry.js";
+
+function createMockRegistry(
+  hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
+): PluginRegistry {
+  return {
+    hooks: hooks as never[],
+    typedHooks: hooks.map((h) => ({
+      pluginId: "test-plugin",
+      hookName: h.hookName,
+      handler: h.handler,
+      priority: 0,
+      source: "test",
+    })),
+    tools: [],
+    httpHandlers: [],
+    httpRoutes: [],
+    channelRegistrations: [],
+    gatewayHandlers: {},
+    cliRegistrars: [],
+    services: [],
+    providers: [],
+    commands: [],
+  } as unknown as PluginRegistry;
+}
 
 describe("gateway hook runner methods", () => {
   it("runGatewayStart invokes registered gateway_start hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "gateway_start", handler }]);
+    const registry = createMockRegistry([{ hookName: "gateway_start", handler }]);
     const runner = createHookRunner(registry);
 
     await runner.runGatewayStart({ port: 18789 }, { port: 18789 });
@@ -22,7 +46,7 @@ describe("gateway hook runner methods", () => {
 
   it("runGatewayStop invokes registered gateway_stop hooks", async () => {
     const handler = vi.fn();
-    const registry = createMockPluginRegistry([{ hookName: "gateway_stop", handler }]);
+    const registry = createMockRegistry([{ hookName: "gateway_stop", handler }]);
     const runner = createHookRunner(registry);
 
     await runner.runGatewayStop({ reason: "test shutdown" }, { port: 18789 });
@@ -31,7 +55,7 @@ describe("gateway hook runner methods", () => {
   });
 
   it("hasHooks returns true for registered gateway hooks", () => {
-    const registry = createMockPluginRegistry([{ hookName: "gateway_start", handler: vi.fn() }]);
+    const registry = createMockRegistry([{ hookName: "gateway_start", handler: vi.fn() }]);
     const runner = createHookRunner(registry);
 
     expect(runner.hasHooks("gateway_start")).toBe(true);

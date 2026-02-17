@@ -28,22 +28,18 @@ function describeOrder(store: AuthProfileStore, provider: string): string[] {
   return Array.isArray(order) ? order : [];
 }
 
-function resolveAuthOrderContext(opts: { provider: string; agent?: string }) {
+export async function modelsAuthOrderGetCommand(
+  opts: { provider: string; agent?: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
   const rawProvider = opts.provider?.trim();
   if (!rawProvider) {
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
+
   const cfg = loadConfig();
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
-  return { cfg, agentId, agentDir, provider };
-}
-
-export async function modelsAuthOrderGetCommand(
-  opts: { provider: string; agent?: string; json?: boolean },
-  runtime: RuntimeEnv,
-) {
-  const { agentId, agentDir, provider } = resolveAuthOrderContext(opts);
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -76,7 +72,14 @@ export async function modelsAuthOrderClearCommand(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir, provider } = resolveAuthOrderContext(opts);
+  const rawProvider = opts.provider?.trim();
+  if (!rawProvider) {
+    throw new Error("Missing --provider.");
+  }
+  const provider = normalizeProviderId(rawProvider);
+
+  const cfg = loadConfig();
+  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
   const updated = await setAuthProfileOrder({
     agentDir,
     provider,
@@ -95,12 +98,19 @@ export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir, provider } = resolveAuthOrderContext(opts);
+  const rawProvider = opts.provider?.trim();
+  if (!rawProvider) {
+    throw new Error("Missing --provider.");
+  }
+  const provider = normalizeProviderId(rawProvider);
+
+  const cfg = loadConfig();
+  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
 
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  const providerKey = provider;
+  const providerKey = normalizeProviderId(provider);
   const requested = (opts.order ?? []).map((entry) => String(entry).trim()).filter(Boolean);
   if (requested.length === 0) {
     throw new Error("Missing profile ids. Provide one or more profile ids.");

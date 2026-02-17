@@ -42,10 +42,7 @@ import {
 import type { CommandCategory } from "./commands-registry.types.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 
-type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
-type AgentConfig = Partial<AgentDefaults> & {
-  model?: AgentDefaults["model"] | string;
-};
+type AgentConfig = Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>;
 
 export const formatTokenCount = formatTokenCountShared;
 
@@ -75,7 +72,7 @@ type StatusArgs = {
   usageLine?: string;
   timeLine?: string;
   queue?: QueueStatus;
-  mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
+  mediaDecisions?: MediaUnderstandingDecision[];
   subagentsLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
@@ -261,7 +258,7 @@ const formatUsagePair = (input?: number | null, output?: number | null) => {
   return `🧮 Tokens: ${inputLabel} in / ${outputLabel} out`;
 };
 
-const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
+const formatMediaUnderstandingLine = (decisions?: MediaUnderstandingDecision[]) => {
   if (!decisions || decisions.length === 0) {
     return null;
   }

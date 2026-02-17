@@ -48,13 +48,7 @@ export {
   LITELLM_BASE_URL,
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
-import {
-  applyAgentDefaultModelPrimary,
-  applyOnboardAuthAgentModelsAndProviders,
-  applyProviderConfigWithDefaultModel,
-  applyProviderConfigWithDefaultModels,
-  applyProviderConfigWithModelCatalog,
-} from "./onboard-auth.config-shared.js";
+import { applyProviderConfigWithDefaultModel } from "./onboard-auth.config-shared.js";
 import {
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
@@ -125,7 +119,20 @@ export function applyZaiProviderConfig(
     models: mergedModels.length > 0 ? mergedModels : defaultModels,
   };
 
-  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
 }
 
 export function applyZaiConfig(
@@ -135,7 +142,25 @@ export function applyZaiConfig(
   const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
   const modelRef = modelId === ZAI_DEFAULT_MODEL_ID ? ZAI_DEFAULT_MODEL_REF : `zai/${modelId}`;
   const next = applyZaiProviderConfig(cfg, params);
-  return applyAgentDefaultModelPrimary(next, modelRef);
+
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: modelRef,
+        },
+      },
+    },
+  };
 }
 
 export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -159,7 +184,24 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: OPENROUTER_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -194,12 +236,46 @@ function applyMoonshotProviderConfigWithBaseUrl(
 
 export function applyMoonshotConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMoonshotProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, MOONSHOT_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: MOONSHOT_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyMoonshotConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMoonshotProviderConfigCn(cfg);
-  return applyAgentDefaultModelPrimary(next, MOONSHOT_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: MOONSHOT_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -223,7 +299,24 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 
 export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyKimiCodeProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, KIMI_CODING_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: KIMI_CODING_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -257,12 +350,42 @@ export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfi
     models: mergedModels.length > 0 ? mergedModels : syntheticModels,
   };
 
-  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
 }
 
 export function applySyntheticConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applySyntheticProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, SYNTHETIC_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: SYNTHETIC_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -271,21 +394,69 @@ export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     ...models[XIAOMI_DEFAULT_MODEL_REF],
     alias: models[XIAOMI_DEFAULT_MODEL_REF]?.alias ?? "Xiaomi",
   };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.xiaomi;
   const defaultProvider = buildXiaomiProvider();
-  const resolvedApi = defaultProvider.api ?? "openai-completions";
-  return applyProviderConfigWithDefaultModels(cfg, {
-    agentModels: models,
-    providerId: "xiaomi",
-    api: resolvedApi,
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === XIAOMI_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.xiaomi = {
+    ...existingProviderRest,
     baseUrl: defaultProvider.baseUrl,
-    defaultModels: defaultProvider.models ?? [],
-    defaultModelId: XIAOMI_DEFAULT_MODEL_ID,
-  });
+    api: defaultProvider.api,
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
 }
 
 export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXiaomiProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, XIAOMI_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: XIAOMI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -299,14 +470,42 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     alias: models[VENICE_DEFAULT_MODEL_REF]?.alias ?? "Llama 3.3 70B",
   };
 
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.venice;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const veniceModels = VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
-    providerId: "venice",
-    api: "openai-completions",
+  const mergedModels = [
+    ...existingModels,
+    ...veniceModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.venice = {
+    ...existingProviderRest,
     baseUrl: VENICE_BASE_URL,
-    catalogModels: veniceModels,
-  });
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : veniceModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
 }
 
 /**
@@ -315,7 +514,24 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
  */
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, VENICE_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: VENICE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -329,14 +545,44 @@ export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig
     alias: models[TOGETHER_DEFAULT_MODEL_REF]?.alias ?? "Together AI",
   };
 
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.together;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const togetherModels = TOGETHER_MODEL_CATALOG.map(buildTogetherModelDefinition);
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
-    providerId: "together",
-    api: "openai-completions",
+  const mergedModels = [
+    ...existingModels,
+    ...togetherModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.together = {
+    ...existingProviderRest,
     baseUrl: TOGETHER_BASE_URL,
-    catalogModels: togetherModels,
-  });
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : togetherModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
 }
 
 /**
@@ -345,7 +591,24 @@ export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig
  */
 export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyTogetherProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, TOGETHER_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: TOGETHER_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -358,14 +621,42 @@ export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawCon
     alias: models[HUGGINGFACE_DEFAULT_MODEL_REF]?.alias ?? "Hugging Face",
   };
 
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.huggingface;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const hfModels = HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
-    providerId: "huggingface",
-    api: "openai-completions",
+  const mergedModels = [
+    ...existingModels,
+    ...hfModels.filter((model) => !existingModels.some((existing) => existing.id === model.id)),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.huggingface = {
+    ...existingProviderRest,
     baseUrl: HUGGINGFACE_BASE_URL,
-    catalogModels: hfModels,
-  });
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : hfModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
 }
 
 /**
@@ -373,7 +664,24 @@ export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawCon
  */
 export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyHuggingfaceProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, HUGGINGFACE_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: HUGGINGFACE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -397,7 +705,24 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXaiProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, XAI_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: XAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }
 
 export function applyAuthProfileConfig(
@@ -455,32 +780,73 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
     ...models[QIANFAN_DEFAULT_MODEL_REF],
     alias: models[QIANFAN_DEFAULT_MODEL_REF]?.alias ?? "QIANFAN",
   };
-  const defaultProvider = buildQianfanProvider();
-  const existingProvider = cfg.models?.providers?.qianfan as
-    | {
-        baseUrl?: unknown;
-        api?: unknown;
-      }
-    | undefined;
-  const existingBaseUrl =
-    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
-  const resolvedBaseUrl = existingBaseUrl || QIANFAN_BASE_URL;
-  const resolvedApi =
-    typeof existingProvider?.api === "string"
-      ? (existingProvider.api as ModelApi)
-      : "openai-completions";
 
-  return applyProviderConfigWithDefaultModels(cfg, {
-    agentModels: models,
-    providerId: "qianfan",
-    api: resolvedApi,
-    baseUrl: resolvedBaseUrl,
-    defaultModels: defaultProvider.models ?? [],
-    defaultModelId: QIANFAN_DEFAULT_MODEL_ID,
-  });
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.qianfan;
+  const defaultProvider = buildQianfanProvider();
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModels = defaultProvider.models ?? [];
+  const hasDefaultModel = existingModels.some((model) => model.id === QIANFAN_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, ...defaultModels]
+      : defaultModels;
+  const {
+    apiKey: existingApiKey,
+    baseUrl: existingBaseUrl,
+    api: existingApi,
+    ...existingProviderRest
+  } = (existingProvider ?? {}) as Record<string, unknown> as {
+    apiKey?: string;
+    baseUrl?: string;
+    api?: ModelApi;
+  };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.qianfan = {
+    ...existingProviderRest,
+    baseUrl: existingBaseUrl ?? QIANFAN_BASE_URL,
+    api: existingApi ?? "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : defaultProvider.models,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
 }
 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: QIANFAN_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
 }

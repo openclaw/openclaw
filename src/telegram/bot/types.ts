@@ -1,6 +1,6 @@
 import type { Message, UserFromGetMe } from "@grammyjs/types";
 
-/** App-specific stream mode for Telegram stream previews. */
+/** App-specific stream mode for Telegram draft streaming. */
 export type TelegramStreamMode = "off" | "partial" | "block";
 
 /**

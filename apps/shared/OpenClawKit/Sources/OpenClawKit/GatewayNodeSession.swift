@@ -85,13 +85,7 @@ public actor GatewayNodeSession {
                 latch.resume(result)
             }
             timeoutTask = Task.detached {
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)
-                } catch {
-                    // Expected when invoke finishes first and cancels the timeout task.
-                    return
-                }
-                guard !Task.isCancelled else { return }
+                try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)
                 timeoutLogger.info("node invoke timeout fired id=\(request.id, privacy: .public)")
                 latch.resume(BridgeInvokeResponse(
                     id: request.id,

@@ -95,10 +95,6 @@ function sanitizeName(input: string): string {
   return trimmed || "collection";
 }
 
-function scopeCollectionBase(base: string, agentId: string): string {
-  return `${base}-${sanitizeName(agentId)}`;
-}
-
 function ensureUniqueName(base: string, existing: Set<string>): string {
   let name = sanitizeName(base);
   if (!existing.has(name)) {
@@ -207,7 +203,6 @@ function resolveCustomPaths(
   rawPaths: MemoryQmdIndexPath[] | undefined,
   workspaceDir: string,
   existing: Set<string>,
-  agentId: string,
 ): ResolvedQmdCollection[] {
   if (!rawPaths?.length) {
     return [];
@@ -225,7 +220,7 @@ function resolveCustomPaths(
       return;
     }
     const pattern = entry.pattern?.trim() || "**/*.md";
-    const baseName = scopeCollectionBase(entry.name?.trim() || `custom-${index + 1}`, agentId);
+    const baseName = entry.name?.trim() || `custom-${index + 1}`;
     const name = ensureUniqueName(baseName, existing);
     collections.push({
       name,
@@ -241,7 +236,6 @@ function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
   existing: Set<string>,
-  agentId: string,
 ): ResolvedQmdCollection[] {
   if (!include) {
     return [];
@@ -252,7 +246,7 @@ function resolveDefaultCollections(
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
-    name: ensureUniqueName(scopeCollectionBase(entry.base, agentId), existing),
+    name: ensureUniqueName(entry.base, existing),
     path: entry.path,
     pattern: entry.pattern,
     kind: "memory",
@@ -274,8 +268,8 @@ export function resolveMemoryBackendConfig(params: {
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
   const collections = [
-    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
-    ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
+    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet),
+    ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet),
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";

@@ -3,21 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { ircOnboardingAdapter } from "./onboarding.js";
 import type { CoreConfig } from "./types.js";
 
-const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
-  const first = params.options[0];
-  if (!first) {
-    throw new Error("no options");
-  }
-  return first.value;
-};
-
 describe("irc onboarding", () => {
   it("configures host and nick via onboarding prompts", async () => {
     const prompter: WizardPrompter = {
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
-      select: selectFirstOption as WizardPrompter["select"],
+      select: vi.fn(async () => "allowlist"),
       multiselect: vi.fn(async () => []),
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {
@@ -58,9 +50,7 @@ describe("irc onboarding", () => {
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
-      exit: vi.fn((code: number): never => {
-        throw new Error(`exit ${code}`);
-      }),
+      exit: vi.fn(),
     };
 
     const result = await ircOnboardingAdapter.configure({
@@ -88,7 +78,7 @@ describe("irc onboarding", () => {
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
-      select: selectFirstOption as WizardPrompter["select"],
+      select: vi.fn(async () => "allowlist"),
       multiselect: vi.fn(async () => []),
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC allowFrom (nick or nick!user@host)") {

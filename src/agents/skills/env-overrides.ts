@@ -3,32 +3,34 @@ import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
 
-type EnvUpdate = { key: string; prev: string | undefined };
-type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
+export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+  const { skills, config } = params;
+  const updates: Array<{ key: string; prev: string | undefined }> = [];
 
-function applySkillConfigEnvOverrides(params: {
-  updates: EnvUpdate[];
-  skillConfig: SkillConfig;
-  primaryEnv?: string | null;
-}) {
-  const { updates, skillConfig, primaryEnv } = params;
-  if (skillConfig.env) {
-    for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
-      if (!envValue || process.env[envKey]) {
-        continue;
+  for (const entry of skills) {
+    const skillKey = resolveSkillKey(entry.skill, entry);
+    const skillConfig = resolveSkillConfig(config, skillKey);
+    if (!skillConfig) {
+      continue;
+    }
+
+    if (skillConfig.env) {
+      for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
+        if (!envValue || process.env[envKey]) {
+          continue;
+        }
+        updates.push({ key: envKey, prev: process.env[envKey] });
+        process.env[envKey] = envValue;
       }
-      updates.push({ key: envKey, prev: process.env[envKey] });
-      process.env[envKey] = envValue;
+    }
+
+    const primaryEnv = entry.metadata?.primaryEnv;
+    if (primaryEnv && skillConfig.apiKey && !process.env[primaryEnv]) {
+      updates.push({ key: primaryEnv, prev: process.env[primaryEnv] });
+      process.env[primaryEnv] = skillConfig.apiKey;
     }
   }
 
-  if (primaryEnv && skillConfig.apiKey && !process.env[primaryEnv]) {
-    updates.push({ key: primaryEnv, prev: process.env[primaryEnv] });
-    process.env[primaryEnv] = skillConfig.apiKey;
-  }
-}
-
-function createEnvReverter(updates: EnvUpdate[]) {
   return () => {
     for (const update of updates) {
       if (update.prev === undefined) {
@@ -40,27 +42,6 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
-  const { skills, config } = params;
-  const updates: EnvUpdate[] = [];
-
-  for (const entry of skills) {
-    const skillKey = resolveSkillKey(entry.skill, entry);
-    const skillConfig = resolveSkillConfig(config, skillKey);
-    if (!skillConfig) {
-      continue;
-    }
-
-    applySkillConfigEnvOverrides({
-      updates,
-      skillConfig,
-      primaryEnv: entry.metadata?.primaryEnv,
-    });
-  }
-
-  return createEnvReverter(updates);
-}
-
 export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
@@ -69,7 +50,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   if (!snapshot) {
     return () => {};
   }
-  const updates: EnvUpdate[] = [];
+  const updates: Array<{ key: string; prev: string | undefined }> = [];
 
   for (const skill of snapshot.skills) {
     const skillConfig = resolveSkillConfig(config, skill.name);
@@ -77,12 +58,32 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       continue;
     }
 
-    applySkillConfigEnvOverrides({
-      updates,
-      skillConfig,
-      primaryEnv: skill.primaryEnv,
-    });
+    if (skillConfig.env) {
+      for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
+        if (!envValue || process.env[envKey]) {
+          continue;
+        }
+        updates.push({ key: envKey, prev: process.env[envKey] });
+        process.env[envKey] = envValue;
+      }
+    }
+
+    if (skill.primaryEnv && skillConfig.apiKey && !process.env[skill.primaryEnv]) {
+      updates.push({
+        key: skill.primaryEnv,
+        prev: process.env[skill.primaryEnv],
+      });
+      process.env[skill.primaryEnv] = skillConfig.apiKey;
+    }
   }
 
-  return createEnvReverter(updates);
+  return () => {
+    for (const update of updates) {
+      if (update.prev === undefined) {
+        delete process.env[update.key];
+      } else {
+        process.env[update.key] = update.prev;
+      }
+    }
+  };
 }

@@ -11,7 +11,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "imessage" as const;
 
@@ -138,7 +138,7 @@ async function promptIMessageAllowFrom(params: {
     },
   });
   const parts = parseIMessageAllowFromInput(String(entry));
-  const unique = mergeAllowFromEntries(undefined, parts);
+  const unique = [...new Set(parts)];
   return setIMessageAllowFrom(params.cfg, accountId, unique);
 }
 

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import {
-  createStartedCronServiceWithFinishedBarrier,
   createCronStoreHarness,
   createNoopLogger,
   installCronTestHooks,
@@ -13,12 +13,42 @@ const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
+function createFinishedBarrier() {
+  const resolvers = new Map<string, (evt: CronEvent) => void>();
+  return {
+    waitForOk: (jobId: string) =>
+      new Promise<CronEvent>((resolve) => {
+        resolvers.set(jobId, resolve);
+      }),
+    onEvent: (evt: CronEvent) => {
+      if (evt.action !== "finished" || evt.status !== "ok") {
+        return;
+      }
+      const resolve = resolvers.get(evt.jobId);
+      if (!resolve) {
+        return;
+      }
+      resolvers.delete(evt.jobId);
+      resolve(evt);
+    },
+  };
+}
+
 describe("CronService interval/cron jobs fire on time", () => {
   it("fires an every-type main job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
-    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const finished = createFinishedBarrier();
+
+    const cron = new CronService({
       storePath: store.storePath,
-      logger: noopLogger,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      onEvent: finished.onEvent,
     });
 
     await cron.start();
@@ -56,13 +86,22 @@ describe("CronService interval/cron jobs fire on time", () => {
 
   it("fires a cron-expression job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
-    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
-      logger: noopLogger,
-    });
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const finished = createFinishedBarrier();
 
     // Set time to just before a minute boundary.
     vi.setSystemTime(new Date("2025-12-13T00:00:59.000Z"));
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      onEvent: finished.onEvent,
+    });
 
     await cron.start();
     const job = await cron.add({
@@ -147,18 +186,16 @@ describe("CronService interval/cron jobs fire on time", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
     });
 
     await cron.start();
-    // Perf: a few recomputation cycles are enough to catch legacy "every" drift.
-    for (let minute = 1; minute <= 3; minute++) {
+    for (let minute = 1; minute <= 6; minute++) {
       vi.setSystemTime(new Date(nowMs + minute * 60_000));
       const minuteRun = await cron.run("minute-cron", "force");
       expect(minuteRun).toEqual({ ok: true, ran: true });
     }
 
-    // "every" cadence is 2m; verify it stays due at the 6-minute boundary.
     vi.setSystemTime(new Date(nowMs + 6 * 60_000));
     const sfRun = await cron.run("legacy-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });

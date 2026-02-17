@@ -1,50 +1,41 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertModelSelection,
   installDirectiveBehaviorE2EHooks,
   loadModelCatalog,
-  makeWhatsAppDirectiveConfig,
-  replyText,
   runEmbeddedPiAgent,
-  sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
-
-async function runModelDirective(
-  home: string,
-  body: string,
-  options: {
-    defaults?: Record<string, unknown>;
-    extra?: Record<string, unknown>;
-  } = {},
-): Promise<string | undefined> {
-  const res = await getReplyFromConfig(
-    { Body: body, From: "+1222", To: "+1222", CommandAuthorized: true },
-    {},
-    makeWhatsAppDirectiveConfig(
-      home,
-      {
-        model: { primary: "anthropic/claude-opus-4-5" },
-        models: {
-          "anthropic/claude-opus-4-5": {},
-          "openai/gpt-4.1-mini": {},
-        },
-        ...options.defaults,
-      },
-      { session: { store: sessionStorePath(home) }, ...options.extra },
-    ),
-  );
-  return replyText(res);
-}
 
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
   it("aliases /model list to /models", async () => {
     await withTempHome(async (home) => {
-      const text = await runModelDirective(home, "/model list");
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model list", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+                "openai/gpt-4.1-mini": {},
+              },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Providers:");
       expect(text).toContain("- anthropic");
       expect(text).toContain("- openai");
@@ -56,7 +47,27 @@ describe("directive behavior", () => {
   it("shows current model when catalog is unavailable", async () => {
     await withTempHome(async (home) => {
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
-      const text = await runModelDirective(home, "/model");
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+                "openai/gpt-4.1-mini": {},
+              },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current: anthropic/claude-opus-4-5");
       expect(text).toContain("Switch: /model <provider/model>");
       expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
@@ -71,16 +82,27 @@ describe("directive behavior", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "grok-4", name: "Grok 4", provider: "xai" },
       ]);
-      const text = await runModelDirective(home, "/model list", {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-opus-4-5",
-            fallbacks: ["openai/gpt-4.1-mini"],
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model list", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-5",
+                fallbacks: ["openai/gpt-4.1-mini"],
+              },
+              imageModel: { primary: "minimax/MiniMax-M2.1" },
+              workspace: path.join(home, "openclaw"),
+            },
           },
-          imageModel: { primary: "minimax/MiniMax-M2.1" },
-          models: undefined,
+          session: { store: storePath },
         },
-      });
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Providers:");
       expect(text).toContain("- anthropic");
       expect(text).toContain("- openai");
@@ -101,15 +123,23 @@ describe("directive behavior", () => {
         },
         { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
       ]);
-      const text = await runModelDirective(home, "/models minimax", {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-5": {},
-            "openai/gpt-4.1-mini": {},
-            "minimax/MiniMax-M2.1": { alias: "minimax" },
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/models minimax", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+                "openai/gpt-4.1-mini": {},
+                "minimax/MiniMax-M2.1": { alias: "minimax" },
+              },
+            },
           },
-        },
-        extra: {
           models: {
             mode: "merge",
             providers: {
@@ -120,8 +150,11 @@ describe("directive behavior", () => {
               },
             },
           },
+          session: { store: storePath },
         },
-      });
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Models (minimax)");
       expect(text).toContain("minimax/MiniMax-M2.1");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -129,13 +162,26 @@ describe("directive behavior", () => {
   });
   it("does not repeat missing auth labels on /model list", async () => {
     await withTempHome(async (home) => {
-      const text = await runModelDirective(home, "/model list", {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-5": {},
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model list", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+              },
+            },
           },
+          session: { store: storePath },
         },
-      });
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Providers:");
       expect(text).not.toContain("missing (missing)");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -143,22 +189,24 @@ describe("directive behavior", () => {
   });
   it("sets model override on /model directive", async () => {
     await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
+      const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
         { Body: "/model openai/gpt-4.1-mini", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          {
-            model: { primary: "anthropic/claude-opus-4-5" },
-            models: {
-              "anthropic/claude-opus-4-5": {},
-              "openai/gpt-4.1-mini": {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+                "openai/gpt-4.1-mini": {},
+              },
             },
           },
-          { session: { store: storePath } },
-        ),
+          session: { store: storePath },
+        },
       );
 
       assertModelSelection(storePath, {
@@ -170,22 +218,24 @@ describe("directive behavior", () => {
   });
   it("supports model aliases on /model directive", async () => {
     await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
+      const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
         { Body: "/model Opus", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          {
-            model: { primary: "openai/gpt-4.1-mini" },
-            models: {
-              "openai/gpt-4.1-mini": {},
-              "anthropic/claude-opus-4-5": { alias: "Opus" },
+        {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-4.1-mini" },
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "openai/gpt-4.1-mini": {},
+                "anthropic/claude-opus-4-5": { alias: "Opus" },
+              },
             },
           },
-          { session: { store: storePath } },
-        ),
+          session: { store: storePath },
+        },
       );
 
       assertModelSelection(storePath, {

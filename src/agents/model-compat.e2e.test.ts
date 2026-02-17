@@ -21,9 +21,7 @@ describe("normalizeModelCompat", () => {
     const model = baseModel();
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
   });
 
   it("leaves non-zai models untouched", () => {
@@ -41,8 +39,6 @@ describe("normalizeModelCompat", () => {
     const model = baseModel();
     model.compat = { supportsDeveloperRole: false };
     const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
   });
 });

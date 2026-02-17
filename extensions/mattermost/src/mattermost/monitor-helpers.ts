@@ -1,5 +1,8 @@
+import { Buffer } from "node:buffer";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-export { createDedupeCache, rawDataToString } from "openclaw/plugin-sdk";
+import type WebSocket from "ws";
+
+export { createDedupeCache } from "openclaw/plugin-sdk";
 
 export type ResponsePrefixContext = {
   model?: string;
@@ -35,6 +38,25 @@ export function formatInboundFromLabel(params: {
     return directLabel;
   }
   return `${directLabel} id:${directId}`;
+}
+
+export function rawDataToString(
+  data: WebSocket.RawData,
+  encoding: BufferEncoding = "utf8",
+): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString(encoding);
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString(encoding);
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString(encoding);
+  }
+  return Buffer.from(String(data)).toString(encoding);
 }
 
 function normalizeAgentId(value: string | undefined | null): string {

@@ -24,7 +24,6 @@ import {
   DEFAULT_IMAGE_MODELS,
 } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
-import { fileExists } from "./fs.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -174,6 +173,18 @@ async function findBinary(name: string): Promise<string | null> {
 
 async function hasBinary(name: string): Promise<boolean> {
   return Boolean(await findBinary(name));
+}
+
+async function fileExists(filePath?: string | null): Promise<boolean> {
+  if (!filePath) {
+    return false;
+  }
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function probeGeminiCli(): Promise<boolean> {

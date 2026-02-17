@@ -453,9 +453,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     });
   }
 
-  const applyMoonshotApiKeyChoice = async (
-    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig,
-  ): Promise<OpenClawConfig | null> => {
+  if (authChoice === "moonshot-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "moonshot",
       cfg: baseConfig,
@@ -475,15 +473,30 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "moonshot",
       mode: "api_key",
     });
-    return applyConfig(nextConfig);
-  };
-
-  if (authChoice === "moonshot-api-key") {
-    return await applyMoonshotApiKeyChoice(applyMoonshotConfig);
+    return applyMoonshotConfig(nextConfig);
   }
 
   if (authChoice === "moonshot-api-key-cn") {
-    return await applyMoonshotApiKeyChoice(applyMoonshotConfigCn);
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "moonshot",
+      cfg: baseConfig,
+      flagValue: opts.moonshotApiKey,
+      flagName: "--moonshot-api-key",
+      envVar: "MOONSHOT_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setMoonshotApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "moonshot:default",
+      provider: "moonshot",
+      mode: "api_key",
+    });
+    return applyMoonshotConfigCn(nextConfig);
   }
 
   if (authChoice === "kimi-code-api-key") {

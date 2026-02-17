@@ -4,7 +4,6 @@ import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuSendResult, ResolvedFeishuAccount } from "./types.js";
 
@@ -162,8 +161,15 @@ export async function sendMessageFeishu(
         msg_type: msgType,
       },
     });
-    assertFeishuMessageApiSuccess(response, "Feishu reply failed");
-    return toFeishuSendResult(response, receiveId);
+
+    if (response.code !== 0) {
+      throw new Error(`Feishu reply failed: ${response.msg || `code ${response.code}`}`);
+    }
+
+    return {
+      messageId: response.data?.message_id ?? "unknown",
+      chatId: receiveId,
+    };
   }
 
   const response = await client.im.message.create({
@@ -174,8 +180,15 @@ export async function sendMessageFeishu(
       msg_type: msgType,
     },
   });
-  assertFeishuMessageApiSuccess(response, "Feishu send failed");
-  return toFeishuSendResult(response, receiveId);
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu send failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return {
+    messageId: response.data?.message_id ?? "unknown",
+    chatId: receiveId,
+  };
 }
 
 export type SendFeishuCardParams = {
@@ -210,8 +223,15 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
         msg_type: "interactive",
       },
     });
-    assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
-    return toFeishuSendResult(response, receiveId);
+
+    if (response.code !== 0) {
+      throw new Error(`Feishu card reply failed: ${response.msg || `code ${response.code}`}`);
+    }
+
+    return {
+      messageId: response.data?.message_id ?? "unknown",
+      chatId: receiveId,
+    };
   }
 
   const response = await client.im.message.create({
@@ -222,8 +242,15 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       msg_type: "interactive",
     },
   });
-  assertFeishuMessageApiSuccess(response, "Feishu card send failed");
-  return toFeishuSendResult(response, receiveId);
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu card send failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return {
+    messageId: response.data?.message_id ?? "unknown",
+    chatId: receiveId,
+  };
 }
 
 export async function updateCardFeishu(params: {

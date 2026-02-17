@@ -2,8 +2,12 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { getActiveMatrixClient } from "../active-client.js";
-import { createPreparedMatrixClient } from "../client-bootstrap.js";
-import { isBunRuntime, resolveMatrixAuth, resolveSharedMatrixClient } from "../client.js";
+import {
+  createMatrixClient,
+  isBunRuntime,
+  resolveMatrixAuth,
+  resolveSharedMatrixClient,
+} from "../client.js";
 import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
 
 export function ensureNodeRuntime() {
@@ -38,10 +42,24 @@ export async function resolveActionClient(
     cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
     accountId,
   });
-  const client = await createPreparedMatrixClient({
-    auth,
-    timeoutMs: opts.timeoutMs,
+  const client = await createMatrixClient({
+    homeserver: auth.homeserver,
+    userId: auth.userId,
+    accessToken: auth.accessToken,
+    encryption: auth.encryption,
+    localTimeoutMs: opts.timeoutMs,
     accountId,
   });
+  if (auth.encryption && client.crypto) {
+    try {
+      const joinedRooms = await client.getJoinedRooms();
+      await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
+        joinedRooms,
+      );
+    } catch {
+      // Ignore crypto prep failures for one-off actions.
+    }
+  }
+  await client.start();
   return { client, stopOnDone: true };
 }

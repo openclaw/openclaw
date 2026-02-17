@@ -19,7 +19,6 @@ import {
 } from "../../config/redact-snapshot.js";
 import { buildConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -30,16 +29,23 @@ import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
   errorShape,
+  formatValidationErrors,
   validateConfigApplyParams,
   validateConfigGetParams,
   validateConfigPatchParams,
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
-import { resolveBaseHashParam } from "./base-hash.js";
-import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+
+function resolveBaseHash(params: unknown): string | null {
+  const raw = (params as { baseHash?: unknown })?.baseHash;
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : null;
+}
 
 function requireConfigBaseHash(
   params: unknown,
@@ -61,7 +67,7 @@ function requireConfigBaseHash(
     );
     return false;
   }
-  const baseHash = resolveBaseHashParam(params);
+  const baseHash = resolveBaseHash(params);
   if (!baseHash) {
     respond(
       false,
@@ -87,65 +93,6 @@ function requireConfigBaseHash(
   return true;
 }
 
-function parseRawConfigOrRespond(
-  params: unknown,
-  requestName: string,
-  respond: RespondFn,
-): string | null {
-  const rawValue = (params as { raw?: unknown }).raw;
-  if (typeof rawValue !== "string") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid ${requestName} params: raw (string) required`,
-      ),
-    );
-    return null;
-  }
-  return rawValue;
-}
-
-function parseValidateConfigFromRawOrRespond(
-  params: unknown,
-  requestName: string,
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-  respond: RespondFn,
-): { config: OpenClawConfig; schema: ConfigSchemaResponse } | null {
-  const rawValue = parseRawConfigOrRespond(params, requestName, respond);
-  if (!rawValue) {
-    return null;
-  }
-  const parsedRes = parseConfigJson5(rawValue);
-  if (!parsedRes.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
-    return null;
-  }
-  const schema = loadSchemaWithPlugins();
-  const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schema.uiHints);
-  if (!restored.ok) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, restored.humanReadableMessage ?? "invalid config"),
-    );
-    return null;
-  }
-  const validated = validateConfigObjectWithPlugins(restored.result);
-  if (!validated.ok) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "invalid config", {
-        details: { issues: validated.issues },
-      }),
-    );
-    return null;
-  }
-  return { config: validated.config, schema };
-}
-
 function resolveConfigRestartRequest(params: unknown): {
   sessionKey: string | undefined;
   note: string | undefined;
@@ -153,7 +100,19 @@ function resolveConfigRestartRequest(params: unknown): {
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
 } {
-  const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
+  const sessionKey =
+    typeof (params as { sessionKey?: unknown }).sessionKey === "string"
+      ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
+      : undefined;
+  const note =
+    typeof (params as { note?: unknown }).note === "string"
+      ? (params as { note?: string }).note?.trim() || undefined
+      : undefined;
+  const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
+  const restartDelayMs =
+    typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
+      ? Math.max(0, Math.floor(restartDelayMsRaw))
+      : undefined;
 
   // Extract deliveryContext + threadId for routing after restart
   // Supports both :thread: (most channels) and :topic: (Telegram)
@@ -239,7 +198,15 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
 
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
+    if (!validateConfigGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid config.get params: ${formatValidationErrors(validateConfigGetParams.errors)}`,
+        ),
+      );
       return;
     }
     const snapshot = await readConfigFileSnapshot();
@@ -247,36 +214,91 @@ export const configHandlers: GatewayRequestHandlers = {
     respond(true, redactConfigSnapshot(snapshot, schema.uiHints), undefined);
   },
   "config.schema": ({ params, respond }) => {
-    if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
+    if (!validateConfigSchemaParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid config.schema params: ${formatValidationErrors(validateConfigSchemaParams.errors)}`,
+        ),
+      );
       return;
     }
     respond(true, loadSchemaWithPlugins(), undefined);
   },
   "config.set": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
+    if (!validateConfigSetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid config.set params: ${formatValidationErrors(validateConfigSetParams.errors)}`,
+        ),
+      );
       return;
     }
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.set", snapshot, respond);
-    if (!parsed) {
+    const rawValue = (params as { raw?: unknown }).raw;
+    if (typeof rawValue !== "string") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config.set params: raw (string) required"),
+      );
       return;
     }
-    await writeConfigFile(parsed.config, writeOptions);
+    const parsedRes = parseConfigJson5(rawValue);
+    if (!parsedRes.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
+      return;
+    }
+    const schemaSet = loadSchemaWithPlugins();
+    const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schemaSet.uiHints);
+    if (!restored.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, restored.humanReadableMessage ?? "invalid config"),
+      );
+      return;
+    }
+    const validated = validateConfigObjectWithPlugins(restored.result);
+    if (!validated.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config", {
+          details: { issues: validated.issues },
+        }),
+      );
+      return;
+    }
+    await writeConfigFile(validated.config, writeOptions);
     respond(
       true,
       {
         ok: true,
         path: CONFIG_PATH,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        config: redactConfigObject(validated.config, schemaSet.uiHints),
       },
       undefined,
     );
   },
   "config.patch": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
+    if (!validateConfigPatchParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid config.patch params: ${formatValidationErrors(validateConfigPatchParams.errors)}`,
+        ),
+      );
       return;
     }
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
@@ -382,18 +404,60 @@ export const configHandlers: GatewayRequestHandlers = {
     );
   },
   "config.apply": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
+    if (!validateConfigApplyParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid config.apply params: ${formatValidationErrors(validateConfigApplyParams.errors)}`,
+        ),
+      );
       return;
     }
     const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
     if (!requireConfigBaseHash(params, snapshot, respond)) {
       return;
     }
-    const parsed = parseValidateConfigFromRawOrRespond(params, "config.apply", snapshot, respond);
-    if (!parsed) {
+    const rawValue = (params as { raw?: unknown }).raw;
+    if (typeof rawValue !== "string") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid config.apply params: raw (string) required",
+        ),
+      );
       return;
     }
-    await writeConfigFile(parsed.config, writeOptions);
+    const parsedRes = parseConfigJson5(rawValue);
+    if (!parsedRes.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
+      return;
+    }
+    const schemaApply = loadSchemaWithPlugins();
+    const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schemaApply.uiHints);
+    if (!restored.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, restored.humanReadableMessage ?? "invalid config"),
+      );
+      return;
+    }
+    const validated = validateConfigObjectWithPlugins(restored.result);
+    if (!validated.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config", {
+          details: { issues: validated.issues },
+        }),
+      );
+      return;
+    }
+    await writeConfigFile(validated.config, writeOptions);
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
       resolveConfigRestartRequest(params);
@@ -415,7 +479,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: CONFIG_PATH,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        config: redactConfigObject(validated.config, schemaApply.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,

@@ -26,14 +26,12 @@ interface BuildLineMessageContextParams {
   account: ResolvedLineAccount;
 }
 
-export type LineSourceInfo = {
+function getSourceInfo(source: EventSource): {
   userId?: string;
   groupId?: string;
   roomId?: string;
   isGroup: boolean;
-};
-
-export function getLineSourceInfo(source: EventSource): LineSourceInfo {
+} {
   const userId =
     source.type === "user"
       ? source.userId
@@ -80,7 +78,7 @@ function resolveLineInboundRoute(params: {
     direction: "inbound",
   });
 
-  const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
+  const { userId, groupId, roomId, isGroup } = getSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
   const route = resolveAgentRoute({
     cfg: params.cfg,
@@ -172,7 +170,7 @@ function extractMediaPlaceholder(message: MessageEvent["message"]): string {
 }
 
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
-type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
+type LineSourceInfo = ReturnType<typeof getSourceInfo> & { peerId: string };
 
 function resolveLineConversationLabel(params: {
   isGroup: boolean;
@@ -213,7 +211,7 @@ async function finalizeLineInboundContext(params: {
   account: ResolvedLineAccount;
   event: MessageEvent | PostbackEvent;
   route: LineRouteInfo;
-  source: LineSourceInfoWithPeerId;
+  source: LineSourceInfo;
   rawBody: string;
   timestamp: number;
   messageSid: string;

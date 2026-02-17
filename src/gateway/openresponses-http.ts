@@ -16,28 +16,38 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import {
+  DEFAULT_INPUT_FILE_MAX_BYTES,
+  DEFAULT_INPUT_FILE_MAX_CHARS,
+  DEFAULT_INPUT_FILE_MIMES,
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,
   DEFAULT_INPUT_MAX_REDIRECTS,
+  DEFAULT_INPUT_PDF_MAX_PAGES,
+  DEFAULT_INPUT_PDF_MAX_PIXELS,
+  DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
   DEFAULT_INPUT_TIMEOUT_MS,
   extractFileContentFromSource,
   extractImageContentFromSource,
   normalizeMimeList,
-  resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
-import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
+import {
+  readJsonBodyOrError,
+  sendJson,
+  sendMethodNotAllowed,
+  setSseHeaders,
+  writeDone,
+} from "./http-common.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
@@ -104,7 +114,6 @@ function resolveResponsesLimits(
 ): ResolvedResponsesLimits {
   const files = config?.files;
   const images = config?.images;
-  const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
     maxUrlParts:
@@ -112,8 +121,18 @@ function resolveResponsesLimits(
         ? Math.max(0, Math.floor(config.maxUrlParts))
         : DEFAULT_MAX_URL_PARTS,
     files: {
-      ...fileLimits,
+      allowUrl: files?.allowUrl ?? true,
       urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
+      allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
+      maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
+      maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
+      maxRedirects: files?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
+      timeoutMs: files?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
+      pdf: {
+        maxPages: files?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
+        maxPixels: files?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
+        minTextChars: files?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
+      },
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
@@ -300,61 +319,45 @@ function createAssistantOutputItem(params: {
   };
 }
 
-async function runResponsesAgentCommand(params: {
-  message: string;
-  images: ImageContent[];
-  clientTools: ClientToolDefinition[];
-  extraSystemPrompt: string;
-  streamParams: { maxTokens: number } | undefined;
-  sessionKey: string;
-  runId: string;
-  deps: ReturnType<typeof createDefaultDeps>;
-}) {
-  return agentCommand(
-    {
-      message: params.message,
-      images: params.images.length > 0 ? params.images : undefined,
-      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
-      extraSystemPrompt: params.extraSystemPrompt || undefined,
-      streamParams: params.streamParams ?? undefined,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      deliver: false,
-      messageChannel: "webchat",
-      bestEffortDeliver: false,
-    },
-    defaultRuntime,
-    params.deps,
-  );
-}
-
 export async function handleOpenResponsesHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  if (url.pathname !== "/v1/responses") {
+    return false;
+  }
+
+  if (req.method !== "POST") {
+    sendMethodNotAllowed(res);
+    return true;
+  }
+
+  const authorized = await authorizeGatewayBearerRequestOrReply({
+    req,
+    res,
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    rateLimiter: opts.rateLimiter,
+  });
+  if (!authorized) {
+    return true;
+  }
+
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
     (opts.config?.maxBodyBytes
       ? limits.maxBodyBytes
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
-  const handled = await handleGatewayPostJsonEndpoint(req, res, {
-    pathname: "/v1/responses",
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    rateLimiter: opts.rateLimiter,
-    maxBodyBytes,
-  });
-  if (handled === false) {
-    return false;
-  }
-  if (!handled) {
+  const body = await readJsonBodyOrError(req, res, maxBodyBytes);
+  if (body === undefined) {
     return true;
   }
 
   // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
+  const parseResult = CreateResponseBodySchema.safeParse(body);
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
     const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
@@ -517,16 +520,22 @@ export async function handleOpenResponsesHttpRequest(
 
   if (!stream) {
     try {
-      const result = await runResponsesAgentCommand({
-        message: prompt.message,
-        images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        streamParams,
-        sessionKey,
-        runId: responseId,
+      const result = await agentCommand(
+        {
+          message: prompt.message,
+          images: images.length > 0 ? images : undefined,
+          clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
+          extraSystemPrompt: extraSystemPrompt || undefined,
+          streamParams: streamParams ?? undefined,
+          sessionKey,
+          runId: responseId,
+          deliver: false,
+          messageChannel: "webchat",
+          bestEffortDeliver: false,
+        },
+        defaultRuntime,
         deps,
-      });
+      );
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
@@ -714,7 +723,9 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const content = resolveAssistantStreamDeltaText(evt);
+      const delta = evt.data?.delta;
+      const text = evt.data?.text;
+      const content = typeof delta === "string" ? delta : typeof text === "string" ? text : "";
       if (!content) {
         return;
       }
@@ -749,16 +760,22 @@ export async function handleOpenResponsesHttpRequest(
 
   void (async () => {
     try {
-      const result = await runResponsesAgentCommand({
-        message: prompt.message,
-        images,
-        clientTools: resolvedClientTools,
-        extraSystemPrompt,
-        streamParams,
-        sessionKey,
-        runId: responseId,
+      const result = await agentCommand(
+        {
+          message: prompt.message,
+          images: images.length > 0 ? images : undefined,
+          clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
+          extraSystemPrompt: extraSystemPrompt || undefined,
+          streamParams: streamParams ?? undefined,
+          sessionKey,
+          runId: responseId,
+          deliver: false,
+          messageChannel: "webchat",
+          bestEffortDeliver: false,
+        },
+        defaultRuntime,
         deps,
-      });
+      );
 
       finalUsage = extractUsageFromResult(result);
       maybeFinalize();

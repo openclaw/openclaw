@@ -9,8 +9,6 @@ function redirectResponse(location: string): Response {
 }
 
 describe("fetchWithSsrFGuard hardening", () => {
-  type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
-
   it("blocks private IP literal URLs before fetch", async () => {
     const fetchImpl = vi.fn();
     await expect(
@@ -23,9 +21,7 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("blocks redirect chains that hop to private hosts", async () => {
-    const lookupFn = vi.fn(async () => [
-      { address: "93.184.216.34", family: 4 },
-    ]) as unknown as LookupFn;
+    const lookupFn = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
     const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:6379/"));
 
     await expect(
@@ -51,9 +47,7 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("allows wildcard allowlisted hosts", async () => {
-    const lookupFn = vi.fn(async () => [
-      { address: "93.184.216.34", family: 4 },
-    ]) as unknown as LookupFn;
+    const lookupFn = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
     const result = await fetchWithSsrFGuard({
       url: "https://img.assets.example.com/pic.png",

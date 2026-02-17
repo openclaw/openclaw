@@ -16,25 +16,6 @@ export type CronState = {
   cronBusy: boolean;
 };
 
-export function supportsAnnounceDelivery(
-  form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
-) {
-  return form.sessionTarget === "isolated" && form.payloadKind === "agentTurn";
-}
-
-export function normalizeCronFormState(form: CronFormState): CronFormState {
-  if (form.deliveryMode !== "announce") {
-    return form;
-  }
-  if (supportsAnnounceDelivery(form)) {
-    return form;
-  }
-  return {
-    ...form,
-    deliveryMode: "none",
-  };
-}
-
 export async function loadCronStatus(state: CronState) {
   if (!state.client || !state.connected) {
     return;
@@ -123,34 +104,27 @@ export async function addCronJob(state: CronState) {
   state.cronBusy = true;
   state.cronError = null;
   try {
-    const form = normalizeCronFormState(state.cronForm);
-    if (form !== state.cronForm) {
-      state.cronForm = form;
-    }
-
-    const schedule = buildCronSchedule(form);
-    const payload = buildCronPayload(form);
-    const selectedDeliveryMode = form.deliveryMode;
+    const schedule = buildCronSchedule(state.cronForm);
+    const payload = buildCronPayload(state.cronForm);
     const delivery =
-      selectedDeliveryMode && selectedDeliveryMode !== "none"
+      state.cronForm.sessionTarget === "isolated" &&
+      state.cronForm.payloadKind === "agentTurn" &&
+      state.cronForm.deliveryMode
         ? {
-            mode: selectedDeliveryMode,
-            channel:
-              selectedDeliveryMode === "announce"
-                ? form.deliveryChannel.trim() || "last"
-                : undefined,
-            to: form.deliveryTo.trim() || undefined,
+            mode: state.cronForm.deliveryMode === "announce" ? "announce" : "none",
+            channel: state.cronForm.deliveryChannel.trim() || "last",
+            to: state.cronForm.deliveryTo.trim() || undefined,
           }
         : undefined;
-    const agentId = form.agentId.trim();
+    const agentId = state.cronForm.agentId.trim();
     const job = {
-      name: form.name.trim(),
-      description: form.description.trim() || undefined,
+      name: state.cronForm.name.trim(),
+      description: state.cronForm.description.trim() || undefined,
       agentId: agentId || undefined,
-      enabled: form.enabled,
+      enabled: state.cronForm.enabled,
       schedule,
-      sessionTarget: form.sessionTarget,
-      wakeMode: form.wakeMode,
+      sessionTarget: state.cronForm.sessionTarget,
+      wakeMode: state.cronForm.wakeMode,
       payload,
       delivery,
     };

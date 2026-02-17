@@ -2,23 +2,40 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
-import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
+import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+
+vi.mock("chokidar", () => ({
+  default: {
+    watch: vi.fn(() => ({
+      on: vi.fn(),
+      close: vi.fn(async () => undefined),
+    })),
+  },
+}));
+
+vi.mock("./embeddings.js", () => {
+  return {
+    createEmbeddingProvider: async () => ({
+      requestedProvider: "openai",
+      provider: {
+        id: "mock",
+        model: "mock-embed",
+        embedQuery: async () => [0, 0, 0],
+        embedBatch: async () => {
+          throw new Error("openai embeddings failed: 400 bad request");
+        },
+      },
+    }),
+  };
+});
 
 describe("memory manager sync failures", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
-  const embedBatch = getEmbedBatchMock();
 
   beforeEach(async () => {
     vi.useFakeTimers();
-    resetEmbeddingMocks();
-    embedBatch.mockImplementation(async () => {
-      throw new Error("openai embeddings failed: 400 bad request");
-    });
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
@@ -54,9 +71,14 @@ describe("memory manager sync failures", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    };
 
-    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
     const syncSpy = vi.spyOn(manager, "sync");
 
     // Call the internal scheduler directly; it uses fire-and-forget sync.

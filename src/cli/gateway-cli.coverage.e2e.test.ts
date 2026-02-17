@@ -1,30 +1,19 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { withEnvOverride } from "../config/test-helpers.js";
 
-type DiscoveredBeacon = Awaited<
-  ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
->[number];
-
-const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
-const startGatewayServer = vi.fn<
-  (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
->(async () => ({
+const callGateway = vi.fn(async () => ({ ok: true }));
+const startGatewayServer = vi.fn(async () => ({
   close: vi.fn(async () => {}),
 }));
 const setVerbose = vi.fn();
-const forceFreePortAndWait = vi.fn<
-  (port: number) => Promise<{ killed: unknown[]; waitedMs: number; escalatedToSigkill: boolean }>
->(async () => ({
+const forceFreePortAndWait = vi.fn(async () => ({
   killed: [],
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
-const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon[]>>(
-  async () => [],
-);
-const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () => {});
+const discoverGatewayBeacons = vi.fn(async () => []);
+const gatewayStatusCommand = vi.fn(async () => {});
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
@@ -35,6 +24,32 @@ const defaultRuntime = {
     throw new Error(`__exit__:${code}`);
   },
 };
+
+async function withEnvOverride<T>(
+  overrides: Record<string, string | undefined>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(overrides)) {
+    saved[key] = process.env[key];
+    if (overrides[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = overrides[key];
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(saved)) {
+      if (saved[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved[key];
+      }
+    }
+  }
+}
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,

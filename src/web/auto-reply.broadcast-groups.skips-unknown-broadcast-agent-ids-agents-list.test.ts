@@ -1,11 +1,14 @@
 import "./test-helpers.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { sendWebDirectInboundAndCollectSessionKeys } from "./auto-reply.broadcast-groups.test-harness.js";
+import { monitorWebChannel } from "./auto-reply.js";
 import {
+  createWebInboundDeliverySpies,
+  createWebListenerFactoryCapture,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
+  sendWebDirectInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
 
@@ -26,7 +29,27 @@ describe("broadcast groups", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { seen, resolver } = await sendWebDirectInboundAndCollectSessionKeys();
+    const seen: string[] = [];
+    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
+      seen.push(String(ctx.SessionKey));
+      return { text: "ok" };
+    });
+
+    const spies = createWebInboundDeliverySpies();
+    const { listenerFactory, getOnMessage } = createWebListenerFactoryCapture();
+
+    await monitorWebChannel(false, listenerFactory, false, resolver);
+    const onMessage = getOnMessage();
+    expect(onMessage).toBeDefined();
+
+    await sendWebDirectInboundMessage({
+      onMessage: onMessage!,
+      spies,
+      id: "m1",
+      from: "+1000",
+      to: "+2000",
+      body: "hello",
+    });
 
     expect(resolver).toHaveBeenCalledTimes(1);
     expect(seen[0]).toContain("agent:alfred:");

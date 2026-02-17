@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import { formatGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { formatLine } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
@@ -49,9 +48,36 @@ function resolveTaskUser(env: Record<string, string | undefined>): string | null
 }
 
 function parseCommandLine(value: string): string[] {
-  // `buildTaskScript` only escapes quotes (`\"`).
-  // Keep all other backslashes literal so drive and UNC paths are preserved.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" });
+  const args: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    // `buildTaskScript` only escapes quotes (`\"`).
+    // Keep all other backslashes literal so drive and UNC paths are preserved.
+    if (char === "\\" && i + 1 < value.length && value[i + 1] === '"') {
+      current += value[i + 1];
+      i++;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && /\s/.test(char)) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    args.push(current);
+  }
+  return args;
 }
 
 export async function readScheduledTaskCommand(env: Record<string, string | undefined>): Promise<{
@@ -190,7 +216,12 @@ export async function installScheduledTask({
   await assertSchtasksAvailable();
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const taskDescription =
+    description ??
+    formatGatewayServiceDescription({
+      profile: env.OPENCLAW_PROFILE,
+      version: environment?.OPENCLAW_SERVICE_VERSION ?? env.OPENCLAW_SERVICE_VERSION,
+    });
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,

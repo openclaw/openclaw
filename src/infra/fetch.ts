@@ -6,12 +6,6 @@ type FetchWithPreconnect = typeof fetch & {
 
 type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
 
-const wrapFetchWithAbortSignalMarker = Symbol.for("openclaw.fetch.abort-signal-wrapped");
-
-type FetchWithAbortSignalMarker = typeof fetch & {
-  [wrapFetchWithAbortSignalMarker]?: true;
-};
-
 function withDuplex(
   init: RequestInit | undefined,
   input: RequestInfo | URL,
@@ -34,10 +28,6 @@ function withDuplex(
 }
 
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
-  if ((fetchImpl as FetchWithAbortSignalMarker)[wrapFetchWithAbortSignalMarker]) {
-    return fetchImpl;
-  }
-
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
     const patchedInit = withDuplex(init, input);
     const signal = patchedInit?.signal;
@@ -55,49 +45,27 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
     }
     const controller = new AbortController();
     const onAbort = bindAbortRelay(controller);
-    let listenerAttached = false;
     if (signal.aborted) {
       controller.abort();
     } else {
       signal.addEventListener("abort", onAbort, { once: true });
-      listenerAttached = true;
     }
-    const cleanup = () => {
-      if (!listenerAttached || typeof signal.removeEventListener !== "function") {
-        return;
-      }
-      listenerAttached = false;
-      try {
+    const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
+    if (typeof signal.removeEventListener === "function") {
+      void response.finally(() => {
         signal.removeEventListener("abort", onAbort);
-      } catch {
-        // Foreign/custom AbortSignal implementations may throw here.
-        // Never let cleanup mask the original fetch result/error.
-      }
-    };
-    try {
-      const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
-      return response.finally(cleanup);
-    } catch (error) {
-      cleanup();
-      throw error;
+      });
     }
+    return response;
   }) as FetchWithPreconnect;
 
-  const wrappedFetch = Object.assign(wrapped, fetchImpl) as FetchWithPreconnect;
   const fetchWithPreconnect = fetchImpl as FetchWithPreconnect;
-  wrappedFetch.preconnect =
+  wrapped.preconnect =
     typeof fetchWithPreconnect.preconnect === "function"
       ? fetchWithPreconnect.preconnect.bind(fetchWithPreconnect)
       : () => {};
 
-  Object.defineProperty(wrappedFetch, wrapFetchWithAbortSignalMarker, {
-    value: true,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-
-  return wrappedFetch;
+  return Object.assign(wrapped, fetchImpl);
 }
 
 export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {

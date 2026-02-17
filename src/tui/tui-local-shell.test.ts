@@ -40,8 +40,7 @@ describe("createLocalShellRunner", () => {
 
     const firstRun = runLocalShellLine("!ls");
     expect(openOverlay).toHaveBeenCalledTimes(1);
-    const selector = lastSelector as ReturnType<typeof createSelector> | null;
-    selector?.onSelect?.({ value: "no", label: "No" });
+    lastSelector?.onSelect?.({ value: "no", label: "No" });
     await firstRun;
 
     await runLocalShellLine("!pwd");

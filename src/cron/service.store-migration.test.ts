@@ -1,21 +1,40 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import {
-  createCronStoreHarness,
-  createNoopLogger,
-  installCronTestHooks,
-} from "./service.test-harness.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-" });
-installCronTestHooks({
-  logger: noopLogger,
-  baseTimeIso: "2026-02-06T17:00:00.000Z",
-});
+const noopLogger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+};
+
+async function makeStorePath() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
+  return {
+    storePath: path.join(dir, "cron", "jobs.json"),
+    cleanup: async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+    },
+  };
+}
 
 describe("CronService store migrations", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-06T17:00:00.000Z"));
+    noopLogger.debug.mockClear();
+    noopLogger.info.mockClear();
+    noopLogger.warn.mockClear();
+    noopLogger.error.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("migrates legacy top-level agentTurn fields and initializes missing state", async () => {
     const store = await makeStorePath();
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -58,7 +77,7 @@ describe("CronService store migrations", () => {
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok", summary: "ok" })),
     });
 
     await cron.start();

@@ -1,33 +1,20 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   installDirectiveBehaviorE2EHooks,
-  makeWhatsAppDirectiveConfig,
-  replyText,
   runEmbeddedPiAgent,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
 
 function makeWorkElevatedAllowlistConfig(home: string) {
-  const base = makeWhatsAppDirectiveConfig(
-    home,
-    {
-      model: "anthropic/claude-opus-4-5",
-    },
-    {
-      tools: {
-        elevated: {
-          allowFrom: { whatsapp: ["+1222", "+1333"] },
-        },
-      },
-      channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
-    },
-  );
   return {
-    ...base,
     agents: {
-      ...base.agents,
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "openclaw"),
+      },
       list: [
         {
           id: "work",
@@ -39,17 +26,13 @@ function makeWorkElevatedAllowlistConfig(home: string) {
         },
       ],
     },
-  };
-}
-
-function makeCommandMessage(body: string, from = "+1222") {
-  return {
-    Body: body,
-    From: from,
-    To: from,
-    Provider: "whatsapp",
-    SenderE164: from,
-    CommandAuthorized: true,
+    tools: {
+      elevated: {
+        allowFrom: { whatsapp: ["+1222", "+1333"] },
+      },
+    },
+    channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
+    session: { store: path.join(home, "sessions.json") },
   } as const;
 }
 
@@ -72,7 +55,7 @@ describe("directive behavior", () => {
         makeWorkElevatedAllowlistConfig(home),
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -81,14 +64,19 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
         {
-          ...makeCommandMessage("/elevated on", "+1333"),
+          Body: "/elevated on",
+          From: "+1333",
+          To: "+1333",
+          Provider: "whatsapp",
+          SenderE164: "+1333",
           SessionKey: "agent:work:main",
+          CommandAuthorized: true,
         },
         {},
         makeWorkElevatedAllowlistConfig(home),
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode set to ask");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -96,26 +84,34 @@ describe("directive behavior", () => {
   it("warns when elevated is used in direct runtime", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
-        makeCommandMessage("/elevated off"),
+        {
+          Body: "/elevated off",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          CommandAuthorized: true,
+        },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          {
-            model: "anthropic/claude-opus-4-5",
-            sandbox: { mode: "off" },
-          },
-          {
-            tools: {
-              elevated: {
-                allowFrom: { whatsapp: ["+1222"] },
-              },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+              sandbox: { mode: "off" },
             },
-            channels: { whatsapp: { allowFrom: ["+1222"] } },
           },
-        ),
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode disabled.");
       expect(text).toContain("Runtime is direct; sandboxing does not apply.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -124,23 +120,33 @@ describe("directive behavior", () => {
   it("rejects invalid elevated level", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
-        makeCommandMessage("/elevated maybe"),
+        {
+          Body: "/elevated maybe",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          CommandAuthorized: true,
+        },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            tools: {
-              elevated: {
-                allowFrom: { whatsapp: ["+1222"] },
-              },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
             },
-            channels: { whatsapp: { allowFrom: ["+1222"] } },
           },
-        ),
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Unrecognized elevated level");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -148,23 +154,33 @@ describe("directive behavior", () => {
   it("handles multiple directives in a single message", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
-        makeCommandMessage("/elevated off\n/verbose on"),
+        {
+          Body: "/elevated off\n/verbose on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          CommandAuthorized: true,
+        },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            tools: {
-              elevated: {
-                allowFrom: { whatsapp: ["+1222"] },
-              },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
             },
-            channels: { whatsapp: { allowFrom: ["+1222"] } },
           },
-        ),
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode disabled.");
       expect(text).toContain("Verbose logging enabled.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();

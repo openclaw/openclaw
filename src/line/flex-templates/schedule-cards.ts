@@ -1,71 +1,6 @@
 import { attachFooterText } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
 
-function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }): FlexComponent[] {
-  const { title, subtitle } = params;
-  const headerContents: FlexComponent[] = [
-    {
-      type: "text",
-      text: title,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
-  ];
-
-  if (subtitle) {
-    headerContents.push({
-      type: "text",
-      text: subtitle,
-      size: "sm",
-      color: "#888888",
-      margin: "sm",
-      wrap: true,
-    } as FlexText);
-  }
-
-  return headerContents;
-}
-
-function buildCardHeaderSections(headerContents: FlexComponent[]): FlexComponent[] {
-  return [
-    {
-      type: "box",
-      layout: "vertical",
-      contents: headerContents,
-      paddingBottom: "lg",
-    } as FlexBox,
-    {
-      type: "separator",
-      color: "#EEEEEE",
-    },
-  ];
-}
-
-function createMegaBubbleWithFooter(params: {
-  bodyContents: FlexComponent[];
-  footer?: string;
-}): FlexBubble {
-  const bubble: FlexBubble = {
-    type: "bubble",
-    size: "mega",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: params.bodyContents,
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
-    },
-  };
-
-  if (params.footer) {
-    attachFooterText(bubble, params.footer);
-  }
-
-  return bubble;
-}
-
 /**
  * Create a receipt/summary card (for orders, transactions, data tables)
  *
@@ -113,10 +48,39 @@ export function createReceiptCard(params: {
   );
 
   // Header section
-  const headerContents = buildTitleSubtitleHeader({ title, subtitle });
+  const headerContents: FlexComponent[] = [
+    {
+      type: "text",
+      text: title,
+      weight: "bold",
+      size: "xl",
+      color: "#111111",
+      wrap: true,
+    } as FlexText,
+  ];
+
+  if (subtitle) {
+    headerContents.push({
+      type: "text",
+      text: subtitle,
+      size: "sm",
+      color: "#888888",
+      margin: "sm",
+      wrap: true,
+    } as FlexText);
+  }
 
   const bodyContents: FlexComponent[] = [
-    ...buildCardHeaderSections(headerContents),
+    {
+      type: "box",
+      layout: "vertical",
+      contents: headerContents,
+      paddingBottom: "lg",
+    } as FlexBox,
+    {
+      type: "separator",
+      color: "#EEEEEE",
+    },
     {
       type: "box",
       layout: "vertical",
@@ -159,7 +123,23 @@ export function createReceiptCard(params: {
     } as FlexBox);
   }
 
-  return createMegaBubbleWithFooter({ bodyContents, footer });
+  const bubble: FlexBubble = {
+    type: "bubble",
+    size: "mega",
+    body: {
+      type: "box",
+      layout: "vertical",
+      contents: bodyContents,
+      paddingAll: "xl",
+      backgroundColor: "#FFFFFF",
+    },
+  };
+
+  if (footer) {
+    attachFooterText(bubble, footer);
+  }
+
+  return bubble;
 }
 
 /**
@@ -358,7 +338,27 @@ export function createAgendaCard(params: {
   const { title, subtitle, events, footer } = params;
 
   // Header with title and optional subtitle
-  const headerContents = buildTitleSubtitleHeader({ title, subtitle });
+  const headerContents: FlexComponent[] = [
+    {
+      type: "text",
+      text: title,
+      weight: "bold",
+      size: "xl",
+      color: "#111111",
+      wrap: true,
+    } as FlexText,
+  ];
+
+  if (subtitle) {
+    headerContents.push({
+      type: "text",
+      text: subtitle,
+      size: "sm",
+      color: "#888888",
+      margin: "sm",
+      wrap: true,
+    } as FlexText);
+  }
 
   // Event timeline items
   const eventItems: FlexComponent[] = events.slice(0, 6).map((event, index) => {
@@ -454,7 +454,16 @@ export function createAgendaCard(params: {
   });
 
   const bodyContents: FlexComponent[] = [
-    ...buildCardHeaderSections(headerContents),
+    {
+      type: "box",
+      layout: "vertical",
+      contents: headerContents,
+      paddingBottom: "lg",
+    } as FlexBox,
+    {
+      type: "separator",
+      color: "#EEEEEE",
+    },
     {
       type: "box",
       layout: "vertical",
@@ -463,5 +472,21 @@ export function createAgendaCard(params: {
     } as FlexBox,
   ];
 
-  return createMegaBubbleWithFooter({ bodyContents, footer });
+  const bubble: FlexBubble = {
+    type: "bubble",
+    size: "mega",
+    body: {
+      type: "box",
+      layout: "vertical",
+      contents: bodyContents,
+      paddingAll: "xl",
+      backgroundColor: "#FFFFFF",
+    },
+  };
+
+  if (footer) {
+    attachFooterText(bubble, footer);
+  }
+
+  return bubble;
 }

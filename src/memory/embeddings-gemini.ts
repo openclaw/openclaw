@@ -1,6 +1,6 @@
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
-import { parseGeminiAuth } from "../infra/gemini-auth.js";
-import { debugEmbeddingsLog } from "./embeddings-debug.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type GeminiEmbeddingClient = {
@@ -15,6 +15,17 @@ export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-004": 2048,
 };
+const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS);
+const log = createSubsystemLogger("memory/embeddings");
+
+const debugLog = (message: string, meta?: Record<string, unknown>) => {
+  if (!debugEmbeddings) {
+    return;
+  }
+  const suffix = meta ? ` ${JSON.stringify(meta)}` : "";
+  log.raw(`${message}${suffix}`);
+};
+
 function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
   const trimmed = remoteApiKey?.trim();
   if (!trimmed) {
@@ -139,14 +150,14 @@ export async function resolveGeminiEmbeddingClient(
   const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
-  const authHeaders = parseGeminiAuth(apiKey);
   const headers: Record<string, string> = {
-    ...authHeaders.headers,
+    "Content-Type": "application/json",
+    "x-goog-api-key": apiKey,
     ...headerOverrides,
   };
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
-  debugEmbeddingsLog("memory embeddings: gemini client", {
+  debugLog("memory embeddings: gemini client", {
     rawBaseUrl,
     baseUrl,
     model,

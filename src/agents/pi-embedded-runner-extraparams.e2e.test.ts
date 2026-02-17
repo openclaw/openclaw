@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
 
@@ -64,32 +65,11 @@ describe("resolveExtraParams", () => {
 });
 
 describe("applyExtraParamsToAgent", () => {
-  function runStoreMutationCase(params: {
-    applyProvider: string;
-    applyModelId: string;
-    model:
-      | Model<"openai-responses">
-      | Model<"openai-codex-responses">
-      | Model<"openai-completions">;
-    options?: SimpleStreamOptions;
-  }) {
-    const payload = { store: false };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-    applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(params.model, context, params.options ?? {});
-    return payload;
-  }
-
   it("adds OpenRouter attribution headers to stream options", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push(options);
-      return {} as ReturnType<StreamFn>;
+      return new AssistantMessageEventStream();
     };
     const agent = { streamFn: baseStreamFn };
 
@@ -113,63 +93,44 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
-    const payload = runStoreMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
-    });
+    const payload = { store: false };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://api.openai.com/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
     expect(payload.store).toBe(true);
   });
 
   it("does not force store for OpenAI Responses routed through non-OpenAI base URLs", () => {
-    const payload = runStoreMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "https://proxy.example.com/v1",
-      } as Model<"openai-responses">,
-    });
-    expect(payload.store).toBe(false);
-  });
-
-  it("does not force store=true for Codex responses (Codex requires store=false)", () => {
-    const payload = runStoreMutationCase({
-      applyProvider: "openai-codex",
-      applyModelId: "codex-mini-latest",
-      model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
-        id: "codex-mini-latest",
-        baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-      } as Model<"openai-codex-responses">,
-    });
-    expect(payload.store).toBe(false);
-  });
-
-  it("does not force store=true for Codex responses (Codex requires store=false)", () => {
     const payload = { store: false };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
-      return {} as ReturnType<StreamFn>;
+      return new AssistantMessageEventStream();
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "openai-codex", "codex-mini-latest");
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
 
     const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      id: "codex-mini-latest",
-      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-    } as Model<"openai-codex-responses">;
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://proxy.example.com/v1",
+    } as Model<"openai-responses">;
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, {});

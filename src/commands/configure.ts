@@ -1,8 +1,4 @@
-export {
-  configureCommand,
-  configureCommandFromSectionsArg,
-  configureCommandWithSections,
-} from "./configure.commands.js";
+export { configureCommand, configureCommandWithSections } from "./configure.commands.js";
 export { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 export {
   CONFIGURE_WIZARD_SECTIONS,

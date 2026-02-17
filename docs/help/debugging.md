@@ -34,13 +34,13 @@ Examples:
 For fast iteration, run the gateway under the file watcher:
 
 ```bash
-pnpm gateway:watch
+pnpm gateway:watch --force
 ```
 
 This maps to:
 
 ```bash
-node --watch-path src --watch-path tsconfig.json --watch-path package.json --watch-preserve-output scripts/run-node.mjs gateway --force
+tsx watch src/entry.ts gateway --force
 ```
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through
@@ -113,13 +113,13 @@ This is the best way to see whether reasoning is arriving as plain text deltas
 Enable it via CLI:
 
 ```bash
-pnpm gateway:watch --raw-stream
+pnpm gateway:watch --force --raw-stream
 ```
 
 Optional path override:
 
 ```bash
-pnpm gateway:watch --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
+pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
 Equivalent env vars:

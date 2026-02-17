@@ -3,18 +3,16 @@ import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
-  createSessionVisibilityGuard,
   createAgentToAgentPolicy,
   classifySessionKind,
   deriveChannel,
   resolveDisplaySessionKey,
-  resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveSandboxedSessionToolContext,
+  resolveMainSessionAlias,
   type SessionListRow,
   stripToolMessages,
 } from "./sessions-helpers.js";
@@ -25,6 +23,10 @@ const SessionsListToolSchema = Type.Object({
   activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
+
+function resolveSandboxSessionToolsVisibility(cfg: ReturnType<typeof loadConfig>) {
+  return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
+}
 
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
@@ -38,17 +40,21 @@ export function createSessionsListTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = loadConfig();
-      const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
-        resolveSandboxedSessionToolContext({
-          cfg,
-          agentSessionKey: opts?.agentSessionKey,
-          sandboxed: opts?.sandboxed,
-        });
-      const effectiveRequesterKey = requesterInternalKey ?? alias;
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
+      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const visibility = resolveSandboxSessionToolsVisibility(cfg);
+      const requesterInternalKey =
+        typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
+          ? resolveInternalSessionKey({
+              key: opts.agentSessionKey,
+              alias,
+              mainKey,
+            })
+          : undefined;
+      const restrictToSpawned =
+        opts?.sandboxed === true &&
+        visibility === "spawned" &&
+        requesterInternalKey &&
+        !isSubagentSessionKey(requesterInternalKey);
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
         value.trim().toLowerCase(),
@@ -79,21 +85,15 @@ export function createSessionsListTool(opts?: {
           activeMinutes,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
-          spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
+          spawnedBy: restrictToSpawned ? requesterInternalKey : undefined,
         },
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const visibilityGuard = await createSessionVisibilityGuard({
-        action: "list",
-        requesterSessionKey: effectiveRequesterKey,
-        visibility,
-        a2aPolicy,
-      });
+      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
       const rows: SessionListRow[] = [];
-      const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -103,8 +103,10 @@ export function createSessionsListTool(opts?: {
         if (!key) {
           continue;
         }
-        const access = visibilityGuard.check(key);
-        if (!access.allowed) {
+
+        const entryAgentId = resolveAgentIdFromSessionKey(key);
+        const crossAgent = entryAgentId !== requesterAgentId;
+        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
           continue;
         }
 
@@ -199,39 +201,23 @@ export function createSessionsListTool(opts?: {
           lastAccountId,
           transcriptPath,
         };
+
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
             key: displayKey,
             alias,
             mainKey,
           });
-          historyTargets.push({ row, resolvedKey });
+          const history = await callGateway<{ messages: Array<unknown> }>({
+            method: "chat.history",
+            params: { sessionKey: resolvedKey, limit: messageLimit },
+          });
+          const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
+          const filtered = stripToolMessages(rawMessages);
+          row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
         }
-        rows.push(row);
-      }
 
-      if (messageLimit > 0 && historyTargets.length > 0) {
-        const maxConcurrent = Math.min(4, historyTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= historyTargets.length) {
-              return;
-            }
-            const target = historyTargets[next];
-            const history = await callGateway<{ messages: Array<unknown> }>({
-              method: "chat.history",
-              params: { sessionKey: target.resolvedKey, limit: messageLimit },
-            });
-            const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
-            const filtered = stripToolMessages(rawMessages);
-            target.row.messages =
-              filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+        rows.push(row);
       }
 
       return jsonResult({

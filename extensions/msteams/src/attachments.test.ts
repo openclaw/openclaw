@@ -10,12 +10,11 @@ const saveMediaBufferMock = vi.fn(async () => ({
 
 const runtimeStub = {
   media: {
-    detectMime: detectMimeMock as unknown as PluginRuntime["media"]["detectMime"],
+    detectMime: (...args: unknown[]) => detectMimeMock(...args),
   },
   channel: {
     media: {
-      saveMediaBuffer:
-        saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+      saveMediaBuffer: (...args: unknown[]) => saveMediaBufferMock(...args),
     },
   },
 } as unknown as PluginRuntime;

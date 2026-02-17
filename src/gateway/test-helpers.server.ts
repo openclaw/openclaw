@@ -15,7 +15,6 @@ import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
-import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
@@ -296,20 +295,9 @@ export async function occupyPort(): Promise<{
   });
 }
 
-type GatewayTestMessage = {
-  type?: string;
-  id?: string;
-  ok?: boolean;
-  event?: string;
-  payload?: Record<string, unknown> | null;
-  seq?: number;
-  stateVersion?: Record<string, unknown>;
-  [key: string]: unknown;
-};
-
-export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
+export function onceMessage<T = unknown>(
   ws: WebSocket,
-  filter: (obj: T) => boolean,
+  filter: (obj: unknown) => boolean,
   // Full-suite runs can saturate the event loop (581+ files). Keep this high
   // enough to avoid flaky RPC timeouts, but still fail fast when a response
   // never arrives.
@@ -323,12 +311,12 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
       reject(new Error(`closed ${code}: ${reason.toString()}`));
     };
     const handler = (data: WebSocket.RawData) => {
-      const obj = JSON.parse(rawDataToString(data)) as T;
+      const obj = JSON.parse(rawDataToString(data));
       if (filter(obj)) {
         clearTimeout(timer);
         ws.off("message", handler);
         ws.off("close", closeHandler);
-        resolve(obj);
+        resolve(obj as T);
       }
     };
     ws.on("message", handler);
@@ -343,50 +331,12 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   return await mod.startGatewayServer(port, resolvedOpts);
 }
 
-async function startGatewayServerWithRetries(params: {
-  port: number;
-  opts?: GatewayServerOptions;
-}): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {
-  let port = params.port;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    try {
-      return {
-        port,
-        server: await startGatewayServer(port, params.opts),
-      };
-    } catch (err) {
-      const code = (err as { cause?: { code?: string } }).cause?.code;
-      if (code !== "EADDRINUSE") {
-        throw err;
-      }
-      port = await getFreePort();
-    }
-  }
-  throw new Error("failed to start gateway server after retries");
-}
-
-export async function withGatewayServer<T>(
-  fn: (ctx: { port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }) => Promise<T>,
-  opts?: { port?: number; serverOptions?: GatewayServerOptions },
-): Promise<T> {
-  const started = await startGatewayServerWithRetries({
-    port: opts?.port ?? (await getFreePort()),
-    opts: opts?.serverOptions,
-  });
-  try {
-    return await fn({ port: started.port, server: started.server });
-  } finally {
-    await started.server.close();
-  }
-}
-
 export async function startServerWithClient(
   token?: string,
   opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
 ) {
   const { wsHeaders, ...gatewayOpts } = opts ?? {};
   let port = await getFreePort();
-  const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token === "string") {
     testState.gatewayAuth = { mode: "token", token };
@@ -402,9 +352,22 @@ export async function startServerWithClient(
     process.env.OPENCLAW_GATEWAY_TOKEN = fallbackToken;
   }
 
-  const started = await startGatewayServerWithRetries({ port, opts: gatewayOpts });
-  port = started.port;
-  const server = started.server;
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      server = await startGatewayServer(port, gatewayOpts);
+      break;
+    } catch (err) {
+      const code = (err as { cause?: { code?: string } }).cause?.code;
+      if (code !== "EADDRINUSE") {
+        throw err;
+      }
+      port = await getFreePort();
+    }
+  }
+  if (!server) {
+    throw new Error("failed to start gateway server after retries");
+  }
 
   const ws = new WebSocket(
     `ws://127.0.0.1:${port}`,
@@ -434,14 +397,14 @@ export async function startServerWithClient(
     ws.once("error", onError);
     ws.once("close", onClose);
   });
-  return { server, ws, port, prevToken: prev, envSnapshot };
+  return { server, ws, port, prevToken: prev };
 }
 
 type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
-  payload?: Record<string, unknown>;
+  payload?: unknown;
   error?: { message?: string };
 };
 
@@ -573,7 +536,7 @@ export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectR
   return res.payload as { type: "hello-ok" };
 }
 
-export async function rpcReq<T extends Record<string, unknown>>(
+export async function rpcReq<T = unknown>(
   ws: WebSocket,
   method: string,
   params?: unknown,
@@ -586,7 +549,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
     type: "res";
     id: string;
     ok: boolean;
-    payload?: T | null | undefined;
+    payload?: T;
     error?: { message?: string; code?: string };
   }>(
     ws,

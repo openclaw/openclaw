@@ -1,7 +1,5 @@
 import {
   buildChannelConfigSchema,
-  collectStatusIssuesFromLastError,
-  createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
@@ -159,8 +157,28 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   },
 
   status: {
-    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("nostr", accounts),
+    defaultRuntime: {
+      accountId: DEFAULT_ACCOUNT_ID,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+    },
+    collectStatusIssues: (accounts) =>
+      accounts.flatMap((account) => {
+        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
+        if (!lastError) {
+          return [];
+        }
+        return [
+          {
+            channel: "nostr",
+            accountId: account.accountId,
+            kind: "runtime" as const,
+            message: `Channel error: ${lastError}`,
+          },
+        ];
+      }),
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       publicKey: snapshot.publicKey ?? null,

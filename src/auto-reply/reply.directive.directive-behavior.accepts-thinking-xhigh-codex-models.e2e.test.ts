@@ -4,11 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   installDirectiveBehaviorE2EHooks,
-  makeWhatsAppDirectiveConfig,
-  replyText,
-  replyTexts,
   runEmbeddedPiAgent,
-  sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { getReplyFromConfig } from "./reply.js";
@@ -24,38 +20,90 @@ async function writeSkill(params: { workspaceDir: string; name: string; descript
   );
 }
 
-async function runThinkingDirective(home: string, model: string) {
-  const res = await getReplyFromConfig(
-    {
-      Body: "/thinking xhigh",
-      From: "+1004",
-      To: "+2000",
-      CommandAuthorized: true,
-    },
-    {},
-    makeWhatsAppDirectiveConfig(home, { model }, { session: { store: sessionStorePath(home) } }),
-  );
-  return replyTexts(res);
-}
-
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
   it("accepts /thinking xhigh for codex models", async () => {
     await withTempHome(async (home) => {
-      const texts = await runThinkingDirective(home, "openai-codex/gpt-5.2-codex");
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.2-codex",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
       expect(texts).toContain("Thinking level set to xhigh.");
     });
   });
   it("accepts /thinking xhigh for openai gpt-5.2", async () => {
     await withTempHome(async (home) => {
-      const texts = await runThinkingDirective(home, "openai/gpt-5.2");
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.2",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
       expect(texts).toContain("Thinking level set to xhigh.");
     });
   });
   it("rejects /thinking xhigh for non-codex models", async () => {
     await withTempHome(async (home) => {
-      const texts = await runThinkingDirective(home, "openai/gpt-4.1-mini");
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/thinking xhigh",
+          From: "+1004",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "openai/gpt-4.1-mini",
+              workspace: path.join(home, "openclaw"),
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res]).map((entry) => entry?.text).filter(Boolean);
       expect(texts).toContain(
         'Thinking level "xhigh" is only supported for openai/gpt-5.2, openai-codex/gpt-5.3-codex, openai-codex/gpt-5.3-codex-spark, openai-codex/gpt-5.2-codex, openai-codex/gpt-5.1-codex, github-copilot/gpt-5.2-codex or github-copilot/gpt-5.2.',
       );
@@ -71,19 +119,22 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          {
-            model: "anthropic/claude-opus-4-5",
-            models: {
-              "anthropic/claude-opus-4-5": { alias: " help " },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+              models: {
+                "anthropic/claude-opus-4-5": { alias: " help " },
+              },
             },
           },
-          { session: { store: sessionStorePath(home) } },
-        ),
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Help");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -105,17 +156,19 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          {
-            model: "anthropic/claude-opus-4-5",
-            workspace,
-            models: {
-              "anthropic/claude-opus-4-5": { alias: "demo_skill" },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace,
+              models: {
+                "anthropic/claude-opus-4-5": { alias: "demo_skill" },
+              },
             },
           },
-          { session: { store: sessionStorePath(home) } },
-        ),
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
@@ -133,16 +186,19 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            session: { store: sessionStorePath(home) },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+            },
           },
-        ),
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Invalid debounce");
       expect(text).toContain("Invalid cap");
       expect(text).toContain("Invalid drop policy");
@@ -160,24 +216,27 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5" },
-          {
-            messages: {
-              queue: {
-                mode: "collect",
-                debounceMs: 1500,
-                cap: 9,
-                drop: "summarize",
-              },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
             },
-            session: { store: sessionStorePath(home) },
           },
-        ),
+          messages: {
+            queue: {
+              mode: "collect",
+              debounceMs: 1500,
+              cap: 9,
+              drop: "summarize",
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain(
         "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
       );
@@ -192,14 +251,19 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5", thinkingDefault: "high" },
-          { session: { store: sessionStorePath(home) } },
-        ),
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "openclaw"),
+              thinkingDefault: "high",
+            },
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
       );
 
-      const text = replyText(res);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: high");
       expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();

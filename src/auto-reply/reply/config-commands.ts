@@ -1,5 +1,4 @@
-import { parseSetUnsetCommand } from "./commands-setunset.js";
-import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
+import { parseConfigValue } from "./config-value.js";
 
 export type ConfigCommand =
   | { action: "show"; path?: string }
@@ -8,31 +7,60 @@ export type ConfigCommand =
   | { action: "error"; message: string };
 
 export function parseConfigCommand(raw: string): ConfigCommand | null {
-  const parsed = parseSlashCommandOrNull(raw, "/config", {
-    invalidMessage: "Invalid /config syntax.",
-  });
-  if (!parsed) {
+  const trimmed = raw.trim();
+  if (!trimmed.toLowerCase().startsWith("/config")) {
     return null;
   }
-  if (!parsed.ok) {
-    return { action: "error", message: parsed.message };
+  const rest = trimmed.slice("/config".length).trim();
+  if (!rest) {
+    return { action: "show" };
   }
-  const { action, args } = parsed;
+
+  const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+  if (!match) {
+    return { action: "error", message: "Invalid /config syntax." };
+  }
+  const action = match[1].toLowerCase();
+  const args = (match[2] ?? "").trim();
 
   switch (action) {
     case "show":
       return { action: "show", path: args || undefined };
     case "get":
       return { action: "show", path: args || undefined };
-    case "unset":
-    case "set": {
-      const parsed = parseSetUnsetCommand({ slash: "/config", action, args });
-      if (parsed.kind === "error") {
-        return { action: "error", message: parsed.message };
+    case "unset": {
+      if (!args) {
+        return { action: "error", message: "Usage: /config unset path" };
       }
-      return parsed.kind === "set"
-        ? { action: "set", path: parsed.path, value: parsed.value }
-        : { action: "unset", path: parsed.path };
+      return { action: "unset", path: args };
+    }
+    case "set": {
+      if (!args) {
+        return {
+          action: "error",
+          message: "Usage: /config set path=value",
+        };
+      }
+      const eqIndex = args.indexOf("=");
+      if (eqIndex <= 0) {
+        return {
+          action: "error",
+          message: "Usage: /config set path=value",
+        };
+      }
+      const path = args.slice(0, eqIndex).trim();
+      const rawValue = args.slice(eqIndex + 1);
+      if (!path) {
+        return {
+          action: "error",
+          message: "Usage: /config set path=value",
+        };
+      }
+      const parsed = parseConfigValue(rawValue);
+      if (parsed.error) {
+        return { action: "error", message: parsed.error };
+      }
+      return { action: "set", path, value: parsed.value };
     }
     default:
       return {

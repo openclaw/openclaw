@@ -30,7 +30,7 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("initializes qmd backend for each configured agent", async () => {
+  it("initializes qmd backend for the default agent", async () => {
     const cfg = {
       agents: { list: [{ id: "ops", default: true }, { id: "main" }] },
       memory: { backend: "qmd", qmd: {} },
@@ -40,37 +40,26 @@ describe("startGatewayMemoryBackend", () => {
 
     await startGatewayMemoryBackend({ cfg, log });
 
-    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(2);
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(1, { cfg, agentId: "ops" });
-    expect(getMemorySearchManagerMock).toHaveBeenNthCalledWith(2, { cfg, agentId: "main" });
-    expect(log.info).toHaveBeenNthCalledWith(
-      1,
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "ops" });
+    expect(log.info).toHaveBeenCalledWith(
       'qmd memory startup initialization armed for agent "ops"',
-    );
-    expect(log.info).toHaveBeenNthCalledWith(
-      2,
-      'qmd memory startup initialization armed for agent "main"',
     );
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("logs a warning when qmd manager init fails and continues with other agents", async () => {
+  it("logs a warning when qmd manager init fails", async () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      agents: { list: [{ id: "main", default: true }] },
       memory: { backend: "qmd", qmd: {} },
     } as OpenClawConfig;
     const log = { info: vi.fn(), warn: vi.fn() };
-    getMemorySearchManagerMock
-      .mockResolvedValueOnce({ manager: null, error: "qmd missing" })
-      .mockResolvedValueOnce({ manager: { search: vi.fn() } });
+    getMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "qmd missing" });
 
     await startGatewayMemoryBackend({ cfg, log });
 
     expect(log.warn).toHaveBeenCalledWith(
       'qmd memory startup initialization failed for agent "main": qmd missing',
     );
-    expect(log.info).toHaveBeenCalledWith(
-      'qmd memory startup initialization armed for agent "ops"',
-    );
+    expect(log.info).not.toHaveBeenCalled();
   });
 });

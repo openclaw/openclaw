@@ -109,7 +109,7 @@ describe("update-startup", () => {
     suiteCase = 0;
   });
 
-  async function runUpdateCheckAndReadState(channel: "stable" | "beta") {
+  it("logs update hint for npm installs when newer tag exists", async () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -123,35 +123,49 @@ describe("update-startup", () => {
 
     const log = { info: vi.fn() };
     await runGatewayUpdateCheck({
-      cfg: { update: { channel } },
+      cfg: { update: { channel: "stable" } },
       log,
       isNixMode: false,
       allowInTests: true,
     });
 
-    const statePath = path.join(tempDir, "update-check.json");
-    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-      lastNotifiedVersion?: string;
-      lastNotifiedTag?: string;
-    };
-    return { log, parsed };
-  }
-
-  it("logs update hint for npm installs when newer tag exists", async () => {
-    const { log, parsed } = await runUpdateCheckAndReadState("stable");
-
     expect(log.info).toHaveBeenCalledWith(
       expect.stringContaining("update available (latest): v2.0.0"),
     );
+
+    const statePath = path.join(tempDir, "update-check.json");
+    const raw = await fs.readFile(statePath, "utf-8");
+    const parsed = JSON.parse(raw) as { lastNotifiedVersion?: string };
     expect(parsed.lastNotifiedVersion).toBe("2.0.0");
   });
 
   it("uses latest when beta tag is older than release", async () => {
-    const { log, parsed } = await runUpdateCheckAndReadState("beta");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2.0.0",
+    });
+
+    const log = { info: vi.fn() };
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "beta" } },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
 
     expect(log.info).toHaveBeenCalledWith(
       expect.stringContaining("update available (latest): v2.0.0"),
     );
+
+    const statePath = path.join(tempDir, "update-check.json");
+    const raw = await fs.readFile(statePath, "utf-8");
+    const parsed = JSON.parse(raw) as { lastNotifiedTag?: string };
     expect(parsed.lastNotifiedTag).toBe("latest");
   });
 

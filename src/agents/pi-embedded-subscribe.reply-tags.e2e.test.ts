@@ -1,15 +1,25 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
+type StubSession = {
+  subscribe: (fn: (evt: unknown) => void) => () => void;
+};
+
 describe("subscribeEmbeddedPiSession reply tags", () => {
-  function createBlockReplyHarness() {
-    const { session, emit } = createStubSessionHarness();
+  it("carries reply_to_current across tag-only block chunks", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "text_end",
@@ -20,14 +30,8 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
       },
     });
 
-    return { emit, onBlockReply };
-  }
-
-  it("carries reply_to_current across tag-only block chunks", () => {
-    const { emit, onBlockReply } = createBlockReplyHarness();
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -35,7 +39,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
         delta: "[[reply_to_current]]\nHello",
       },
     });
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_end" },
@@ -45,7 +49,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
       role: "assistant",
       content: [{ type: "text", text: "[[reply_to_current]]\nHello" }],
     } as AssistantMessage;
-    emit({ type: "message_end", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const payload = onBlockReply.mock.calls[0]?.[0];
@@ -55,15 +59,35 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
   });
 
   it("flushes trailing directive tails on stream end", () => {
-    const { emit, onBlockReply } = createBlockReplyHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: {
+        minChars: 1,
+        maxChars: 50,
+        breakPreference: "newline",
+      },
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: "Hello [[" },
     });
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_end" },
@@ -73,7 +97,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
       role: "assistant",
       content: [{ type: "text", text: "Hello [[" }],
     } as AssistantMessage;
-    emit({ type: "message_end", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Hello");
@@ -81,33 +105,39 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
   });
 
   it("streams partial replies past reply_to tags split across chunks", () => {
-    const { session, emit } = createStubSessionHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
     const onPartialReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onPartialReply,
     });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: "[[reply_to:1897" },
     });
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: "]] Hello" },
     });
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: " world" },
     });
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_end" },

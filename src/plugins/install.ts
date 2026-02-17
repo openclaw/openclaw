@@ -73,46 +73,6 @@ async function ensureOpenClawExtensions(manifest: PackageManifest) {
   return list;
 }
 
-function resolvePluginInstallModeOptions(params: {
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-}): { logger: PluginInstallLogger; mode: "install" | "update"; dryRun: boolean } {
-  return {
-    logger: params.logger ?? defaultLogger,
-    mode: params.mode ?? "install",
-    dryRun: params.dryRun ?? false,
-  };
-}
-
-function resolveTimedPluginInstallModeOptions(params: {
-  logger?: PluginInstallLogger;
-  timeoutMs?: number;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-}): {
-  logger: PluginInstallLogger;
-  timeoutMs: number;
-  mode: "install" | "update";
-  dryRun: boolean;
-} {
-  return {
-    ...resolvePluginInstallModeOptions(params),
-    timeoutMs: params.timeoutMs ?? 120_000,
-  };
-}
-
-function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
-  return {
-    ok: true,
-    pluginId,
-    targetDir: targetFile,
-    manifestName: undefined,
-    version: undefined,
-    extensions: [path.basename(targetFile)],
-  };
-}
-
 export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
   const extensionsBase = extensionsDir
     ? resolveUserPath(extensionsDir)
@@ -141,7 +101,10 @@ async function installPluginFromPackageDir(params: {
   dryRun?: boolean;
   expectedPluginId?: string;
 }): Promise<InstallPluginResult> {
-  const { logger, timeoutMs, mode, dryRun } = resolveTimedPluginInstallModeOptions(params);
+  const logger = params.logger ?? defaultLogger;
+  const timeoutMs = params.timeoutMs ?? 120_000;
+  const mode = params.mode ?? "install";
+  const dryRun = params.dryRun ?? false;
 
   const manifestPath = path.join(params.packageDir, "package.json");
   if (!(await fileExists(manifestPath))) {
@@ -382,7 +345,9 @@ export async function installPluginFromFile(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
 }): Promise<InstallPluginResult> {
-  const { logger, mode, dryRun } = resolvePluginInstallModeOptions(params);
+  const logger = params.logger ?? defaultLogger;
+  const mode = params.mode ?? "install";
+  const dryRun = params.dryRun ?? false;
 
   const filePath = resolveUserPath(params.filePath);
   if (!(await fileExists(filePath))) {
@@ -407,13 +372,27 @@ export async function installPluginFromFile(params: {
   }
 
   if (dryRun) {
-    return buildFileInstallResult(pluginId, targetFile);
+    return {
+      ok: true,
+      pluginId,
+      targetDir: targetFile,
+      manifestName: undefined,
+      version: undefined,
+      extensions: [path.basename(targetFile)],
+    };
   }
 
   logger.info?.(`Installing to ${targetFile}…`);
   await fs.copyFile(filePath, targetFile);
 
-  return buildFileInstallResult(pluginId, targetFile);
+  return {
+    ok: true,
+    pluginId,
+    targetDir: targetFile,
+    manifestName: undefined,
+    version: undefined,
+    extensions: [path.basename(targetFile)],
+  };
 }
 
 export async function installPluginFromNpmSpec(params: {
@@ -425,7 +404,10 @@ export async function installPluginFromNpmSpec(params: {
   dryRun?: boolean;
   expectedPluginId?: string;
 }): Promise<InstallPluginResult> {
-  const { logger, timeoutMs, mode, dryRun } = resolveTimedPluginInstallModeOptions(params);
+  const logger = params.logger ?? defaultLogger;
+  const timeoutMs = params.timeoutMs ?? 120_000;
+  const mode = params.mode ?? "install";
+  const dryRun = params.dryRun ?? false;
   const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
   const specError = validateRegistryNpmSpec(spec);

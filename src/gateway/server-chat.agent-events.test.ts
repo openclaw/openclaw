@@ -7,18 +7,15 @@ import {
 } from "./server-chat.js";
 
 describe("agent event handler", () => {
-  function createHarness(params?: {
-    now?: number;
-    resolveSessionKeyForRun?: (runId: string) => string | undefined;
-  }) {
-    const nowSpy =
-      params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
+  it("emits chat delta for assistant text-only events", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const nodeSendToSession = vi.fn();
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -26,28 +23,10 @@ describe("agent event handler", () => {
       nodeSendToSession,
       agentRunSeq,
       chatRunState,
-      resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
+      resolveSessionKeyForRun: () => undefined,
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
     });
-
-    return {
-      nowSpy,
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      agentRunSeq,
-      chatRunState,
-      toolEventRecipients,
-      handler,
-    };
-  }
-
-  it("emits chat delta for assistant text-only events", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
-      now: 1_000,
-    });
-    chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
 
     handler({
       runId: "run-1",
@@ -67,14 +46,29 @@ describe("agent event handler", () => {
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     const sessionChatCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
     expect(sessionChatCalls).toHaveLength(1);
-    nowSpy?.mockRestore();
+    nowSpy.mockRestore();
   });
 
   it("does not emit chat delta for NO_REPLY streaming text", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
-      now: 1_000,
-    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
     chatRunState.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
 
     handler({
       runId: "run-1",
@@ -88,14 +82,29 @@ describe("agent event handler", () => {
     expect(chatCalls).toHaveLength(0);
     const sessionChatCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
     expect(sessionChatCalls).toHaveLength(0);
-    nowSpy?.mockRestore();
+    nowSpy.mockRestore();
   });
 
   it("does not include NO_REPLY text in chat final message", () => {
-    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
-      now: 2_000,
-    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
     chatRunState.registry.add("run-2", { sessionKey: "session-2", clientRunId: "client-2" });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
 
     handler({
       runId: "run-2",
@@ -119,14 +128,31 @@ describe("agent event handler", () => {
     expect(payload.message).toBeUndefined();
     const sessionChatCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
     expect(sessionChatCalls).toHaveLength(1);
-    nowSpy?.mockRestore();
+    nowSpy.mockRestore();
   });
 
   it("cleans up agent run sequence tracking when lifecycle completes", () => {
-    const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({ now: 2_500 });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_500);
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
     chatRunState.registry.add("run-cleanup", {
       sessionKey: "session-cleanup",
       clientRunId: "client-cleanup",
+    });
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
     });
 
     handler({
@@ -148,16 +174,30 @@ describe("agent event handler", () => {
 
     expect(agentRunSeq.has("run-cleanup")).toBe(false);
     expect(agentRunSeq.has("client-cleanup")).toBe(false);
-    nowSpy?.mockRestore();
+    nowSpy.mockRestore();
   });
 
   it("routes tool events only to registered recipients when verbose is enabled", () => {
-    const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-    });
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
 
     registerAgentRunContext("run-tool", { sessionKey: "session-1", verboseLevel: "on" });
     toolEventRecipients.add("run-tool", "conn-1");
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => "session-1",
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
 
     handler({
       runId: "run-tool",
@@ -173,12 +213,26 @@ describe("agent event handler", () => {
   });
 
   it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
-    const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-    });
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
 
     registerAgentRunContext("run-tool-off", { sessionKey: "session-1", verboseLevel: "off" });
     toolEventRecipients.add("run-tool-off", "conn-1");
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => "session-1",
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
 
     handler({
       runId: "run-tool-off",
@@ -197,12 +251,26 @@ describe("agent event handler", () => {
   });
 
   it("strips tool output when verbose is on", () => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-    });
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
 
     registerAgentRunContext("run-tool-on", { sessionKey: "session-1", verboseLevel: "on" });
     toolEventRecipients.add("run-tool-on", "conn-1");
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => "session-1",
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
 
     handler({
       runId: "run-tool-on",
@@ -226,12 +294,26 @@ describe("agent event handler", () => {
   });
 
   it("keeps tool output when verbose is full", () => {
-    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-    });
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
 
     registerAgentRunContext("run-tool-full", { sessionKey: "session-1", verboseLevel: "full" });
     toolEventRecipients.add("run-tool-full", "conn-1");
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => "session-1",
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
 
     const result = { content: [{ type: "text", text: "secret" }] };
     handler({

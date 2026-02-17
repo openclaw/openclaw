@@ -1,22 +1,8 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../runtime.js";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
-const baseDeliveryParams = {
-  chatId: "123",
-  token: "tok",
-  replyToMode: "off",
-  textLimit: 4000,
-} as const;
-type DeliverRepliesParams = Parameters<typeof deliverReplies>[0];
-type DeliverWithParams = Omit<
-  DeliverRepliesParams,
-  "chatId" | "token" | "replyToMode" | "textLimit"
-> &
-  Partial<Pick<DeliverRepliesParams, "replyToMode" | "textLimit">>;
-type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
@@ -34,45 +20,23 @@ vi.mock("grammy", () => ({
   },
 }));
 
-function createRuntime(withLog = true): RuntimeStub {
-  return {
-    error: vi.fn(),
-    log: withLog ? vi.fn() : vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
-function createBot(api: Record<string, unknown> = {}): Bot {
-  return { api } as unknown as Bot;
-}
-
-async function deliverWith(params: DeliverWithParams) {
-  await deliverReplies({
-    ...baseDeliveryParams,
-    ...params,
-  });
-}
-
-function mockMediaLoad(fileName: string, contentType: string, data: string) {
-  loadWebMedia.mockResolvedValueOnce({
-    buffer: Buffer.from(data),
-    contentType,
-    fileName,
-  });
-}
-
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockReset();
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
-    const runtime = createRuntime(false);
+    const runtime = { error: vi.fn() };
+    const bot = { api: {} } as unknown as Bot;
 
-    await deliverWith({
+    await deliverReplies({
       replies: [{ audioAsVoice: true }],
+      chatId: "123",
+      token: "tok",
       runtime,
-      bot: createBot(),
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
@@ -80,22 +44,30 @@ describe("deliverReplies", () => {
 
   it("invokes onVoiceRecording before sending a voice note", async () => {
     const events: string[] = [];
-    const runtime = createRuntime(false);
+    const runtime = { error: vi.fn() };
     const sendVoice = vi.fn(async () => {
       events.push("sendVoice");
       return { message_id: 1, chat: { id: "123" } };
     });
-    const bot = createBot({ sendVoice });
+    const bot = { api: { sendVoice } } as unknown as Bot;
     const onVoiceRecording = vi.fn(async () => {
       events.push("recordVoice");
     });
 
-    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
 
-    await deliverWith({
+    await deliverReplies({
       replies: [{ mediaUrl: "https://example.com/note.ogg", audioAsVoice: true }],
+      chatId: "123",
+      token: "tok",
       runtime,
       bot,
+      replyToMode: "off",
+      textLimit: 4000,
       onVoiceRecording,
     });
 
@@ -105,19 +77,27 @@ describe("deliverReplies", () => {
   });
 
   it("renders markdown in media captions", async () => {
-    const runtime = createRuntime();
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 2,
       chat: { id: "123" },
     });
-    const bot = createBot({ sendPhoto });
+    const bot = { api: { sendPhoto } } as unknown as Bot;
 
-    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
 
-    await deliverWith({
+    await deliverReplies({
       replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "hi **boss**" }],
+      chatId: "123",
+      token: "tok",
       runtime,
       bot,
+      replyToMode: "off",
+      textLimit: 4000,
     });
 
     expect(sendPhoto).toHaveBeenCalledWith(
@@ -130,41 +110,22 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("passes mediaLocalRoots to media loading", async () => {
-    const runtime = createRuntime();
-    const sendPhoto = vi.fn().mockResolvedValue({
-      message_id: 12,
-      chat: { id: "123" },
-    });
-    const bot = createBot({ sendPhoto });
-    const mediaLocalRoots = ["/tmp/workspace-work"];
-
-    mockMediaLoad("photo.jpg", "image/jpeg", "image");
-
-    await deliverWith({
-      replies: [{ mediaUrl: "/tmp/workspace-work/photo.jpg" }],
-      runtime,
-      bot,
-      mediaLocalRoots,
-    });
-
-    expect(loadWebMedia).toHaveBeenCalledWith("/tmp/workspace-work/photo.jpg", {
-      localRoots: mediaLocalRoots,
-    });
-  });
-
   it("includes link_preview_options when linkPreview is false", async () => {
-    const runtime = createRuntime();
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 3,
       chat: { id: "123" },
     });
-    const bot = createBot({ sendMessage });
+    const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await deliverWith({
+    await deliverReplies({
       replies: [{ text: "Check https://example.com" }],
+      chatId: "123",
+      token: "tok",
       runtime,
       bot,
+      replyToMode: "off",
+      textLimit: 4000,
       linkPreview: false,
     });
 
@@ -177,42 +138,50 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("includes message_thread_id for DM topics", async () => {
-    const runtime = createRuntime();
+  it("keeps message_thread_id=1 when allowed", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 4,
       chat: { id: "123" },
     });
-    const bot = createBot({ sendMessage });
+    const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await deliverWith({
+    await deliverReplies({
       replies: [{ text: "Hello" }],
+      chatId: "123",
+      token: "tok",
       runtime,
       bot,
-      thread: { id: 42, scope: "dm" },
+      replyToMode: "off",
+      textLimit: 4000,
+      thread: { id: 1, scope: "dm" },
     });
 
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
       expect.objectContaining({
-        message_thread_id: 42,
+        message_thread_id: 1,
       }),
     );
   });
 
   it("does not include link_preview_options when linkPreview is true", async () => {
-    const runtime = createRuntime();
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 4,
       chat: { id: "123" },
     });
-    const bot = createBot({ sendMessage });
+    const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await deliverWith({
+    await deliverReplies({
       replies: [{ text: "Check https://example.com" }],
+      chatId: "123",
+      token: "tok",
       runtime,
       bot,
+      replyToMode: "off",
+      textLimit: 4000,
       linkPreview: true,
     });
 
@@ -226,18 +195,21 @@ describe("deliverReplies", () => {
   });
 
   it("uses reply_to_message_id when quote text is provided", async () => {
-    const runtime = createRuntime();
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 10,
       chat: { id: "123" },
     });
-    const bot = createBot({ sendMessage });
+    const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await deliverWith({
+    await deliverReplies({
       replies: [{ text: "Hello there", replyToId: "500" }],
+      chatId: "123",
+      token: "tok",
       runtime,
       bot,
       replyToMode: "all",
+      textLimit: 4000,
       replyQuoteText: "quoted text",
     });
 
@@ -258,7 +230,7 @@ describe("deliverReplies", () => {
   });
 
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
-    const runtime = createRuntime();
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendVoice = vi
       .fn()
       .mockRejectedValue(
@@ -270,16 +242,24 @@ describe("deliverReplies", () => {
       message_id: 5,
       chat: { id: "123" },
     });
-    const bot = createBot({ sendVoice, sendMessage });
+    const bot = { api: { sendVoice, sendMessage } } as unknown as Bot;
 
-    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
 
-    await deliverWith({
+    await deliverReplies({
       replies: [
         { mediaUrl: "https://example.com/note.ogg", text: "Hello there", audioAsVoice: true },
       ],
+      chatId: "123",
+      token: "tok",
       runtime,
       bot,
+      replyToMode: "off",
+      textLimit: 4000,
     });
 
     // Voice was attempted but failed
@@ -294,18 +274,26 @@ describe("deliverReplies", () => {
   });
 
   it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
-    const runtime = createRuntime();
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
     const sendMessage = vi.fn();
-    const bot = createBot({ sendVoice, sendMessage });
+    const bot = { api: { sendVoice, sendMessage } } as unknown as Bot;
 
-    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
 
     await expect(
-      deliverWith({
+      deliverReplies({
         replies: [{ mediaUrl: "https://example.com/note.ogg", text: "Hello", audioAsVoice: true }],
+        chatId: "123",
+        token: "tok",
         runtime,
         bot,
+        replyToMode: "off",
+        textLimit: 4000,
       }),
     ).rejects.toThrow("Network error");
 
@@ -315,7 +303,7 @@ describe("deliverReplies", () => {
   });
 
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
-    const runtime = createRuntime();
+    const runtime = { error: vi.fn(), log: vi.fn() };
     const sendVoice = vi
       .fn()
       .mockRejectedValue(
@@ -324,15 +312,23 @@ describe("deliverReplies", () => {
         ),
       );
     const sendMessage = vi.fn();
-    const bot = createBot({ sendVoice, sendMessage });
+    const bot = { api: { sendVoice, sendMessage } } as unknown as Bot;
 
-    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "note.ogg",
+    });
 
     await expect(
-      deliverWith({
+      deliverReplies({
         replies: [{ mediaUrl: "https://example.com/note.ogg", audioAsVoice: true }],
+        chatId: "123",
+        token: "tok",
         runtime,
         bot,
+        replyToMode: "off",
+        textLimit: 4000,
       }),
     ).rejects.toThrow("VOICE_MESSAGES_FORBIDDEN");
 

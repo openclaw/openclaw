@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  formatGatewayServiceDescription,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
-  resolveGatewayServiceDescription,
   resolveGatewaySystemdServiceName,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
@@ -200,7 +200,12 @@ export async function installSystemdService({
 
   const unitPath = resolveSystemdUnitPath(env);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription =
+    description ??
+    formatGatewayServiceDescription({
+      profile: env.OPENCLAW_PROFILE,
+      version: environment?.OPENCLAW_SERVICE_VERSION ?? env.OPENCLAW_SERVICE_VERSION,
+    });
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,

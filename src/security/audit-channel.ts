@@ -1,10 +1,6 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import {
-  isNumericTelegramUserId,
-  normalizeTelegramAllowFromEntry,
-} from "../channels/telegram/allow-from.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -16,6 +12,18 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
+}
+
+function normalizeTelegramAllowFromEntry(raw: unknown): string {
+  const base = typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
+  return base
+    .trim()
+    .replace(/^(telegram|tg):/i, "")
+    .trim();
+}
+
+function isNumericTelegramUserId(raw: string): boolean {
+  return /^\d+$/.test(raw);
 }
 
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {

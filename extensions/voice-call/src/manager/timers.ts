@@ -87,9 +87,8 @@ export function resolveTranscriptWaiter(
 }
 
 export function waitForFinalTranscript(ctx: TimerContext, callId: CallId): Promise<string> {
-  if (ctx.transcriptWaiters.has(callId)) {
-    return Promise.reject(new Error("Already waiting for transcript"));
-  }
+  // Only allow one in-flight waiter per call.
+  rejectTranscriptWaiter(ctx, callId, "Transcript waiter replaced");
 
   const timeoutMs = ctx.config.transcriptTimeoutMs;
   return new Promise((resolve, reject) => {

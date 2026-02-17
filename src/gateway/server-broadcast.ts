@@ -15,29 +15,6 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.pair.resolved": [PAIRING_SCOPE],
 };
 
-export type GatewayBroadcastStateVersion = {
-  presence?: number;
-  health?: number;
-};
-
-export type GatewayBroadcastOpts = {
-  dropIfSlow?: boolean;
-  stateVersion?: GatewayBroadcastStateVersion;
-};
-
-export type GatewayBroadcastFn = (
-  event: string,
-  payload: unknown,
-  opts?: GatewayBroadcastOpts,
-) => void;
-
-export type GatewayBroadcastToConnIdsFn = (
-  event: string,
-  payload: unknown,
-  connIds: ReadonlySet<string>,
-  opts?: GatewayBroadcastOpts,
-) => void;
-
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
@@ -60,7 +37,10 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
   const broadcastInternal = (
     event: string,
     payload: unknown,
-    opts?: GatewayBroadcastOpts,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
     targetConnIds?: ReadonlySet<string>,
   ) => {
     if (params.clients.size === 0) {
@@ -117,10 +97,24 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     }
   };
 
-  const broadcast: GatewayBroadcastFn = (event, payload, opts) =>
-    broadcastInternal(event, payload, opts);
+  const broadcast = (
+    event: string,
+    payload: unknown,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
+  ) => broadcastInternal(event, payload, opts);
 
-  const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
+  const broadcastToConnIds = (
+    event: string,
+    payload: unknown,
+    connIds: ReadonlySet<string>,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
+  ) => {
     if (connIds.size === 0) {
       return;
     }

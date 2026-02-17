@@ -38,29 +38,6 @@ export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES = [
   },
 ] as const;
 
-function cloneFirstTemplateModel(params: {
-  normalizedProvider: string;
-  trimmedModelId: string;
-  templateIds: string[];
-  modelRegistry: ModelRegistry;
-  patch?: Partial<Model<Api>>;
-}): Model<Api> | undefined {
-  const { normalizedProvider, trimmedModelId, templateIds, modelRegistry } = params;
-  for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      ...params.patch,
-    } as Model<Api>);
-  }
-  return undefined;
-}
-
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
   modelId: string,
@@ -131,12 +108,19 @@ function resolveAnthropicOpus46ForwardCompatModel(
   }
   templateIds.push(...ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS);
 
-  return cloneFirstTemplateModel({
-    normalizedProvider,
-    trimmedModelId,
-    templateIds,
-    modelRegistry,
-  });
+  for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    return normalizeModelCompat({
+      ...template,
+      id: trimmedModelId,
+      name: trimmedModelId,
+    } as Model<Api>);
+  }
+
+  return undefined;
 }
 
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
@@ -227,12 +211,19 @@ function resolveAntigravityOpus46ForwardCompatModel(
   templateIds.push(...ANTIGRAVITY_OPUS_TEMPLATE_MODEL_IDS);
   templateIds.push(...ANTIGRAVITY_OPUS_THINKING_TEMPLATE_MODEL_IDS);
 
-  return cloneFirstTemplateModel({
-    normalizedProvider,
-    trimmedModelId,
-    templateIds,
-    modelRegistry,
-  });
+  for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    return normalizeModelCompat({
+      ...template,
+      id: trimmedModelId,
+      name: trimmedModelId,
+    } as Model<Api>);
+  }
+
+  return undefined;
 }
 
 export function resolveForwardCompatModel(

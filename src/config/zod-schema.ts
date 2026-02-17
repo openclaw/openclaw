@@ -93,14 +93,6 @@ const MemorySchema = z
   .strict()
   .optional();
 
-const HttpUrlSchema = z
-  .string()
-  .url()
-  .refine((value) => {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  }, "Expected http:// or https:// URL");
-
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -303,8 +295,6 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
-        webhook: HttpUrlSchema.optional(),
-        webhookToken: z.string().optional().register(sensitive),
         sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       })
       .strict()
@@ -442,7 +432,6 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        channelHealthCheckMinutes: z.number().int().min(0).optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
@@ -577,16 +566,6 @@ export const OpenClawSchema = z
             nodeManager: z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
-          })
-          .strict()
-          .optional(),
-        limits: z
-          .object({
-            maxCandidatesPerRoot: z.number().int().min(1).optional(),
-            maxSkillsLoadedPerSource: z.number().int().min(1).optional(),
-            maxSkillsInPrompt: z.number().int().min(0).optional(),
-            maxSkillsPromptChars: z.number().int().min(0).optional(),
-            maxSkillFileBytes: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

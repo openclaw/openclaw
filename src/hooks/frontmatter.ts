@@ -2,12 +2,8 @@ import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import {
   getFrontmatterString,
   normalizeStringList,
-  parseOpenClawManifestInstallBase,
   parseFrontmatterBool,
   resolveOpenClawManifestBlock,
-  resolveOpenClawManifestInstall,
-  resolveOpenClawManifestOs,
-  resolveOpenClawManifestRequires,
 } from "../shared/frontmatter.js";
 import type {
   OpenClawHookMetadata,
@@ -22,23 +18,30 @@ export function parseFrontmatter(content: string): ParsedHookFrontmatter {
 }
 
 function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
-  const parsed = parseOpenClawManifestInstallBase(input, ["bundled", "npm", "git"]);
-  if (!parsed) {
+  if (!input || typeof input !== "object") {
     return undefined;
   }
-  const { raw } = parsed;
+  const raw = input as Record<string, unknown>;
+  const kindRaw =
+    typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
+  const kind = kindRaw.trim().toLowerCase();
+  if (kind !== "bundled" && kind !== "npm" && kind !== "git") {
+    return undefined;
+  }
+
   const spec: HookInstallSpec = {
-    kind: parsed.kind as HookInstallSpec["kind"],
+    kind: kind,
   };
 
-  if (parsed.id) {
-    spec.id = parsed.id;
+  if (typeof raw.id === "string") {
+    spec.id = raw.id;
   }
-  if (parsed.label) {
-    spec.label = parsed.label;
+  if (typeof raw.label === "string") {
+    spec.label = raw.label;
   }
-  if (parsed.bins) {
-    spec.bins = parsed.bins;
+  const bins = normalizeStringList(raw.bins);
+  if (bins.length > 0) {
+    spec.bins = bins;
   }
   if (typeof raw.package === "string") {
     spec.package = raw.package;
@@ -57,9 +60,15 @@ export function resolveOpenClawMetadata(
   if (!metadataObj) {
     return undefined;
   }
-  const requires = resolveOpenClawManifestRequires(metadataObj);
-  const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
-  const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const requiresRaw =
+    typeof metadataObj.requires === "object" && metadataObj.requires !== null
+      ? (metadataObj.requires as Record<string, unknown>)
+      : undefined;
+  const installRaw = Array.isArray(metadataObj.install) ? (metadataObj.install as unknown[]) : [];
+  const install = installRaw
+    .map((entry) => parseInstallSpec(entry))
+    .filter((entry): entry is HookInstallSpec => Boolean(entry));
+  const osRaw = normalizeStringList(metadataObj.os);
   const eventsRaw = normalizeStringList(metadataObj.events);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
@@ -69,7 +78,14 @@ export function resolveOpenClawMetadata(
     export: typeof metadataObj.export === "string" ? metadataObj.export : undefined,
     os: osRaw.length > 0 ? osRaw : undefined,
     events: eventsRaw.length > 0 ? eventsRaw : [],
-    requires: requires,
+    requires: requiresRaw
+      ? {
+          bins: normalizeStringList(requiresRaw.bins),
+          anyBins: normalizeStringList(requiresRaw.anyBins),
+          env: normalizeStringList(requiresRaw.env),
+          config: normalizeStringList(requiresRaw.config),
+        }
+      : undefined,
     install: install.length > 0 ? install : undefined,
   };
 }

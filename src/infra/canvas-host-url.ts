@@ -25,25 +25,14 @@ const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
   return trimmed;
 };
 
-type ParsedHostHeader = {
-  host: string;
-  port?: number;
-};
-
-const parseHostHeader = (value: HostSource): ParsedHostHeader => {
+const parseHostHeader = (value: HostSource) => {
   if (!value) {
-    return { host: "" };
+    return "";
   }
   try {
-    const parsed = new URL(`http://${String(value).trim()}`);
-    const portRaw = parsed.port.trim();
-    const port = portRaw ? Number.parseInt(portRaw, 10) : undefined;
-    return {
-      host: parsed.hostname,
-      port: Number.isFinite(port) ? port : undefined,
-    };
+    return new URL(`http://${String(value).trim()}`).hostname;
   } catch {
-    return { host: "" };
+    return "";
   }
 };
 
@@ -65,29 +54,13 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
     (parseForwardedProto(params.forwardedProto)?.trim() === "https" ? "https" : "http");
 
   const override = normalizeHost(params.hostOverride, true);
-  const parsedRequestHost = parseHostHeader(params.requestHost);
-  const requestHost = normalizeHost(parsedRequestHost.host, !!override);
+  const requestHost = normalizeHost(parseHostHeader(params.requestHost), !!override);
   const localAddress = normalizeHost(params.localAddress, Boolean(override || requestHost));
 
   const host = override || requestHost || localAddress;
   if (!host) {
     return undefined;
   }
-
-  // When the websocket is proxied over HTTPS (for example Tailscale Serve), the gateway's
-  // internal listener still runs on 18789. In that case, expose the public port instead of
-  // advertising the internal one back to clients.
-  let exposedPort = port;
-  if (!override && requestHost && port === 18789) {
-    if (parsedRequestHost.port && parsedRequestHost.port > 0) {
-      exposedPort = parsedRequestHost.port;
-    } else if (scheme === "https") {
-      exposedPort = 443;
-    } else if (scheme === "http") {
-      exposedPort = 80;
-    }
-  }
-
   const formatted = host.includes(":") ? `[${host}]` : host;
-  return `${scheme}://${formatted}:${exposedPort}`;
+  return `${scheme}://${formatted}:${port}`;
 }

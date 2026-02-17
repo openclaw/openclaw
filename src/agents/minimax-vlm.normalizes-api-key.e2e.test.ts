@@ -4,6 +4,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   const priorFetch = global.fetch;
 
   afterEach(() => {
+    // @ts-expect-error restore
     global.fetch = priorFetch;
     vi.restoreAllMocks();
   });
@@ -21,6 +22,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     });
+    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const { minimaxUnderstandImage } = await import("./minimax-vlm.js");

@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
-import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
   isRequestBodyLimitError,
@@ -9,21 +8,19 @@ import {
   readRequestBodyWithLimit,
 } from "./http-body.js";
 
-type MockIncomingMessage = IncomingMessage & {
-  destroyed?: boolean;
-  destroy: (error?: Error) => MockIncomingMessage;
-  __unhandledDestroyError?: unknown;
-};
-
 function createMockRequest(params: {
   chunks?: string[];
   headers?: Record<string, string>;
   emitEnd?: boolean;
-}): MockIncomingMessage {
-  const req = new EventEmitter() as MockIncomingMessage;
+}): IncomingMessage {
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed?: boolean;
+    destroy: (error?: Error) => void;
+    __unhandledDestroyError?: unknown;
+  };
   req.destroyed = false;
   req.headers = params.headers ?? {};
-  req.destroy = ((error?: Error) => {
+  req.destroy = (error?: Error) => {
     req.destroyed = true;
     if (error) {
       // Simulate Node's async 'error' emission on destroy(err). If no listener is
@@ -36,8 +33,7 @@ function createMockRequest(params: {
         }
       });
     }
-    return req;
-  }) as MockIncomingMessage["destroy"];
+  };
 
   if (params.chunks) {
     void Promise.resolve().then(() => {
@@ -54,6 +50,24 @@ function createMockRequest(params: {
   }
 
   return req;
+}
+
+function createMockResponse(): ServerResponse & { body?: string } {
+  const headers: Record<string, string> = {};
+  const res = {
+    headersSent: false,
+    statusCode: 200,
+    setHeader: (key: string, value: string) => {
+      headers[key.toLowerCase()] = value;
+      return res;
+    },
+    end: (body?: string) => {
+      res.headersSent = true;
+      res.body = body;
+      return res;
+    },
+  } as unknown as ServerResponse & { body?: string };
+  return res;
 }
 
 describe("http body limits", () => {
@@ -90,7 +104,7 @@ describe("http body limits", () => {
       headers: { "content-length": "9999" },
       emitEnd: false,
     });
-    const res = createMockServerResponse();
+    const res = createMockResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128 });
     expect(guard.isTripped()).toBe(true);
     expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
@@ -99,7 +113,7 @@ describe("http body limits", () => {
 
   it("guard rejects streamed oversized body", async () => {
     const req = createMockRequest({ chunks: ["small", "x".repeat(256)], emitEnd: false });
-    const res = createMockServerResponse();
+    const res = createMockResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128, responseFormat: "text" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(guard.isTripped()).toBe(true);

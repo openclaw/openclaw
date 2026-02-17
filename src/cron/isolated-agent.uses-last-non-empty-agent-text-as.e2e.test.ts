@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { CliDeps } from "../cli/deps.js";
-import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -17,11 +18,13 @@ vi.mock("../agents/model-catalog.js", () => ({
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-const withTempHome = withTempCronHome;
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
+}
 
 function makeDeps(): CliDeps {
   return {
-    sendMessageSlack: vi.fn(),
     sendMessageWhatsApp: vi.fn(),
     sendMessageTelegram: vi.fn(),
     sendMessageDiscord: vi.fn(),
@@ -86,83 +89,36 @@ async function readSessionEntry(storePath: string, key: string) {
   return store[key];
 }
 
-const DEFAULT_MESSAGE = "do it";
-const DEFAULT_SESSION_KEY = "cron:job-1";
-const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
-  kind: "agentTurn",
-  message: DEFAULT_MESSAGE,
-  deliver: false,
-};
-const GMAIL_MODEL = "openrouter/meta-llama/llama-3.3-70b:free";
-
-type RunCronTurnOptions = {
-  cfgOverrides?: Parameters<typeof makeCfg>[2];
-  deps?: CliDeps;
-  jobPayload?: CronJob["payload"];
-  message?: string;
-  mockTexts?: string[] | null;
-  sessionKey?: string;
-  storeEntries?: Record<string, Record<string, unknown>>;
-  storePath?: string;
-};
-
-async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
-  const storePath = options.storePath ?? (await writeSessionStore(home, options.storeEntries));
-  const deps = options.deps ?? makeDeps();
-  if (options.mockTexts === null) {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
-  } else {
-    mockEmbeddedTexts(options.mockTexts ?? ["ok"]);
-  }
-
-  const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
-  const res = await runCronIsolatedAgentTurn({
-    cfg: makeCfg(home, storePath, options.cfgOverrides),
-    deps,
-    job: makeJob(jobPayload),
-    message:
-      options.message ?? (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
-    sessionKey: options.sessionKey ?? DEFAULT_SESSION_KEY,
-    lane: "cron",
-  });
-
-  return { deps, res, storePath };
-}
-
-async function runGmailHookTurn(
+function makeCfg(
   home: string,
-  storeEntries?: Record<string, Record<string, unknown>>,
-) {
-  return runCronTurn(home, {
-    cfgOverrides: {
-      hooks: {
-        gmail: {
-          model: GMAIL_MODEL,
-        },
+  storePath: string,
+  overrides: Partial<OpenClawConfig> = {},
+): OpenClawConfig {
+  const base: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "openclaw"),
       },
     },
-    jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-    sessionKey: "hook:gmail:msg-1",
-    storeEntries,
-  });
+    session: { store: storePath, mainKey: "main" },
+  } as OpenClawConfig;
+  return { ...base, ...overrides };
 }
 
-async function runTurnWithStoredModelOverride(
-  home: string,
-  jobPayload: CronJob["payload"],
-  modelOverride = "gpt-4.1-mini",
-) {
-  return runCronTurn(home, {
-    jobPayload,
-    storeEntries: {
-      "agent:main:cron:job-1": {
-        sessionId: "existing-cron-session",
-        updatedAt: Date.now(),
-        providerOverride: "openai",
-        modelOverride,
-      },
-    },
-  });
+function makeJob(payload: CronJob["payload"]): CronJob {
+  const now = Date.now();
+  return {
+    id: "job-1",
+    enabled: true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload,
+    state: {},
+  };
 }
 
 describe("runCronIsolatedAgentTurn", () => {
@@ -173,8 +129,17 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("treats blank model overrides as unset", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "   " },
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", model: "   " }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -184,9 +149,17 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("uses last non-empty agent text as summary", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: ["first", " ", " last "],
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedTexts(["first", " ", " last "]);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -196,8 +169,17 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("appends current time after the cron header line", async () => {
     await withTempHome(async (home) => {
-      await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
@@ -236,13 +218,13 @@ describe("runCronIsolatedAgentTurn", () => {
         job: {
           ...makeJob({
             kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
+            message: "do it",
             deliver: false,
             channel: "last",
           }),
           agentId: "ops",
         },
-        message: DEFAULT_MESSAGE,
+        message: "do it",
         sessionKey: "cron:job-ops",
         agentId: "ops",
         lane: "cron",
@@ -262,12 +244,21 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("uses model override when provided", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        jobPayload: {
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({
           kind: "agentTurn",
-          message: DEFAULT_MESSAGE,
+          message: "do it",
           model: "openai/gpt-4.1-mini",
-        },
+        }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -277,10 +268,24 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("uses stored session override when no job model override is provided", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runTurnWithStoredModelOverride(home, {
-        kind: "agentTurn",
-        message: DEFAULT_MESSAGE,
-        deliver: false,
+      const storePath = await writeSessionStore(home, {
+        "agent:main:cron:job-1": {
+          sessionId: "existing-cron-session",
+          updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-4.1-mini",
+        },
+      });
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -290,11 +295,29 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("prefers job model override over stored session override", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runTurnWithStoredModelOverride(home, {
-        kind: "agentTurn",
-        message: DEFAULT_MESSAGE,
-        model: "anthropic/claude-opus-4-5",
-        deliver: false,
+      const storePath = await writeSessionStore(home, {
+        "agent:main:cron:job-1": {
+          sessionId: "existing-cron-session",
+          updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-4.1-mini",
+        },
+      });
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "do it",
+          model: "anthropic/claude-opus-4-5",
+          deliver: false,
+        }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -304,19 +327,36 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("uses hooks.gmail.model for Gmail hook sessions", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runGmailHookTurn(home);
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          hooks: {
+            gmail: {
+              model: "openrouter/meta-llama/llama-3.3-70b:free",
+            },
+          },
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "hook:gmail:msg-1",
+        lane: "cron",
+      });
 
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({
         provider: "openrouter",
-        model: GMAIL_MODEL.replace("openrouter/", ""),
+        model: "meta-llama/llama-3.3-70b:free",
       });
     });
   });
 
   it("keeps hooks.gmail.model precedence over stored session override", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runGmailHookTurn(home, {
+      const storePath = await writeSessionStore(home, {
         "agent:main:hook:gmail:msg-1": {
           sessionId: "existing-gmail-session",
           updatedAt: Date.now(),
@@ -324,21 +364,45 @@ describe("runCronIsolatedAgentTurn", () => {
           modelOverride: "claude-opus-4-5",
         },
       });
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          hooks: {
+            gmail: {
+              model: "openrouter/meta-llama/llama-3.3-70b:free",
+            },
+          },
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "hook:gmail:msg-1",
+        lane: "cron",
+      });
 
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({
         provider: "openrouter",
-        model: GMAIL_MODEL.replace("openrouter/", ""),
+        model: "meta-llama/llama-3.3-70b:free",
       });
     });
   });
 
   it("wraps external hook content by default", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        jobPayload: { kind: "agentTurn", message: "Hello" },
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "Hello" }),
         message: "Hello",
         sessionKey: "hook:gmail:msg-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -350,17 +414,23 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("skips external content wrapping when hooks.gmail opts out", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        cfgOverrides: {
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedOk();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
           hooks: {
             gmail: {
               allowUnsafeExternalContent: true,
             },
           },
-        },
-        jobPayload: { kind: "agentTurn", message: "Hello" },
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "Hello" }),
         message: "Hello",
         sessionKey: "hook:gmail:msg-2",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -372,6 +442,21 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("ignores hooks.gmail.model when not in the allowlist", async () => {
     await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
         {
           id: "claude-opus-4-5",
@@ -380,11 +465,11 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       ]);
 
-      const { res } = await runCronTurn(home, {
-        cfgOverrides: {
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
           agents: {
             defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
+              model: "anthropic/claude-opus-4-5",
               models: {
                 "anthropic/claude-opus-4-5": { alias: "Opus" },
               },
@@ -395,9 +480,12 @@ describe("runCronIsolatedAgentTurn", () => {
               model: "openrouter/meta-llama/llama-3.3-70b:free",
             },
           },
-        },
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
         sessionKey: "hook:gmail:msg-2",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -412,13 +500,27 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("rejects invalid model override", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        jobPayload: {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({
           kind: "agentTurn",
-          message: DEFAULT_MESSAGE,
+          message: "do it",
           model: "openai/",
-        },
-        mockTexts: null,
+        }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("error");
@@ -429,6 +531,21 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("defaults thinking to low for reasoning-capable models", async () => {
     await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "done" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
         {
           id: "claude-opus-4-5",
@@ -438,9 +555,13 @@ describe("runCronIsolatedAgentTurn", () => {
         },
       ]);
 
-      await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: ["done"],
+      await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
@@ -450,10 +571,30 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("truncates long summaries", async () => {
     await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
       const long = "a".repeat(2001);
-      const { res } = await runCronTurn(home, {
-        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
-        mockTexts: [long],
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: long }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
 
       expect(res.status).toBe("ok");
@@ -464,27 +605,41 @@ describe("runCronIsolatedAgentTurn", () => {
   it("starts a fresh session id for each cron run", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
-      const deps = makeDeps();
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
 
-      const first = (
-        await runCronTurn(home, {
-          deps,
-          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
-          message: "ping",
-          mockTexts: ["ok"],
-          storePath,
-        })
-      ).res;
+      const cfg = makeCfg(home, storePath);
+      const job = makeJob({ kind: "agentTurn", message: "ping", deliver: false });
 
-      const second = (
-        await runCronTurn(home, {
-          deps,
-          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
-          message: "ping",
-          mockTexts: ["ok"],
-          storePath,
-        })
-      ).res;
+      const first = await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "ping",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      const second = await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "ping",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
 
       expect(first.sessionId).toBeDefined();
       expect(second.sessionId).toBeDefined();
@@ -507,10 +662,28 @@ describe("runCronIsolatedAgentTurn", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 
-      await runCronTurn(home, {
-        jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "ping", deliver: false }),
         message: "ping",
-        storePath,
+        sessionKey: "cron:job-1",
+        lane: "cron",
       });
       const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
 

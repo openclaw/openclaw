@@ -1,7 +1,8 @@
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { mediaKindFromMime } from "../media/constants.js";
-import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
+import { saveMediaBuffer } from "../media/store.js";
+import { loadWebMedia } from "../web/media.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
@@ -12,7 +13,6 @@ export type SignalSendOpts = {
   account?: string;
   accountId?: string;
   mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
@@ -95,6 +95,20 @@ function buildTargetParams(
   return null;
 }
 
+async function resolveAttachment(
+  mediaUrl: string,
+  maxBytes: number,
+): Promise<{ path: string; contentType?: string }> {
+  const media = await loadWebMedia(mediaUrl, maxBytes);
+  const saved = await saveMediaBuffer(
+    media.buffer,
+    media.contentType ?? undefined,
+    "outbound",
+    maxBytes,
+  );
+  return { path: saved.path, contentType: saved.contentType };
+}
+
 export async function sendMessageSignal(
   to: string,
   text: string,
@@ -126,9 +140,7 @@ export async function sendMessageSignal(
 
   let attachments: string[] | undefined;
   if (opts.mediaUrl?.trim()) {
-    const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
-      localRoots: opts.mediaLocalRoots,
-    });
+    const resolved = await resolveAttachment(opts.mediaUrl.trim(), maxBytes);
     attachments = [resolved.path];
     const kind = mediaKindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {

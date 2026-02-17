@@ -24,26 +24,6 @@ type ParagraphBreak = {
   length: number;
 };
 
-function findSafeSentenceBreakIndex(
-  text: string,
-  fenceSpans: FenceSpan[],
-  minChars: number,
-): number {
-  const matches = text.matchAll(/[.!?](?=\s|$)/g);
-  let sentenceIdx = -1;
-  for (const match of matches) {
-    const at = match.index ?? -1;
-    if (at < minChars) {
-      continue;
-    }
-    const candidate = at + 1;
-    if (isSafeFenceBreak(fenceSpans, candidate)) {
-      sentenceIdx = candidate;
-    }
-  }
-  return sentenceIdx >= minChars ? sentenceIdx : -1;
-}
-
 export class EmbeddedBlockChunker {
   #buffer = "";
   readonly #chunking: BlockReplyChunking;
@@ -231,8 +211,19 @@ export class EmbeddedBlockChunker {
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(buffer, fenceSpans, minChars);
-      if (sentenceIdx !== -1) {
+      const matches = buffer.matchAll(/[.!?](?=\s|$)/g);
+      let sentenceIdx = -1;
+      for (const match of matches) {
+        const at = match.index ?? -1;
+        if (at < minChars) {
+          continue;
+        }
+        const candidate = at + 1;
+        if (isSafeFenceBreak(fenceSpans, candidate)) {
+          sentenceIdx = candidate;
+        }
+      }
+      if (sentenceIdx >= minChars) {
         return { index: sentenceIdx };
       }
     }
@@ -280,8 +271,19 @@ export class EmbeddedBlockChunker {
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(window, fenceSpans, minChars);
-      if (sentenceIdx !== -1) {
+      const matches = window.matchAll(/[.!?](?=\s|$)/g);
+      let sentenceIdx = -1;
+      for (const match of matches) {
+        const at = match.index ?? -1;
+        if (at < minChars) {
+          continue;
+        }
+        const candidate = at + 1;
+        if (isSafeFenceBreak(fenceSpans, candidate)) {
+          sentenceIdx = candidate;
+        }
+      }
+      if (sentenceIdx >= minChars) {
         return { index: sentenceIdx };
       }
     }

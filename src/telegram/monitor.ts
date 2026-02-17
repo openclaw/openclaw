@@ -158,7 +158,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         config: cfg,
         path: opts.webhookPath,
         port: opts.webhookPort,
-        secret: opts.webhookSecret ?? account.config.webhookSecret,
+        secret: opts.webhookSecret,
         host: opts.webhookHost ?? account.config.webhookHost,
         runtime: opts.runtime as RuntimeEnv,
         fetch: proxyFetch,

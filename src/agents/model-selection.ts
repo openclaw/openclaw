@@ -21,7 +21,6 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "opus-4.5": "claude-opus-4-5",
   "sonnet-4.5": "claude-sonnet-4-5",
 };
-const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -46,33 +45,6 @@ export function normalizeProviderId(provider: string): string {
     return "kimi-coding";
   }
   return normalized;
-}
-
-export function findNormalizedProviderValue<T>(
-  entries: Record<string, T> | undefined,
-  provider: string,
-): T | undefined {
-  if (!entries) {
-    return undefined;
-  }
-  const providerKey = normalizeProviderId(provider);
-  for (const [key, value] of Object.entries(entries)) {
-    if (normalizeProviderId(key) === providerKey) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-export function findNormalizedProviderKey(
-  entries: Record<string, unknown> | undefined,
-  provider: string,
-): string | undefined {
-  if (!entries) {
-    return undefined;
-  }
-  const providerKey = normalizeProviderId(provider);
-  return Object.keys(entries).find((key) => normalizeProviderId(key) === providerKey);
 }
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
@@ -106,28 +78,6 @@ function normalizeProviderModelId(provider: string, model: string): string {
   return model;
 }
 
-function shouldUseOpenAICodexProvider(provider: string, model: string): boolean {
-  if (provider !== "openai") {
-    return false;
-  }
-  const normalized = model.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return OPENAI_CODEX_OAUTH_MODEL_PREFIXES.some(
-    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
-  );
-}
-
-export function normalizeModelRef(provider: string, model: string): ModelRef {
-  const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
-  if (shouldUseOpenAICodexProvider(normalizedProvider, normalizedModel)) {
-    return { provider: "openai-codex", model: normalizedModel };
-  }
-  return { provider: normalizedProvider, model: normalizedModel };
-}
-
 export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -135,14 +85,18 @@ export function parseModelRef(raw: string, defaultProvider: string): ModelRef | 
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    return normalizeModelRef(defaultProvider, trimmed);
+    const provider = normalizeProviderId(defaultProvider);
+    const model = normalizeProviderModelId(provider, trimmed);
+    return { provider, model };
   }
   const providerRaw = trimmed.slice(0, slash).trim();
+  const provider = normalizeProviderId(providerRaw);
   const model = trimmed.slice(slash + 1).trim();
-  if (!providerRaw || !model) {
+  if (!provider || !model) {
     return null;
   }
-  return normalizeModelRef(providerRaw, model);
+  const normalizedModel = normalizeProviderModelId(provider, model);
+  return { provider, model: normalizedModel };
 }
 
 export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
@@ -452,29 +406,10 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
-  // 1. Per-model thinkingDefault (highest priority)
-  // Normalize config keys via parseModelRef (consistent with buildModelAliasIndex,
-  // buildAllowedModelSet, etc.) so aliases like "anthropic/opus-4.6" resolve correctly.
-  const configModels = params.cfg.agents?.defaults?.models ?? {};
-  for (const [rawKey, entry] of Object.entries(configModels)) {
-    const parsed = parseModelRef(rawKey, params.provider);
-    if (
-      parsed &&
-      parsed.provider === params.provider &&
-      parsed.model === params.model &&
-      entry?.thinkingDefault
-    ) {
-      return entry.thinkingDefault as ThinkLevel;
-    }
-  }
-
-  // 2. Global thinkingDefault
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
   }
-
-  // 3. Auto-detect from model catalog (reasoning-capable → "low")
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );

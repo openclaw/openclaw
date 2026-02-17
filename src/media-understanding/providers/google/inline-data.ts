@@ -1,6 +1,5 @@
 import { normalizeGoogleModelId } from "../../../agents/models-config.providers.js";
-import { parseGeminiAuth } from "../../../infra/gemini-auth.js";
-import { assertOkOrThrowHttpError, fetchWithTimeoutGuarded, normalizeBaseUrl } from "../shared.js";
+import { fetchWithTimeoutGuarded, normalizeBaseUrl, readErrorResponse } from "../shared.js";
 
 export async function generateGeminiInlineDataText(params: {
   buffer: Buffer;
@@ -31,12 +30,12 @@ export async function generateGeminiInlineDataText(params: {
   })();
   const url = `${baseUrl}/models/${model}:generateContent`;
 
-  const authHeaders = parseGeminiAuth(params.apiKey);
   const headers = new Headers(params.headers);
-  for (const [key, value] of Object.entries(authHeaders.headers)) {
-    if (!headers.has(key)) {
-      headers.set(key, value);
-    }
+  if (!headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  if (!headers.has("x-goog-api-key")) {
+    headers.set("x-goog-api-key", params.apiKey);
   }
 
   const prompt = (() => {
@@ -74,7 +73,11 @@ export async function generateGeminiInlineDataText(params: {
   );
 
   try {
-    await assertOkOrThrowHttpError(res, params.httpErrorLabel);
+    if (!res.ok) {
+      const detail = await readErrorResponse(res);
+      const suffix = detail ? `: ${detail}` : "";
+      throw new Error(`${params.httpErrorLabel} (HTTP ${res.status})${suffix}`);
+    }
 
     const payload = (await res.json()) as {
       candidates?: Array<{

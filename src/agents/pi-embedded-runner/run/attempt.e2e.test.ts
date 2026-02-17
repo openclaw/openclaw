@@ -17,9 +17,8 @@ describe("injectHistoryImagesIntoMessages", () => {
     const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[0, [image]]]));
 
     expect(didMutate).toBe(true);
-    const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(Array.isArray(firstUser?.content)).toBe(true);
-    const content = firstUser?.content as Array<{ type: string; text?: string; data?: string }>;
+    expect(Array.isArray(messages[0]?.content)).toBe(true);
+    const content = messages[0]?.content as Array<{ type: string; text?: string; data?: string }>;
     expect(content).toHaveLength(2);
     expect(content[0]?.type).toBe("text");
     expect(content[1]).toMatchObject({ type: "image", data: "abc" });
@@ -36,7 +35,7 @@ describe("injectHistoryImagesIntoMessages", () => {
     const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[0, [image]]]));
 
     expect(didMutate).toBe(false);
-    const first = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    const first = messages[0];
     if (!first || !Array.isArray(first.content)) {
       throw new Error("expected array content");
     }
@@ -48,13 +47,12 @@ describe("injectHistoryImagesIntoMessages", () => {
       {
         role: "assistant",
         content: "noop",
-      } as unknown as AgentMessage,
+      } as AgentMessage,
     ];
 
     const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[1, [image]]]));
 
     expect(didMutate).toBe(false);
-    const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
-    expect(firstAssistant?.content).toBe("noop");
+    expect(messages[0]?.content).toBe("noop");
   });
 });

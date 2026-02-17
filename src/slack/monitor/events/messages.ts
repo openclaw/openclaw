@@ -17,31 +17,6 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
-  const resolveSlackChannelSystemEventTarget = async (channelId: string | undefined) => {
-    const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
-    const channelType = channelInfo?.type;
-    if (
-      !ctx.isChannelAllowed({
-        channelId,
-        channelName: channelInfo?.name,
-        channelType,
-      })
-    ) {
-      return null;
-    }
-
-    const label = resolveSlackChannelLabel({
-      channelId,
-      channelName: channelInfo?.name,
-    });
-    const sessionKey = ctx.resolveSlackSystemEventSessionKey({
-      channelId,
-      channelType,
-    });
-
-    return { channelInfo, channelType, label, sessionKey };
-  };
-
   ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
@@ -52,13 +27,28 @@ export function registerSlackMessageEvents(params: {
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
         const channelId = changed.channel;
-        const target = await resolveSlackChannelSystemEventTarget(channelId);
-        if (!target) {
+        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
+        const channelType = channelInfo?.type;
+        if (
+          !ctx.isChannelAllowed({
+            channelId,
+            channelName: channelInfo?.name,
+            channelType,
+          })
+        ) {
           return;
         }
         const messageId = changed.message?.ts ?? changed.previous_message?.ts;
-        enqueueSystemEvent(`Slack message edited in ${target.label}.`, {
-          sessionKey: target.sessionKey,
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName: channelInfo?.name,
+        });
+        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+          channelId,
+          channelType,
+        });
+        enqueueSystemEvent(`Slack message edited in ${label}.`, {
+          sessionKey,
           contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
         });
         return;
@@ -66,12 +56,27 @@ export function registerSlackMessageEvents(params: {
       if (message.subtype === "message_deleted") {
         const deleted = event as SlackMessageDeletedEvent;
         const channelId = deleted.channel;
-        const target = await resolveSlackChannelSystemEventTarget(channelId);
-        if (!target) {
+        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
+        const channelType = channelInfo?.type;
+        if (
+          !ctx.isChannelAllowed({
+            channelId,
+            channelName: channelInfo?.name,
+            channelType,
+          })
+        ) {
           return;
         }
-        enqueueSystemEvent(`Slack message deleted in ${target.label}.`, {
-          sessionKey: target.sessionKey,
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName: channelInfo?.name,
+        });
+        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+          channelId,
+          channelType,
+        });
+        enqueueSystemEvent(`Slack message deleted in ${label}.`, {
+          sessionKey,
           contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
         });
         return;
@@ -79,13 +84,28 @@ export function registerSlackMessageEvents(params: {
       if (message.subtype === "thread_broadcast") {
         const thread = event as SlackThreadBroadcastEvent;
         const channelId = thread.channel;
-        const target = await resolveSlackChannelSystemEventTarget(channelId);
-        if (!target) {
+        const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
+        const channelType = channelInfo?.type;
+        if (
+          !ctx.isChannelAllowed({
+            channelId,
+            channelName: channelInfo?.name,
+            channelType,
+          })
+        ) {
           return;
         }
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName: channelInfo?.name,
+        });
         const messageId = thread.message?.ts ?? thread.event_ts;
-        enqueueSystemEvent(`Slack thread reply broadcast in ${target.label}.`, {
-          sessionKey: target.sessionKey,
+        const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+          channelId,
+          channelType,
+        });
+        enqueueSystemEvent(`Slack thread reply broadcast in ${label}.`, {
+          sessionKey,
           contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
         });
         return;

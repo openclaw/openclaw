@@ -1,12 +1,13 @@
-import type { BaseProbeResult } from "../channels/plugins/types.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 
-export type DiscordProbe = BaseProbeResult & {
+export type DiscordProbe = {
+  ok: boolean;
   status?: number | null;
+  error?: string | null;
   elapsedMs: number;
   bot?: { id?: string | null; username?: string | null };
   application?: DiscordApplicationSummary;
@@ -32,31 +33,6 @@ const DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS = 1 << 14;
 const DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS_LIMITED = 1 << 15;
 const DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT = 1 << 18;
 const DISCORD_APP_FLAG_GATEWAY_MESSAGE_CONTENT_LIMITED = 1 << 19;
-
-async function fetchDiscordApplicationMe(
-  token: string,
-  timeoutMs: number,
-  fetcher: typeof fetch,
-): Promise<{ id?: string; flags?: number } | undefined> {
-  const normalized = normalizeDiscordToken(token);
-  if (!normalized) {
-    return undefined;
-  }
-  try {
-    const res = await fetchWithTimeout(
-      `${DISCORD_API_BASE}/oauth2/applications/@me`,
-      { headers: { Authorization: `Bot ${normalized}` } },
-      timeoutMs,
-      getResolvedFetch(fetcher),
-    );
-    if (!res.ok) {
-      return undefined;
-    }
-    return (await res.json()) as { id?: string; flags?: number };
-  } catch {
-    return undefined;
-  }
-}
 
 export function resolveDiscordPrivilegedIntentsFromFlags(
   flags: number,
@@ -88,18 +64,32 @@ export async function fetchDiscordApplicationSummary(
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
 ): Promise<DiscordApplicationSummary | undefined> {
-  const json = await fetchDiscordApplicationMe(token, timeoutMs, fetcher);
-  if (!json) {
+  const normalized = normalizeDiscordToken(token);
+  if (!normalized) {
     return undefined;
   }
-  const flags =
-    typeof json.flags === "number" && Number.isFinite(json.flags) ? json.flags : undefined;
-  return {
-    id: json.id ?? null,
-    flags: flags ?? null,
-    intents:
-      typeof flags === "number" ? resolveDiscordPrivilegedIntentsFromFlags(flags) : undefined,
-  };
+  try {
+    const res = await fetchWithTimeout(
+      `${DISCORD_API_BASE}/oauth2/applications/@me`,
+      { headers: { Authorization: `Bot ${normalized}` } },
+      timeoutMs,
+      getResolvedFetch(fetcher),
+    );
+    if (!res.ok) {
+      return undefined;
+    }
+    const json = (await res.json()) as { id?: string; flags?: number };
+    const flags =
+      typeof json.flags === "number" && Number.isFinite(json.flags) ? json.flags : undefined;
+    return {
+      id: json.id ?? null,
+      flags: flags ?? null,
+      intents:
+        typeof flags === "number" ? resolveDiscordPrivilegedIntentsFromFlags(flags) : undefined,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
@@ -170,6 +160,23 @@ export async function fetchDiscordApplicationId(
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
 ): Promise<string | undefined> {
-  const json = await fetchDiscordApplicationMe(token, timeoutMs, fetcher);
-  return json?.id ?? undefined;
+  const normalized = normalizeDiscordToken(token);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const res = await fetchWithTimeout(
+      `${DISCORD_API_BASE}/oauth2/applications/@me`,
+      { headers: { Authorization: `Bot ${normalized}` } },
+      timeoutMs,
+      getResolvedFetch(fetcher),
+    );
+    if (!res.ok) {
+      return undefined;
+    }
+    const json = (await res.json()) as { id?: string };
+    return json.id ?? undefined;
+  } catch {
+    return undefined;
+  }
 }

@@ -3,25 +3,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 
 describe("resolveHeartbeatVisibility", () => {
-  function createTelegramAccountHeartbeatConfig(): OpenClawConfig {
-    return {
-      channels: {
-        telegram: {
-          heartbeat: {
-            showOk: true,
-          },
-          accounts: {
-            primary: {
-              heartbeat: {
-                showOk: false,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-  }
-
   it("returns default values when no config is provided", () => {
     const cfg = {} as OpenClawConfig;
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
@@ -155,14 +136,46 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("handles missing accountId gracefully", () => {
-    const cfg = createTelegramAccountHeartbeatConfig();
+    const cfg = {
+      channels: {
+        telegram: {
+          heartbeat: {
+            showOk: true,
+          },
+          accounts: {
+            primary: {
+              heartbeat: {
+                showOk: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
     expect(result.showOk).toBe(true);
   });
 
   it("handles non-existent account gracefully", () => {
-    const cfg = createTelegramAccountHeartbeatConfig();
+    const cfg = {
+      channels: {
+        telegram: {
+          heartbeat: {
+            showOk: true,
+          },
+          accounts: {
+            primary: {
+              heartbeat: {
+                showOk: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
     const result = resolveHeartbeatVisibility({
       cfg,
       channel: "telegram",

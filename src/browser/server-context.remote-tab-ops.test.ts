@@ -1,9 +1,31 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as cdpModule from "./cdp.js";
 import * as pwAiModule from "./pw-ai-module.js";
 import type { BrowserServerState } from "./server-context.js";
-import "./server-context.chrome-test-harness.js";
 import { createBrowserRouteContext } from "./server-context.js";
+
+const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
+
+beforeAll(async () => {
+  chromeUserDataDir.dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-user-data-"));
+});
+
+afterAll(async () => {
+  await fs.rm(chromeUserDataDir.dir, { recursive: true, force: true });
+});
+
+vi.mock("./chrome.js", () => ({
+  isChromeCdpReady: vi.fn(async () => true),
+  isChromeReachable: vi.fn(async () => true),
+  launchOpenClawChrome: vi.fn(async () => {
+    throw new Error("unexpected launch");
+  }),
+  resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
+  stopOpenClawChrome: vi.fn(async () => {}),
+}));
 
 const originalFetch = globalThis.fetch;
 
@@ -27,8 +49,6 @@ function makeState(
       cdpIsLoopback: profile !== "remote",
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
-      evaluateEnabled: false,
-      extraArgs: [],
       color: "#FF4500",
       headless: true,
       noSandbox: false,
@@ -64,7 +84,7 @@ describe("browser server-context remote profile tab operations", () => {
       listPagesViaPlaywright,
       createPageViaPlaywright,
       closePageByTargetIdViaPlaywright,
-    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
@@ -129,7 +149,7 @@ describe("browser server-context remote profile tab operations", () => {
       closePageByTargetIdViaPlaywright: vi.fn(async () => {
         throw new Error("unexpected close");
       }),
-    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
@@ -156,7 +176,7 @@ describe("browser server-context remote profile tab operations", () => {
     vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright,
       focusPageByTargetIdViaPlaywright,
-    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
@@ -182,7 +202,7 @@ describe("browser server-context remote profile tab operations", () => {
       listPagesViaPlaywright: vi.fn(async () => {
         throw new Error("boom");
       }),
-    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+    } as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
 
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");

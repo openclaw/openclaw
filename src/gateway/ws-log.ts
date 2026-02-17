@@ -44,46 +44,6 @@ function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
   return restMeta;
 }
 
-function buildWsHeadline(params: {
-  kind: string;
-  method?: string;
-  event?: string;
-}): string | undefined {
-  if ((params.kind === "req" || params.kind === "res") && params.method) {
-    return chalk.bold(params.method);
-  }
-  if (params.kind === "event" && params.event) {
-    return chalk.bold(params.event);
-  }
-  return undefined;
-}
-
-function buildWsStatusToken(kind: string, ok?: boolean): string | undefined {
-  if (kind !== "res" || ok === undefined) {
-    return undefined;
-  }
-  return ok ? chalk.greenBright("✓") : chalk.redBright("✗");
-}
-
-function logWsInfoLine(params: {
-  prefix: string;
-  statusToken?: string;
-  headline?: string;
-  durationToken?: string;
-  restMeta: string[];
-  trailing: string[];
-}): void {
-  const tokens = [
-    params.prefix,
-    params.statusToken,
-    params.headline,
-    params.durationToken,
-    ...params.restMeta,
-    ...params.trailing,
-  ].filter((t): t is string => Boolean(t));
-  wsLog.info(tokens.join(" "));
-}
-
 export function shouldLogWs(): boolean {
   return shouldLogSubsystemToConsole("gateway/ws");
 }
@@ -295,8 +255,19 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
   const dirColor = direction === "in" ? chalk.greenBright : chalk.cyanBright;
   const prefix = `${dirColor(dirArrow)} ${chalk.bold(kind)}`;
 
-  const headline = buildWsHeadline({ kind, method, event });
-  const statusToken = buildWsStatusToken(kind, ok);
+  const headline =
+    (kind === "req" || kind === "res") && method
+      ? chalk.bold(method)
+      : kind === "event" && event
+        ? chalk.bold(event)
+        : undefined;
+
+  const statusToken =
+    kind === "res" && ok !== undefined
+      ? ok
+        ? chalk.greenBright("✓")
+        : chalk.redBright("✗")
+      : undefined;
 
   const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
 
@@ -310,7 +281,11 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  logWsInfoLine({ prefix, statusToken, headline, durationToken, restMeta, trailing });
+  const tokens = [prefix, statusToken, headline, durationToken, ...restMeta, ...trailing].filter(
+    (t): t is string => Boolean(t),
+  );
+
+  wsLog.info(tokens.join(" "));
 }
 
 function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
@@ -359,22 +334,23 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
     return;
   }
 
-  const statusToken = buildWsStatusToken("res", ok);
+  const statusToken =
+    ok === undefined ? undefined : ok ? chalk.greenBright("✓") : chalk.redBright("✗");
   const durationToken = typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
 
   const restMeta = collectWsRestMeta(meta);
 
-  logWsInfoLine({
-    prefix: `${chalk.yellowBright("⇄")} ${chalk.bold("res")}`,
+  const tokens = [
+    `${chalk.yellowBright("⇄")} ${chalk.bold("res")}`,
     statusToken,
-    headline: method ? chalk.bold(method) : undefined,
+    method ? chalk.bold(method) : undefined,
     durationToken,
-    restMeta,
-    trailing: [
-      connId ? `${chalk.dim("conn")}=${chalk.gray(shortId(connId))}` : "",
-      id ? `${chalk.dim("id")}=${chalk.gray(shortId(id))}` : "",
-    ].filter(Boolean),
-  });
+    ...restMeta,
+    connId ? `${chalk.dim("conn")}=${chalk.gray(shortId(connId))}` : undefined,
+    id ? `${chalk.dim("id")}=${chalk.gray(shortId(id))}` : undefined,
+  ].filter((t): t is string => Boolean(t));
+
+  wsLog.info(tokens.join(" "));
 }
 
 function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
@@ -405,7 +381,12 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
 
   const prefix = `${arrowColor(compactArrow)} ${chalk.bold(kind)}`;
 
-  const statusToken = buildWsStatusToken(kind, ok);
+  const statusToken =
+    kind === "res" && ok !== undefined
+      ? ok
+        ? chalk.greenBright("✓")
+        : chalk.redBright("✗")
+      : undefined;
 
   const startedAt =
     kind === "res" && direction === "out" && inflightKey
@@ -417,11 +398,12 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
   const durationToken =
     typeof startedAt === "number" ? chalk.dim(`${now - startedAt}ms`) : undefined;
 
-  const headline = buildWsHeadline({
-    kind,
-    method,
-    event: typeof meta?.event === "string" ? meta.event : undefined,
-  });
+  const headline =
+    (kind === "req" || kind === "res") && method
+      ? chalk.bold(method)
+      : kind === "event" && typeof meta?.event === "string"
+        ? chalk.bold(meta.event)
+        : undefined;
 
   const restMeta = collectWsRestMeta(meta);
 
@@ -434,5 +416,9 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
     trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
   }
 
-  logWsInfoLine({ prefix, statusToken, headline, durationToken, restMeta, trailing });
+  const tokens = [prefix, statusToken, headline, durationToken, ...restMeta, ...trailing].filter(
+    (t): t is string => Boolean(t),
+  );
+
+  wsLog.info(tokens.join(" "));
 }

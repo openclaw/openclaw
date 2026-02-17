@@ -11,27 +11,6 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 
-function applyCliSessionIdToSessionPatch(
-  params: {
-    providerUsed?: string;
-    cliSessionId?: string;
-  },
-  entry: SessionEntry,
-  patch: Partial<SessionEntry>,
-): Partial<SessionEntry> {
-  const cliProvider = params.providerUsed ?? entry.modelProvider;
-  if (params.cliSessionId && cliProvider) {
-    const nextEntry = { ...entry, ...patch };
-    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  return patch;
-}
-
 export async function persistSessionUsageUpdate(params: {
   storePath?: string;
   sessionKey?: string;
@@ -95,7 +74,17 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          const cliProvider = params.providerUsed ?? entry.modelProvider;
+          if (params.cliSessionId && cliProvider) {
+            const nextEntry = { ...entry, ...patch };
+            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
+            return {
+              ...patch,
+              cliSessionIds: nextEntry.cliSessionIds,
+              claudeCliSessionId: nextEntry.claudeCliSessionId,
+            };
+          }
+          return patch;
         },
       });
     } catch (err) {
@@ -117,7 +106,17 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          const cliProvider = params.providerUsed ?? entry.modelProvider;
+          if (params.cliSessionId && cliProvider) {
+            const nextEntry = { ...entry, ...patch };
+            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
+            return {
+              ...patch,
+              cliSessionIds: nextEntry.cliSessionIds,
+              claudeCliSessionId: nextEntry.claudeCliSessionId,
+            };
+          }
+          return patch;
         },
       });
     } catch (err) {

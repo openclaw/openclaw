@@ -40,100 +40,89 @@ describe("onboard-hooks", () => {
     exit: vi.fn(),
   });
 
-  const createMockHook = (
-    params: {
-      name: string;
-      description: string;
-      filePath: string;
-      baseDir: string;
-      handlerPath: string;
-      hookKey: string;
-      emoji: string;
-      events: string[];
-    },
-    eligible: boolean,
-  ) => ({
-    ...params,
-    source: "openclaw-bundled" as const,
-    pluginId: undefined,
-    homepage: undefined,
-    always: false,
-    disabled: false,
-    eligible,
-    managedByPlugin: false,
-    requirements: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: ["workspace.dir"],
-      os: [],
-    },
-    missing: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: eligible ? [] : ["workspace.dir"],
-      os: [],
-    },
-    configChecks: [],
-    install: [],
-  });
-
   const createMockHookReport = (eligible = true): HookStatusReport => ({
     workspaceDir: "/mock/workspace",
     managedHooksDir: "/mock/.openclaw/hooks",
     hooks: [
-      createMockHook(
-        {
-          name: "session-memory",
-          description: "Save session context to memory when /new command is issued",
-          filePath: "/mock/workspace/hooks/session-memory/HOOK.md",
-          baseDir: "/mock/workspace/hooks/session-memory",
-          handlerPath: "/mock/workspace/hooks/session-memory/handler.js",
-          hookKey: "session-memory",
-          emoji: "💾",
-          events: ["command:new"],
-        },
+      {
+        name: "session-memory",
+        description: "Save session context to memory when /new command is issued",
+        source: "openclaw-bundled",
+        pluginId: undefined,
+        filePath: "/mock/workspace/hooks/session-memory/HOOK.md",
+        baseDir: "/mock/workspace/hooks/session-memory",
+        handlerPath: "/mock/workspace/hooks/session-memory/handler.js",
+        hookKey: "session-memory",
+        emoji: "💾",
+        events: ["command:new"],
+        homepage: undefined,
+        always: false,
+        disabled: false,
         eligible,
-      ),
-      createMockHook(
-        {
-          name: "command-logger",
-          description: "Log all command events to a centralized audit file",
-          filePath: "/mock/workspace/hooks/command-logger/HOOK.md",
-          baseDir: "/mock/workspace/hooks/command-logger",
-          handlerPath: "/mock/workspace/hooks/command-logger/handler.js",
-          hookKey: "command-logger",
-          emoji: "📝",
-          events: ["command"],
+        managedByPlugin: false,
+        requirements: {
+          bins: [],
+          anyBins: [],
+          env: [],
+          config: ["workspace.dir"],
+          os: [],
         },
+        missing: {
+          bins: [],
+          anyBins: [],
+          env: [],
+          config: eligible ? [] : ["workspace.dir"],
+          os: [],
+        },
+        configChecks: [],
+        install: [],
+      },
+      {
+        name: "command-logger",
+        description: "Log all command events to a centralized audit file",
+        source: "openclaw-bundled",
+        pluginId: undefined,
+        filePath: "/mock/workspace/hooks/command-logger/HOOK.md",
+        baseDir: "/mock/workspace/hooks/command-logger",
+        handlerPath: "/mock/workspace/hooks/command-logger/handler.js",
+        hookKey: "command-logger",
+        emoji: "📝",
+        events: ["command"],
+        homepage: undefined,
+        always: false,
+        disabled: false,
         eligible,
-      ),
+        managedByPlugin: false,
+        requirements: {
+          bins: [],
+          anyBins: [],
+          env: [],
+          config: ["workspace.dir"],
+          os: [],
+        },
+        missing: {
+          bins: [],
+          anyBins: [],
+          env: [],
+          config: eligible ? [] : ["workspace.dir"],
+          os: [],
+        },
+        configChecks: [],
+        install: [],
+      },
     ],
   });
 
-  async function runSetupInternalHooks(params: {
-    selected: string[];
-    cfg?: OpenClawConfig;
-    eligible?: boolean;
-  }) {
-    const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
-    vi.mocked(buildWorkspaceHookStatus).mockReturnValue(
-      createMockHookReport(params.eligible ?? true),
-    );
-
-    const cfg = params.cfg ?? {};
-    const prompter = createMockPrompter(params.selected);
-    const runtime = createMockRuntime();
-    const result = await setupInternalHooks(cfg, runtime, prompter);
-    return { result, cfg, prompter };
-  }
-
   describe("setupInternalHooks", () => {
     it("should enable hooks when user selects them", async () => {
-      const { result, prompter } = await runSetupInternalHooks({
-        selected: ["session-memory"],
-      });
+      const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
+      vi.mocked(buildWorkspaceHookStatus).mockReturnValue(createMockHookReport());
+
+      const cfg: OpenClawConfig = {};
+      const prompter = createMockPrompter(["session-memory"]);
+      const runtime = createMockRuntime();
+
+      const result = await setupInternalHooks(cfg, runtime, prompter);
 
       expect(result.hooks?.internal?.enabled).toBe(true);
       expect(result.hooks?.internal?.entries).toEqual({
@@ -159,19 +148,28 @@ describe("onboard-hooks", () => {
     });
 
     it("should not enable hooks when user skips", async () => {
-      const { result, prompter } = await runSetupInternalHooks({
-        selected: ["__skip__"],
-      });
+      const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
+      vi.mocked(buildWorkspaceHookStatus).mockReturnValue(createMockHookReport());
+
+      const cfg: OpenClawConfig = {};
+      const prompter = createMockPrompter(["__skip__"]);
+      const runtime = createMockRuntime();
+
+      const result = await setupInternalHooks(cfg, runtime, prompter);
 
       expect(result.hooks?.internal).toBeUndefined();
       expect(prompter.note).toHaveBeenCalledTimes(1);
     });
 
     it("should handle no eligible hooks", async () => {
-      const { result, cfg, prompter } = await runSetupInternalHooks({
-        selected: [],
-        eligible: false,
-      });
+      const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
+      vi.mocked(buildWorkspaceHookStatus).mockReturnValue(createMockHookReport(false));
+
+      const cfg: OpenClawConfig = {};
+      const prompter = createMockPrompter([]);
+      const runtime = createMockRuntime();
+
+      const result = await setupInternalHooks(cfg, runtime, prompter);
 
       expect(result).toEqual(cfg);
       expect(prompter.multiselect).not.toHaveBeenCalled();
@@ -182,6 +180,9 @@ describe("onboard-hooks", () => {
     });
 
     it("should preserve existing hooks config when enabled", async () => {
+      const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
+      vi.mocked(buildWorkspaceHookStatus).mockReturnValue(createMockHookReport());
+
       const cfg: OpenClawConfig = {
         hooks: {
           enabled: true,
@@ -189,10 +190,10 @@ describe("onboard-hooks", () => {
           token: "existing-token",
         },
       };
-      const { result } = await runSetupInternalHooks({
-        selected: ["session-memory"],
-        cfg,
-      });
+      const prompter = createMockPrompter(["session-memory"]);
+      const runtime = createMockRuntime();
+
+      const result = await setupInternalHooks(cfg, runtime, prompter);
 
       expect(result.hooks?.enabled).toBe(true);
       expect(result.hooks?.path).toBe("/webhook");
@@ -204,22 +205,30 @@ describe("onboard-hooks", () => {
     });
 
     it("should preserve existing config when user skips", async () => {
+      const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
+      vi.mocked(buildWorkspaceHookStatus).mockReturnValue(createMockHookReport());
+
       const cfg: OpenClawConfig = {
         agents: { defaults: { workspace: "/workspace" } },
       };
-      const { result } = await runSetupInternalHooks({
-        selected: ["__skip__"],
-        cfg,
-      });
+      const prompter = createMockPrompter(["__skip__"]);
+      const runtime = createMockRuntime();
+
+      const result = await setupInternalHooks(cfg, runtime, prompter);
 
       expect(result).toEqual(cfg);
       expect(result.agents?.defaults?.workspace).toBe("/workspace");
     });
 
     it("should show informative notes to user", async () => {
-      const { prompter } = await runSetupInternalHooks({
-        selected: ["session-memory"],
-      });
+      const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
+      vi.mocked(buildWorkspaceHookStatus).mockReturnValue(createMockHookReport());
+
+      const cfg: OpenClawConfig = {};
+      const prompter = createMockPrompter(["session-memory"]);
+      const runtime = createMockRuntime();
+
+      await setupInternalHooks(cfg, runtime, prompter);
 
       const noteCalls = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
       expect(noteCalls).toHaveLength(2);

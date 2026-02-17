@@ -99,13 +99,7 @@ describe("handleFeishuMessage command authorization", () => {
     await handleFeishuMessage({
       cfg,
       event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
     });
 
     expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
@@ -154,13 +148,7 @@ describe("handleFeishuMessage command authorization", () => {
     await handleFeishuMessage({
       cfg,
       event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
     });
 
     expect(mockReadAllowFromStore).toHaveBeenCalledWith("feishu");
@@ -201,13 +189,7 @@ describe("handleFeishuMessage command authorization", () => {
     await handleFeishuMessage({
       cfg,
       event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
     });
 
     expect(mockUpsertPairingRequest).toHaveBeenCalledWith({
@@ -265,13 +247,7 @@ describe("handleFeishuMessage command authorization", () => {
     await handleFeishuMessage({
       cfg,
       event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
+      runtime: { log: vi.fn(), error: vi.fn() } as RuntimeEnv,
     });
 
     expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({

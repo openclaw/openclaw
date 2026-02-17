@@ -15,7 +15,6 @@ import { elide } from "./util.js";
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   msg: WebInboundMsg;
-  mediaLocalRoots?: readonly string[];
   maxMediaBytes: number;
   textLimit: number;
   chunkMode?: ChunkMode;
@@ -100,10 +99,7 @@ export async function deliverWebReply(params: {
   for (const [index, mediaUrl] of mediaList.entries()) {
     const caption = index === 0 ? remainingText.shift() || undefined : undefined;
     try {
-      const media = await loadWebMedia(mediaUrl, {
-        maxBytes: maxMediaBytes,
-        localRoots: params.mediaLocalRoots,
-      });
+      const media = await loadWebMedia(mediaUrl, maxMediaBytes);
       if (shouldLogVerbose()) {
         logVerbose(
           `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,

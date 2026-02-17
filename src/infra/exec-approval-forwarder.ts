@@ -98,12 +98,6 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
   return [channel, target.to, accountId, threadId].join(":");
 }
 
-// Discord has component-based exec approvals; skip the text fallback there.
-function shouldSkipDiscordForwarding(target: ExecApprovalForwardTarget): boolean {
-  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-  return channel === "discord";
-}
-
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
   if (!command.includes("\n") && !command.includes("`")) {
     return { inline: true, text: `\`${command}\`` };
@@ -271,9 +265,7 @@ export function createExecApprovalForwarder(
       }
     }
 
-    const filteredTargets = targets.filter((target) => !shouldSkipDiscordForwarding(target));
-
-    if (filteredTargets.length === 0) {
+    if (targets.length === 0) {
       return;
     }
 
@@ -291,7 +283,7 @@ export function createExecApprovalForwarder(
     }, expiresInMs);
     timeoutId.unref?.();
 
-    const pendingEntry: PendingApproval = { request, targets: filteredTargets, timeoutId };
+    const pendingEntry: PendingApproval = { request, targets, timeoutId };
     pending.set(request.id, pendingEntry);
 
     if (pending.get(request.id) !== pendingEntry) {
@@ -301,7 +293,7 @@ export function createExecApprovalForwarder(
     const text = buildRequestMessage(request, nowMs());
     await deliverToTargets({
       cfg,
-      targets: filteredTargets,
+      targets,
       text,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,

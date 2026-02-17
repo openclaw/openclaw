@@ -1,10 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  createBlockReplyCollector,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   makeCfg,
-  mockRunEmbeddedPiAgentOk,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -18,8 +16,16 @@ installTriggerHandlingE2eTestHooks();
 describe("trigger handling", () => {
   it("handles inline /commands and strips it before the agent", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
-      const { blockReplies, handlers } = createBlockReplyCollector();
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const blockReplies: Array<{ text?: string }> = [];
       const res = await getReplyFromConfig(
         {
           Body: "please /commands now",
@@ -27,7 +33,11 @@ describe("trigger handling", () => {
           To: "+2000",
           CommandAuthorized: true,
         },
-        handlers,
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
         makeCfg(home),
       );
 
@@ -43,8 +53,16 @@ describe("trigger handling", () => {
 
   it("handles inline /whoami and strips it before the agent", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
-      const { blockReplies, handlers } = createBlockReplyCollector();
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const blockReplies: Array<{ text?: string }> = [];
       const res = await getReplyFromConfig(
         {
           Body: "please /whoami now",
@@ -53,7 +71,11 @@ describe("trigger handling", () => {
           SenderId: "12345",
           CommandAuthorized: true,
         },
-        handlers,
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
         makeCfg(home),
       );
 

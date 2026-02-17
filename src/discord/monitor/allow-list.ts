@@ -21,8 +21,8 @@ export type DiscordGuildEntryResolved = {
   slug?: string;
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
-  users?: string[];
-  roles?: string[];
+  users?: Array<string | number>;
+  roles?: Array<string | number>;
   channels?: Record<
     string,
     {
@@ -30,8 +30,8 @@ export type DiscordGuildEntryResolved = {
       requireMention?: boolean;
       skills?: string[];
       enabled?: boolean;
-      users?: string[];
-      roles?: string[];
+      users?: Array<string | number>;
+      roles?: Array<string | number>;
       systemPrompt?: string;
       includeThreadStarter?: boolean;
       autoThread?: boolean;
@@ -44,8 +44,8 @@ export type DiscordChannelConfigResolved = {
   requireMention?: boolean;
   skills?: string[];
   enabled?: boolean;
-  users?: string[];
-  roles?: string[];
+  users?: Array<string | number>;
+  roles?: Array<string | number>;
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
@@ -53,7 +53,10 @@ export type DiscordChannelConfigResolved = {
   matchSource?: ChannelMatchSource;
 };
 
-export function normalizeDiscordAllowList(raw: string[] | undefined, prefixes: string[]) {
+export function normalizeDiscordAllowList(
+  raw: Array<string | number> | undefined,
+  prefixes: string[],
+) {
   if (!raw || raw.length === 0) {
     return null;
   }
@@ -138,7 +141,7 @@ export function resolveDiscordAllowListMatch(params: {
 }
 
 export function resolveDiscordUserAllowed(params: {
-  allowList?: string[];
+  allowList?: Array<string | number>;
   userId: string;
   userName?: string;
   userTag?: string;
@@ -155,10 +158,10 @@ export function resolveDiscordUserAllowed(params: {
 }
 
 export function resolveDiscordRoleAllowed(params: {
-  allowList?: string[];
+  allowList?: Array<string | number>;
   memberRoleIds: string[];
 }) {
-  // Role allowlists accept role IDs only. Names are ignored.
+  // Role allowlists accept role IDs only (string or number). Names are ignored.
   const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
   if (!allowList) {
     return true;
@@ -170,8 +173,8 @@ export function resolveDiscordRoleAllowed(params: {
 }
 
 export function resolveDiscordMemberAllowed(params: {
-  userAllowList?: string[];
-  roleAllowList?: string[];
+  userAllowList?: Array<string | number>;
+  roleAllowList?: Array<string | number>;
   memberRoleIds: string[];
   userId: string;
   userName?: string;
@@ -197,28 +200,6 @@ export function resolveDiscordMemberAllowed(params: {
       })
     : false;
   return userOk || roleOk;
-}
-
-export function resolveDiscordMemberAccessState(params: {
-  channelConfig?: DiscordChannelConfigResolved | null;
-  guildInfo?: DiscordGuildEntryResolved | null;
-  memberRoleIds: string[];
-  sender: { id: string; name?: string; tag?: string };
-}) {
-  const channelUsers = params.channelConfig?.users ?? params.guildInfo?.users;
-  const channelRoles = params.channelConfig?.roles ?? params.guildInfo?.roles;
-  const hasAccessRestrictions =
-    (Array.isArray(channelUsers) && channelUsers.length > 0) ||
-    (Array.isArray(channelRoles) && channelRoles.length > 0);
-  const memberAllowed = resolveDiscordMemberAllowed({
-    userAllowList: channelUsers,
-    roleAllowList: channelRoles,
-    memberRoleIds: params.memberRoleIds,
-    userId: params.sender.id,
-    userName: params.sender.name,
-    userTag: params.sender.tag,
-  });
-  return { channelUsers, channelRoles, hasAccessRestrictions, memberAllowed } as const;
 }
 
 export function resolveDiscordOwnerAllowFrom(params: {
@@ -250,7 +231,7 @@ export function resolveDiscordOwnerAllowFrom(params: {
 
 export function resolveDiscordCommandAuthorized(params: {
   isDirectMessage: boolean;
-  allowFrom?: string[];
+  allowFrom?: Array<string | number>;
   guildInfo?: DiscordGuildEntryResolved | null;
   author: User;
 }) {
@@ -475,7 +456,7 @@ export function isDiscordGroupAllowedByPolicy(params: {
 }
 
 export function resolveGroupDmAllow(params: {
-  channels?: string[];
+  channels?: Array<string | number>;
   channelId: string;
   channelName?: string;
   channelSlug: string;
@@ -500,7 +481,7 @@ export function shouldEmitDiscordReactionNotification(params: {
   userId: string;
   userName?: string;
   userTag?: string;
-  allowlist?: string[];
+  allowlist?: Array<string | number>;
 }) {
   const mode = params.mode ?? "own";
   if (mode === "off") {

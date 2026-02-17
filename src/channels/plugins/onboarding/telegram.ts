@@ -10,7 +10,7 @@ import {
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
+import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "telegram" as const;
 
@@ -133,7 +133,11 @@ async function promptTelegramAllowFrom(params: {
     resolvedIds = results.filter(Boolean) as string[];
   }
 
-  const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
+  const merged = [
+    ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
+    ...resolvedIds,
+  ];
+  const unique = [...new Set(merged)];
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {

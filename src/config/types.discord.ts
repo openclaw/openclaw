@@ -17,11 +17,11 @@ export type DiscordDmConfig = {
   /** Direct message access policy (default: pairing). */
   policy?: DmPolicy;
   /** Allowlist for DM senders (ids or names). */
-  allowFrom?: string[];
+  allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
-  groupChannels?: string[];
+  groupChannels?: Array<string | number>;
 };
 
 export type DiscordGuildChannelConfig = {
@@ -35,9 +35,9 @@ export type DiscordGuildChannelConfig = {
   /** If false, disable the bot for this channel. */
   enabled?: boolean;
   /** Optional allowlist for channel senders (ids or names). */
-  users?: string[];
+  users?: Array<string | number>;
   /** Optional allowlist for channel senders by role ID. */
-  roles?: string[];
+  roles?: Array<string | number>;
   /** Optional system prompt snippet for this channel. */
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
@@ -55,9 +55,9 @@ export type DiscordGuildEntry = {
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
   /** Optional allowlist for guild senders (ids or names). */
-  users?: string[];
+  users?: Array<string | number>;
   /** Optional allowlist for guild senders by role ID. */
-  roles?: string[];
+  roles?: Array<string | number>;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -95,7 +95,7 @@ export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
   /** Discord user IDs to receive approval prompts. Required if enabled. */
-  approvers?: string[];
+  approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */
@@ -111,15 +111,6 @@ export type DiscordExecApprovalConfig = {
 export type DiscordAgentComponentsConfig = {
   /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
   enabled?: boolean;
-};
-
-export type DiscordUiComponentsConfig = {
-  /** Accent color used by Discord component containers (hex). */
-  accentColor?: string;
-};
-
-export type DiscordUiConfig = {
-  components?: DiscordUiComponentsConfig;
 };
 
 export type DiscordAccountConfig = {
@@ -182,7 +173,7 @@ export type DiscordAccountConfig = {
    * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
    * Legacy key: channels.discord.dm.allowFrom.
    */
-  allowFrom?: string[];
+  allowFrom?: Array<string | number>;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
@@ -192,19 +183,12 @@ export type DiscordAccountConfig = {
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
   agentComponents?: DiscordAgentComponentsConfig;
-  /** Discord UI customization (components, modals, etc.). */
-  ui?: DiscordUiConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
-  /**
-   * Per-channel ack reaction override.
-   * Discord supports both unicode emoji and custom emoji names.
-   */
-  ackReaction?: string;
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */

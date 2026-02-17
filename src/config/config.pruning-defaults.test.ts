@@ -4,16 +4,6 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
-async function writeConfigForTest(home: string, config: unknown): Promise<void> {
-  const configDir = path.join(home, ".openclaw");
-  await fs.mkdir(configDir, { recursive: true });
-  await fs.writeFile(
-    path.join(configDir, "openclaw.json"),
-    JSON.stringify(config, null, 2),
-    "utf-8",
-  );
-}
-
 describe("config pruning defaults", () => {
   it("does not enable contextPruning by default", async () => {
     const prevApiKey = process.env.ANTHROPIC_API_KEY;
@@ -21,7 +11,13 @@ describe("config pruning defaults", () => {
     process.env.ANTHROPIC_API_KEY = "";
     process.env.ANTHROPIC_OAUTH_TOKEN = "";
     await withTempHome(async (home) => {
-      await writeConfigForTest(home, { agents: { defaults: {} } });
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: {} } }, null, 2),
+        "utf-8",
+      );
 
       const cfg = loadConfig();
 
@@ -41,14 +37,24 @@ describe("config pruning defaults", () => {
 
   it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {
     await withTempHome(async (home) => {
-      await writeConfigForTest(home, {
-        auth: {
-          profiles: {
-            "anthropic:me": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            auth: {
+              profiles: {
+                "anthropic:me": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+              },
+            },
+            agents: { defaults: {} },
           },
-        },
-        agents: { defaults: {} },
-      });
+          null,
+          2,
+        ),
+        "utf-8",
+      );
 
       const cfg = loadConfig();
 
@@ -60,18 +66,28 @@ describe("config pruning defaults", () => {
 
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", async () => {
     await withTempHome(async (home) => {
-      await writeConfigForTest(home, {
-        auth: {
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            auth: {
+              profiles: {
+                "anthropic:api": { provider: "anthropic", mode: "api_key" },
+              },
+            },
+            agents: {
+              defaults: {
+                model: { primary: "anthropic/claude-opus-4-5" },
+              },
+            },
           },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-5" },
-          },
-        },
-      });
+          null,
+          2,
+        ),
+        "utf-8",
+      );
 
       const cfg = loadConfig();
 
@@ -86,7 +102,13 @@ describe("config pruning defaults", () => {
 
   it("does not override explicit contextPruning mode", async () => {
     await withTempHome(async (home) => {
-      await writeConfigForTest(home, { agents: { defaults: { contextPruning: { mode: "off" } } } });
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({ agents: { defaults: { contextPruning: { mode: "off" } } } }, null, 2),
+        "utf-8",
+      );
 
       const cfg = loadConfig();
 

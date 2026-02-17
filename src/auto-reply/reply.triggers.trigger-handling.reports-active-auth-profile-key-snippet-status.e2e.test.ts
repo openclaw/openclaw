@@ -3,11 +3,9 @@ import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
-  createBlockReplyCollector,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   makeCfg,
-  mockRunEmbeddedPiAgentOk,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -17,14 +15,6 @@ beforeAll(async () => {
 });
 
 installTriggerHandlingE2eTestHooks();
-
-function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
-  const storePath = cfg.session?.store;
-  if (!storePath) {
-    throw new Error("expected session store path");
-  }
-  return storePath;
-}
 
 describe("trigger handling", () => {
   it("reports active auth profile and key snippet in status", async () => {
@@ -58,7 +48,7 @@ describe("trigger handling", () => {
         Provider: "whatsapp",
       } as Parameters<typeof resolveSessionKey>[1]);
       await fs.writeFile(
-        requireSessionStorePath(cfg),
+        cfg.session.store,
         JSON.stringify(
           {
             [sessionKey]: {
@@ -95,8 +85,16 @@ describe("trigger handling", () => {
 
   it("strips inline /status and still runs the agent", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
-      const { blockReplies, handlers } = createBlockReplyCollector();
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const blockReplies: Array<{ text?: string }> = [];
       await getReplyFromConfig(
         {
           Body: "please /status now",
@@ -107,7 +105,11 @@ describe("trigger handling", () => {
           SenderE164: "+1002",
           CommandAuthorized: true,
         },
-        handlers,
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
         makeCfg(home),
       );
       expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
@@ -122,8 +124,15 @@ describe("trigger handling", () => {
 
   it("handles inline /help and strips it before the agent", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
-      const { blockReplies, handlers } = createBlockReplyCollector();
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const blockReplies: Array<{ text?: string }> = [];
       const res = await getReplyFromConfig(
         {
           Body: "please /help now",
@@ -131,7 +140,11 @@ describe("trigger handling", () => {
           To: "+2000",
           CommandAuthorized: true,
         },
-        handlers,
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;

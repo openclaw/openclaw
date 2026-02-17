@@ -1,7 +1,6 @@
 import {
   addWildcardAllowFrom,
   formatDocsLink,
-  mergeAllowFromEntries,
   promptAccountId,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -100,7 +99,7 @@ async function promptNextcloudTalkAllowFrom(params: {
     ...existingAllowFrom.map((item) => String(item).trim().toLowerCase()).filter(Boolean),
     ...resolvedIds,
   ];
-  const unique = mergeAllowFromEntries(undefined, merged);
+  const unique = [...new Set(merged)];
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {

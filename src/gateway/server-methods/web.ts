@@ -7,7 +7,7 @@ import {
   validateWebLoginWaitParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
@@ -15,28 +15,6 @@ const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
     (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
   ) ?? null;
-
-function resolveAccountId(params: unknown): string | undefined {
-  return typeof (params as { accountId?: unknown }).accountId === "string"
-    ? (params as { accountId?: string }).accountId
-    : undefined;
-}
-
-function respondProviderUnavailable(respond: RespondFn) {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
-  );
-}
-
-function respondProviderUnsupported(respond: RespondFn, providerId: string) {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, `web login is not supported by provider ${providerId}`),
-  );
-}
 
 export const webHandlers: GatewayRequestHandlers = {
   "web.login.start": async ({ params, respond, context }) => {
@@ -52,15 +30,29 @@ export const webHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const accountId = resolveAccountId(params);
+      const accountId =
+        typeof (params as { accountId?: unknown }).accountId === "string"
+          ? (params as { accountId?: string }).accountId
+          : undefined;
       const provider = resolveWebLoginProvider();
       if (!provider) {
-        respondProviderUnavailable(respond);
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
+        );
         return;
       }
       await context.stopChannel(provider.id, accountId);
       if (!provider.gateway?.loginWithQrStart) {
-        respondProviderUnsupported(respond, provider.id);
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `web login is not supported by provider ${provider.id}`,
+          ),
+        );
         return;
       }
       const result = await provider.gateway.loginWithQrStart({
@@ -90,14 +82,28 @@ export const webHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const accountId = resolveAccountId(params);
+      const accountId =
+        typeof (params as { accountId?: unknown }).accountId === "string"
+          ? (params as { accountId?: string }).accountId
+          : undefined;
       const provider = resolveWebLoginProvider();
       if (!provider) {
-        respondProviderUnavailable(respond);
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
+        );
         return;
       }
       if (!provider.gateway?.loginWithQrWait) {
-        respondProviderUnsupported(respond, provider.id);
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `web login is not supported by provider ${provider.id}`,
+          ),
+        );
         return;
       }
       const result = await provider.gateway.loginWithQrWait({

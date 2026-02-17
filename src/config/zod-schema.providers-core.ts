@@ -13,7 +13,6 @@ import {
   DmPolicySchema,
   ExecutableTokenSchema,
   GroupPolicySchema,
-  HexColorSchema,
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
@@ -24,13 +23,6 @@ import {
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
-
-const DiscordIdSchema = z
-  .union([z.string(), z.number()])
-  .refine((value) => typeof value === "string", {
-    message: "Discord IDs must be strings (wrap numeric IDs in quotes).",
-  });
-const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 
@@ -150,7 +142,6 @@ export const TelegramAccountSchemaBase = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
-    ackReaction: z.string().optional(),
   })
   .strict();
 
@@ -221,9 +212,9 @@ export const DiscordDmSchema = z
   .object({
     enabled: z.boolean().optional(),
     policy: DmPolicySchema.optional(),
-    allowFrom: DiscordIdListSchema.optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupEnabled: z.boolean().optional(),
-    groupChannels: DiscordIdListSchema.optional(),
+    groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
   })
   .strict();
 
@@ -235,8 +226,8 @@ export const DiscordGuildChannelSchema = z
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
-    users: DiscordIdListSchema.optional(),
-    roles: DiscordIdListSchema.optional(),
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    roles: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
@@ -250,23 +241,11 @@ export const DiscordGuildSchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-    users: DiscordIdListSchema.optional(),
-    roles: DiscordIdListSchema.optional(),
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    roles: z.array(z.union([z.string(), z.number()])).optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();
-
-const DiscordUiSchema = z
-  .object({
-    components: z
-      .object({
-        accentColor: HexColorSchema.optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict()
-  .optional();
 
 export const DiscordAccountSchema = z
   .object({
@@ -318,14 +297,14 @@ export const DiscordAccountSchema = z
     // Aliases for channels.discord.dm.policy / channels.discord.dm.allowFrom. Prefer these for
     // inheritance in multi-account setups (shallow merge works; nested dm object doesn't).
     dmPolicy: DmPolicySchema.optional(),
-    allowFrom: DiscordIdListSchema.optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     execApprovals: z
       .object({
         enabled: z.boolean().optional(),
-        approvers: DiscordIdListSchema.optional(),
+        approvers: z.array(z.union([z.string(), z.number()])).optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
         cleanupAfterResolve: z.boolean().optional(),
@@ -333,7 +312,6 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
-    ui: DiscordUiSchema,
     intents: z
       .object({
         presence: z.boolean().optional(),
@@ -349,7 +327,6 @@ export const DiscordAccountSchema = z
       .strict()
       .optional(),
     responsePrefix: z.string().optional(),
-    ackReaction: z.string().optional(),
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
     activityType: z
@@ -460,7 +437,6 @@ export const GoogleChatAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streamMode: z.enum(["replace", "status_final", "append"]).optional().default("replace"),
     mediaMaxMb: z.number().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     actions: z
@@ -582,7 +558,6 @@ export const SlackAccountSchema = z
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
-    ackReaction: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -765,9 +740,7 @@ export const IrcAccountSchemaBase = z
   })
   .strict();
 
-type IrcBaseConfig = z.infer<typeof IrcAccountSchemaBase>;
-
-function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCtx): void {
+export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -782,16 +755,25 @@ function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCt
       message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
     });
   }
-}
-
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  refineIrcAllowFromAndNickserv(value, ctx);
 });
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
 }).superRefine((value, ctx) => {
-  refineIrcAllowFromAndNickserv(value, ctx);
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+  });
+  if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["nickserv", "registerEmail"],
+      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
+    });
+  }
 });
 
 export const IMessageAccountSchemaBase = z

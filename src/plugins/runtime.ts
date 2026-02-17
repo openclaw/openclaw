@@ -1,4 +1,20 @@
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry.js";
+
+const createEmptyRegistry = (): PluginRegistry => ({
+  plugins: [],
+  tools: [],
+  hooks: [],
+  typedHooks: [],
+  channels: [],
+  providers: [],
+  gatewayHandlers: {},
+  httpHandlers: [],
+  httpRoutes: [],
+  cliRegistrars: [],
+  services: [],
+  commands: [],
+  diagnostics: [],
+});
 
 const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
@@ -13,7 +29,7 @@ const state: RegistryState = (() => {
   };
   if (!globalState[REGISTRY_STATE]) {
     globalState[REGISTRY_STATE] = {
-      registry: createEmptyPluginRegistry(),
+      registry: createEmptyRegistry(),
       key: null,
     };
   }
@@ -31,7 +47,7 @@ export function getActivePluginRegistry(): PluginRegistry | null {
 
 export function requireActivePluginRegistry(): PluginRegistry {
   if (!state.registry) {
-    state.registry = createEmptyPluginRegistry();
+    state.registry = createEmptyRegistry();
   }
   return state.registry;
 }

@@ -5,28 +5,16 @@ import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
 import { CronDeliverySchema } from "../gateway/protocol/schema.js";
 
 type SchemaLike = {
-  anyOf?: Array<SchemaLike>;
+  anyOf?: Array<{ properties?: Record<string, unknown>; const?: unknown }>;
   properties?: Record<string, unknown>;
   const?: unknown;
 };
 
 function extractDeliveryModes(schema: SchemaLike): string[] {
   const modeSchema = schema.properties?.mode as SchemaLike | undefined;
-  const directModes = (modeSchema?.anyOf ?? [])
+  return (modeSchema?.anyOf ?? [])
     .map((entry) => entry?.const)
     .filter((value): value is string => typeof value === "string");
-  if (directModes.length > 0) {
-    return directModes;
-  }
-
-  const unionModes = (schema.anyOf ?? [])
-    .map((entry) => {
-      const mode = entry.properties?.mode as SchemaLike | undefined;
-      return mode?.const;
-    })
-    .filter((value): value is string => typeof value === "string");
-
-  return Array.from(new Set(unionModes));
 }
 
 const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];

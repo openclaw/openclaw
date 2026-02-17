@@ -18,7 +18,7 @@ metadata:
               "archive": "tar.bz2",
               "extract": true,
               "stripComponents": 1,
-              "targetDir": "runtime",
+              "targetDir": "~/.openclaw/tools/sherpa-onnx-tts/runtime",
               "label": "Download sherpa-onnx runtime (macOS)",
             },
             {
@@ -29,7 +29,7 @@ metadata:
               "archive": "tar.bz2",
               "extract": true,
               "stripComponents": 1,
-              "targetDir": "runtime",
+              "targetDir": "~/.openclaw/tools/sherpa-onnx-tts/runtime",
               "label": "Download sherpa-onnx runtime (Linux x64)",
             },
             {
@@ -40,7 +40,7 @@ metadata:
               "archive": "tar.bz2",
               "extract": true,
               "stripComponents": 1,
-              "targetDir": "runtime",
+              "targetDir": "~/.openclaw/tools/sherpa-onnx-tts/runtime",
               "label": "Download sherpa-onnx runtime (Windows x64)",
             },
             {
@@ -49,7 +49,7 @@ metadata:
               "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-high.tar.bz2",
               "archive": "tar.bz2",
               "extract": true,
-              "targetDir": "models",
+              "targetDir": "~/.openclaw/tools/sherpa-onnx-tts/models",
               "label": "Download Piper en_US lessac (high)",
             },
           ],

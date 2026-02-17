@@ -1,91 +1,34 @@
-import type { Mock } from "vitest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 
-let envSnapshot: ReturnType<typeof captureEnv>;
+let previousProfile: string | undefined;
 
 beforeAll(() => {
-  envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
+  previousProfile = process.env.OPENCLAW_PROFILE;
   process.env.OPENCLAW_PROFILE = "isolated";
 });
 
 afterAll(() => {
-  envSnapshot.restore();
-});
-
-function createDefaultSessionStoreEntry() {
-  return {
-    updatedAt: Date.now() - 60_000,
-    verboseLevel: "on",
-    thinkingLevel: "low",
-    inputTokens: 2_000,
-    outputTokens: 3_000,
-    totalTokens: 5_000,
-    contextTokens: 10_000,
-    model: "pi:opus",
-    sessionId: "abc123",
-    systemSent: true,
-  };
-}
-
-function createUnknownUsageSessionStore() {
-  return {
-    "+1000": {
-      updatedAt: Date.now() - 60_000,
-      inputTokens: 2_000,
-      outputTokens: 3_000,
-      contextTokens: 10_000,
-      model: "pi:opus",
-    },
-  };
-}
-
-function createChannelIssueCollector(channel: string) {
-  return (accounts: Array<Record<string, unknown>>) =>
-    accounts
-      .filter((account) => typeof account.lastError === "string" && account.lastError)
-      .map((account) => ({
-        channel,
-        accountId: typeof account.accountId === "string" ? account.accountId : "default",
-        message: `Channel error: ${String(account.lastError)}`,
-      }));
-}
-
-function createErrorChannelPlugin(params: { id: string; label: string; docsPath: string }) {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: params.docsPath,
-      blurb: "mock",
-    },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-    },
-    status: {
-      collectStatusIssues: createChannelIssueCollector(params.id),
-    },
-  };
-}
-
-async function withUnknownUsageStore(run: () => Promise<void>) {
-  const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
-  mocks.loadSessionStore.mockReturnValue(createUnknownUsageSessionStore());
-  try {
-    await run();
-  } finally {
-    if (originalLoadSessionStore) {
-      mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
-    }
+  if (previousProfile === undefined) {
+    delete process.env.OPENCLAW_PROFILE;
+  } else {
+    process.env.OPENCLAW_PROFILE = previousProfile;
   }
-}
+});
 
 const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn().mockReturnValue({
-    "+1000": createDefaultSessionStoreEntry(),
+    "+1000": {
+      updatedAt: Date.now() - 60_000,
+      verboseLevel: "on",
+      thinkingLevel: "low",
+      inputTokens: 2_000,
+      outputTokens: 3_000,
+      totalTokens: 5_000,
+      contextTokens: 10_000,
+      model: "pi:opus",
+      sessionId: "abc123",
+      systemSent: true,
+    },
   }),
   resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
   resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
@@ -208,18 +151,52 @@ vi.mock("../channels/plugins/index.js", () => ({
         },
       },
       {
-        ...createErrorChannelPlugin({
+        id: "signal",
+        meta: {
           id: "signal",
           label: "Signal",
+          selectionLabel: "Signal",
           docsPath: "/platforms/signal",
-        }),
+          blurb: "mock",
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+        status: {
+          collectStatusIssues: (accounts: Array<Record<string, unknown>>) =>
+            accounts
+              .filter((account) => typeof account.lastError === "string" && account.lastError)
+              .map((account) => ({
+                channel: "signal",
+                accountId: typeof account.accountId === "string" ? account.accountId : "default",
+                message: `Channel error: ${String(account.lastError)}`,
+              })),
+        },
       },
       {
-        ...createErrorChannelPlugin({
+        id: "imessage",
+        meta: {
           id: "imessage",
           label: "iMessage",
+          selectionLabel: "iMessage",
           docsPath: "/platforms/mac",
-        }),
+          blurb: "mock",
+        },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+        },
+        status: {
+          collectStatusIssues: (accounts: Array<Record<string, unknown>>) =>
+            accounts
+              .filter((account) => typeof account.lastError === "string" && account.lastError)
+              .map((account) => ({
+                channel: "imessage",
+                accountId: typeof account.accountId === "string" ? account.accountId : "default",
+                message: `Channel error: ${String(account.lastError)}`,
+              })),
+        },
       },
     ] as unknown,
 }));
@@ -236,13 +213,9 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/call.js")>();
   return { ...actual, callGateway: mocks.callGateway };
 });
-vi.mock("../gateway/session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
-  return {
-    ...actual,
-    listAgentsForGateway: mocks.listAgentsForGateway,
-  };
-});
+vi.mock("../gateway/session-utils.js", () => ({
+  listAgentsForGateway: mocks.listAgentsForGateway,
+}));
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
 }));
@@ -276,7 +249,6 @@ vi.mock("../infra/update-check.js", () => ({
     },
     registry: { latestVersion: "0.0.0" },
   }),
-  formatGitInstallLabel: vi.fn(() => "main · @ deadbeef"),
   compareSemverStrings: vi.fn(() => 0),
 }));
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -324,12 +296,10 @@ const runtime = {
   exit: vi.fn(),
 };
 
-const runtimeLogMock = runtime.log as Mock<(...args: unknown[]) => void>;
-
 describe("statusCommand", () => {
   it("prints JSON when requested", async () => {
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls[0][0]);
     expect(payload.linkChannel.linked).toBe(true);
     expect(payload.memory.agentId).toBe("main");
     expect(payload.memoryPlugin.enabled).toBe(true);
@@ -350,50 +320,78 @@ describe("statusCommand", () => {
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {
-    await withUnknownUsageStore(async () => {
-      runtimeLogMock.mockClear();
-      await statusCommand({ json: true }, runtime as never);
-      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
-      expect(payload.sessions.recent[0].totalTokens).toBeNull();
-      expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
-      expect(payload.sessions.recent[0].percentUsed).toBeNull();
-      expect(payload.sessions.recent[0].remainingTokens).toBeNull();
+    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": {
+        updatedAt: Date.now() - 60_000,
+        inputTokens: 2_000,
+        outputTokens: 3_000,
+        contextTokens: 10_000,
+        model: "pi:opus",
+      },
     });
+
+    (runtime.log as vi.Mock).mockClear();
+    await statusCommand({ json: true }, runtime as never);
+    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls.at(-1)?.[0]);
+    expect(payload.sessions.recent[0].totalTokens).toBeNull();
+    expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
+    expect(payload.sessions.recent[0].percentUsed).toBeNull();
+    expect(payload.sessions.recent[0].remainingTokens).toBeNull();
+
+    if (originalLoadSessionStore) {
+      mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+    }
   });
 
   it("prints unknown usage in formatted output when totalTokens is missing", async () => {
-    await withUnknownUsageStore(async () => {
-      runtimeLogMock.mockClear();
-      await statusCommand({}, runtime as never);
-      const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
-      expect(logs.some((line) => line.includes("unknown/") && line.includes("(?%)"))).toBe(true);
+    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": {
+        updatedAt: Date.now() - 60_000,
+        inputTokens: 2_000,
+        outputTokens: 3_000,
+        contextTokens: 10_000,
+        model: "pi:opus",
+      },
     });
+
+    try {
+      (runtime.log as vi.Mock).mockClear();
+      await statusCommand({}, runtime as never);
+      const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+      expect(logs.some((line) => line.includes("unknown/") && line.includes("(?%)"))).toBe(true);
+    } finally {
+      if (originalLoadSessionStore) {
+        mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+      }
+    }
   });
 
   it("prints formatted lines otherwise", async () => {
-    runtimeLogMock.mockClear();
+    (runtime.log as vi.Mock).mockClear();
     await statusCommand({}, runtime as never);
-    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
-    expect(logs.some((l: string) => l.includes("OpenClaw status"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Overview"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Security audit"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Summary:"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("CRITICAL"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Dashboard"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("macos 14.0 (arm64)"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Memory"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Channels"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("WhatsApp"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Sessions"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("+1000"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("50%"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("LaunchAgent"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("FAQ:"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Troubleshooting:"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Next steps:"))).toBe(true);
+    const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+    expect(logs.some((l) => l.includes("OpenClaw status"))).toBe(true);
+    expect(logs.some((l) => l.includes("Overview"))).toBe(true);
+    expect(logs.some((l) => l.includes("Security audit"))).toBe(true);
+    expect(logs.some((l) => l.includes("Summary:"))).toBe(true);
+    expect(logs.some((l) => l.includes("CRITICAL"))).toBe(true);
+    expect(logs.some((l) => l.includes("Dashboard"))).toBe(true);
+    expect(logs.some((l) => l.includes("macos 14.0 (arm64)"))).toBe(true);
+    expect(logs.some((l) => l.includes("Memory"))).toBe(true);
+    expect(logs.some((l) => l.includes("Channels"))).toBe(true);
+    expect(logs.some((l) => l.includes("WhatsApp"))).toBe(true);
+    expect(logs.some((l) => l.includes("Sessions"))).toBe(true);
+    expect(logs.some((l) => l.includes("+1000"))).toBe(true);
+    expect(logs.some((l) => l.includes("50%"))).toBe(true);
+    expect(logs.some((l) => l.includes("LaunchAgent"))).toBe(true);
+    expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
+    expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
+    expect(logs.some((l) => l.includes("Next steps:"))).toBe(true);
     expect(
       logs.some(
-        (l: string) =>
+        (l) =>
           l.includes("openclaw status --all") ||
           l.includes("openclaw --profile isolated status --all") ||
           l.includes("openclaw status --all") ||
@@ -417,10 +415,10 @@ describe("statusCommand", () => {
         presence: [],
         configSnapshot: null,
       });
-      runtimeLogMock.mockClear();
+      (runtime.log as vi.Mock).mockClear();
       await statusCommand({}, runtime as never);
-      const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
-      expect(logs.some((l: string) => l.includes("auth token"))).toBe(true);
+      const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+      expect(logs.some((l) => l.includes("auth token"))).toBe(true);
     } finally {
       if (prevToken === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -465,9 +463,9 @@ describe("statusCommand", () => {
       },
     });
 
-    runtimeLogMock.mockClear();
+    (runtime.log as vi.Mock).mockClear();
     await statusCommand({}, runtime as never);
-    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+    const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
     expect(logs.join("\n")).toMatch(/Signal/i);
     expect(logs.join("\n")).toMatch(/iMessage/i);
     expect(logs.join("\n")).toMatch(/gateway:/i);
@@ -505,12 +503,23 @@ describe("statusCommand", () => {
         };
       }
       return {
-        "+1000": createDefaultSessionStoreEntry(),
+        "+1000": {
+          updatedAt: Date.now() - 60_000,
+          verboseLevel: "on",
+          thinkingLevel: "low",
+          inputTokens: 2_000,
+          outputTokens: 3_000,
+          totalTokens: 5_000,
+          contextTokens: 10_000,
+          model: "pi:opus",
+          sessionId: "abc123",
+          systemSent: true,
+        },
       };
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls.at(-1)?.[0]);
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);
     expect(

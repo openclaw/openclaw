@@ -44,11 +44,8 @@ describe("pw-tools-core", () => {
       paths: ["/tmp/2"],
     });
 
-    if (!resolve1 || !resolve2) {
-      throw new Error("file chooser handlers were not registered");
-    }
-    (resolve1 as (value: unknown) => void)(fc1);
-    (resolve2 as (value: unknown) => void)(fc2);
+    resolve1?.(fc1);
+    resolve2?.(fc2);
     await Promise.resolve();
 
     expect(fc1.setFiles).not.toHaveBeenCalled();

@@ -141,17 +141,6 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("binding.peer");
   });
 
-  test("coerces numeric peer ids to stable session keys", () => {
-    const cfg: OpenClawConfig = {};
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "discord",
-      accountId: "default",
-      peer: { kind: "channel", id: 1468834856187203680n as unknown as string },
-    });
-    expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
-  });
-
   test("guild binding wins over account binding when peer not bound", () => {
     const cfg: OpenClawConfig = {
       bindings: [
@@ -386,49 +375,24 @@ test("dmScope=per-account-channel-peer uses default accountId when not provided"
 });
 
 describe("parentPeer binding inheritance (thread support)", () => {
-  const threadPeer = { kind: "channel" as const, id: "thread-456" };
-  const defaultParentPeer = { kind: "channel" as const, id: "parent-channel-123" };
-
-  function makeDiscordPeerBinding(agentId: string, peerId: string) {
-    return {
-      agentId,
-      match: {
-        channel: "discord" as const,
-        peer: { kind: "channel" as const, id: peerId },
-      },
-    };
-  }
-
-  function makeDiscordGuildBinding(agentId: string, guildId: string) {
-    return {
-      agentId,
-      match: {
-        channel: "discord" as const,
-        guildId,
-      },
-    };
-  }
-
-  function resolveDiscordThreadRoute(params: {
-    cfg: OpenClawConfig;
-    parentPeer?: { kind: "channel"; id: string } | null;
-    guildId?: string;
-  }) {
-    const parentPeer = "parentPeer" in params ? params.parentPeer : defaultParentPeer;
-    return resolveAgentRoute({
-      cfg: params.cfg,
-      channel: "discord",
-      peer: threadPeer,
-      parentPeer,
-      guildId: params.guildId,
-    });
-  }
-
   test("thread inherits binding from parent channel when no direct match", () => {
     const cfg: OpenClawConfig = {
-      bindings: [makeDiscordPeerBinding("adecco", defaultParentPeer.id)],
+      bindings: [
+        {
+          agentId: "adecco",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+      ],
     };
-    const route = resolveDiscordThreadRoute({ cfg });
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+    });
     expect(route.agentId).toBe("adecco");
     expect(route.matchedBy).toBe("binding.peer.parent");
   });
@@ -436,11 +400,28 @@ describe("parentPeer binding inheritance (thread support)", () => {
   test("direct peer binding wins over parent peer binding", () => {
     const cfg: OpenClawConfig = {
       bindings: [
-        makeDiscordPeerBinding("thread-agent", threadPeer.id),
-        makeDiscordPeerBinding("parent-agent", defaultParentPeer.id),
+        {
+          agentId: "thread-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "thread-456" },
+          },
+        },
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
       ],
     };
-    const route = resolveDiscordThreadRoute({ cfg });
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+    });
     expect(route.agentId).toBe("thread-agent");
     expect(route.matchedBy).toBe("binding.peer");
   });
@@ -448,11 +429,29 @@ describe("parentPeer binding inheritance (thread support)", () => {
   test("parent peer binding wins over guild binding", () => {
     const cfg: OpenClawConfig = {
       bindings: [
-        makeDiscordPeerBinding("parent-agent", defaultParentPeer.id),
-        makeDiscordGuildBinding("guild-agent", "guild-789"),
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+        {
+          agentId: "guild-agent",
+          match: {
+            channel: "discord",
+            guildId: "guild-789",
+          },
+        },
       ],
     };
-    const route = resolveDiscordThreadRoute({ cfg, guildId: "guild-789" });
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+      guildId: "guild-789",
+    });
     expect(route.agentId).toBe("parent-agent");
     expect(route.matchedBy).toBe("binding.peer.parent");
   });
@@ -460,29 +459,73 @@ describe("parentPeer binding inheritance (thread support)", () => {
   test("falls back to guild binding when no parent peer match", () => {
     const cfg: OpenClawConfig = {
       bindings: [
-        makeDiscordPeerBinding("other-parent-agent", "other-parent-999"),
-        makeDiscordGuildBinding("guild-agent", "guild-789"),
+        {
+          agentId: "other-parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "other-parent-999" },
+          },
+        },
+        {
+          agentId: "guild-agent",
+          match: {
+            channel: "discord",
+            guildId: "guild-789",
+          },
+        },
       ],
     };
-    const route = resolveDiscordThreadRoute({ cfg, guildId: "guild-789" });
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+      guildId: "guild-789",
+    });
     expect(route.agentId).toBe("guild-agent");
     expect(route.matchedBy).toBe("binding.guild");
   });
 
   test("parentPeer with empty id is ignored", () => {
     const cfg: OpenClawConfig = {
-      bindings: [makeDiscordPeerBinding("parent-agent", defaultParentPeer.id)],
+      bindings: [
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+      ],
     };
-    const route = resolveDiscordThreadRoute({ cfg, parentPeer: { kind: "channel", id: "" } });
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "" },
+    });
     expect(route.agentId).toBe("main");
     expect(route.matchedBy).toBe("default");
   });
 
   test("null parentPeer is handled gracefully", () => {
     const cfg: OpenClawConfig = {
-      bindings: [makeDiscordPeerBinding("parent-agent", defaultParentPeer.id)],
+      bindings: [
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+      ],
     };
-    const route = resolveDiscordThreadRoute({ cfg, parentPeer: null });
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: null,
+    });
     expect(route.agentId).toBe("main");
     expect(route.matchedBy).toBe("default");
   });

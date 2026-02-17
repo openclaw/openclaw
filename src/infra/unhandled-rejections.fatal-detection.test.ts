@@ -16,11 +16,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   beforeEach(() => {
     exitCalls = [];
 
-    vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
+    vi.spyOn(process, "exit").mockImplementation((code: string | number | null | undefined) => {
       if (code !== undefined && code !== null) {
         exitCalls.push(code);
       }
-      return undefined as never;
     });
 
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -1,18 +1,49 @@
 import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  dispatchMock,
-  readAllowFromStoreMock,
-  sendMock,
-  updateLastRouteMock,
-  upsertPairingRequestMock,
-} from "./monitor.tool-result.test-harness.js";
+import { createDiscordMessageHandler } from "./monitor.js";
+import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
+import { __resetDiscordThreadStarterCacheForTest } from "./monitor/threading.js";
 
 type Config = ReturnType<typeof import("../config/config.js").loadConfig>;
 
+const sendMock = vi.fn();
+const reactMock = vi.fn();
+const updateLastRouteMock = vi.fn();
+const dispatchMock = vi.fn();
+const readAllowFromStoreMock = vi.fn();
+const upsertPairingRequestMock = vi.fn();
+
+vi.mock("./send.js", () => ({
+  sendMessageDiscord: (...args: unknown[]) => sendMock(...args),
+  reactMessageDiscord: async (...args: unknown[]) => {
+    reactMock(...args);
+  },
+}));
+vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/dispatch.js")>();
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: unknown[]) => dispatchMock(...args),
+    dispatchInboundMessageWithDispatcher: (...args: unknown[]) => dispatchMock(...args),
+    dispatchInboundMessageWithBufferedDispatcher: (...args: unknown[]) => dispatchMock(...args),
+  };
+});
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
+    updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
+    resolveSessionKey: vi.fn(),
+  };
+});
+
 beforeEach(() => {
-  vi.resetModules();
   sendMock.mockReset().mockResolvedValue(undefined);
   updateLastRouteMock.mockReset();
   dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {
@@ -21,17 +52,19 @@ beforeEach(() => {
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+  __resetDiscordChannelInfoCacheForTest();
+  __resetDiscordThreadStarterCacheForTest();
 });
 
-const BASE_CFG: Config = {
+const BASE_CFG = {
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-4-5" },
+      model: "anthropic/claude-opus-4-5",
       workspace: "/tmp/openclaw",
     },
   },
   session: { store: "/tmp/openclaw-sessions.json" },
-};
+} as const;
 
 const CATEGORY_GUILD_CFG = {
   ...BASE_CFG,
@@ -46,13 +79,13 @@ const CATEGORY_GUILD_CFG = {
       },
     },
   },
-} satisfies Config;
+  routing: { allowFrom: [] },
+} as Config;
 
-async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
-  const { createDiscordMessageHandler } = await import("./monitor.js");
+function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
   return createDiscordMessageHandler({
     cfg: opts.cfg,
-    discordConfig: opts.cfg.channels?.discord,
+    discordConfig: opts.cfg.channels.discord,
     accountId: "default",
     token: "token",
     runtime: {
@@ -84,11 +117,10 @@ function createDmClient(fetchChannel?: ReturnType<typeof vi.fn>) {
   return { fetchChannel: resolvedFetchChannel } as unknown as Client;
 }
 
-async function createCategoryGuildHandler() {
-  const { createDiscordMessageHandler } = await import("./monitor.js");
+function createCategoryGuildHandler() {
   return createDiscordMessageHandler({
     cfg: CATEGORY_GUILD_CFG,
-    discordConfig: CATEGORY_GUILD_CFG.channels?.discord,
+    discordConfig: CATEGORY_GUILD_CFG.channels.discord,
     accountId: "default",
     token: "token",
     runtime: {
@@ -132,7 +164,7 @@ describe("discord tool result dispatch", () => {
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const runtimeError = vi.fn();
-    const handler = await createDmHandler({ cfg, runtimeError });
+    const handler = createDmHandler({ cfg, runtimeError });
     const client = createDmClient();
 
     await handler(
@@ -167,7 +199,7 @@ describe("discord tool result dispatch", () => {
       channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
-    const handler = await createDmHandler({ cfg });
+    const handler = createDmHandler({ cfg });
     const fetchChannel = vi.fn().mockResolvedValue({
       type: ChannelType.DM,
       name: "dm",
@@ -219,7 +251,7 @@ describe("discord tool result dispatch", () => {
       channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
-    const handler = await createDmHandler({ cfg });
+    const handler = createDmHandler({ cfg });
     const client = createDmClient();
 
     await handler(
@@ -271,7 +303,7 @@ describe("discord tool result dispatch", () => {
       return { queuedFinal: true, counts: { final: 1 } };
     });
 
-    const handler = await createCategoryGuildHandler();
+    const handler = createCategoryGuildHandler();
     const client = createCategoryGuildClient();
 
     await handler(
@@ -308,7 +340,7 @@ describe("discord tool result dispatch", () => {
       return { queuedFinal: true, counts: { final: 1 } };
     });
 
-    const handler = await createCategoryGuildHandler();
+    const handler = createCategoryGuildHandler();
     const client = createCategoryGuildClient();
 
     await handler(
@@ -345,7 +377,7 @@ describe("discord tool result dispatch", () => {
       },
     } as Config;
 
-    const handler = await createDmHandler({ cfg });
+    const handler = createDmHandler({ cfg });
     const client = createDmClient();
 
     await handler(

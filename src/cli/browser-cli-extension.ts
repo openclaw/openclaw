@@ -84,7 +84,6 @@ export function registerBrowserExtensionCommands(
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
-        return;
       }
 
       if (parent?.json) {

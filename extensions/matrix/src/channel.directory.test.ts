@@ -1,4 +1,4 @@
-import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
@@ -24,18 +24,10 @@ vi.mock("@vector-im/matrix-bot-sdk", () => ({
 }));
 
 describe("matrix directory", () => {
-  const runtimeEnv: RuntimeEnv = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
-
   beforeEach(() => {
     setMatrixRuntime({
       state: {
-        resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
+        resolveStateDir: (_env, homeDir) => homeDir(),
       },
     } as PluginRuntime);
   });
@@ -59,12 +51,11 @@ describe("matrix directory", () => {
     expect(matrixPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      matrixPlugin.directory!.listPeers!({
+      matrixPlugin.directory!.listPeers({
         cfg,
         accountId: undefined,
         query: undefined,
         limit: undefined,
-        runtime: runtimeEnv,
       }),
     ).resolves.toEqual(
       expect.arrayContaining([
@@ -76,12 +67,11 @@ describe("matrix directory", () => {
     );
 
     await expect(
-      matrixPlugin.directory!.listGroups!({
+      matrixPlugin.directory!.listGroups({
         cfg,
         accountId: undefined,
         query: undefined,
         limit: undefined,
-        runtime: runtimeEnv,
       }),
     ).resolves.toEqual(
       expect.arrayContaining([
@@ -140,11 +130,11 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    expect(matrixPlugin.groups!.resolveRequireMention!({ cfg, groupId: "!room:example.org" })).toBe(
+    expect(matrixPlugin.groups.resolveRequireMention({ cfg, groupId: "!room:example.org" })).toBe(
       true,
     );
     expect(
-      matrixPlugin.groups!.resolveRequireMention!({
+      matrixPlugin.groups.resolveRequireMention({
         cfg,
         accountId: "assistant",
         groupId: "!room:example.org",

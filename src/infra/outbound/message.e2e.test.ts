@@ -89,7 +89,7 @@ describe("sendMessage replyToId threading", () => {
     setRegistry(emptyRegistry);
   });
 
-  const setupMattermostCapture = () => {
+  it("passes replyToId through to the outbound adapter", async () => {
     const capturedCtx: Record<string, unknown>[] = [];
     const plugin = createMattermostLikePlugin({
       onSendText: (ctx) => {
@@ -97,11 +97,6 @@ describe("sendMessage replyToId threading", () => {
       },
     });
     setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
-    return capturedCtx;
-  };
-
-  it("passes replyToId through to the outbound adapter", async () => {
-    const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
@@ -116,7 +111,13 @@ describe("sendMessage replyToId threading", () => {
   });
 
   it("passes threadId through to the outbound adapter", async () => {
-    const capturedCtx = setupMattermostCapture();
+    const capturedCtx: Record<string, unknown>[] = [];
+    const plugin = createMattermostLikePlugin({
+      onSendText: (ctx) => {
+        capturedCtx.push(ctx);
+      },
+    });
+    setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
 
     await sendMessage({
       cfg: {},

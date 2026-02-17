@@ -19,18 +19,11 @@ vi.mock("./node-llama.js", () => ({
 }));
 
 const createFetchMock = () =>
-  vi.fn(async (_input?: unknown, _init?: unknown) => ({
+  vi.fn(async () => ({
     ok: true,
     status: 200,
     json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
-  }));
-
-function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvider>>) {
-  if (!result.provider) {
-    throw new Error("Expected embedding provider");
-  }
-  return result.provider;
-}
+  })) as unknown as typeof fetch;
 
 describe("embedding provider remote overrides", () => {
   afterEach(() => {
@@ -76,12 +69,10 @@ describe("embedding provider remote overrides", () => {
       fallback: "openai",
     });
 
-    const provider = requireProvider(result);
-    await provider.embedQuery("hello");
+    await result.provider.embedQuery("hello");
 
     expect(authModule.resolveApiKeyForProvider).not.toHaveBeenCalled();
-    const url = fetchMock.mock.calls[0]?.[0];
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe("https://remote.example/v1/embeddings");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer remote-key");
@@ -121,21 +112,19 @@ describe("embedding provider remote overrides", () => {
       fallback: "openai",
     });
 
-    const provider = requireProvider(result);
-    await provider.embedQuery("hello");
+    await result.provider.embedQuery("hello");
 
     expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledTimes(1);
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    const headers = (init?.headers as Record<string, string>) ?? {};
+    const headers = (fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>) ?? {};
     expect(headers.Authorization).toBe("Bearer provider-key");
   });
 
   it("builds Gemini embeddings requests with api key header", async () => {
-    const fetchMock = vi.fn(async (_input?: unknown, _init?: unknown) => ({
+    const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
       json: async () => ({ embedding: { values: [1, 2, 3] } }),
-    }));
+    })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchMock);
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
@@ -163,11 +152,9 @@ describe("embedding provider remote overrides", () => {
       fallback: "openai",
     });
 
-    const provider = requireProvider(result);
-    await provider.embedQuery("hello");
+    await result.provider.embedQuery("hello");
 
-    const url = fetchMock.mock.calls[0]?.[0];
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
     );
@@ -199,16 +186,15 @@ describe("embedding provider auto selection", () => {
     });
 
     expect(result.requestedProvider).toBe("auto");
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("openai");
+    expect(result.provider.id).toBe("openai");
   });
 
   it("uses gemini when openai is missing", async () => {
-    const fetchMock = vi.fn(async (_input?: unknown, _init?: unknown) => ({
+    const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
       json: async () => ({ embedding: { values: [1, 2, 3] } }),
-    }));
+    })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchMock);
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
@@ -228,9 +214,8 @@ describe("embedding provider auto selection", () => {
     });
 
     expect(result.requestedProvider).toBe("auto");
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("gemini");
-    await provider.embedQuery("hello");
+    expect(result.provider.id).toBe("gemini");
+    await result.provider.embedQuery("hello");
     const [url] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(
       `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_GEMINI_EMBEDDING_MODEL}:embedContent`,
@@ -238,11 +223,11 @@ describe("embedding provider auto selection", () => {
   });
 
   it("keeps explicit model when openai is selected", async () => {
-    const fetchMock = vi.fn(async (_input?: unknown, _init?: unknown) => ({
+    const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
-    }));
+    })) as unknown as typeof fetch;
     vi.stubGlobal("fetch", fetchMock);
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
@@ -259,13 +244,11 @@ describe("embedding provider auto selection", () => {
     });
 
     expect(result.requestedProvider).toBe("auto");
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("openai");
-    await provider.embedQuery("hello");
-    const url = fetchMock.mock.calls[0]?.[0];
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(result.provider.id).toBe("openai");
+    await result.provider.embedQuery("hello");
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe("https://api.openai.com/v1/embeddings");
-    const payload = JSON.parse(init?.body as string) as { model?: string };
+    const payload = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
     expect(payload.model).toBe("text-embedding-3-small");
   });
 });
@@ -299,8 +282,7 @@ describe("embedding provider local fallback", () => {
       fallback: "openai",
     });
 
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("openai");
+    expect(result.provider.id).toBe("openai");
     expect(result.fallbackFrom).toBe("local");
     expect(result.fallbackReason).toContain("node-llama-cpp");
   });
@@ -346,45 +328,32 @@ describe("local embedding normalization", () => {
     vi.unstubAllGlobals();
   });
 
-  async function createLocalProviderForTest() {
-    return createEmbeddingProvider({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-    });
-  }
+  it("normalizes local embeddings to magnitude ~1.0", async () => {
+    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
+    const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");
 
-  function mockSingleLocalEmbeddingVector(
-    vector: number[],
-    resolveModelFile: (modelPath: string, modelDirectory?: string) => Promise<string> = async () =>
-      "/fake/model.gguf",
-  ): void {
     importNodeLlamaCppMock.mockResolvedValue({
       getLlama: async () => ({
         loadModel: vi.fn().mockResolvedValue({
           createEmbeddingContext: vi.fn().mockResolvedValue({
             getEmbeddingFor: vi.fn().mockResolvedValue({
-              vector: new Float32Array(vector),
+              vector: new Float32Array(unnormalizedVector),
             }),
           }),
         }),
       }),
-      resolveModelFile,
+      resolveModelFile: resolveModelFileMock,
       LlamaLogLevel: { error: 0 },
     });
-  }
 
-  it("normalizes local embeddings to magnitude ~1.0", async () => {
-    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
-    const resolveModelFileMock = vi.fn(async () => "/fake/model.gguf");
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
 
-    mockSingleLocalEmbeddingVector(unnormalizedVector, resolveModelFileMock);
-
-    const result = await createLocalProviderForTest();
-
-    const provider = requireProvider(result);
-    const embedding = await provider.embedQuery("test query");
+    const embedding = await result.provider.embedQuery("test query");
 
     const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
 
@@ -395,12 +364,28 @@ describe("local embedding normalization", () => {
   it("handles zero vector without division by zero", async () => {
     const zeroVector = [0, 0, 0, 0];
 
-    mockSingleLocalEmbeddingVector(zeroVector);
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi.fn().mockResolvedValue({
+              vector: new Float32Array(zeroVector),
+            }),
+          }),
+        }),
+      }),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
 
-    const result = await createLocalProviderForTest();
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
 
-    const provider = requireProvider(result);
-    const embedding = await provider.embedQuery("test");
+    const embedding = await result.provider.embedQuery("test");
 
     expect(embedding).toEqual([0, 0, 0, 0]);
     expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
@@ -409,12 +394,28 @@ describe("local embedding normalization", () => {
   it("sanitizes non-finite values before normalization", async () => {
     const nonFiniteVector = [1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
 
-    mockSingleLocalEmbeddingVector(nonFiniteVector);
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor: vi.fn().mockResolvedValue({
+              vector: new Float32Array(nonFiniteVector),
+            }),
+          }),
+        }),
+      }),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
 
-    const result = await createLocalProviderForTest();
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
 
-    const provider = requireProvider(result);
-    const embedding = await provider.embedQuery("test");
+    const embedding = await result.provider.embedQuery("test");
 
     expect(embedding).toEqual([1, 0, 0, 0]);
     expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
@@ -443,74 +444,18 @@ describe("local embedding normalization", () => {
       LlamaLogLevel: { error: 0 },
     });
 
-    const result = await createLocalProviderForTest();
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
 
-    const provider = requireProvider(result);
-    const embeddings = await provider.embedBatch(["text1", "text2", "text3"]);
+    const embeddings = await result.provider.embedBatch(["text1", "text2", "text3"]);
 
     for (const embedding of embeddings) {
       const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
       expect(magnitude).toBeCloseTo(1.0, 5);
     }
-  });
-});
-
-describe("FTS-only fallback when no provider available", () => {
-  afterEach(() => {
-    vi.resetAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("returns null provider with reason when auto mode finds no providers", async () => {
-    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
-      new Error('No API key found for provider "openai"'),
-    );
-
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "auto",
-      model: "",
-      fallback: "none",
-    });
-
-    expect(result.provider).toBeNull();
-    expect(result.requestedProvider).toBe("auto");
-    expect(result.providerUnavailableReason).toBeDefined();
-    expect(result.providerUnavailableReason).toContain("No API key");
-  });
-
-  it("returns null provider when explicit provider fails with missing API key", async () => {
-    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
-      new Error('No API key found for provider "openai"'),
-    );
-
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "openai",
-      model: "text-embedding-3-small",
-      fallback: "none",
-    });
-
-    expect(result.provider).toBeNull();
-    expect(result.requestedProvider).toBe("openai");
-    expect(result.providerUnavailableReason).toBeDefined();
-  });
-
-  it("returns null provider when both primary and fallback fail with missing API keys", async () => {
-    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
-      new Error("No API key found for provider"),
-    );
-
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "openai",
-      model: "text-embedding-3-small",
-      fallback: "gemini",
-    });
-
-    expect(result.provider).toBeNull();
-    expect(result.requestedProvider).toBe("openai");
-    expect(result.fallbackFrom).toBe("openai");
-    expect(result.providerUnavailableReason).toContain("Fallback to gemini failed");
   });
 });

@@ -13,15 +13,6 @@ describe("normalizeLegacyConfigValues", () => {
     fs.writeFileSync(path.join(dir, "creds.json"), JSON.stringify({ me: {} }));
   };
 
-  const expectNoWhatsAppConfigForLegacyAuth = (setup?: () => void) => {
-    setup?.();
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-    });
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
-  };
-
   beforeEach(() => {
     previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
     tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
@@ -66,24 +57,39 @@ describe("normalizeLegacyConfigValues", () => {
   });
 
   it("does not add whatsapp config when only auth exists (issue #900)", () => {
-    expectNoWhatsAppConfigForLegacyAuth(() => {
-      const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
-      writeCreds(credsDir);
+    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
+    writeCreds(credsDir);
+
+    const res = normalizeLegacyConfigValues({
+      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
+
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
   });
 
   it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
-    expectNoWhatsAppConfigForLegacyAuth(() => {
-      const credsPath = path.join(tempOauthDir ?? "", "creds.json");
-      fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
+    const credsPath = path.join(tempOauthDir ?? "", "creds.json");
+    fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
+
+    const res = normalizeLegacyConfigValues({
+      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
+
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
   });
 
   it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
-    expectNoWhatsAppConfigForLegacyAuth(() => {
-      const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
-      writeCreds(credsDir);
+    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
+    writeCreds(credsDir);
+
+    const res = normalizeLegacyConfigValues({
+      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
+
+    expect(res.config.channels?.whatsapp).toBeUndefined();
+    expect(res.changes).toEqual([]);
   });
 
   it("copies legacy ack reaction when authDir override exists", () => {

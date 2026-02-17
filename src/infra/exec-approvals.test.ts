@@ -11,7 +11,6 @@ import {
   isSafeBinUsage,
   matchAllowlist,
   maxAsk,
-  mergeExecApprovalsSocketDefaults,
   minSecurity,
   normalizeExecApprovals,
   normalizeSafeBins,
@@ -32,26 +31,6 @@ function makePathEnv(binDir: string): NodeJS.ProcessEnv {
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
-}
-
-function createSafeBinJqCase(params: { command: string; seedFileName?: string }) {
-  const dir = makeTempDir();
-  const binDir = path.join(dir, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
-  const exeName = process.platform === "win32" ? "jq.exe" : "jq";
-  const exe = path.join(binDir, exeName);
-  fs.writeFileSync(exe, "");
-  fs.chmodSync(exe, 0o755);
-  if (params.seedFileName) {
-    fs.writeFileSync(path.join(dir, params.seedFileName), "{}");
-  }
-  const res = analyzeShellCommand({
-    command: params.command,
-    cwd: dir,
-    env: makePathEnv(binDir),
-  });
-  expect(res.ok).toBe(true);
-  return { dir, segment: res.segments[0] };
 }
 
 describe("exec approvals allowlist matching", () => {
@@ -97,36 +76,6 @@ describe("exec approvals allowlist matching", () => {
     const entries: ExecAllowlistEntry[] = [{ pattern: "bin/rg" }];
     const match = matchAllowlist(entries, resolution);
     expect(match).toBeNull();
-  });
-});
-
-describe("mergeExecApprovalsSocketDefaults", () => {
-  it("prefers normalized socket, then current, then default path", () => {
-    const normalized = normalizeExecApprovals({
-      version: 1,
-      agents: {},
-      socket: { path: "/tmp/a.sock", token: "a" },
-    });
-    const current = normalizeExecApprovals({
-      version: 1,
-      agents: {},
-      socket: { path: "/tmp/b.sock", token: "b" },
-    });
-    const merged = mergeExecApprovalsSocketDefaults({ normalized, current });
-    expect(merged.socket?.path).toBe("/tmp/a.sock");
-    expect(merged.socket?.token).toBe("a");
-  });
-
-  it("falls back to current token when missing in normalized", () => {
-    const normalized = normalizeExecApprovals({ version: 1, agents: {} });
-    const current = normalizeExecApprovals({
-      version: 1,
-      agents: {},
-      socket: { path: "/tmp/b.sock", token: "b" },
-    });
-    const merged = mergeExecApprovalsSocketDefaults({ normalized, current });
-    expect(merged.socket?.path).toBeTruthy();
-    expect(merged.socket?.token).toBe("b");
   });
 });
 
@@ -409,7 +358,20 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const { dir, segment } = createSafeBinJqCase({ command: "jq .foo" });
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const exeName = process.platform === "win32" ? "jq.exe" : "jq";
+    const exe = path.join(binDir, exeName);
+    fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
+    const res = analyzeShellCommand({
+      command: "jq .foo",
+      cwd: dir,
+      env: makePathEnv(binDir),
+    });
+    expect(res.ok).toBe(true);
+    const segment = res.segments[0];
     const ok = isSafeBinUsage({
       argv: segment.argv,
       resolution: segment.resolution,
@@ -423,10 +385,22 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const { dir, segment } = createSafeBinJqCase({
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const exeName = process.platform === "win32" ? "jq.exe" : "jq";
+    const exe = path.join(binDir, exeName);
+    fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
+    const file = path.join(dir, "secret.json");
+    fs.writeFileSync(file, "{}");
+    const res = analyzeShellCommand({
       command: "jq .foo secret.json",
-      seedFileName: "secret.json",
+      cwd: dir,
+      env: makePathEnv(binDir),
     });
+    expect(res.ok).toBe(true);
+    const segment = res.segments[0];
     const ok = isSafeBinUsage({
       argv: segment.argv,
       resolution: segment.resolution,
@@ -693,7 +667,7 @@ describe("exec approvals node host allowlist check", () => {
 
 describe("exec approvals default agent migration", () => {
   it("migrates legacy default agent entries to main", () => {
-    const file: ExecApprovalsFile = {
+    const file = {
       version: 1,
       agents: {
         default: { allowlist: [{ pattern: "/bin/legacy" }] },
@@ -706,7 +680,7 @@ describe("exec approvals default agent migration", () => {
   });
 
   it("prefers main agent settings when both main and default exist", () => {
-    const file: ExecApprovalsFile = {
+    const file = {
       version: 1,
       agents: {
         main: { ask: "always", allowlist: [{ pattern: "/bin/main" }] },

@@ -1,18 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildGatewayAuthConfig } from "./configure.js";
 
-function expectGeneratedTokenFromInput(token: string | undefined, literalToAvoid = "undefined") {
-  const result = buildGatewayAuthConfig({
-    mode: "token",
-    token,
-  });
-  expect(result?.mode).toBe("token");
-  expect(result?.token).toBeDefined();
-  expect(result?.token).not.toBe(literalToAvoid);
-  expect(typeof result?.token).toBe("string");
-  expect(result?.token?.length).toBeGreaterThan(0);
-}
-
 describe("buildGatewayAuthConfig", () => {
   it("preserves allowTailscale when switching to token", () => {
     const result = buildGatewayAuthConfig({
@@ -66,23 +54,68 @@ describe("buildGatewayAuthConfig", () => {
   });
 
   it("generates random token when token param is undefined", () => {
-    expectGeneratedTokenFromInput(undefined);
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: undefined,
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
   });
 
   it("generates random token when token param is empty string", () => {
-    expectGeneratedTokenFromInput("");
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
   });
 
   it("generates random token when token param is whitespace only", () => {
-    expectGeneratedTokenFromInput("   ");
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "   ",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
   });
 
   it('generates random token when token param is the literal string "undefined"', () => {
-    expectGeneratedTokenFromInput("undefined");
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "undefined",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("undefined");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
   });
 
   it('generates random token when token param is the literal string "null"', () => {
-    expectGeneratedTokenFromInput("null", "null");
+    const result = buildGatewayAuthConfig({
+      mode: "token",
+      token: "null",
+    });
+
+    expect(result?.mode).toBe("token");
+    expect(result?.token).toBeDefined();
+    expect(result?.token).not.toBe("null");
+    expect(typeof result?.token).toBe("string");
+    expect(result?.token?.length).toBeGreaterThan(0);
   });
 
   it("builds trusted-proxy config with all options", () => {

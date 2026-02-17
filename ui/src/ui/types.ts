@@ -452,7 +452,7 @@ export type CronPayload =
     };
 
 export type CronDelivery = {
-  mode: "none" | "announce" | "webhook";
+  mode: "none" | "announce";
   channel?: string;
   to?: string;
   bestEffort?: boolean;

@@ -3,10 +3,9 @@ import SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import {
-  addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   mergeAllowlist,
-  patchAllowlistUsersInConfigEntries,
+  resolveAllowlistIdAdditions,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
@@ -227,7 +226,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const handleSlackMessage = createSlackMessageHandler({ ctx, account });
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
-  await registerSlackMonitorSlashCommands({ ctx, account });
+  registerSlackMonitorSlashCommands({ ctx, account });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -284,17 +283,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             token: resolveToken,
             entries: allowEntries.map((entry) => String(entry)),
           });
-          const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
-            resolvedUsers,
-            {
-              formatResolved: (entry) => {
-                const note = (entry as { note?: string }).note
-                  ? ` (${(entry as { note?: string }).note})`
-                  : "";
-                return `${entry.input}→${entry.id}${note}`;
-              },
-            },
-          );
+          const mapping: string[] = [];
+          const unresolved: string[] = [];
+          const additions: string[] = [];
+          for (const entry of resolvedUsers) {
+            if (entry.resolved && entry.id) {
+              const note = entry.note ? ` (${entry.note})` : "";
+              mapping.push(`${entry.input}→${entry.id}${note}`);
+              additions.push(entry.id);
+            } else {
+              unresolved.push(entry.input);
+            }
+          }
           allowFrom = mergeAllowlist({ existing: allowFrom, additions });
           ctx.allowFrom = normalizeAllowList(allowFrom);
           summarizeMapping("slack users", mapping, unresolved, runtime);
@@ -306,7 +306,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       if (channelsConfig && Object.keys(channelsConfig).length > 0) {
         const userEntries = new Set<string>();
         for (const channel of Object.values(channelsConfig)) {
-          addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
+          if (!channel || typeof channel !== "object") {
+            continue;
+          }
+          const channelUsers = (channel as { users?: Array<string | number> }).users;
+          if (!Array.isArray(channelUsers)) {
+            continue;
+          }
+          for (const entry of channelUsers) {
+            const trimmed = String(entry).trim();
+            if (trimmed && trimmed !== "*") {
+              userEntries.add(trimmed);
+            }
+          }
         }
 
         if (userEntries.size > 0) {
@@ -318,10 +330,24 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             const { resolvedMap, mapping, unresolved } =
               buildAllowlistResolutionSummary(resolvedUsers);
 
-            const nextChannels = patchAllowlistUsersInConfigEntries({
-              entries: channelsConfig,
-              resolvedMap,
-            });
+            const nextChannels = { ...channelsConfig };
+            for (const [channelKey, channelConfig] of Object.entries(channelsConfig)) {
+              if (!channelConfig || typeof channelConfig !== "object") {
+                continue;
+              }
+              const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
+              if (!Array.isArray(channelUsers) || channelUsers.length === 0) {
+                continue;
+              }
+              const additions = resolveAllowlistIdAdditions({
+                existing: channelUsers,
+                resolvedMap,
+              });
+              nextChannels[channelKey] = {
+                ...channelConfig,
+                users: mergeAllowlist({ existing: channelUsers, additions }),
+              };
+            }
             channelsConfig = nextChannels;
             ctx.channelsConfig = nextChannels;
             summarizeMapping("slack channel users", mapping, unresolved, runtime);

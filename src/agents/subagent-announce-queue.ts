@@ -14,9 +14,6 @@ import {
 } from "../utils/queue-helpers.js";
 
 export type AnnounceQueueItem = {
-  // Stable announce identity shared by direct + queued delivery paths.
-  // Optional for backward compatibility with previously queued items.
-  announceId?: string;
   prompt: string;
   summaryLine?: string;
   enqueuedAt: number;

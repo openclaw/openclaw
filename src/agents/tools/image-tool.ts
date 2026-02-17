@@ -26,7 +26,6 @@ import {
 const DEFAULT_PROMPT = "Describe the image.";
 const ANTHROPIC_IMAGE_PRIMARY = "anthropic/claude-opus-4-6";
 const ANTHROPIC_IMAGE_FALLBACK = "anthropic/claude-opus-4-5";
-const DEFAULT_MAX_IMAGES = 20;
 
 export const __testing = {
   decodeDataUrl,
@@ -183,21 +182,15 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
   return undefined;
 }
 
-function buildImageContext(
-  prompt: string,
-  images: Array<{ base64: string; mimeType: string }>,
-): Context {
-  const content: Array<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-  > = [{ type: "text", text: prompt }];
-  for (const img of images) {
-    content.push({ type: "image", data: img.base64, mimeType: img.mimeType });
-  }
+function buildImageContext(prompt: string, base64: string, mimeType: string): Context {
   return {
     messages: [
       {
         role: "user",
-        content,
+        content: [
+          { type: "text", text: prompt },
+          { type: "image", data: base64, mimeType },
+        ],
         timestamp: Date.now(),
       },
     ],
@@ -249,7 +242,8 @@ async function runImagePrompt(params: {
   imageModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
-  images: Array<{ base64: string; mimeType: string }>;
+  base64: string;
+  mimeType: string;
 }): Promise<{
   text: string;
   provider: string;
@@ -291,11 +285,9 @@ async function runImagePrompt(params: {
       });
       const apiKey = requireApiKey(apiKeyInfo, model.provider);
       authStorage.setRuntimeApiKey(model.provider, apiKey);
+      const imageDataUrl = `data:${params.mimeType};base64,${params.base64}`;
 
-      // MiniMax VLM only supports a single image; use the first one.
       if (model.provider === "minimax") {
-        const first = params.images[0];
-        const imageDataUrl = `data:${first.mimeType};base64,${first.base64}`;
         const text = await minimaxUnderstandImage({
           apiKey,
           prompt: params.prompt,
@@ -305,7 +297,7 @@ async function runImagePrompt(params: {
         return { text, provider: model.provider, model: model.id };
       }
 
-      const context = buildImageContext(params.prompt, params.images);
+      const context = buildImageContext(params.prompt, params.base64, params.mimeType);
       const message = await complete(model, context, {
         apiKey,
         maxTokens: resolveImageToolMaxTokens(model.maxTokens),
@@ -358,8 +350,8 @@ export function createImageTool(options?: {
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
-    ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
-    : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
+    ? "Analyze an image with a vision model. Only use this tool when the image was NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
+    : "Analyze an image with the configured image model (agents.defaults.imageModel). Provide a prompt and image path or URL.";
 
   const localRoots = (() => {
     const roots = getDefaultLocalRoots();
@@ -376,63 +368,44 @@ export function createImageTool(options?: {
     description,
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
-      image: Type.Optional(Type.String({ description: "Single image path or URL." })),
-      images: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Multiple image paths or URLs (up to maxImages, default 20).",
-        }),
-      ),
+      image: Type.String(),
       model: Type.Optional(Type.String()),
       maxBytesMb: Type.Optional(Type.Number()),
-      maxImages: Type.Optional(Type.Number()),
     }),
     execute: async (_toolCallId, args) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-
-      // MARK: - Normalize image + images input and dedupe while preserving order
-      const imageCandidates: string[] = [];
-      if (typeof record.image === "string") {
-        imageCandidates.push(record.image);
-      }
-      if (Array.isArray(record.images)) {
-        imageCandidates.push(...record.images.filter((v): v is string => typeof v === "string"));
-      }
-
-      const seenImages = new Set<string>();
-      const imageInputs: string[] = [];
-      for (const candidate of imageCandidates) {
-        const trimmedCandidate = candidate.trim();
-        const normalizedForDedupe = trimmedCandidate.startsWith("@")
-          ? trimmedCandidate.slice(1).trim()
-          : trimmedCandidate;
-        if (!normalizedForDedupe || seenImages.has(normalizedForDedupe)) {
-          continue;
-        }
-        seenImages.add(normalizedForDedupe);
-        imageInputs.push(trimmedCandidate);
-      }
-      if (imageInputs.length === 0) {
+      const imageRawInput = typeof record.image === "string" ? record.image.trim() : "";
+      const imageRaw = imageRawInput.startsWith("@")
+        ? imageRawInput.slice(1).trim()
+        : imageRawInput;
+      if (!imageRaw) {
         throw new Error("image required");
       }
 
-      // MARK: - Enforce max images cap
-      const maxImagesRaw = typeof record.maxImages === "number" ? record.maxImages : undefined;
-      const maxImages =
-        typeof maxImagesRaw === "number" && Number.isFinite(maxImagesRaw) && maxImagesRaw > 0
-          ? Math.floor(maxImagesRaw)
-          : DEFAULT_MAX_IMAGES;
-      if (imageInputs.length > maxImages) {
+      // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
+      // agent/model contexts, images can be referenced as pseudo-URIs like
+      // `image:0` (e.g. "first image in the prompt"). We don't have access to a
+      // shared image registry here, so fail gracefully instead of attempting to
+      // `fs.readFile("image:0")` and producing a noisy ENOENT.
+      const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
+      const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
+      const isFileUrl = /^file:/i.test(imageRaw);
+      const isHttpUrl = /^https?:\/\//i.test(imageRaw);
+      const isDataUrl = /^data:/i.test(imageRaw);
+      if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
         return {
           content: [
             {
               type: "text",
-              text: `Too many images: ${imageInputs.length} provided, maximum is ${maxImages}. Please reduce the number of images.`,
+              text: `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
             },
           ],
-          details: { error: "too_many_images", count: imageInputs.length, max: maxImages },
+          details: {
+            error: "unsupported_image_reference",
+            image: imageRawInput,
+          },
         };
       }
-
       const promptRaw =
         typeof record.prompt === "string" && record.prompt.trim()
           ? record.prompt.trim()
@@ -446,136 +419,73 @@ export function createImageTool(options?: {
         options?.sandbox && options?.sandbox.root.trim()
           ? { root: options.sandbox.root.trim(), bridge: options.sandbox.bridge }
           : null;
-
-      // MARK: - Load and resolve each image
-      const loadedImages: Array<{
-        base64: string;
-        mimeType: string;
-        resolvedImage: string;
-        rewrittenFrom?: string;
-      }> = [];
-
-      for (const imageRawInput of imageInputs) {
-        const trimmed = imageRawInput.trim();
-        const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
-        if (!imageRaw) {
-          throw new Error("image required (empty string in array)");
-        }
-
-        // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
-        // agent/model contexts, images can be referenced as pseudo-URIs like
-        // `image:0` (e.g. "first image in the prompt"). We don't have access to a
-        // shared image registry here, so fail gracefully instead of attempting to
-        // `fs.readFile("image:0")` and producing a noisy ENOENT.
-        const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
-        const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
-        const isFileUrl = /^file:/i.test(imageRaw);
-        const isHttpUrl = /^https?:\/\//i.test(imageRaw);
-        const isDataUrl = /^data:/i.test(imageRaw);
-        if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
-              },
-            ],
-            details: {
-              error: "unsupported_image_reference",
-              image: imageRawInput,
-            },
-          };
-        }
-
-        if (sandboxConfig && isHttpUrl) {
-          throw new Error("Sandboxed image tool does not allow remote URLs.");
-        }
-
-        const resolvedImage = (() => {
-          if (sandboxConfig) {
-            return imageRaw;
-          }
-          if (imageRaw.startsWith("~")) {
-            return resolveUserPath(imageRaw);
-          }
-          return imageRaw;
-        })();
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
-          ? { resolved: "" }
-          : sandboxConfig
-            ? await resolveSandboxedImagePath({
-                sandbox: sandboxConfig,
-                imagePath: resolvedImage,
-              })
-            : {
-                resolved: resolvedImage.startsWith("file://")
-                  ? resolvedImage.slice("file://".length)
-                  : resolvedImage,
-              };
-        const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
-
-        const media = isDataUrl
-          ? decodeDataUrl(resolvedImage)
-          : sandboxConfig
-            ? await loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
-                sandboxValidated: true,
-                readFile: (filePath) =>
-                  sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
-              })
-            : await loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
-                localRoots,
-              });
-        if (media.kind !== "image") {
-          throw new Error(`Unsupported media type: ${media.kind}`);
-        }
-
-        const mimeType =
-          ("contentType" in media && media.contentType) ||
-          ("mimeType" in media && media.mimeType) ||
-          "image/png";
-        const base64 = media.buffer.toString("base64");
-        loadedImages.push({
-          base64,
-          mimeType,
-          resolvedImage,
-          ...(resolvedPathInfo.rewrittenFrom
-            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
-            : {}),
-        });
+      const isUrl = isHttpUrl;
+      if (sandboxConfig && isUrl) {
+        throw new Error("Sandboxed image tool does not allow remote URLs.");
       }
 
-      // MARK: - Run image prompt with all loaded images
+      const resolvedImage = (() => {
+        if (sandboxConfig) {
+          return imageRaw;
+        }
+        if (imageRaw.startsWith("~")) {
+          return resolveUserPath(imageRaw);
+        }
+        return imageRaw;
+      })();
+      const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
+        ? { resolved: "" }
+        : sandboxConfig
+          ? await resolveSandboxedImagePath({
+              sandbox: sandboxConfig,
+              imagePath: resolvedImage,
+            })
+          : {
+              resolved: resolvedImage.startsWith("file://")
+                ? resolvedImage.slice("file://".length)
+                : resolvedImage,
+            };
+      const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
+
+      const media = isDataUrl
+        ? decodeDataUrl(resolvedImage)
+        : sandboxConfig
+          ? await loadWebMedia(resolvedPath ?? resolvedImage, {
+              maxBytes,
+              sandboxValidated: true,
+              readFile: (filePath) =>
+                sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
+            })
+          : await loadWebMedia(resolvedPath ?? resolvedImage, {
+              maxBytes,
+              localRoots,
+            });
+      if (media.kind !== "image") {
+        throw new Error(`Unsupported media type: ${media.kind}`);
+      }
+
+      const mimeType =
+        ("contentType" in media && media.contentType) ||
+        ("mimeType" in media && media.mimeType) ||
+        "image/png";
+      const base64 = media.buffer.toString("base64");
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,
         imageModelConfig,
         modelOverride,
         prompt: promptRaw,
-        images: loadedImages.map((img) => ({ base64: img.base64, mimeType: img.mimeType })),
+        base64,
+        mimeType,
       });
-
-      const imageDetails =
-        loadedImages.length === 1
-          ? {
-              image: loadedImages[0].resolvedImage,
-              ...(loadedImages[0].rewrittenFrom
-                ? { rewrittenFrom: loadedImages[0].rewrittenFrom }
-                : {}),
-            }
-          : {
-              images: loadedImages.map((img) => ({
-                image: img.resolvedImage,
-                ...(img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {}),
-              })),
-            };
-
       return {
         content: [{ type: "text", text: result.text }],
         details: {
           model: `${result.provider}/${result.model}`,
-          ...imageDetails,
+          image: resolvedImage,
+          ...(resolvedPathInfo.rewrittenFrom
+            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
+            : {}),
           attempts: result.attempts,
         },
       };

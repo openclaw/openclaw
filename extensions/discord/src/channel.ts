@@ -16,7 +16,6 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeDiscordMessagingTarget,
-  normalizeDiscordOutboundTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
@@ -159,12 +158,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
   },
-  agentPrompt: {
-    messageToolHints: () => [
-      "- Discord components: set `components` when sending messages to include buttons, selects, or v2 containers.",
-      "- Forms: add `components.modal` (title, fields). OpenClaw adds a trigger button and routes submissions as new messages.",
-    ],
-  },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
     targetResolver: {
@@ -292,7 +285,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     chunker: null,
     textChunkLimit: 2000,
     pollMaxOptions: 10,
-    resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
     sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {

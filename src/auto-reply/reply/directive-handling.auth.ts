@@ -9,7 +9,7 @@ import {
   resolveAuthProfileOrder,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 
@@ -39,7 +39,18 @@ export const resolveAuthLabel = async (
   });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   const providerKey = normalizeProviderId(provider);
-  const lastGood = findNormalizedProviderValue(store.lastGood, providerKey);
+  const lastGood = (() => {
+    const map = store.lastGood;
+    if (!map) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(map)) {
+      if (normalizeProviderId(key) === providerKey) {
+        return value;
+      }
+    }
+    return undefined;
+  })();
   const nextProfileId = order[0];
   const now = Date.now();
 

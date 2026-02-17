@@ -1,4 +1,3 @@
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -26,23 +25,9 @@ vi.mock("../agents/model-auth.js", () => ({
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
-import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
 
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
-
-  async function expectNoWarningWithConfiguredRemoteApiKey(provider: string) {
-    resolveMemorySearchConfig.mockReturnValue({
-      provider,
-      local: {},
-      remote: { apiKey: "from-config" },
-    });
-
-    await noteMemorySearchHealth(cfg);
-
-    expect(note).not.toHaveBeenCalled();
-    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
-  }
 
   beforeEach(() => {
     note.mockReset();
@@ -53,11 +38,29 @@ describe("noteMemorySearchHealth", () => {
   });
 
   it("does not warn when remote apiKey is configured for explicit provider", async () => {
-    await expectNoWarningWithConfiguredRemoteApiKey("openai");
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: { apiKey: "from-config" },
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
   it("does not warn in auto mode when remote apiKey is configured", async () => {
-    await expectNoWarningWithConfiguredRemoteApiKey("auto");
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: { apiKey: "from-config" },
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
   it("resolves provider auth from the default agent directory", async () => {
@@ -80,14 +83,5 @@ describe("noteMemorySearchHealth", () => {
       agentDir: "/tmp/agent-default",
     });
     expect(note).not.toHaveBeenCalled();
-  });
-});
-
-describe("detectLegacyWorkspaceDirs", () => {
-  it("returns active workspace and no legacy dirs", () => {
-    const workspaceDir = "/home/user/openclaw";
-    const detection = detectLegacyWorkspaceDirs({ workspaceDir });
-    expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
-    expect(detection.legacyDirs).toEqual([]);
   });
 });

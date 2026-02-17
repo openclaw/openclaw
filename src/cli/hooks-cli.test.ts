@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
 import { formatHooksCheck, formatHooksList } from "./hooks-cli.js";
-import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const report: HookStatusReport = {
   workspaceDir: "/tmp/workspace",
@@ -23,7 +22,22 @@ const report: HookStatusReport = {
       disabled: false,
       eligible: true,
       managedByPlugin: false,
-      ...createEmptyInstallChecks(),
+      requirements: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      },
+      configChecks: [],
+      install: [],
     },
   ],
 };
@@ -61,7 +75,22 @@ describe("hooks cli formatting", () => {
           disabled: false,
           eligible: true,
           managedByPlugin: true,
-          ...createEmptyInstallChecks(),
+          requirements: {
+            bins: [],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+          missing: {
+            bins: [],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+          configChecks: [],
+          install: [],
         },
       ],
     };

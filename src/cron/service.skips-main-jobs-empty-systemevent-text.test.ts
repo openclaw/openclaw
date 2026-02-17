@@ -1,10 +1,26 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
+const noopLogger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+};
+
+async function makeStorePath() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
+  return {
+    storePath: path.join(dir, "cron", "jobs.json"),
+    cleanup: async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+    },
+  };
+}
 
 async function waitForFirstJob(
   cron: CronService,
@@ -22,35 +38,6 @@ async function waitForFirstJob(
   return latest;
 }
 
-async function withCronService(
-  cronEnabled: boolean,
-  run: (params: {
-    cron: CronService;
-    enqueueSystemEvent: ReturnType<typeof vi.fn>;
-    requestHeartbeatNow: ReturnType<typeof vi.fn>;
-  }) => Promise<void>,
-) {
-  const store = await makeStorePath();
-  const enqueueSystemEvent = vi.fn();
-  const requestHeartbeatNow = vi.fn();
-  const cron = new CronService({
-    storePath: store.storePath,
-    cronEnabled,
-    log: noopLogger,
-    enqueueSystemEvent,
-    requestHeartbeatNow,
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-  });
-
-  await cron.start();
-  try {
-    await run({ cron, enqueueSystemEvent, requestHeartbeatNow });
-  } finally {
-    cron.stop();
-    await store.cleanup();
-  }
-}
-
 describe("CronService", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -66,70 +53,115 @@ describe("CronService", () => {
   });
 
   it("skips main jobs with empty systemEvent text", async () => {
-    await withCronService(true, async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
-      const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-      await cron.add({
-        name: "empty systemEvent test",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "   " },
-      });
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
 
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
-
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeatNow).not.toHaveBeenCalled();
-
-      const job = await waitForFirstJob(cron, (current) => current?.state.lastStatus === "skipped");
-      expect(job?.state.lastStatus).toBe("skipped");
-      expect(job?.state.lastError).toMatch(/non-empty/i);
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
     });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
+    await cron.add({
+      name: "empty systemEvent test",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "   " },
+    });
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+    const job = await waitForFirstJob(cron, (current) => current?.state.lastStatus === "skipped");
+    expect(job?.state.lastStatus).toBe("skipped");
+    expect(job?.state.lastError).toMatch(/non-empty/i);
+
+    cron.stop();
+    await store.cleanup();
   });
 
   it("does not schedule timers when cron is disabled", async () => {
-    await withCronService(false, async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
-      const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-      await cron.add({
-        name: "disabled cron job",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
 
-      const status = await cron.status();
-      expect(status.enabled).toBe(false);
-      expect(status.nextWakeAtMs).toBeNull();
-
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
-
-      expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeatNow).not.toHaveBeenCalled();
-      expect(noopLogger.warn).toHaveBeenCalled();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: false,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
     });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
+    await cron.add({
+      name: "disabled cron job",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    const status = await cron.status();
+    expect(status.enabled).toBe(false);
+    expect(status.nextWakeAtMs).toBeNull();
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(noopLogger.warn).toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
   });
 
   it("status reports next wake when enabled", async () => {
-    await withCronService(true, async ({ cron }) => {
-      const atMs = Date.parse("2025-12-13T00:00:05.000Z");
-      await cron.add({
-        name: "status next wake",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
 
-      const status = await cron.status();
-      expect(status.enabled).toBe(true);
-      expect(status.jobs).toBe(1);
-      expect(status.nextWakeAtMs).toBe(atMs);
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
     });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:05.000Z");
+    await cron.add({
+      name: "status next wake",
+      enabled: true,
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    const status = await cron.status();
+    expect(status.enabled).toBe(true);
+    expect(status.jobs).toBe(1);
+    expect(status.nextWakeAtMs).toBe(atMs);
+
+    cron.stop();
+    await store.cleanup();
   });
 });

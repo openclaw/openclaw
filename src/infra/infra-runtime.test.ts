@@ -18,21 +18,6 @@ import { getShellPathFromLoginShell, resetShellPathCacheForTests } from "./shell
 import { listTailnetAddresses } from "./tailnet.js";
 
 describe("infra runtime", () => {
-  function setupRestartSignalSuite() {
-    beforeEach(() => {
-      __testing.resetSigusr1State();
-      vi.useFakeTimers();
-      vi.spyOn(process, "kill").mockImplementation(() => true);
-    });
-
-    afterEach(async () => {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-      __testing.resetSigusr1State();
-    });
-  }
-
   describe("ensureBinary", () => {
     it("passes through when binary exists", async () => {
       const exec: typeof runExec = vi.fn().mockResolvedValue({
@@ -84,7 +69,18 @@ describe("infra runtime", () => {
   });
 
   describe("restart authorization", () => {
-    setupRestartSignalSuite();
+    beforeEach(() => {
+      __testing.resetSigusr1State();
+      vi.useFakeTimers();
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(async () => {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      __testing.resetSigusr1State();
+    });
 
     it("authorizes exactly once when scheduled restart emits", async () => {
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
@@ -128,7 +124,18 @@ describe("infra runtime", () => {
   });
 
   describe("pre-restart deferral check", () => {
-    setupRestartSignalSuite();
+    beforeEach(() => {
+      __testing.resetSigusr1State();
+      vi.useFakeTimers();
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(async () => {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      __testing.resetSigusr1State();
+    });
 
     it("emits SIGUSR1 immediately when no deferral check is registered", async () => {
       const emitSpy = vi.spyOn(process, "emit");

@@ -162,7 +162,7 @@ describe("sandboxed workspace paths", () => {
           sessionKey: "sandbox:test",
           workspaceDir: sandboxDir,
           agentWorkspaceDir: workspaceDir,
-          workspaceAccess: "rw" as const,
+          workspaceAccess: "rw",
           containerName: "openclaw-sbx-test",
           containerWorkdir: "/workspace",
           fsBridge: createHostSandboxFsBridge(sandboxDir),

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
-import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { buildParseArgv, getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import type { ProgramContext } from "./context.js";
+import { resolveActionArgs } from "./helpers.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 type CommandRegisterParams = {
@@ -15,14 +15,8 @@ export type CommandRegistration = {
   register: (params: CommandRegisterParams) => void;
 };
 
-type CoreCliCommandDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
-};
-
 type CoreCliEntry = {
-  commands: CoreCliCommandDescriptor[];
+  commands: Array<{ name: string; description: string }>;
   register: (params: CommandRegisterParams) => Promise<void> | void;
 };
 
@@ -33,59 +27,30 @@ const shouldRegisterCorePrimaryOnly = (argv: string[]) => {
   return true;
 };
 
-// Note for humans and agents:
-// If you update the list of commands, also check whether they have subcommands
-// and set the flag accordingly.
 const coreEntries: CoreCliEntry[] = [
   {
-    commands: [
-      {
-        name: "setup",
-        description: "Initialize local config and agent workspace",
-        hasSubcommands: false,
-      },
-    ],
+    commands: [{ name: "setup", description: "Setup helpers" }],
     register: async ({ program }) => {
       const mod = await import("./register.setup.js");
       mod.registerSetupCommand(program);
     },
   },
   {
-    commands: [
-      {
-        name: "onboard",
-        description: "Interactive onboarding wizard for gateway, workspace, and skills",
-        hasSubcommands: false,
-      },
-    ],
+    commands: [{ name: "onboard", description: "Onboarding helpers" }],
     register: async ({ program }) => {
       const mod = await import("./register.onboard.js");
       mod.registerOnboardCommand(program);
     },
   },
   {
-    commands: [
-      {
-        name: "configure",
-        description:
-          "Interactive setup wizard for credentials, channels, gateway, and agent defaults",
-        hasSubcommands: false,
-      },
-    ],
+    commands: [{ name: "configure", description: "Configure wizard" }],
     register: async ({ program }) => {
       const mod = await import("./register.configure.js");
       mod.registerConfigureCommand(program);
     },
   },
   {
-    commands: [
-      {
-        name: "config",
-        description:
-          "Non-interactive config helpers (get/set/unset). Default: starts setup wizard.",
-        hasSubcommands: true,
-      },
-    ],
+    commands: [{ name: "config", description: "Config helpers" }],
     register: async ({ program }) => {
       const mod = await import("../config-cli.js");
       mod.registerConfigCli(program);
@@ -93,25 +58,12 @@ const coreEntries: CoreCliEntry[] = [
   },
   {
     commands: [
-      {
-        name: "doctor",
-        description: "Health checks + quick fixes for the gateway and channels",
-        hasSubcommands: false,
-      },
-      {
-        name: "dashboard",
-        description: "Open the Control UI with your current token",
-        hasSubcommands: false,
-      },
-      {
-        name: "reset",
-        description: "Reset local config/state (keeps the CLI installed)",
-        hasSubcommands: false,
-      },
+      { name: "doctor", description: "Health checks + quick fixes for the gateway and channels" },
+      { name: "dashboard", description: "Open the Control UI with your current token" },
+      { name: "reset", description: "Reset local config/state (keeps the CLI installed)" },
       {
         name: "uninstall",
         description: "Uninstall the gateway service + local data (CLI remains)",
-        hasSubcommands: false,
       },
     ],
     register: async ({ program }) => {
@@ -120,26 +72,14 @@ const coreEntries: CoreCliEntry[] = [
     },
   },
   {
-    commands: [
-      {
-        name: "message",
-        description: "Send, read, and manage messages",
-        hasSubcommands: true,
-      },
-    ],
+    commands: [{ name: "message", description: "Send, read, and manage messages" }],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.message.js");
       mod.registerMessageCommands(program, ctx);
     },
   },
   {
-    commands: [
-      {
-        name: "memory",
-        description: "Search and reindex memory files",
-        hasSubcommands: true,
-      },
-    ],
+    commands: [{ name: "memory", description: "Memory commands" }],
     register: async ({ program }) => {
       const mod = await import("../memory-cli.js");
       mod.registerMemoryCli(program);
@@ -147,41 +87,19 @@ const coreEntries: CoreCliEntry[] = [
   },
   {
     commands: [
-      {
-        name: "agent",
-        description: "Run one agent turn via the Gateway",
-        hasSubcommands: false,
-      },
-      {
-        name: "agents",
-        description: "Manage isolated agents (workspaces, auth, routing)",
-        hasSubcommands: true,
-      },
+      { name: "agent", description: "Agent commands" },
+      { name: "agents", description: "Manage isolated agents" },
     ],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.agent.js");
-      mod.registerAgentCommands(program, {
-        agentChannelOptions: ctx.agentChannelOptions,
-      });
+      mod.registerAgentCommands(program, { agentChannelOptions: ctx.agentChannelOptions });
     },
   },
   {
     commands: [
-      {
-        name: "status",
-        description: "Show channel health and recent session recipients",
-        hasSubcommands: false,
-      },
-      {
-        name: "health",
-        description: "Fetch health from the running gateway",
-        hasSubcommands: false,
-      },
-      {
-        name: "sessions",
-        description: "List stored conversation sessions",
-        hasSubcommands: false,
-      },
+      { name: "status", description: "Gateway status" },
+      { name: "health", description: "Gateway health" },
+      { name: "sessions", description: "Session management" },
     ],
     register: async ({ program }) => {
       const mod = await import("./register.status-health-sessions.js");
@@ -189,13 +107,7 @@ const coreEntries: CoreCliEntry[] = [
     },
   },
   {
-    commands: [
-      {
-        name: "browser",
-        description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
-        hasSubcommands: true,
-      },
-    ],
+    commands: [{ name: "browser", description: "Browser tools" }],
     register: async ({ program }) => {
       const mod = await import("../browser-cli.js");
       mod.registerBrowserCli(program);
@@ -203,30 +115,19 @@ const coreEntries: CoreCliEntry[] = [
   },
 ];
 
-function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {
+export function getCoreCliCommandNames(): string[] {
   const seen = new Set<string>();
   const names: string[] = [];
   for (const entry of coreEntries) {
-    for (const command of entry.commands) {
-      if (predicate && !predicate(command)) {
+    for (const cmd of entry.commands) {
+      if (seen.has(cmd.name)) {
         continue;
       }
-      if (seen.has(command.name)) {
-        continue;
-      }
-      seen.add(command.name);
-      names.push(command.name);
+      seen.add(cmd.name);
+      names.push(cmd.name);
     }
   }
   return names;
-}
-
-export function getCoreCliCommandNames(): string[] {
-  return collectCoreCliCommandNames();
-}
-
-export function getCoreCliCommandsWithSubcommands(): string[] {
-  return collectCoreCliCommandNames((command) => command.hasSubcommands);
 }
 
 function removeCommand(program: Command, command: Command) {
@@ -241,7 +142,7 @@ function registerLazyCoreCommand(
   program: Command,
   ctx: ProgramContext,
   entry: CoreCliEntry,
-  command: CoreCliCommandDescriptor,
+  command: { name: string; description: string },
 ) {
   const placeholder = program.command(command.name).description(command.description);
   placeholder.allowUnknownOption(true);
@@ -256,7 +157,19 @@ function registerLazyCoreCommand(
       }
     }
     await entry.register({ program, ctx, argv: process.argv });
-    await reparseProgramFromActionArgs(program, actionArgs);
+    const actionCommand = actionArgs.at(-1) as Command | undefined;
+    const root = actionCommand?.parent ?? program;
+    const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
+    const actionArgsList = resolveActionArgs(actionCommand);
+    const fallbackArgv = actionCommand?.name()
+      ? [actionCommand.name(), ...actionArgsList]
+      : actionArgsList;
+    const parseArgv = buildParseArgv({
+      programName: program.name(),
+      rawArgs,
+      fallbackArgv,
+    });
+    await program.parseAsync(parseArgv);
   });
 }
 

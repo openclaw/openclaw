@@ -16,7 +16,7 @@ function redirectResponse(location: string): Response {
     status: 302,
     headers: makeHeaders({ location }),
     body: { cancel: vi.fn() },
-  } as unknown as Response;
+  } as Response;
 }
 
 function textResponse(body: string): Response {
@@ -25,31 +25,7 @@ function textResponse(body: string): Response {
     status: 200,
     headers: makeHeaders({ "content-type": "text/plain" }),
     text: async () => body,
-  } as unknown as Response;
-}
-
-function setMockFetch(impl?: (...args: unknown[]) => unknown) {
-  const fetchSpy = vi.fn(impl);
-  global.fetch = fetchSpy as typeof fetch;
-  return fetchSpy;
-}
-
-async function createWebFetchToolForTest(params?: {
-  firecrawl?: { enabled?: boolean; apiKey?: string };
-}) {
-  const { createWebFetchTool } = await import("./web-tools.js");
-  return createWebFetchTool({
-    config: {
-      tools: {
-        web: {
-          fetch: {
-            cacheTtlMinutes: 0,
-            firecrawl: params?.firecrawl ?? { enabled: false },
-          },
-        },
-      },
-    },
-  });
+  } as Response;
 }
 
 describe("web_fetch SSRF protection", () => {
@@ -62,15 +38,29 @@ describe("web_fetch SSRF protection", () => {
   });
 
   afterEach(() => {
+    // @ts-expect-error restore
     global.fetch = priorFetch;
     lookupMock.mockReset();
     vi.restoreAllMocks();
   });
 
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
-    const fetchSpy = setMockFetch();
-    const tool = await createWebFetchToolForTest({
-      firecrawl: { apiKey: "firecrawl-test" },
+    const fetchSpy = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              firecrawl: { apiKey: "firecrawl-test" },
+            },
+          },
+        },
+      },
     });
 
     await expect(tool?.execute?.("call", { url: "http://localhost/test" })).rejects.toThrow(
@@ -81,8 +71,16 @@ describe("web_fetch SSRF protection", () => {
   });
 
   it("blocks private IP literals without DNS", async () => {
-    const fetchSpy = setMockFetch();
-    const tool = await createWebFetchToolForTest();
+    const fetchSpy = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
+      },
+    });
 
     await expect(tool?.execute?.("call", { url: "http://127.0.0.1/test" })).rejects.toThrow(
       /private|internal|blocked/i,
@@ -102,8 +100,16 @@ describe("web_fetch SSRF protection", () => {
       return [{ address: "10.0.0.5", family: 4 }];
     });
 
-    const fetchSpy = setMockFetch();
-    const tool = await createWebFetchToolForTest();
+    const fetchSpy = vi.fn();
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
+      },
+    });
 
     await expect(tool?.execute?.("call", { url: "https://private.test/resource" })).rejects.toThrow(
       /private|internal|blocked/i,
@@ -114,11 +120,19 @@ describe("web_fetch SSRF protection", () => {
   it("blocks redirects to private hosts", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
-    const fetchSpy = setMockFetch().mockResolvedValueOnce(
-      redirectResponse("http://127.0.0.1/secret"),
-    );
-    const tool = await createWebFetchToolForTest({
-      firecrawl: { apiKey: "firecrawl-test" },
+    const fetchSpy = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1/secret"));
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
+          },
+        },
+      },
     });
 
     await expect(tool?.execute?.("call", { url: "https://example.com" })).rejects.toThrow(
@@ -130,8 +144,16 @@ describe("web_fetch SSRF protection", () => {
   it("allows public hosts", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
-    setMockFetch().mockResolvedValue(textResponse("ok"));
-    const tool = await createWebFetchToolForTest();
+    const fetchSpy = vi.fn().mockResolvedValue(textResponse("ok"));
+    // @ts-expect-error mock fetch
+    global.fetch = fetchSpy;
+
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
+      },
+    });
 
     const result = await tool?.execute?.("call", { url: "https://example.com" });
     expect(result?.details).toMatchObject({

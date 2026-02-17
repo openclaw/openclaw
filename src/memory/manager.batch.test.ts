@@ -2,20 +2,38 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
-import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
-import "./test-runtime-mocks.js";
 
-const embedBatch = vi.fn(async (_texts: string[]) => [] as number[][]);
+const embedBatch = vi.fn(async () => []);
 const embedQuery = vi.fn(async () => [0.5, 0.5, 0.5]);
 
+// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
+vi.mock("chokidar", () => ({
+  default: {
+    watch: () => ({ on: () => {}, close: async () => {} }),
+  },
+  watch: () => ({ on: () => {}, close: async () => {} }),
+}));
+
+vi.mock("./sqlite-vec.js", () => ({
+  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
+}));
+
 vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async () =>
-    createOpenAIEmbeddingProviderMock({
+  createEmbeddingProvider: async () => ({
+    requestedProvider: "openai",
+    provider: {
+      id: "openai",
+      model: "text-embedding-3-small",
       embedQuery,
       embedBatch,
-    }),
+    },
+    openAi: {
+      baseUrl: "https://api.openai.com/v1",
+      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      model: "text-embedding-3-small",
+    },
+  }),
 }));
 
 describe("memory indexing with OpenAI batches", () => {
@@ -111,7 +129,7 @@ describe("memory indexing with OpenAI batches", () => {
     return { fetchMock, state };
   }
 
-  function createBatchCfg(): OpenClawConfig {
+  function createBatchCfg() {
     return {
       agents: {
         defaults: {
@@ -127,7 +145,7 @@ describe("memory indexing with OpenAI batches", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    };
   }
 
   beforeAll(async () => {
@@ -142,7 +160,7 @@ describe("memory indexing with OpenAI batches", () => {
     if (!result.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager as unknown as MemoryIndexManager;
+    manager = result.manager;
   });
 
   afterAll(async () => {

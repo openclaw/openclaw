@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
+import { normalizeProviderId } from "../model-selection.js";
+import { listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
-import { clearExpiredCooldowns, isProfileInCooldown } from "./usage.js";
+import { isProfileInCooldown } from "./usage.js";
 
 function resolveProfileUnusableUntil(stats: {
   cooldownUntil?: number;
@@ -26,13 +26,30 @@ export function resolveAuthProfileOrder(params: {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
   const now = Date.now();
-
-  // Clear any cooldowns that have expired since the last check so profiles
-  // get a fresh error count and are not immediately re-penalized on the
-  // next transient failure. See #3604.
-  clearExpiredCooldowns(store, now);
-  const storedOrder = findNormalizedProviderValue(store.order, providerKey);
-  const configuredOrder = findNormalizedProviderValue(cfg?.auth?.order, providerKey);
+  const storedOrder = (() => {
+    const order = store.order;
+    if (!order) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(order)) {
+      if (normalizeProviderId(key) === providerKey) {
+        return value;
+      }
+    }
+    return undefined;
+  })();
+  const configuredOrder = (() => {
+    const order = cfg?.auth?.order;
+    if (!order) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(order)) {
+      if (normalizeProviderId(key) === providerKey) {
+        return value;
+      }
+    }
+    return undefined;
+  })();
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
@@ -88,7 +105,12 @@ export function resolveAuthProfileOrder(params: {
     }
     return false;
   });
-  const deduped = dedupeProfileIds(filtered);
+  const deduped: string[] = [];
+  for (const entry of filtered) {
+    if (!deduped.includes(entry)) {
+      deduped.push(entry);
+    }
+  }
 
   // If user specified explicit order (store override or config), respect it
   // exactly, but still apply cooldown sorting to avoid repeatedly selecting

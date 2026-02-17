@@ -93,10 +93,14 @@ actor CameraController {
         }
         withExtendedLifetime(delegate) {}
 
-        let res = try PhotoCapture.transcodeJPEGForGateway(
-            rawData: rawData,
+        let maxPayloadBytes = 5 * 1024 * 1024
+        // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under 5MB (API limit).
+        let maxEncodedBytes = (maxPayloadBytes / 4) * 3
+        let res = try JPEGTranscoder.transcodeToJPEG(
+            imageData: rawData,
             maxWidthPx: maxWidth,
-            quality: quality)
+            quality: quality,
+            maxBytes: maxEncodedBytes)
 
         return (
             format: format.rawValue,
@@ -331,8 +335,8 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     func photoOutput(
         _ output: AVCapturePhotoOutput,
         didFinishProcessingPhoto photo: AVCapturePhoto,
-        error: Error?
-    ) {
+        error: Error?)
+    {
         guard !self.didResume else { return }
         self.didResume = true
 
@@ -360,8 +364,8 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     func photoOutput(
         _ output: AVCapturePhotoOutput,
         didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
-        error: Error?
-    ) {
+        error: Error?)
+    {
         guard let error else { return }
         guard !self.didResume else { return }
         self.didResume = true

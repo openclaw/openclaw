@@ -97,18 +97,15 @@ export async function resolveControlUiDistIndexPath(
   for (let i = 0; i < 8; i++) {
     const pkgJsonPath = path.join(dir, "package.json");
     const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-    if (fs.existsSync(pkgJsonPath)) {
+    if (fs.existsSync(pkgJsonPath) && fs.existsSync(indexPath)) {
       try {
         const raw = fs.readFileSync(pkgJsonPath, "utf-8");
         const parsed = JSON.parse(raw) as { name?: unknown };
         if (parsed.name === "openclaw") {
-          return fs.existsSync(indexPath) ? indexPath : null;
+          return indexPath;
         }
-        // Stop at the first package boundary to avoid resolving through unrelated ancestors.
-        return null;
       } catch {
-        // Invalid package.json at package boundary; abort fallback resolution.
-        return null;
+        // Invalid package.json, continue searching
       }
     }
     const parent = path.dirname(dir);

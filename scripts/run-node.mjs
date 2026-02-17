@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 const compiler = "tsdown";
 const compilerArgs = ["exec", compiler, "--no-clean"];
 
-export const runNodeWatchedPaths = ["src", "tsconfig.json", "package.json"];
+const gitWatchedPaths = ["src", "tsconfig.json", "package.json"];
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -91,7 +91,7 @@ const resolveGitHead = (deps) => {
 
 const hasDirtySourceTree = (deps) => {
   const output = runGit(
-    ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
+    ["status", "--porcelain", "--untracked-files=normal", "--", ...gitWatchedPaths],
     deps,
   );
   if (output === null) {

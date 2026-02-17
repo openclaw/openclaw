@@ -8,10 +8,8 @@ import {
   connectDeviceAuthReq,
   connectGatewayClient,
   getFreeGatewayPort,
-  startGatewayWithClient,
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
-import { buildOpenAiResponsesProviderConfig } from "./test-openai-responses-model.js";
 
 function extractPayloadText(result: unknown): string {
   const record = result as Record<string, unknown>;
@@ -68,15 +66,40 @@ describe("gateway e2e", () => {
         models: {
           mode: "replace",
           providers: {
-            openai: buildOpenAiResponsesProviderConfig(openaiBaseUrl),
+            openai: {
+              baseUrl: openaiBaseUrl,
+              apiKey: "test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.2",
+                  name: "gpt-5.2",
+                  api: "openai-responses",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
           },
         },
         gateway: { auth: { token } },
       };
 
-      const { server, client } = await startGatewayWithClient({
-        cfg,
-        configPath,
+      await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
         token,
         clientDisplayName: "vitest-mock-openai",
       });

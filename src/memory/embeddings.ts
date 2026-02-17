@@ -36,11 +36,10 @@ export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage"] as const;
 
 export type EmbeddingProviderResult = {
-  provider: EmbeddingProvider | null;
+  provider: EmbeddingProvider;
   requestedProvider: EmbeddingProviderRequest;
   fallbackFrom?: EmbeddingProviderId;
   fallbackReason?: string;
-  providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
@@ -184,19 +183,15 @@ export async function createEmbeddingProvider(
           missingKeyErrors.push(message);
           continue;
         }
-        // Non-auth errors (e.g., network) are still fatal
         throw new Error(message, { cause: err });
       }
     }
 
-    // All providers failed due to missing API keys - return null provider for FTS-only mode
     const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
-    const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
-    return {
-      provider: null,
-      requestedProvider,
-      providerUnavailableReason: reason,
-    };
+    if (details.length > 0) {
+      throw new Error(details.join("\n\n"));
+    }
+    throw new Error("No embeddings provider available.");
   }
 
   try {
@@ -214,30 +209,12 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        // Both primary and fallback failed - check if it's auth-related
-        const fallbackReason = formatErrorMessage(fallbackErr);
-        const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
-        if (isMissingApiKeyError(primaryErr) && isMissingApiKeyError(fallbackErr)) {
-          // Both failed due to missing API keys - return null for FTS-only mode
-          return {
-            provider: null,
-            requestedProvider,
-            fallbackFrom: requestedProvider,
-            fallbackReason: reason,
-            providerUnavailableReason: combinedReason,
-          };
-        }
-        // Non-auth errors are still fatal
-        throw new Error(combinedReason, { cause: fallbackErr });
+        // oxlint-disable-next-line preserve-caught-error
+        throw new Error(
+          `${reason}\n\nFallback to ${fallback} failed: ${formatErrorMessage(fallbackErr)}`,
+          { cause: fallbackErr },
+        );
       }
-    }
-    // No fallback configured - check if we should degrade to FTS-only
-    if (isMissingApiKeyError(primaryErr)) {
-      return {
-        provider: null,
-        requestedProvider,
-        providerUnavailableReason: reason,
-      };
     }
     throw new Error(reason, { cause: primaryErr });
   }

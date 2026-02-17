@@ -7,7 +7,6 @@ export type MattermostEventPayload = {
   event?: string;
   data?: {
     post?: string;
-    reaction?: string;
     channel_id?: string;
     channel_name?: string;
     channel_display_name?: string;
@@ -52,16 +51,22 @@ type CreateMattermostConnectOnceOpts = {
   runtime: RuntimeEnv;
   nextSeq: () => number;
   onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
-  onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
 export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) =>
   new WebSocket(url) as MattermostWebSocketLike;
 
-export function parsePostedPayload(
-  payload: MattermostEventPayload,
+export function parsePostedEvent(
+  data: WebSocket.RawData,
 ): { payload: MattermostEventPayload; post: MattermostPost } | null {
+  const raw = rawDataToString(data);
+  let payload: MattermostEventPayload;
+  try {
+    payload = JSON.parse(raw) as MattermostEventPayload;
+  } catch {
+    return null;
+  }
   if (payload.event !== "posted") {
     return null;
   }
@@ -83,19 +88,6 @@ export function parsePostedPayload(
     return null;
   }
   return { payload, post };
-}
-
-export function parsePostedEvent(
-  data: WebSocket.RawData,
-): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  const raw = rawDataToString(data);
-  let payload: MattermostEventPayload;
-  try {
-    payload = JSON.parse(raw) as MattermostEventPayload;
-  } catch {
-    return null;
-  }
-  return parsePostedPayload(payload);
 }
 
 export function createMattermostConnectOnce(
@@ -143,30 +135,7 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("message", async (data) => {
-          const raw = rawDataToString(data);
-          let payload: MattermostEventPayload;
-          try {
-            payload = JSON.parse(raw) as MattermostEventPayload;
-          } catch {
-            return;
-          }
-
-          if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
-            if (!opts.onReaction) {
-              return;
-            }
-            try {
-              await opts.onReaction(payload);
-            } catch (err) {
-              opts.runtime.error?.(`mattermost reaction handler failed: ${String(err)}`);
-            }
-            return;
-          }
-
-          if (payload.event !== "posted") {
-            return;
-          }
-          const parsed = parsePostedPayload(payload);
+          const parsed = parsePostedEvent(data);
           if (!parsed) {
             return;
           }

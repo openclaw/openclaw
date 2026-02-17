@@ -329,9 +329,43 @@ public final class GatewayDiscoveryModel {
     }
 
     private func updateStatusText() {
-        self.statusText = GatewayDiscoveryStatusText.make(
-            states: Array(self.statesByDomain.values),
-            hasBrowsers: !self.browsers.isEmpty)
+        let states = Array(self.statesByDomain.values)
+        if states.isEmpty {
+            self.statusText = self.browsers.isEmpty ? "Idle" : "Setup"
+            return
+        }
+
+        if let failed = states.first(where: { state in
+            if case .failed = state { return true }
+            return false
+        }) {
+            if case let .failed(err) = failed {
+                self.statusText = "Failed: \(err)"
+                return
+            }
+        }
+
+        if let waiting = states.first(where: { state in
+            if case .waiting = state { return true }
+            return false
+        }) {
+            if case let .waiting(err) = waiting {
+                self.statusText = "Waiting: \(err)"
+                return
+            }
+        }
+
+        if states.contains(where: { if case .ready = $0 { true } else { false } }) {
+            self.statusText = "Searching…"
+            return
+        }
+
+        if states.contains(where: { if case .setup = $0 { true } else { false } }) {
+            self.statusText = "Setup"
+            return
+        }
+
+        self.statusText = "Searching…"
     }
 
     private static func txtDictionary(from result: NWBrowser.Result) -> [String: String] {

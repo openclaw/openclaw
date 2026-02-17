@@ -5,26 +5,22 @@ import {
   shouldEnableWindowsGitBashPasteFallback,
 } from "./tui.js";
 
-function createSubmitHarness() {
-  const editor = {
-    setText: vi.fn(),
-    addToHistory: vi.fn(),
-  };
-  const handleCommand = vi.fn();
-  const sendMessage = vi.fn();
-  const handleBangLine = vi.fn();
-  const onSubmit = createEditorSubmitHandler({
-    editor,
-    handleCommand,
-    sendMessage,
-    handleBangLine,
-  });
-  return { editor, handleCommand, sendMessage, handleBangLine, onSubmit };
-}
-
 describe("createEditorSubmitHandler", () => {
   it("routes lines starting with ! to handleBangLine", () => {
-    const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+    const handleCommand = vi.fn();
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+
+    const onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand,
+      sendMessage,
+      handleBangLine,
+    });
 
     onSubmit("!ls");
 
@@ -35,7 +31,20 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("treats a lone ! as a normal message", () => {
-    const { sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+    const handleCommand = vi.fn();
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+
+    const onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand,
+      sendMessage,
+      handleBangLine,
+    });
 
     onSubmit("!");
 
@@ -45,7 +54,20 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("does not treat leading whitespace before ! as a bang command", () => {
-    const { editor, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+    const handleCommand = vi.fn();
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+
+    const onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand,
+      sendMessage,
+      handleBangLine,
+    });
 
     onSubmit("  !ls");
 
@@ -55,7 +77,20 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("trims normal messages before sending and adding to history", () => {
-    const { editor, sendMessage, onSubmit } = createSubmitHarness();
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+    const handleCommand = vi.fn();
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+
+    const onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand,
+      sendMessage,
+      handleBangLine,
+    });
 
     onSubmit("  hello  ");
 
@@ -64,7 +99,20 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("preserves internal newlines for multiline messages", () => {
-    const { editor, handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+    const editor = {
+      setText: vi.fn(),
+      addToHistory: vi.fn(),
+    };
+    const handleCommand = vi.fn();
+    const sendMessage = vi.fn();
+    const handleBangLine = vi.fn();
+
+    const onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand,
+      sendMessage,
+      handleBangLine,
+    });
 
     onSubmit("Line 1\nLine 2\nLine 3");
 

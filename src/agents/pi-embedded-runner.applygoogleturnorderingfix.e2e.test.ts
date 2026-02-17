@@ -4,12 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { applyGoogleTurnOrderingFix } from "./pi-embedded-runner.js";
 
 describe("applyGoogleTurnOrderingFix", () => {
-  const makeAssistantFirst = (): AgentMessage[] => [
-    {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    } as unknown as AgentMessage,
-  ];
+  const makeAssistantFirst = () =>
+    [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      },
+    ] satisfies AgentMessage[];
 
   it("prepends a bootstrap once and records a marker for Google models", () => {
     const sessionManager = SessionManager.inMemory();

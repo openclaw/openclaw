@@ -1,29 +1,41 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createStubSessionHarness,
-  emitMessageStartAndEndForAssistantText,
-  expectSingleAgentEventText,
-} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
+type StubSession = {
+  subscribe: (fn: (evt: unknown) => void) => () => void;
+};
+
 describe("subscribeEmbeddedPiSession", () => {
+  const _THINKING_TAG_CASES = [
+    { tag: "think", open: "<think>", close: "</think>" },
+    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+    { tag: "thought", open: "<thought>", close: "</thought>" },
+    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+  ] as const;
+
   it("filters to <final> and suppresses output without a start tag", () => {
-    const { session, emit } = createStubSessionHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
     const onPartialReply = vi.fn();
     const onAgentEvent = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       enforceFinalTag: true,
       onPartialReply,
       onAgentEvent,
     });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -38,8 +50,8 @@ describe("subscribeEmbeddedPiSession", () => {
 
     onPartialReply.mockReset();
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -51,31 +63,56 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
   it("emits agent events on message_end even without <final> tags", () => {
-    const { session, emit } = createStubSessionHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
     const onAgentEvent = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       enforceFinalTag: true,
       onAgentEvent,
     });
-    emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
-    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_start", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    const payloads = onAgentEvent.mock.calls
+      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
+      .filter((value): value is Record<string, unknown> => Boolean(value));
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Hello world");
+    expect(payloads[0]?.delta).toBe("Hello world");
   });
   it("does not require <final> when enforcement is off", () => {
-    const { session, emit } = createStubSessionHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
     const onPartialReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onPartialReply,
     });
 
-    emit({
+    handler?.({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -88,12 +125,18 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payload.text).toBe("Hello world");
   });
   it("emits block replies on message_end", () => {
-    const { session, emit } = createStubSessionHarness();
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
 
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session,
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
@@ -104,7 +147,7 @@ describe("subscribeEmbeddedPiSession", () => {
       content: [{ type: "text", text: "Hello block" }],
     } as AssistantMessage;
 
-    emit({ type: "message_end", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalled();
     const payload = onBlockReply.mock.calls[0][0];

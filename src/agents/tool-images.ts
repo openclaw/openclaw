@@ -17,55 +17,6 @@ const MAX_IMAGE_DIMENSION_PX = 2000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 
-// Valid base64: alphanumeric, +, /, with 0-2 trailing = padding only
-// This regex ensures = only appears at the end as valid padding
-const BASE64_REGEX = /^[A-Za-z0-9+/]*={0,2}$/;
-
-/**
- * Validates and normalizes base64 image data before processing.
- * - Strips data URL prefixes (e.g., "data:image/png;base64,")
- * - Converts URL-safe base64 to standard base64 (- → +, _ → /)
- * - Validates base64 character set and structure
- * - Ensures the string is not empty after trimming
- *
- * Returns the cleaned base64 string or throws an error if invalid.
- */
-function validateAndNormalizeBase64(base64: string): string {
-  let data = base64.trim();
-
-  // Strip data URL prefix if present (e.g., "data:image/png;base64,...")
-  const dataUrlMatch = data.match(/^data:[^;]+;base64,(.*)$/i);
-  if (dataUrlMatch) {
-    data = dataUrlMatch[1].trim();
-  }
-
-  if (!data) {
-    throw new Error("Base64 data is empty");
-  }
-
-  // Normalize URL-safe base64 to standard base64
-  // URL-safe uses - instead of + and _ instead of /
-  data = data.replace(/-/g, "+").replace(/_/g, "/");
-
-  // Check for valid base64 characters and structure
-  // The regex ensures = only appears as 0-2 trailing padding chars
-  // Node's Buffer.from silently ignores invalid chars, but Anthropic API rejects them
-  if (!BASE64_REGEX.test(data)) {
-    throw new Error("Base64 data contains invalid characters or malformed padding");
-  }
-
-  // Check that length is valid for base64 (must be multiple of 4 when padded)
-  // Remove padding for length check, then verify
-  const withoutPadding = data.replace(/=+$/, "");
-  const remainder = withoutPadding.length % 4;
-  if (remainder === 1) {
-    // A single char remainder is always invalid in base64
-    throw new Error("Base64 data has invalid length");
-  }
-
-  return data;
-}
-
 function isImageBlock(block: unknown): block is ImageContentBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -209,8 +160,8 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
 
-    const rawData = block.data.trim();
-    if (!rawData) {
+    const data = block.data.trim();
+    if (!data) {
       out.push({
         type: "text",
         text: `[${label}] omitted empty image payload`,
@@ -219,11 +170,6 @@ export async function sanitizeContentBlocksImages(
     }
 
     try {
-      // Validate and normalize base64 before processing
-      // This catches invalid base64 that Buffer.from() would silently accept
-      // but Anthropic's API would reject, preventing permanent session corruption
-      const data = validateAndNormalizeBase64(rawData);
-
       const inferredMimeType = inferMimeTypeFromBase64(data);
       const mimeType = inferredMimeType ?? block.mimeType;
       const resized = await resizeImageBase64IfNeeded({

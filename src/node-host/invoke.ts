@@ -12,12 +12,12 @@ import {
   evaluateShellAllowlist,
   requiresExecApproval,
   normalizeExecApprovals,
-  mergeExecApprovalsSocketDefaults,
   recordAllowlistUse,
   resolveExecApprovals,
   resolveSafeBins,
   ensureExecApprovals,
   readExecApprovalsSnapshot,
+  resolveExecApprovalsSocketPath,
   saveExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -336,39 +336,6 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   return { ...payload, output: text };
 }
 
-async function sendExecFinishedEvent(params: {
-  client: GatewayClient;
-  sessionKey: string;
-  runId: string;
-  cmdText: string;
-  result: {
-    stdout?: string;
-    stderr?: string;
-    error?: string | null;
-    exitCode?: number | null;
-    timedOut?: boolean;
-    success?: boolean;
-  };
-}) {
-  const combined = [params.result.stdout, params.result.stderr, params.result.error]
-    .filter(Boolean)
-    .join("\n");
-  await sendNodeEvent(
-    params.client,
-    "exec.finished",
-    buildExecEventPayload({
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      host: "node",
-      command: params.cmdText,
-      exitCode: params.result.exitCode ?? undefined,
-      timedOut: params.result.timedOut,
-      success: params.result.success,
-      output: combined,
-    }),
-  );
-}
-
 async function runViaMacAppExecHost(params: {
   approvals: ReturnType<typeof resolveExecApprovals>;
   request: ExecHostRequest;
@@ -422,7 +389,18 @@ export async function handleInvoke(
       const snapshot = readExecApprovalsSnapshot();
       requireExecApprovalsBaseHash(params, snapshot);
       const normalized = normalizeExecApprovals(params.file);
-      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
+      const currentSocketPath = snapshot.file.socket?.path?.trim();
+      const currentToken = snapshot.file.socket?.token?.trim();
+      const socketPath =
+        normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+      const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
+      const next: ExecApprovalsFile = {
+        ...normalized,
+        socket: {
+          path: socketPath,
+          token,
+        },
+      };
       saveExecApprovals(next);
       const nextSnapshot = readExecApprovalsSnapshot();
       const payload: ExecApprovalsSnapshot = {
@@ -646,7 +624,21 @@ export async function handleInvoke(
       return;
     } else {
       const result: ExecHostRunResult = response.payload;
-      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
+      const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
+      await sendNodeEvent(
+        client,
+        "exec.finished",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          exitCode: result.exitCode,
+          timedOut: result.timedOut,
+          success: result.success,
+          output: combined,
+        }),
+      );
       await sendInvokeResult(client, frame, {
         ok: true,
         payloadJSON: JSON.stringify(result),
@@ -798,7 +790,21 @@ export async function handleInvoke(
       result.stdout = `${result.stdout}\n${suffix}`;
     }
   }
-  await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
+  const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
+  await sendNodeEvent(
+    client,
+    "exec.finished",
+    buildExecEventPayload({
+      sessionKey,
+      runId,
+      host: "node",
+      command: cmdText,
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      success: result.success,
+      output: combined,
+    }),
+  );
 
   await sendInvokeResult(client, frame, {
     ok: true,

@@ -10,30 +10,12 @@ setupAccessControlTestHarness();
 
 const { checkInboundAccessControl } = await import("./access-control.js");
 
-async function checkUnauthorizedWorkDmSender() {
-  return checkInboundAccessControl({
-    accountId: "work",
-    from: "+15550001111",
-    selfE164: "+15550009999",
-    senderE164: "+15550001111",
-    group: false,
-    pushName: "Stranger",
-    isFromMe: false,
-    sock: { sendMessage: sendMessageMock },
-    remoteJid: "15550001111@s.whatsapp.net",
-  });
-}
-
-function expectSilentlyBlocked(result: { allowed: boolean }) {
-  expect(result.allowed).toBe(false);
-  expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-  expect(sendMessageMock).not.toHaveBeenCalled();
-}
-
 describe("checkInboundAccessControl pairing grace", () => {
-  async function runPairingGraceCase(messageTimestampMs: number) {
+  it("suppresses pairing replies for historical DMs on connect", async () => {
     const connectedAtMs = 1_000_000;
-    return await checkInboundAccessControl({
+    const messageTimestampMs = connectedAtMs - 31_000;
+
+    const result = await checkInboundAccessControl({
       accountId: "default",
       from: "+15550001111",
       selfE164: "+15550009999",
@@ -47,10 +29,6 @@ describe("checkInboundAccessControl pairing grace", () => {
       sock: { sendMessage: sendMessageMock },
       remoteJid: "15550001111@s.whatsapp.net",
     });
-  }
-
-  it("suppresses pairing replies for historical DMs on connect", async () => {
-    const result = await runPairingGraceCase(1_000_000 - 31_000);
 
     expect(result.allowed).toBe(false);
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
@@ -58,7 +36,23 @@ describe("checkInboundAccessControl pairing grace", () => {
   });
 
   it("sends pairing replies for live DMs", async () => {
-    const result = await runPairingGraceCase(1_000_000 - 10_000);
+    const connectedAtMs = 1_000_000;
+    const messageTimestampMs = connectedAtMs - 10_000;
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Sam",
+      isFromMe: false,
+      messageTimestampMs,
+      connectedAtMs,
+      pairingGraceMs: 30_000,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
 
     expect(result.allowed).toBe(false);
     expect(upsertPairingRequestMock).toHaveBeenCalled();
@@ -85,8 +79,21 @@ describe("WhatsApp dmPolicy precedence", () => {
       },
     });
 
-    const result = await checkUnauthorizedWorkDmSender();
-    expectSilentlyBlocked(result);
+    const result = await checkInboundAccessControl({
+      accountId: "work",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Stranger",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
   it("inherits channel-level dmPolicy when account-level dmPolicy is unset", async () => {
@@ -105,7 +112,20 @@ describe("WhatsApp dmPolicy precedence", () => {
       },
     });
 
-    const result = await checkUnauthorizedWorkDmSender();
-    expectSilentlyBlocked(result);
+    const result = await checkInboundAccessControl({
+      accountId: "work",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: false,
+      pushName: "Stranger",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550001111@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });

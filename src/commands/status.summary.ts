@@ -9,13 +9,29 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { classifySessionKey, listAgentsForGateway } from "../gateway/session-utils.js";
+import { listAgentsForGateway } from "../gateway/session-utils.js";
 import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
+
+const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] => {
+  if (key === "global") {
+    return "global";
+  }
+  if (key === "unknown") {
+    return "unknown";
+  }
+  if (entry?.chatType === "group" || entry?.chatType === "channel") {
+    return "group";
+  }
+  if (key.includes(":group:") || key.includes(":channel:")) {
+    return "group";
+  }
+  return "direct";
+};
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -143,7 +159,7 @@ export async function getStatusSummary(
         return {
           agentId,
           key,
-          kind: classifySessionKey(key, entry),
+          kind: classifyKey(key, entry),
           sessionId: entry?.sessionId,
           updatedAt,
           age,

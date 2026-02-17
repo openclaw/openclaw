@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { GatewayAuthConfig } from "../config/config.js";
-import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
-import {
-  createThrowingRuntime,
-  readJsonFile,
-  runNonInteractiveOnboarding,
-} from "./onboard-non-interactive.test-helpers.js";
+import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -46,33 +41,60 @@ vi.mock("../gateway/client.js", () => ({
 }));
 
 async function getFreePort(): Promise<number> {
-  return await getFreePortBlockWithPermissionFallback({
-    offsets: [0],
-    fallbackBase: 30_000,
-  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const srv = createServer();
+      srv.on("error", (err) => {
+        srv.close();
+        reject(err);
+      });
+      srv.listen(0, "127.0.0.1", () => {
+        const addr = srv.address();
+        if (!addr || typeof addr === "string") {
+          srv.close();
+          reject(new Error("failed to acquire free port"));
+          return;
+        }
+        const port = addr.port;
+        srv.close((err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(port);
+          }
+        });
+      });
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES") {
+      return 30_000 + (process.pid % 10_000);
+    }
+    throw err;
+  }
 }
 
 async function getFreeGatewayPort(): Promise<number> {
-  return await getFreePortBlockWithPermissionFallback({
-    offsets: [0, 1, 2, 4],
-    fallbackBase: 40_000,
-  });
+  try {
+    return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 4] });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES") {
+      return 40_000 + (process.pid % 10_000);
+    }
+    throw err;
+  }
 }
 
-const runtime = createThrowingRuntime();
-
-async function expectGatewayTokenAuth(params: {
-  authConfig: GatewayAuthConfig | null | undefined;
-  token: string;
-  env: NodeJS.ProcessEnv;
-}) {
-  const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
-  const auth = resolveGatewayAuth({ authConfig: params.authConfig, env: params.env });
-  const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
-  expect(resNoToken.ok).toBe(false);
-  const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token: params.token } });
-  expect(resToken.ok).toBe(true);
-}
+const runtime = {
+  log: () => {},
+  error: (msg: string) => {
+    throw new Error(msg);
+  },
+  exit: (code: number) => {
+    throw new Error(`exit:${code}`);
+  },
+};
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
   const prev = {
@@ -98,17 +120,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     delete process.env.OPENCLAW_CONFIG_PATH;
     return stateDir;
   };
-  const withStateDir = async (
-    prefix: string,
-    run: (stateDir: string) => Promise<void>,
-  ): Promise<void> => {
-    const stateDir = await initStateDir(prefix);
-    try {
-      await run(stateDir);
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  };
+
   beforeAll(async () => {
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -118,7 +130,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
-    tempHome = await makeTempWorkspace("openclaw-onboard-");
+    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-"));
     process.env.HOME = tempHome;
   });
 
@@ -139,78 +151,83 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   });
 
   it("writes gateway token auth into config and gateway enforces it", async () => {
-    await withStateDir("state-noninteractive-", async (stateDir) => {
-      const token = "tok_test_123";
-      const workspace = path.join(stateDir, "openclaw");
+    const stateDir = await initStateDir("state-noninteractive-");
+    const token = "tok_test_123";
+    const workspace = path.join(stateDir, "openclaw");
 
-      await runNonInteractiveOnboarding(
-        {
-          nonInteractive: true,
-          mode: "local",
-          workspace,
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
-          gatewayBind: "loopback",
-          gatewayAuth: "token",
-          gatewayToken: token,
-        },
-        runtime,
-      );
+    const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+    await runNonInteractiveOnboarding(
+      {
+        nonInteractive: true,
+        mode: "local",
+        workspace,
+        authChoice: "skip",
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+        gatewayBind: "loopback",
+        gatewayAuth: "token",
+        gatewayToken: token,
+      },
+      runtime,
+    );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
-      const cfg = await readJsonFile<{
-        gateway?: { auth?: GatewayAuthConfig };
-        agents?: { defaults?: { workspace?: string } };
-      }>(configPath);
+    const { resolveConfigPath } = await import("../config/paths.js");
+    const configPath = resolveConfigPath(process.env, stateDir);
+    const cfg = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      gateway?: { auth?: { mode?: string; token?: string } };
+      agents?: { defaults?: { workspace?: string } };
+    };
 
-      expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
-      expect(cfg?.gateway?.auth?.mode).toBe("token");
-      expect(cfg?.gateway?.auth?.token).toBe(token);
+    expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
+    expect(cfg?.gateway?.auth?.mode).toBe("token");
+    expect(cfg?.gateway?.auth?.token).toBe(token);
 
-      await expectGatewayTokenAuth({
-        authConfig: cfg.gateway?.auth,
-        token,
-        env: process.env,
-      });
-    });
+    const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
+    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
+    const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
+    expect(resNoToken.ok).toBe(false);
+    const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token } });
+    expect(resToken.ok).toBe(true);
+
+    await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
 
   it("writes gateway.remote url/token and callGateway uses them", async () => {
-    await withStateDir("state-remote-", async () => {
-      const port = await getFreePort();
-      const token = "tok_remote_123";
-      await runNonInteractiveOnboarding(
-        {
-          nonInteractive: true,
-          mode: "remote",
-          remoteUrl: `ws://127.0.0.1:${port}`,
-          remoteToken: token,
-          authChoice: "skip",
-          json: true,
-        },
-        runtime,
-      );
+    const stateDir = await initStateDir("state-remote-");
+    const port = await getFreePort();
+    const token = "tok_remote_123";
+    const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+    await runNonInteractiveOnboarding(
+      {
+        nonInteractive: true,
+        mode: "remote",
+        remoteUrl: `ws://127.0.0.1:${port}`,
+        remoteToken: token,
+        authChoice: "skip",
+        json: true,
+      },
+      runtime,
+    );
 
-      const { resolveConfigPath } = await import("../config/config.js");
-      const cfg = await readJsonFile<{
-        gateway?: { mode?: string; remote?: { url?: string; token?: string } };
-      }>(resolveConfigPath());
+    const { resolveConfigPath } = await import("../config/config.js");
+    const cfg = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8")) as {
+      gateway?: { mode?: string; remote?: { url?: string; token?: string } };
+    };
 
-      expect(cfg.gateway?.mode).toBe("remote");
-      expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
-      expect(cfg.gateway?.remote?.token).toBe(token);
+    expect(cfg.gateway?.mode).toBe("remote");
+    expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
+    expect(cfg.gateway?.remote?.token).toBe(token);
 
-      gatewayClientCalls.length = 0;
-      const { callGateway } = await import("../gateway/call.js");
-      const health = await callGateway<{ ok?: boolean }>({ method: "health" });
-      expect(health?.ok).toBe(true);
-      const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
-      expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);
-      expect(lastCall?.token).toBe(token);
-    });
+    gatewayClientCalls.length = 0;
+    const { callGateway } = await import("../gateway/call.js");
+    const health = await callGateway<{ ok?: boolean }>({ method: "health" });
+    expect(health?.ok).toBe(true);
+    const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
+    expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);
+    expect(lastCall?.token).toBe(token);
+
+    await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
 
   it("auto-generates token auth when binding LAN and persists the token", async () => {
@@ -218,49 +235,52 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
       return;
     }
-    await withStateDir("state-lan-", async (stateDir) => {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+    const stateDir = await initStateDir("state-lan-");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
 
-      const port = await getFreeGatewayPort();
-      const workspace = path.join(stateDir, "openclaw");
+    const port = await getFreeGatewayPort();
+    const workspace = path.join(stateDir, "openclaw");
 
-      await runNonInteractiveOnboarding(
-        {
-          nonInteractive: true,
-          mode: "local",
-          workspace,
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
-          gatewayPort: port,
-          gatewayBind: "lan",
-        },
-        runtime,
-      );
+    const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+    await runNonInteractiveOnboarding(
+      {
+        nonInteractive: true,
+        mode: "local",
+        workspace,
+        authChoice: "skip",
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+        gatewayPort: port,
+        gatewayBind: "lan",
+      },
+      runtime,
+    );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
-      const cfg = await readJsonFile<{
-        gateway?: {
-          bind?: string;
-          port?: number;
-          auth?: GatewayAuthConfig;
-        };
-      }>(configPath);
+    const { resolveConfigPath } = await import("../config/paths.js");
+    const configPath = resolveConfigPath(process.env, stateDir);
+    const cfg = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      gateway?: {
+        bind?: string;
+        port?: number;
+        auth?: { mode?: string; token?: string };
+      };
+    };
 
-      expect(cfg.gateway?.bind).toBe("lan");
-      expect(cfg.gateway?.port).toBe(port);
-      expect(cfg.gateway?.auth?.mode).toBe("token");
-      const token = cfg.gateway?.auth?.token ?? "";
-      expect(token.length).toBeGreaterThan(8);
+    expect(cfg.gateway?.bind).toBe("lan");
+    expect(cfg.gateway?.port).toBe(port);
+    expect(cfg.gateway?.auth?.mode).toBe("token");
+    const token = cfg.gateway?.auth?.token ?? "";
+    expect(token.length).toBeGreaterThan(8);
 
-      await expectGatewayTokenAuth({
-        authConfig: cfg.gateway?.auth,
-        token,
-        env: process.env,
-      });
-    });
+    const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
+    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
+    const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
+    expect(resNoToken.ok).toBe(false);
+    const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token } });
+    expect(resToken.ok).toBe(true);
+
+    await fs.rm(stateDir, { recursive: true, force: true });
   }, 60_000);
 });

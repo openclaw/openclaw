@@ -1,5 +1,4 @@
 import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
-import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
   BrowserConsoleMessage,
@@ -7,30 +6,33 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 
-function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of params) {
-    if (typeof value === "boolean") {
-      query.set(key, String(value));
-      continue;
-    }
-    if (typeof value === "string" && value.length > 0) {
-      query.set(key, value);
-    }
+function buildProfileQuery(profile?: string): string {
+  return profile ? `?profile=${encodeURIComponent(profile)}` : "";
+}
+
+function withBaseUrl(baseUrl: string | undefined, path: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return path;
   }
-  const encoded = query.toString();
-  return encoded.length > 0 ? `?${encoded}` : "";
+  return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
   opts: { level?: string; targetId?: string; profile?: string } = {},
 ): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
-  const suffix = buildQuerySuffix([
-    ["level", opts.level],
-    ["targetId", opts.targetId],
-    ["profile", opts.profile],
-  ]);
+  const q = new URLSearchParams();
+  if (opts.level) {
+    q.set("level", opts.level);
+  }
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
     messages: BrowserConsoleMessage[];
@@ -55,11 +57,17 @@ export async function browserPageErrors(
   baseUrl: string | undefined,
   opts: { targetId?: string; clear?: boolean; profile?: string } = {},
 ): Promise<{ ok: true; targetId: string; errors: BrowserPageError[] }> {
-  const suffix = buildQuerySuffix([
-    ["targetId", opts.targetId],
-    ["clear", typeof opts.clear === "boolean" ? opts.clear : undefined],
-    ["profile", opts.profile],
-  ]);
+  const q = new URLSearchParams();
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (typeof opts.clear === "boolean") {
+    q.set("clear", String(opts.clear));
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
@@ -76,12 +84,20 @@ export async function browserRequests(
     profile?: string;
   } = {},
 ): Promise<{ ok: true; targetId: string; requests: BrowserNetworkRequest[] }> {
-  const suffix = buildQuerySuffix([
-    ["targetId", opts.targetId],
-    ["filter", opts.filter],
-    ["clear", typeof opts.clear === "boolean" ? opts.clear : undefined],
-    ["profile", opts.profile],
-  ]);
+  const q = new URLSearchParams();
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (opts.filter) {
+    q.set("filter", opts.filter);
+  }
+  if (typeof opts.clear === "boolean") {
+    q.set("clear", String(opts.clear));
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
+  const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;

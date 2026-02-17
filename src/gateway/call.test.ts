@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 
 const loadConfig = vi.fn();
 const resolveGatewayPort = vi.fn();
@@ -281,18 +280,18 @@ describe("callGateway error details", () => {
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     vi.useFakeTimers();
-    let errMessage = "";
+    let err: Error | null = null;
     const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
+      err = caught as Error;
     });
 
     await vi.advanceTimersByTimeAsync(5);
     await promise;
 
-    expect(errMessage).toContain("gateway timeout after 5ms");
-    expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
-    expect(errMessage).toContain("Source: local loopback");
-    expect(errMessage).toContain("Bind: loopback");
+    expect(err?.message).toContain("gateway timeout after 5ms");
+    expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(err?.message).toContain("Source: local loopback");
+    expect(err?.message).toContain("Bind: loopback");
   });
 
   it("does not overflow very large timeout values", async () => {
@@ -304,18 +303,18 @@ describe("callGateway error details", () => {
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     vi.useFakeTimers();
-    let errMessage = "";
+    let err: Error | null = null;
     const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
+      err = caught as Error;
     });
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(errMessage).toBe("");
+    expect(err).toBeNull();
 
     lastClientOptions?.onClose?.(1006, "");
     await promise;
 
-    expect(errMessage).toContain("gateway closed (1006");
+    expect(err?.message).toContain("gateway closed (1006");
   });
 
   it("fails fast when remote mode is missing remote url", async () => {
@@ -332,10 +331,7 @@ describe("callGateway error details", () => {
 });
 
 describe("callGateway url override auth requirements", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
@@ -349,7 +345,8 @@ describe("callGateway url override auth requirements", () => {
   });
 
   afterEach(() => {
-    envSnapshot.restore();
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   });
 
   it("throws when url override is set without explicit credentials", async () => {
@@ -369,10 +366,9 @@ describe("callGateway url override auth requirements", () => {
 });
 
 describe("callGateway password resolution", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  const originalEnvPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PASSWORD"]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
@@ -387,7 +383,11 @@ describe("callGateway password resolution", () => {
   });
 
   afterEach(() => {
-    envSnapshot.restore();
+    if (originalEnvPassword == null) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = originalEnvPassword;
+    }
   });
 
   it("uses local config password when env is unset", async () => {
@@ -468,10 +468,9 @@ describe("callGateway password resolution", () => {
 });
 
 describe("callGateway token resolution", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  const originalEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
@@ -486,7 +485,11 @@ describe("callGateway token resolution", () => {
   });
 
   afterEach(() => {
-    envSnapshot.restore();
+    if (originalEnvToken == null) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = originalEnvToken;
+    }
   });
 
   it("uses explicit token when url override is set", async () => {

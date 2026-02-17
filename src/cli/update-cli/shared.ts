@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
-import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
@@ -69,7 +68,15 @@ export function normalizeVersionTag(tag: string): string | null {
   return parseSemver(cleaned) ? cleaned : null;
 }
 
-export { readPackageName, readPackageVersion };
+export async function readPackageVersion(root: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { version?: string };
+    return typeof parsed.version === "string" ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function resolveTargetVersion(
   tag: string,
@@ -89,6 +96,17 @@ export async function isGitCheckout(root: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+export async function readPackageName(root: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { name?: string };
+    const name = parsed?.name?.trim();
+    return name ? name : null;
+  } catch {
+    return null;
   }
 }
 

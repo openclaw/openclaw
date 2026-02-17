@@ -8,19 +8,14 @@ import {
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  runCommandWithTimeout: vi.fn<
-    (
-      argv: string[],
-      options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
-    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
-  >(async () => ({
+  runCommandWithTimeout: vi.fn(async () => ({
     stdout: "",
     stderr: "",
     code: 0,
     signal: null,
     killed: false,
   })),
-  pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
+  pickPrimaryTailnetIPv4: vi.fn(() => undefined),
 }));
 
 vi.mock("../process/exec.js", () => ({

@@ -15,8 +15,6 @@ struct SettingsTab: View {
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
-    @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
-    @AppStorage("talk.voiceDirectiveHint.enabled") private var talkVoiceDirectiveHintEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
@@ -30,26 +28,16 @@ struct SettingsTab: View {
     @AppStorage("gateway.manual.tls") private var manualGatewayTLS: Bool = true
     @AppStorage("gateway.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
-
-    // Onboarding control (RootCanvas listens to onboarding.requestID and force-opens the wizard).
-    @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
-    @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
-    @AppStorage("gateway.hasConnectedOnce") private var hasConnectedOnce: Bool = false
-
     @State private var connectingGatewayID: String?
     @State private var localIPAddress: String?
     @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
-    @State private var talkElevenLabsApiKey: String = ""
     @AppStorage("gateway.setupCode") private var setupCode: String = ""
     @State private var setupStatusText: String?
     @State private var manualGatewayPortText: String = ""
     @State private var gatewayExpanded: Bool = true
     @State private var selectedAgentPickerId: String = ""
-
-    @State private var showResetOnboardingAlert: Bool = false
-    @State private var suppressCredentialPersist: Bool = false
 
     private let gatewayLogger = Logger(subsystem: "ai.openclaw.ios", category: "GatewaySettings")
 
@@ -115,6 +103,7 @@ struct SettingsTab: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        DisclosureGroup("Advanced") {
                         if self.appModel.gatewayServerName == nil {
                             LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
                         }
@@ -159,74 +148,69 @@ struct SettingsTab: View {
                             self.gatewayList(showing: .all)
                         }
 
-                        DisclosureGroup("Advanced") {
-                            Toggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
+                        Toggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
 
-                            TextField("Host", text: self.$manualGatewayHost)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
+                        TextField("Host", text: self.$manualGatewayHost)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
 
-                            TextField("Port (optional)", text: self.manualPortBinding)
-                                .keyboardType(.numberPad)
+                        TextField("Port (optional)", text: self.manualPortBinding)
+                            .keyboardType(.numberPad)
 
-                            Toggle("Use TLS", isOn: self.$manualGatewayTLS)
+                        Toggle("Use TLS", isOn: self.$manualGatewayTLS)
 
-                            Button {
-                                Task { await self.connectManual() }
-                            } label: {
-                                if self.connectingGatewayID == "manual" {
-                                    HStack(spacing: 8) {
-                                        ProgressView()
-                                            .progressViewStyle(.circular)
-                                        Text("Connecting…")
-                                    }
-                                } else {
-                                    Text("Connect (Manual)")
+                        Button {
+                            Task { await self.connectManual() }
+                        } label: {
+                            if self.connectingGatewayID == "manual" {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                    Text("Connecting…")
                                 }
-                            }
-                            .disabled(self.connectingGatewayID != nil || self.manualGatewayHost
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                                .isEmpty || !self.manualPortIsValid)
-
-                            Text(
-                                "Use this when mDNS/Bonjour discovery is blocked. "
-                                    + "Leave port empty for 443 on tailnet DNS (TLS) or 18789 otherwise.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-
-                            Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
-                                .onChange(of: self.discoveryDebugLogsEnabled) { _, newValue in
-                                    self.gatewayController.setDiscoveryDebugLoggingEnabled(newValue)
-                                }
-
-                            NavigationLink("Discovery Logs") {
-                                GatewayDiscoveryDebugLogView()
-                            }
-
-                            Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
-
-                            TextField("Gateway Auth Token", text: self.$gatewayToken)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-
-                            SecureField("Gateway Password", text: self.$gatewayPassword)
-
-                            Button("Reset Onboarding", role: .destructive) {
-                                self.showResetOnboardingAlert = true
-                            }
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Debug")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                Text(self.gatewayDebugText())
-                                    .font(.system(size: 12, weight: .regular, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(10)
-                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            } else {
+                                Text("Connect (Manual)")
                             }
                         }
+                        .disabled(self.connectingGatewayID != nil || self.manualGatewayHost
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty || !self.manualPortIsValid)
+
+                        Text(
+                            "Use this when mDNS/Bonjour discovery is blocked. "
+                                + "Leave port empty for 443 on tailnet DNS (TLS) or 18789 otherwise.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
+                            .onChange(of: self.discoveryDebugLogsEnabled) { _, newValue in
+                                self.gatewayController.setDiscoveryDebugLoggingEnabled(newValue)
+                            }
+
+                        NavigationLink("Discovery Logs") {
+                            GatewayDiscoveryDebugLogView()
+                        }
+
+                        Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
+
+                        TextField("Gateway Token", text: self.$gatewayToken)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        SecureField("Gateway Password", text: self.$gatewayPassword)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Debug")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(self.gatewayDebugText())
+                                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                    }
                     } label: {
                         HStack(spacing: 10) {
                             Circle()
@@ -251,20 +235,6 @@ struct SettingsTab: View {
                             .onChange(of: self.talkEnabled) { _, newValue in
                                 self.appModel.setTalkEnabled(newValue)
                             }
-                        SecureField("Talk ElevenLabs API Key (optional)", text: self.$talkElevenLabsApiKey)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        Text("Use this local override when gateway config redacts talk.apiKey for mobile clients.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Toggle("Background Listening", isOn: self.$talkBackgroundEnabled)
-                        Text("Keep listening when the app is in the background. Uses more battery.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Toggle("Voice Directive Hint", isOn: self.$talkVoiceDirectiveHintEnabled)
-                        Text("Include ElevenLabs voice switching instructions in the Talk Mode prompt. Disable to save tokens.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                         // Keep this separate so users can hide the side bubble without disabling Talk Mode.
                         Toggle("Show Talk Button", isOn: self.$talkButtonEnabled)
 
@@ -333,17 +303,8 @@ struct SettingsTab: View {
                     .accessibilityLabel("Close")
                 }
             }
-            .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-                Button("Reset", role: .destructive) {
-                    self.resetOnboarding()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(
-                    "This will disconnect, clear saved gateway connection + credentials, and reopen the onboarding wizard.")
-            }
             .onAppear {
-                self.localIPAddress = NetworkInterfaces.primaryIPv4Address()
+                self.localIPAddress = Self.primaryIPv4Address()
                 self.lastLocationModeRaw = self.locationEnabledModeRaw
                 self.syncManualPortText()
                 let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -351,7 +312,6 @@ struct SettingsTab: View {
                     self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
                     self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
                 }
-                self.talkElevenLabsApiKey = GatewaySettingsStore.loadTalkElevenLabsApiKey() ?? ""
                 // Keep setup front-and-center when disconnected; keep things compact once connected.
                 self.gatewayExpanded = !self.isGatewayConnected
                 self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
@@ -371,21 +331,16 @@ struct SettingsTab: View {
                 GatewaySettingsStore.savePreferredGatewayStableID(trimmed)
             }
             .onChange(of: self.gatewayToken) { _, newValue in
-                guard !self.suppressCredentialPersist else { return }
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !instanceId.isEmpty else { return }
                 GatewaySettingsStore.saveGatewayToken(trimmed, instanceId: instanceId)
             }
             .onChange(of: self.gatewayPassword) { _, newValue in
-                guard !self.suppressCredentialPersist else { return }
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !instanceId.isEmpty else { return }
                 GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
-            }
-            .onChange(of: self.talkElevenLabsApiKey) { _, newValue in
-                GatewaySettingsStore.saveTalkElevenLabsApiKey(newValue)
             }
             .onChange(of: self.manualGatewayPort) { _, _ in
                 self.syncManualPortText()
@@ -466,11 +421,10 @@ struct SettingsTab: View {
                 ForEach(rows) { gateway in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            // Avoid localized-string formatting edge cases from Bonjour-advertised names.
-                            Text(verbatim: gateway.name)
+                            Text(gateway.name)
                             let detailLines = self.gatewayDetailLines(gateway)
                             ForEach(detailLines, id: \.self) { line in
-                                Text(verbatim: line)
+                                Text(line)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -556,10 +510,7 @@ struct SettingsTab: View {
         GatewaySettingsStore.saveLastDiscoveredGatewayStableID(gateway.stableID)
         defer { self.connectingGatewayID = nil }
 
-        let err = await self.gatewayController.connectWithDiagnostics(gateway)
-        if let err {
-            self.setupStatusText = err
-        }
+        await self.gatewayController.connect(gateway)
     }
 
     private func connectLastKnown() async {
@@ -639,6 +590,15 @@ struct SettingsTab: View {
         }
     }
 
+    private struct SetupPayload: Codable {
+        var url: String?
+        var host: String?
+        var port: Int?
+        var tls: Bool?
+        var token: String?
+        var password: String?
+    }
+
     private func applySetupCodeAndConnect() async {
         self.setupStatusText = nil
         guard self.applySetupCode() else { return }
@@ -666,7 +626,7 @@ struct SettingsTab: View {
             return false
         }
 
-        guard let payload = GatewaySetupCode.decode(raw: raw) else {
+        guard let payload = self.decodeSetupPayload(raw: raw) else {
             self.setupStatusText = "Setup code not recognized."
             return false
         }
@@ -767,14 +727,67 @@ struct SettingsTab: View {
     }
 
     private static func probeTCP(host: String, port: Int, timeoutSeconds: Double) async -> Bool {
-        await TCPProbe.probe(
-            host: host,
-            port: port,
-            timeoutSeconds: timeoutSeconds,
-            queueLabel: "gateway.preflight")
+        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { return false }
+        let endpointHost = NWEndpoint.Host(host)
+        let connection = NWConnection(host: endpointHost, port: nwPort, using: .tcp)
+        return await withCheckedContinuation { cont in
+            let queue = DispatchQueue(label: "gateway.preflight")
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            let finish: @Sendable (Bool) -> Void = { ok in
+                let shouldResume = finished.withLock { flag -> Bool in
+                    if flag { return false }
+                    flag = true
+                    return true
+                }
+                guard shouldResume else { return }
+                connection.cancel()
+                cont.resume(returning: ok)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    finish(true)
+                case .failed, .cancelled:
+                    finish(false)
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + timeoutSeconds) {
+                finish(false)
+            }
+        }
     }
 
-    // (GatewaySetupCode) decode raw setup codes.
+    private func decodeSetupPayload(raw: String) -> SetupPayload? {
+        if let payload = decodeSetupPayloadFromJSON(raw) {
+            return payload
+        }
+        if let decoded = decodeBase64Payload(raw),
+           let payload = decodeSetupPayloadFromJSON(decoded)
+        {
+            return payload
+        }
+        return nil
+    }
+
+    private func decodeSetupPayloadFromJSON(_ json: String) -> SetupPayload? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SetupPayload.self, from: data)
+    }
+
+    private func decodeBase64Payload(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = normalized.count % 4
+        let padded = padding == 0 ? normalized : normalized + String(repeating: "=", count: 4 - padding)
+        guard let data = Data(base64Encoded: padded) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 
     private func connectManual() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -839,6 +852,44 @@ struct SettingsTab: View {
         return nil
     }
 
+    private static func primaryIPv4Address() -> String? {
+        var addrList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
+        defer { freeifaddrs(addrList) }
+
+        var fallback: String?
+        var en0: String?
+
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(ptr.pointee.ifa_flags)
+            let isUp = (flags & IFF_UP) != 0
+            let isLoopback = (flags & IFF_LOOPBACK) != 0
+            let name = String(cString: ptr.pointee.ifa_name)
+            let family = ptr.pointee.ifa_addr.pointee.sa_family
+            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
+
+            var addr = ptr.pointee.ifa_addr.pointee
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                &addr,
+                socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+                &buffer,
+                socklen_t(buffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST)
+            guard result == 0 else { continue }
+            let len = buffer.prefix { $0 != 0 }
+            let bytes = len.map { UInt8(bitPattern: $0) }
+            guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
+
+            if name == "en0" { en0 = ip; break }
+            if fallback == nil { fallback = ip }
+        }
+
+        return en0 ?? fallback
+    }
+
     private static func hasTailnetIPv4() -> Bool {
         var addrList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&addrList) == 0, let first = addrList else { return false }
@@ -896,43 +947,6 @@ struct SettingsTab: View {
 
     private static func httpURLString(host: String?, port: Int?, fallback: String) -> String {
         SettingsNetworkingHelpers.httpURLString(host: host, port: port, fallback: fallback)
-    }
-
-    private func resetOnboarding() {
-        // Disconnect first so RootCanvas doesn't instantly mark onboarding complete again.
-        self.appModel.disconnectGateway()
-        self.connectingGatewayID = nil
-        self.setupStatusText = nil
-        self.setupCode = ""
-        self.gatewayAutoConnect = false
-
-        self.suppressCredentialPersist = true
-        defer { self.suppressCredentialPersist = false }
-
-        self.gatewayToken = ""
-        self.gatewayPassword = ""
-
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: trimmedInstanceId)
-        }
-
-        // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
-        GatewaySettingsStore.clearLastGatewayConnection()
-
-        // RootCanvas also short-circuits onboarding when these are true.
-        self.onboardingComplete = false
-        self.hasConnectedOnce = false
-
-        // Clear manual override so it doesn't count as an existing gateway config.
-        self.manualGatewayEnabled = false
-        self.manualGatewayHost = ""
-
-        // Force re-present even without app restart.
-        self.onboardingRequestID += 1
-
-        // The onboarding wizard is presented from RootCanvas; dismiss Settings so it can show.
-        self.dismiss()
     }
 
     private func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {

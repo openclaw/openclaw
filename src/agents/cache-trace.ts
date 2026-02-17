@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../config/config.js";
@@ -6,7 +7,6 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 
 export type CacheTraceStage =
   | "session:loaded"
@@ -70,7 +70,10 @@ type CacheTraceConfig = {
   includeSystem: boolean;
 };
 
-type CacheTraceWriter = QueuedFileWriter;
+type CacheTraceWriter = {
+  filePath: string;
+  write: (line: string) => void;
+};
 
 const writers = new Map<string, CacheTraceWriter>();
 
@@ -99,7 +102,27 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 }
 
 function getWriter(filePath: string): CacheTraceWriter {
-  return getQueuedFileWriter(writers, filePath);
+  const existing = writers.get(filePath);
+  if (existing) {
+    return existing;
+  }
+
+  const dir = path.dirname(filePath);
+  const ready = fs.mkdir(dir, { recursive: true }).catch(() => undefined);
+  let queue = Promise.resolve();
+
+  const writer: CacheTraceWriter = {
+    filePath,
+    write: (line: string) => {
+      queue = queue
+        .then(() => ready)
+        .then(() => fs.appendFile(filePath, line, "utf8"))
+        .catch(() => undefined);
+    },
+  };
+
+  writers.set(filePath, writer);
+  return writer;
 }
 
 function stableStringify(value: unknown): string {

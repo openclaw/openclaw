@@ -61,10 +61,37 @@ extension NodeAppModel {
     private static func probeTCP(url: URL, timeoutSeconds: Double) async -> Bool {
         guard let host = url.host, !host.isEmpty else { return false }
         let portInt = url.port ?? ((url.scheme ?? "").lowercased() == "wss" ? 443 : 80)
-        return await TCPProbe.probe(
-            host: host,
-            port: portInt,
-            timeoutSeconds: timeoutSeconds,
-            queueLabel: "a2ui.preflight")
+        guard portInt >= 1, portInt <= 65535 else { return false }
+        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(portInt)) else { return false }
+
+        let endpointHost = NWEndpoint.Host(host)
+        let connection = NWConnection(host: endpointHost, port: nwPort, using: .tcp)
+        return await withCheckedContinuation { cont in
+            let queue = DispatchQueue(label: "a2ui.preflight")
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            let finish: @Sendable (Bool) -> Void = { ok in
+                let shouldResume = finished.withLock { flag -> Bool in
+                    if flag { return false }
+                    flag = true
+                    return true
+                }
+                guard shouldResume else { return }
+                connection.cancel()
+                cont.resume(returning: ok)
+            }
+
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    finish(true)
+                case .failed, .cancelled:
+                    finish(false)
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + timeoutSeconds) { finish(false) }
+        }
     }
 }

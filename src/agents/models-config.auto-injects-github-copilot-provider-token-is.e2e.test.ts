@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
@@ -13,7 +12,7 @@ installModelsConfigTestHooks({ restoreFetch: true });
 describe("models-config", () => {
   it("auto-injects github-copilot provider when token is present", async () => {
     await withTempHome(async (home) => {
-      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN"]);
+      const previous = process.env.COPILOT_GITHUB_TOKEN;
       process.env.COPILOT_GITHUB_TOKEN = "gh-token";
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
@@ -37,14 +36,20 @@ describe("models-config", () => {
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
         expect(parsed.providers["github-copilot"]?.models?.length ?? 0).toBe(0);
       } finally {
-        envSnapshot.restore();
+        if (previous === undefined) {
+          delete process.env.COPILOT_GITHUB_TOKEN;
+        } else {
+          process.env.COPILOT_GITHUB_TOKEN = previous;
+        }
       }
     });
   });
 
   it("prefers COPILOT_GITHUB_TOKEN over GH_TOKEN and GITHUB_TOKEN", async () => {
     await withTempHome(async () => {
-      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]);
+      const previous = process.env.COPILOT_GITHUB_TOKEN;
+      const previousGh = process.env.GH_TOKEN;
+      const previousGithub = process.env.GITHUB_TOKEN;
       process.env.COPILOT_GITHUB_TOKEN = "copilot-token";
       process.env.GH_TOKEN = "gh-token";
       process.env.GITHUB_TOKEN = "github-token";
@@ -65,7 +70,9 @@ describe("models-config", () => {
         const [, opts] = fetchMock.mock.calls[0] as [string, { headers?: Record<string, string> }];
         expect(opts?.headers?.Authorization).toBe("Bearer copilot-token");
       } finally {
-        envSnapshot.restore();
+        process.env.COPILOT_GITHUB_TOKEN = previous;
+        process.env.GH_TOKEN = previousGh;
+        process.env.GITHUB_TOKEN = previousGithub;
       }
     });
   });

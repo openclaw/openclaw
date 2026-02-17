@@ -1,28 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "./dashboard.js";
 
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
-const resolveControlUiLinksMock = vi.hoisted(() => vi.fn());
-const detectBrowserOpenSupportMock = vi.hoisted(() => vi.fn());
-const openUrlMock = vi.hoisted(() => vi.fn());
-const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
-const copyToClipboardMock = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  readConfigFileSnapshot: vi.fn(),
+  resolveGatewayPort: vi.fn(),
+  resolveControlUiLinks: vi.fn(),
+  detectBrowserOpenSupport: vi.fn(),
+  openUrl: vi.fn(),
+  formatControlUiSshHint: vi.fn(),
+  copyToClipboard: vi.fn(),
+}));
 
 vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  resolveGatewayPort: resolveGatewayPortMock,
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
-  resolveControlUiLinks: resolveControlUiLinksMock,
-  detectBrowserOpenSupport: detectBrowserOpenSupportMock,
-  openUrl: openUrlMock,
-  formatControlUiSshHint: formatControlUiSshHintMock,
+  resolveControlUiLinks: mocks.resolveControlUiLinks,
+  detectBrowserOpenSupport: mocks.detectBrowserOpenSupport,
+  openUrl: mocks.openUrl,
+  formatControlUiSshHint: mocks.formatControlUiSshHint,
 }));
 
 vi.mock("../infra/clipboard.js", () => ({
-  copyToClipboard: copyToClipboardMock,
+  copyToClipboard: mocks.copyToClipboard,
 }));
 
 const runtime = {
@@ -38,7 +40,7 @@ function resetRuntime() {
 }
 
 function mockSnapshot(token = "abc") {
-  readConfigFileSnapshotMock.mockResolvedValue({
+  mocks.readConfigFileSnapshot.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
     raw: "{}",
@@ -48,8 +50,8 @@ function mockSnapshot(token = "abc") {
     issues: [],
     legacyIssues: [],
   });
-  resolveGatewayPortMock.mockReturnValue(18789);
-  resolveControlUiLinksMock.mockReturnValue({
+  mocks.resolveGatewayPort.mockReturnValue(18789);
+  mocks.resolveControlUiLinks.mockReturnValue({
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
   });
@@ -58,31 +60,31 @@ function mockSnapshot(token = "abc") {
 describe("dashboardCommand", () => {
   beforeEach(() => {
     resetRuntime();
-    readConfigFileSnapshotMock.mockReset();
-    resolveGatewayPortMock.mockReset();
-    resolveControlUiLinksMock.mockReset();
-    detectBrowserOpenSupportMock.mockReset();
-    openUrlMock.mockReset();
-    formatControlUiSshHintMock.mockReset();
-    copyToClipboardMock.mockReset();
+    mocks.readConfigFileSnapshot.mockReset();
+    mocks.resolveGatewayPort.mockReset();
+    mocks.resolveControlUiLinks.mockReset();
+    mocks.detectBrowserOpenSupport.mockReset();
+    mocks.openUrl.mockReset();
+    mocks.formatControlUiSshHint.mockReset();
+    mocks.copyToClipboard.mockReset();
   });
 
   it("opens and copies the dashboard link by default", async () => {
     mockSnapshot("abc123");
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
+    mocks.copyToClipboard.mockResolvedValue(true);
+    mocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
+    mocks.openUrl.mockResolvedValue(true);
 
     await dashboardCommand(runtime);
 
-    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
+    expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
       port: 18789,
       bind: "loopback",
       customBindHost: undefined,
       basePath: undefined,
     });
-    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
-    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(mocks.openUrl).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
     );
@@ -90,27 +92,27 @@ describe("dashboardCommand", () => {
 
   it("prints SSH hint when browser cannot open", async () => {
     mockSnapshot("shhhh");
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({
+    mocks.copyToClipboard.mockResolvedValue(false);
+    mocks.detectBrowserOpenSupport.mockResolvedValue({
       ok: false,
       reason: "ssh",
     });
-    formatControlUiSshHintMock.mockReturnValue("ssh hint");
+    mocks.formatControlUiSshHint.mockReturnValue("ssh hint");
 
     await dashboardCommand(runtime);
 
-    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
   it("respects --no-open and skips browser attempts", async () => {
     mockSnapshot();
-    copyToClipboardMock.mockResolvedValue(true);
+    mocks.copyToClipboard.mockResolvedValue(true);
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
-    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(mocks.detectBrowserOpenSupport).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
     );

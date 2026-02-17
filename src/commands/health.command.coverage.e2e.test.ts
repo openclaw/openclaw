@@ -8,13 +8,6 @@ import { healthCommand } from "./health.js";
 const callGatewayMock = vi.fn();
 const logWebSelfIdMock = vi.fn();
 
-function createRecentSessionRows(now = Date.now()) {
-  return [
-    { key: "main", updatedAt: now - 60_000, age: 60_000 },
-    { key: "foo", updatedAt: null, age: null },
-  ];
-}
-
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
@@ -63,7 +56,6 @@ describe("healthCommand (coverage)", () => {
   });
 
   it("prints the rich text summary when linked and configured", async () => {
-    const recent = createRecentSessionRows();
     callGatewayMock.mockResolvedValueOnce({
       ok: true,
       ts: Date.now(),
@@ -112,14 +104,20 @@ describe("healthCommand (coverage)", () => {
           sessions: {
             path: "/tmp/sessions.json",
             count: 2,
-            recent,
+            recent: [
+              { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
+              { key: "foo", updatedAt: null, age: null },
+            ],
           },
         },
       ],
       sessions: {
         path: "/tmp/sessions.json",
         count: 2,
-        recent,
+        recent: [
+          { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
+          { key: "foo", updatedAt: null, age: null },
+        ],
       },
     } satisfies HealthSummary);
 

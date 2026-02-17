@@ -1,8 +1,9 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
-export type BlueBubblesProbe = BaseProbeResult & {
+export type BlueBubblesProbe = {
+  ok: boolean;
   status?: number | null;
+  error?: string | null;
 };
 
 export type BlueBubblesServerInfo = {

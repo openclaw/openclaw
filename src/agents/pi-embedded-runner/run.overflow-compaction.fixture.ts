@@ -15,7 +15,6 @@ export function makeAttemptResult(
     messagesSnapshot: [],
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     ...overrides,

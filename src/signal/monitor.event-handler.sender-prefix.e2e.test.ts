@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SignalReactionMessage } from "./monitor/event-handler.types.js";
 
 const dispatchMock = vi.fn();
 const readAllowFromMock = vi.fn();
@@ -65,7 +64,7 @@ describe("signal event handler sender prefix", () => {
       fetchAttachment: async () => null,
       deliverReplies: async () => undefined,
       resolveSignalReactionTargets: () => [],
-      isSignalReactionMessage: (_reaction): _reaction is SignalReactionMessage => false,
+      isSignalReactionMessage: () => false,
       shouldEmitSignalReactionNotification: () => false,
       buildSignalReactionSystemEventText: () => "",
     });
