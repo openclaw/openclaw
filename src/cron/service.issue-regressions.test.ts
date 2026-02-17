@@ -458,7 +458,8 @@ describe("Cron issue regressions", () => {
     });
 
     targetJobId = job.id;
-    await vi.advanceTimersByTimeAsync(2);
+    // MIN_TIMER_DELAY_MS (500ms) clamps near-zero delays to prevent spin loops.
+    await vi.advanceTimersByTimeAsync(501);
     await started.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
