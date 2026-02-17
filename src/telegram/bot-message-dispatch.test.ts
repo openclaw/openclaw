@@ -468,20 +468,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("does not send fallback when streamMode=partial and final delivery succeeds", async () => {
     const draftStream = createDraftStream(undefined);
     createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: "Here is your answer" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Here is your answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
     deliverReplies.mockResolvedValue({ delivered: true });
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     // Should NOT send fallback because final delivery succeeded.
     const fallbackCall = deliverReplies.mock.calls.find(
-      (call) =>
-        call[0]?.replies?.[0]?.text === "No response generated. Please try again.",
+      (call) => call[0]?.replies?.[0]?.text === "No response generated. Please try again.",
     );
     expect(fallbackCall).toBeUndefined();
   });
