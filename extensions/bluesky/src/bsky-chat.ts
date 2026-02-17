@@ -184,9 +184,16 @@ export async function startBlueskyChat(
    * Resolves or creates the conversation first.
    */
   async function sendDm(recipientDid: string, text: string): Promise<void> {
+    // Resolve handle to DID if needed
+    let did = recipientDid;
+    if (!recipientDid.startsWith("did:")) {
+      const resolved = await agent.resolveHandle({ handle: recipientDid });
+      did = resolved.data.did;
+    }
+
     // Get or create conversation with this user
     const convoResponse = await agent.api.chat.bsky.convo.getConvoForMembers(
-      { members: [recipientDid] },
+      { members: [did] },
       { headers: withChatProxy(agent) },
     );
 
