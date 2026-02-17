@@ -237,7 +237,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 核心参数：
 
 - `query`（必需）
-- `count`（1-10；默认来自 `tools.web.search.maxResults`）
+- `count`（1-20；默认来自 `tools.web.search.maxResults`）
 
 注意：
 

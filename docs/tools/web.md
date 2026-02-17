@@ -196,9 +196,9 @@ show the `x_search` prompt.
 | Parameter             | Description                                           |
 | --------------------- | ----------------------------------------------------- |
 | `query`               | Search query (required)                               |
-| `count`               | Results to return (1-10, default: 5)                  |
-| `country`             | 2-letter ISO country code (e.g. "US", "DE")           |
-| `language`            | ISO 639-1 language code (e.g. "en", "de")             |
+| `count`               | Results to return (1-20, default: 5)                  |
+| `country`             | 2-letter ISO country code (e.g., "US", "DE")          |
+| `language`            | ISO 639-1 language code (e.g., "en", "de")            |
 | `freshness`           | Time filter: `day`, `week`, `month`, or `year`        |
 | `date_after`          | Results after this date (YYYY-MM-DD)                  |
 | `date_before`         | Results before this date (YYYY-MM-DD)                 |

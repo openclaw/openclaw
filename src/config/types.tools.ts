@@ -497,7 +497,7 @@ export type ToolsConfig = {
       provider?: string;
       /** Shared API key slot used by providers that do not need nested config. */
       apiKey?: SecretInput;
-      /** Default search results count (1-10). */
+      /** Default search results count (1-20). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
       timeoutSeconds?: number;

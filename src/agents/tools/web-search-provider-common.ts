@@ -29,7 +29,7 @@ type UnsupportedWebSearchFilterName =
   | "date_before";
 
 export const DEFAULT_SEARCH_COUNT = 5;
-export const MAX_SEARCH_COUNT = 10;
+export const MAX_SEARCH_COUNT = 20;
 export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
