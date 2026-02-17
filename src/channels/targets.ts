@@ -67,6 +67,23 @@ export function parseTargetPrefix(params: {
   return id ? buildMessagingTarget(params.kind, id, params.raw) : undefined;
 }
 
+export function parseTargetPrefixes(params: {
+  raw: string;
+  prefixes: Array<{ prefix: string; kind: MessagingTargetKind }>;
+}): MessagingTarget | undefined {
+  for (const entry of params.prefixes) {
+    const parsed = parseTargetPrefix({
+      raw: params.raw,
+      prefix: entry.prefix,
+      kind: entry.kind,
+    });
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 export function requireTargetKind(params: {
   platform: string;
   target: MessagingTarget | undefined;

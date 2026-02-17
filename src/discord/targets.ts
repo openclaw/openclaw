@@ -3,7 +3,7 @@ import {
   buildMessagingTarget,
   ensureTargetId,
   parseTargetMention,
-  parseTargetPrefix,
+  parseTargetPrefixes,
   requireTargetKind,
   type MessagingTarget,
   type MessagingTargetKind,
@@ -33,22 +33,14 @@ export function parseDiscordTarget(
   if (mentionTarget) {
     return mentionTarget;
   }
-  const prefixedTarget =
-    parseTargetPrefix({
-      raw: trimmed,
-      prefix: "user:",
-      kind: "user",
-    }) ??
-    parseTargetPrefix({
-      raw: trimmed,
-      prefix: "channel:",
-      kind: "channel",
-    }) ??
-    parseTargetPrefix({
-      raw: trimmed,
-      prefix: "discord:",
-      kind: "user",
-    });
+  const prefixedTarget = parseTargetPrefixes({
+    raw: trimmed,
+    prefixes: [
+      { prefix: "user:", kind: "user" },
+      { prefix: "channel:", kind: "channel" },
+      { prefix: "discord:", kind: "user" },
+    ],
+  });
   if (prefixedTarget) {
     return prefixedTarget;
   }
