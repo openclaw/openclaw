@@ -1,0 +1,17 @@
+{
+  "name": "context-firewall",
+  "version": "1.0.0",
+  "description": "Privacy-focused memory manager",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {},
+  "type": "commonjs"
+}

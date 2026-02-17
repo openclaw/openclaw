@@ -1,0 +1,13 @@
+{
+  "memories": [
+    {
+      "id": "6080i",
+      "text": "My secret API key is 12345",
+      "scope": "private",
+      "ownerId": "userA",
+      "groupId": "group1",
+      "timestamp": 1771318699065,
+      "tags": []
+    }
+  ]
+}
