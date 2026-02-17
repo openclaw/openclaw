@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
   buildCommandsMessage,
@@ -13,7 +13,9 @@ import {
 } from "./status.js";
 
 const { listPluginCommands } = vi.hoisted(() => ({
-  listPluginCommands: vi.fn(() => []),
+  listPluginCommands: vi.fn(
+    (): Array<{ name: string; description: string; pluginId: string }> => [],
+  ),
 }));
 
 vi.mock("../plugins/commands.js", () => ({

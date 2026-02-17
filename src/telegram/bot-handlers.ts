@@ -1,7 +1,4 @@
-import type { Message } from "@grammyjs/types";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
-import type { TelegramMediaRef } from "./bot-message-context.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
@@ -17,7 +14,9 @@ import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -27,6 +26,7 @@ import {
   normalizeAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
+import type { TelegramMediaRef } from "./bot-message-context.js";
 import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
@@ -36,6 +36,7 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
+import type { TelegramContext } from "./bot/types.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -50,7 +51,9 @@ import {
   parseModelCallbackData,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { getSentPoll } from "./poll-vote-cache.js";
 import { buildInlineKeyboard } from "./send.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -458,6 +461,98 @@ export const registerTelegramHandlers = ({
     return false;
   };
 
+  // Handle emoji reactions to messages.
+  bot.on("message_reaction", async (ctx) => {
+    try {
+      const reaction = ctx.messageReaction;
+      if (!reaction) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+
+      const chatId = reaction.chat.id;
+      const messageId = reaction.message_id;
+      const user = reaction.user;
+
+      // Resolve reaction notification mode (default: "own").
+      const reactionMode = telegramCfg.reactionNotifications ?? "own";
+      if (reactionMode === "off") {
+        return;
+      }
+      if (user?.is_bot) {
+        return;
+      }
+      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
+        return;
+      }
+
+      // Detect added reactions.
+      const oldEmojis = new Set(
+        reaction.old_reaction
+          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+          .map((r) => r.emoji),
+      );
+      const addedReactions = reaction.new_reaction
+        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+        .filter((r) => !oldEmojis.has(r.emoji));
+
+      if (addedReactions.length === 0) {
+        return;
+      }
+
+      // Build sender label.
+      const senderName = user
+        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
+        : undefined;
+      const senderUsername = user?.username ? `@${user.username}` : undefined;
+      let senderLabel = senderName;
+      if (senderName && senderUsername) {
+        senderLabel = `${senderName} (${senderUsername})`;
+      } else if (!senderName && senderUsername) {
+        senderLabel = senderUsername;
+      }
+      if (!senderLabel && user?.id) {
+        senderLabel = `id:${user.id}`;
+      }
+      senderLabel = senderLabel || "unknown";
+
+      // Reactions target a specific message_id; the Telegram Bot API does not include
+      // message_thread_id on MessageReactionUpdated, so we route to the chat-level
+      // session (forum topic routing is not available for reactions).
+      const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
+      const isForum = reaction.chat.is_forum === true;
+      const resolvedThreadId = isForum
+        ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
+        : undefined;
+      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      // Fresh config for bindings lookup; other routing inputs are payload-derived.
+      const route = resolveAgentRoute({
+        cfg: loadConfig(),
+        channel: "telegram",
+        accountId,
+        peer: { kind: isGroup ? "group" : "direct", id: peerId },
+        parentPeer,
+      });
+      const sessionKey = route.sessionKey;
+
+      // Enqueue system event for each added reaction.
+      for (const r of addedReactions) {
+        const emoji = r.emoji;
+        const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
+        enqueueSystemEvent(text, {
+          sessionKey,
+          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+        });
+        logVerbose(`telegram: reaction event enqueued: ${text}`);
+      }
+    } catch (err) {
+      runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
+    }
+  });
+
   bot.on("callback_query", async (ctx) => {
     const callback = ctx.callbackQuery;
     if (!callback) {
@@ -746,6 +841,65 @@ export const registerTelegramHandlers = ({
       });
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
+    }
+  });
+
+  bot.on("poll_answer", async (ctx) => {
+    try {
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+      const pollAnswer = (ctx.update as { poll_answer?: unknown })?.poll_answer as
+        | {
+            poll_id?: string;
+            user?: { id?: number; username?: string; first_name?: string };
+            option_ids?: number[];
+          }
+        | undefined;
+      if (!pollAnswer) {
+        return;
+      }
+      const pollId = pollAnswer?.poll_id?.trim();
+      if (!pollId) {
+        return;
+      }
+      const pollMeta = getSentPoll(pollId);
+      if (!pollMeta) {
+        return;
+      }
+      if (pollMeta.accountId && pollMeta.accountId !== accountId) {
+        return;
+      }
+      const userId = pollAnswer.user?.id;
+      if (typeof userId !== "number") {
+        return;
+      }
+      const optionIds = Array.isArray(pollAnswer.option_ids) ? pollAnswer.option_ids : [];
+      const selected = optionIds.map((id) => pollMeta.options[id] ?? `option#${id + 1}`);
+      const selectedText = selected.length > 0 ? selected.join(", ") : "(cleared vote)";
+      const syntheticText = `Poll vote update: "${pollMeta.question}" -> ${selectedText}`;
+      const syntheticMessage = {
+        message_id: Date.now(),
+        date: Math.floor(Date.now() / 1000),
+        chat: {
+          id: Number(pollMeta.chatId),
+          type: String(pollMeta.chatId).startsWith("-") ? "supergroup" : "private",
+        },
+        from: {
+          id: userId,
+          is_bot: false,
+          first_name: pollAnswer.user?.first_name ?? "User",
+          username: pollAnswer.user?.username,
+        },
+        text: syntheticText,
+      } as unknown as Message;
+      const storeAllowFrom = await loadStoreAllowFrom();
+      await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
+        forceWasMentioned: true,
+        messageIdOverride: `poll:${pollId}:${userId}:${Date.now()}`,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`poll_answer handler failed: ${String(err)}`));
     }
   });
 

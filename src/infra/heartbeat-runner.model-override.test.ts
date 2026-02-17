@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -75,7 +75,10 @@ afterEach(() => {
 });
 
 describe("runHeartbeatOnce – heartbeat model override", () => {
-  async function runDefaultsHeartbeat(params: { model?: string }) {
+  async function runDefaultsHeartbeat(params: {
+    model?: string;
+    suppressToolErrorWarnings?: boolean;
+  }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -85,6 +88,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: "5m",
               target: "whatsapp",
               model: params.model,
+              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             },
           },
         },
@@ -116,6 +120,17 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       expect.objectContaining({
         isHeartbeat: true,
         heartbeatModelOverride: "ollama/llama3.2:1b",
+        suppressToolErrorWarnings: false,
+      }),
+    );
+  });
+
+  it("passes suppressToolErrorWarnings when configured", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        suppressToolErrorWarnings: true,
       }),
     );
   });

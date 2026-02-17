@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { RunEmbeddedPiAgentParams } from "./run/params.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -51,11 +50,13 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -198,12 +199,62 @@ export async function runEmbeddedPiAgent(
       }
       const prevCwd = process.cwd();
 
-      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
+
+      // Run before_model_resolve hooks early so plugins can override the
+      // provider/model before resolveModel().
+      //
+      // Legacy compatibility: before_agent_start is also checked for override
+      // fields if present. New hook takes precedence when both are set.
+      let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+      const hookRunner = getGlobalHookRunner();
+      const hookCtx = {
+        agentId: workspaceResolution.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: resolvedWorkspace,
+        messageProvider: params.messageProvider ?? undefined,
+      };
+      if (hookRunner?.hasHooks("before_model_resolve")) {
+        try {
+          modelResolveOverride = await hookRunner.runBeforeModelResolve(
+            { prompt: params.prompt },
+            hookCtx,
+          );
+        } catch (hookErr) {
+          log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
+        }
+      }
+      if (hookRunner?.hasHooks("before_agent_start")) {
+        try {
+          const legacyResult = await hookRunner.runBeforeAgentStart(
+            { prompt: params.prompt },
+            hookCtx,
+          );
+          modelResolveOverride = {
+            providerOverride:
+              modelResolveOverride?.providerOverride ?? legacyResult?.providerOverride,
+            modelOverride: modelResolveOverride?.modelOverride ?? legacyResult?.modelOverride,
+          };
+        } catch (hookErr) {
+          log.warn(
+            `before_agent_start hook (legacy model resolve path) failed: ${String(hookErr)}`,
+          );
+        }
+      }
+      if (modelResolveOverride?.providerOverride) {
+        provider = modelResolveOverride.providerOverride;
+        log.info(`[hooks] provider overridden to ${provider}`);
+      }
+      if (modelResolveOverride?.modelOverride) {
+        modelId = modelResolveOverride.modelOverride;
+        log.info(`[hooks] model overridden to ${modelId}`);
+      }
 
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
@@ -495,6 +546,7 @@ export async function runEmbeddedPiAgent(
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
+          const lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
           const formattedAssistantErrorText = lastAssistant
@@ -894,6 +946,9 @@ export async function runEmbeddedPiAgent(
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
+          if (usage && lastTurnTotal && lastTurnTotal > 0) {
+            usage.total = lastTurnTotal;
+          }
           // Extract the last individual API call's usage for context-window
           // utilization display. The accumulated `usage` sums input tokens
           // across all calls (tool-use loops, compaction retries), which
@@ -947,7 +1002,9 @@ export async function runEmbeddedPiAgent(
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
             };
           }
 
@@ -988,7 +1045,9 @@ export async function runEmbeddedPiAgent(
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
+            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
+            successfulCronAdds: attempt.successfulCronAdds,
           };
         }
       } finally {

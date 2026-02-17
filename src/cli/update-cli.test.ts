@@ -13,6 +13,9 @@ const isCancel = (value: unknown) => value === "cancel";
 const readPackageName = vi.fn();
 const readPackageVersion = vi.fn();
 const resolveGlobalManager = vi.fn();
+const serviceLoaded = vi.fn();
+const prepareRestartScript = vi.fn();
+const runRestartScript = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -74,6 +77,17 @@ vi.mock("./update-cli/shared.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: vi.fn(() => ({
+    isLoaded: (...args: unknown[]) => serviceLoaded(...args),
+  })),
+}));
+
+vi.mock("./update-cli/restart-helper.js", () => ({
+  prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
+  runRestartScript: (...args: unknown[]) => runRestartScript(...args),
+}));
+
 // Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
   doctorCommand: vi.fn(),
@@ -99,6 +113,7 @@ const { checkUpdateStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
 const { runDaemonRestart } = await import("./daemon-cli.js");
+const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, registerUpdateCli, updateStatusCommand, updateWizardCommand } =
   await import("./update-cli.js");
@@ -186,12 +201,16 @@ describe("update-cli", () => {
     vi.mocked(resolveNpmChannelTag).mockReset();
     vi.mocked(runCommandWithTimeout).mockReset();
     vi.mocked(runDaemonRestart).mockReset();
+    vi.mocked(doctorCommand).mockReset();
     vi.mocked(defaultRuntime.log).mockReset();
     vi.mocked(defaultRuntime.error).mockReset();
     vi.mocked(defaultRuntime.exit).mockReset();
     readPackageName.mockReset();
     readPackageVersion.mockReset();
     resolveGlobalManager.mockReset();
+    serviceLoaded.mockReset();
+    prepareRestartScript.mockReset();
+    runRestartScript.mockReset();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -237,6 +256,9 @@ describe("update-cli", () => {
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
+    serviceLoaded.mockResolvedValue(false);
+    prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
+    runRestartScript.mockResolvedValue(undefined);
     setTty(false);
     setStdoutTty(false);
   });
@@ -461,6 +483,41 @@ describe("update-cli", () => {
     await updateCommand({});
 
     expect(runDaemonRestart).toHaveBeenCalled();
+  });
+
+  it("updateCommand continues after doctor sub-step and clears update flag", async () => {
+    const mockResult: UpdateRunResult = {
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+    };
+
+    const envSnapshot = captureEnv(["OPENCLAW_UPDATE_IN_PROGRESS"]);
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+      vi.mocked(runDaemonRestart).mockResolvedValue(true);
+      vi.mocked(doctorCommand).mockResolvedValue(undefined);
+      vi.mocked(defaultRuntime.log).mockClear();
+
+      await updateCommand({});
+
+      expect(doctorCommand).toHaveBeenCalledWith(
+        defaultRuntime,
+        expect.objectContaining({ nonInteractive: true }),
+      );
+      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+
+      const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+      expect(
+        logLines.some((line) => line.includes("Leveled up! New skills unlocked. You're welcome.")),
+      ).toBe(true);
+    } finally {
+      randomSpy.mockRestore();
+      envSnapshot.restore();
+    }
   });
 
   it("updateCommand skips restart when --no-restart is set", async () => {

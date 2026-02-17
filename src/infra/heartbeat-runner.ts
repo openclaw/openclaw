@@ -1,10 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
-import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -23,23 +18,29 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -55,6 +56,7 @@ import {
   requestHeartbeatNow,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -62,7 +64,7 @@ import {
 } from "./outbound/targets.js";
 import { peekSystemEventEntries } from "./system-events.js";
 
-type HeartbeatDeps = OutboundSendDeps &
+export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
@@ -257,6 +259,7 @@ function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId?: string,
   heartbeat?: HeartbeatConfig,
+  forcedSessionKey?: string,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -272,6 +275,31 @@ function resolveHeartbeatSession(
 
   if (scope === "global") {
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const forced = forcedSessionKey?.trim();
+  if (forced) {
+    const forcedCandidate = toAgentStoreSessionKey({
+      agentId: resolvedAgentId,
+      requestKey: forced,
+      mainKey: cfg.session?.mainKey,
+    });
+    const forcedCanonical = canonicalizeMainSessionAlias({
+      cfg,
+      agentId: resolvedAgentId,
+      sessionKey: forcedCandidate,
+    });
+    if (forcedCanonical !== "global") {
+      const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
+      if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+        return {
+          sessionKey: forcedCanonical,
+          storePath,
+          store,
+          entry: store[forcedCanonical],
+        };
+      }
+    }
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
@@ -350,12 +378,84 @@ async function restoreHeartbeatUpdatedAt(params: {
   });
 }
 
+/**
+ * Prune heartbeat transcript entries by truncating the file back to a previous size.
+ * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
+ * preventing context pollution from zero-information exchanges.
+ */
+async function pruneHeartbeatTranscript(params: {
+  transcriptPath?: string;
+  preHeartbeatSize?: number;
+}) {
+  const { transcriptPath, preHeartbeatSize } = params;
+  if (!transcriptPath || typeof preHeartbeatSize !== "number" || preHeartbeatSize < 0) {
+    return;
+  }
+  try {
+    const stat = await fs.stat(transcriptPath);
+    // Only truncate if the file has grown during the heartbeat run
+    if (stat.size > preHeartbeatSize) {
+      await fs.truncate(transcriptPath, preHeartbeatSize);
+    }
+  } catch {
+    // File may not exist or may have been removed - ignore errors
+  }
+}
+
+/**
+ * Get the transcript file path and its current size before a heartbeat run.
+ * Returns undefined values if the session or transcript doesn't exist yet.
+ */
+async function captureTranscriptState(params: {
+  storePath: string;
+  sessionKey: string;
+  agentId?: string;
+}): Promise<{ transcriptPath?: string; preHeartbeatSize?: number }> {
+  const { storePath, sessionKey, agentId } = params;
+  try {
+    const store = loadSessionStore(storePath);
+    const entry = store[sessionKey];
+    if (!entry?.sessionId) {
+      return {};
+    }
+    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    const stat = await fs.stat(transcriptPath);
+    return { transcriptPath, preHeartbeatSize: stat.size };
+  } catch {
+    // Session or transcript doesn't exist yet - nothing to prune
+    return {};
+  }
+}
+
+function stripLeadingHeartbeatResponsePrefix(
+  text: string,
+  responsePrefix: string | undefined,
+): string {
+  const normalizedPrefix = responsePrefix?.trim();
+  if (!normalizedPrefix) {
+    return text;
+  }
+
+  // Require a boundary after the configured prefix so short prefixes like "Hi"
+  // do not strip the beginning of normal words like "History".
+  const prefixPattern = new RegExp(
+    `^${escapeRegExp(normalizedPrefix)}(?=$|\\s|[\\p{P}\\p{S}])\\s*`,
+    "iu",
+  );
+  return text.replace(prefixPattern, "");
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
 ) {
-  const stripped = stripHeartbeatToken(payload.text, {
+  const rawText = typeof payload.text === "string" ? payload.text : "";
+  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
@@ -377,6 +477,7 @@ function normalizeHeartbeatReply(
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
+  sessionKey?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
   deps?: HeartbeatDeps;
@@ -433,7 +534,12 @@ export async function runHeartbeatOnce(opts: {
     // The LLM prompt says "if it exists" so this is expected behavior.
   }
 
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
+  const { entry, sessionKey, storePath } = resolveHeartbeatSession(
+    cfg,
+    agentId,
+    heartbeat,
+    opts.sessionKey,
+  );
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -539,6 +645,13 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK
+    const transcriptState = await captureTranscriptState({
+      storePath,
+      sessionKey,
+      agentId,
+    });
+
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const replyOpts = heartbeatModelOverride
@@ -560,6 +673,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // Prune the transcript to remove HEARTBEAT_OK turns
+      await pruneHeartbeatTranscript(transcriptState);
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-empty",
@@ -594,6 +709,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // Prune the transcript to remove HEARTBEAT_OK turns
+      await pruneHeartbeatTranscript(transcriptState);
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
@@ -630,6 +747,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // Prune the transcript to remove duplicate heartbeat turns
+      await pruneHeartbeatTranscript(transcriptState);
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
@@ -896,10 +1015,44 @@ export function startHeartbeatRunner(opts: {
     }
 
     const reason = params?.reason;
+    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
+
+    if (requestedSessionKey || requestedAgentId) {
+      const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
+      const targetAgent = state.agents.get(targetAgentId);
+      if (!targetAgent) {
+        scheduleNext();
+        return { status: "skipped", reason: "disabled" };
+      }
+      try {
+        const res = await runOnce({
+          cfg: state.cfg,
+          agentId: targetAgent.agentId,
+          heartbeat: targetAgent.heartbeat,
+          reason,
+          sessionKey: requestedSessionKey,
+          deps: { runtime: state.runtime },
+        });
+        if (res.status !== "skipped" || res.reason !== "disabled") {
+          advanceAgentSchedule(targetAgent, now);
+        }
+        scheduleNext();
+        return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
+      } catch (err) {
+        const errMsg = formatErrorMessage(err);
+        log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
+          error: errMsg,
+        });
+        advanceAgentSchedule(targetAgent, now);
+        scheduleNext();
+        return { status: "failed", reason: errMsg };
+      }
+    }
 
     for (const agent of state.agents.values()) {
       if (isInterval && now < agent.nextDueMs) {
@@ -943,7 +1096,12 @@ export function startHeartbeatRunner(opts: {
     return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
-  const wakeHandler: HeartbeatWakeHandler = async (params) => run({ reason: params.reason });
+  const wakeHandler: HeartbeatWakeHandler = async (params) =>
+    run({
+      reason: params.reason,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "../config/config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { listChatCommands } from "./commands-registry.js";
 

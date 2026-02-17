@@ -5,9 +5,11 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async () => ({ ok: true, messageId: "mock" })),
-  tryFastAbortFromMessage: vi.fn(async () => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
   })),
@@ -59,6 +61,7 @@ const { resetInboundDedupe } = await import("./inbound-dedupe.js");
 
 const noAbortResult = { handled: false, aborted: false } as const;
 const emptyConfig = {} as OpenClawConfig;
+type DispatchReplyArgs = Parameters<typeof dispatchReplyFromConfig>[0];
 
 function createDispatcher(): ReplyDispatcher {
   return {
@@ -79,6 +82,17 @@ function firstToolResultPayload(dispatcher: ReplyDispatcher): ReplyPayload | und
   return (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
     | ReplyPayload
     | undefined;
+}
+
+async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
+  await dispatchReplyFromConfig({
+    ...params,
+    dispatcher: createDispatcher(),
+  });
+  await dispatchReplyFromConfig({
+    ...params,
+    dispatcher: createDispatcher(),
+  });
 }
 
 describe("dispatchReplyFromConfig", () => {
@@ -105,8 +119,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      _opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -129,8 +143,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      _opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
@@ -160,8 +174,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       await opts?.onToolResult?.({
@@ -193,8 +207,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       expect(typeof opts?.onToolResult).toBe("function");
@@ -216,8 +230,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
@@ -248,8 +262,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       // Simulate tool result emission
       await opts?.onToolResult?.({ text: "🔧 exec: ls" });
@@ -275,8 +289,8 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async (
       _ctx: MsgContext,
-      opts: GetReplyOptions | undefined,
-      _cfg: OpenClawConfig,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
     ) => {
       expect(opts?.onToolResult).toBeDefined();
       await opts?.onToolResult?.({ text: "🔧 tools/sessions_send" });
@@ -352,16 +366,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
-    await dispatchReplyFromConfig({
+    await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 
@@ -457,16 +464,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
-    await dispatchReplyFromConfig({
+    await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 

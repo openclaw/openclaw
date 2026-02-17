@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import * as replyModule from "../auto-reply/reply.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
+import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -19,6 +17,7 @@ describe("resolveHeartbeatIntervalMs", () => {
     storePath: string;
     heartbeat: Record<string, unknown>;
     channels: Record<string, unknown>;
+    messages?: Record<string, unknown>;
   }): OpenClawConfig {
     return {
       agents: {
@@ -28,6 +27,7 @@ describe("resolveHeartbeatIntervalMs", () => {
         },
       },
       channels: params.channels as never,
+      ...(params.messages ? { messages: params.messages as never } : {}),
       session: { store: params.storePath },
     };
   }
@@ -58,12 +58,14 @@ describe("resolveHeartbeatIntervalMs", () => {
     } = {},
   ) {
     return {
-      ...(params.sendWhatsApp ? { sendWhatsApp: params.sendWhatsApp } : {}),
+      ...(params.sendWhatsApp
+        ? { sendWhatsApp: params.sendWhatsApp as unknown as HeartbeatDeps["sendWhatsApp"] }
+        : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
       webAuthExists: params.webAuthExists ?? (async () => true),
       hasActiveWebListener: params.hasActiveWebListener ?? (() => true),
-    };
+    } satisfies HeartbeatDeps;
   }
 
   function makeTelegramDeps(
@@ -74,55 +76,12 @@ describe("resolveHeartbeatIntervalMs", () => {
     } = {},
   ) {
     return {
-      ...(params.sendTelegram ? { sendTelegram: params.sendTelegram } : {}),
+      ...(params.sendTelegram
+        ? { sendTelegram: params.sendTelegram as unknown as HeartbeatDeps["sendTelegram"] }
+        : {}),
       getQueueSize: params.getQueueSize ?? (() => 0),
       nowMs: params.nowMs ?? (() => 0),
-    };
-  }
-
-  async function seedSessionStore(
-    storePath: string,
-    sessionKey: string,
-    session: {
-      sessionId?: string;
-      updatedAt?: number;
-      lastChannel: string;
-      lastProvider: string;
-      lastTo: string;
-    },
-  ) {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: session.sessionId ?? "sid",
-            updatedAt: session.updatedAt ?? Date.now(),
-            ...session,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-  }
-
-  async function withTempHeartbeatSandbox<T>(
-    fn: (ctx: {
-      tmpDir: string;
-      storePath: string;
-      replySpy: ReturnType<typeof vi.spyOn>;
-    }) => Promise<T>,
-  ) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
-      return await fn({ tmpDir, storePath, replySpy });
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    } satisfies HeartbeatDeps;
   }
 
   async function withTempTelegramHeartbeatSandbox<T>(
@@ -132,17 +91,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       replySpy: ReturnType<typeof vi.spyOn>;
     }) => Promise<T>,
   ) {
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
-      return await withTempHeartbeatSandbox(fn);
-    } finally {
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-    }
+    return withTempHeartbeatSandbox(fn, { unsetEnvVars: ["TELEGRAM_BOT_TOKEN"] });
   }
 
   it("respects ackMaxChars for heartbeat acks", async () => {
@@ -249,6 +198,91 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: {
+          every: "5m",
+          target: "telegram",
+        },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        messages: { responsePrefix: "[openclaw]" },
+      });
+
+      await seedMainSession(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "[openclaw] HEARTBEAT_OK all good" });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not strip alphanumeric responsePrefix from larger words", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: {
+          every: "5m",
+          target: "telegram",
+        },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        messages: { responsePrefix: "Hi" },
+      });
+
+      await seedMainSession(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "History check complete" });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "12345",
+        "History check complete",
+        expect.any(Object),
+      );
     });
   });
 

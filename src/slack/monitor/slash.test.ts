@@ -3,6 +3,11 @@ import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.j
 
 vi.mock("../../auto-reply/commands-registry.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
+  const reportCommand = { key: "report", nativeName: "report" };
+  const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
+  const reportExternalCommand = { key: "reportexternal", nativeName: "reportexternal" };
+  const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
+  const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
 
   return {
     buildCommandTextFromArgs: (
@@ -10,16 +15,73 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       args?: { values?: Record<string, unknown> },
     ) => {
       const name = cmd.nativeName ?? cmd.key;
-      const mode = args?.values?.mode;
-      return typeof mode === "string" && mode.trim() ? `/${name} ${mode.trim()}` : `/${name}`;
+      const values = args?.values ?? {};
+      const mode = values.mode;
+      const period = values.period;
+      const selected =
+        typeof mode === "string" && mode.trim()
+          ? mode.trim()
+          : typeof period === "string" && period.trim()
+            ? period.trim()
+            : "";
+      return selected ? `/${name} ${selected}` : `/${name}`;
     },
     findCommandByNativeName: (name: string) => {
-      return name.trim().toLowerCase() === "usage" ? usageCommand : undefined;
+      const normalized = name.trim().toLowerCase();
+      if (normalized === "usage") {
+        return usageCommand;
+      }
+      if (normalized === "report") {
+        return reportCommand;
+      }
+      if (normalized === "reportcompact") {
+        return reportCompactCommand;
+      }
+      if (normalized === "reportexternal") {
+        return reportExternalCommand;
+      }
+      if (normalized === "reportlong") {
+        return reportLongCommand;
+      }
+      if (normalized === "unsafeconfirm") {
+        return unsafeConfirmCommand;
+      }
+      return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
       {
         name: "usage",
         description: "Usage",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "report",
+        description: "Report",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reportcompact",
+        description: "ReportCompact",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reportexternal",
+        description: "ReportExternal",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "reportlong",
+        description: "ReportLong",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "unsafeconfirm",
+        description: "UnsafeConfirm",
         acceptsArgs: true,
         args: [],
       },
@@ -29,6 +91,73 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       command?: { key?: string };
       args?: { values?: unknown };
     }) => {
+      if (params.command?.key === "report") {
+        const values = (params.args?.values ?? {}) as Record<string, unknown>;
+        if (typeof values.period === "string" && values.period.trim()) {
+          return null;
+        }
+        return {
+          arg: { name: "period", description: "period" },
+          choices: [
+            { value: "day", label: "day" },
+            { value: "week", label: "week" },
+            { value: "month", label: "month" },
+            { value: "quarter", label: "quarter" },
+            { value: "year", label: "year" },
+            { value: "all", label: "all" },
+          ],
+        };
+      }
+      if (params.command?.key === "reportlong") {
+        const values = (params.args?.values ?? {}) as Record<string, unknown>;
+        if (typeof values.period === "string" && values.period.trim()) {
+          return null;
+        }
+        return {
+          arg: { name: "period", description: "period" },
+          choices: [
+            { value: "day", label: "day" },
+            { value: "week", label: "week" },
+            { value: "month", label: "month" },
+            { value: "quarter", label: "quarter" },
+            { value: "year", label: "year" },
+            { value: "x".repeat(90), label: "long" },
+          ],
+        };
+      }
+      if (params.command?.key === "reportcompact") {
+        const values = (params.args?.values ?? {}) as Record<string, unknown>;
+        if (typeof values.period === "string" && values.period.trim()) {
+          return null;
+        }
+        return {
+          arg: { name: "period", description: "period" },
+          choices: [
+            { value: "day", label: "day" },
+            { value: "week", label: "week" },
+            { value: "month", label: "month" },
+            { value: "quarter", label: "quarter" },
+          ],
+        };
+      }
+      if (params.command?.key === "reportexternal") {
+        return {
+          arg: { name: "period", description: "period" },
+          choices: Array.from({ length: 140 }, (_v, i) => ({
+            value: `period-${i + 1}`,
+            label: `Period ${i + 1}`,
+          })),
+        };
+      }
+      if (params.command?.key === "unsafeconfirm") {
+        return {
+          arg: { name: "mode_*`~<&>", description: "mode" },
+          choices: [
+            { value: "on", label: "on" },
+            { value: "off", label: "off" },
+          ],
+        };
+      }
       if (params.command?.key !== "usage") {
         return null;
       }
@@ -76,9 +205,16 @@ function encodeValue(parts: { command: string; arg: string; value: string; userI
   ].join("|");
 }
 
+function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
+  return payload.blocks?.find((block) => block.type === "actions") as
+    | { type: string; elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }> }
+    | undefined;
+}
+
 function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
+  const options = new Map<string, (args: unknown) => Promise<void>>();
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const app = {
@@ -88,6 +224,9 @@ function createArgMenusHarness() {
     },
     action: (id: string, handler: (args: unknown) => Promise<void>) => {
       actions.set(id, handler);
+    },
+    options: (id: string, handler: (args: unknown) => Promise<void>) => {
+      options.set(id, handler);
     },
   };
 
@@ -124,13 +263,19 @@ function createArgMenusHarness() {
     config: { commands: { native: true, nativeSkills: false } },
   } as unknown;
 
-  return { commands, actions, postEphemeral, ctx, account };
+  return { commands, actions, options, postEphemeral, ctx, account };
 }
 
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
   let usageHandler: (args: unknown) => Promise<void>;
+  let reportHandler: (args: unknown) => Promise<void>;
+  let reportCompactHandler: (args: unknown) => Promise<void>;
+  let reportExternalHandler: (args: unknown) => Promise<void>;
+  let reportLongHandler: (args: unknown) => Promise<void>;
+  let unsafeConfirmHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
+  let argMenuOptionsHandler: (args: unknown) => Promise<void>;
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
@@ -141,12 +286,42 @@ describe("Slack native command argument menus", () => {
       throw new Error("Missing /usage handler");
     }
     usageHandler = usage;
+    const report = harness.commands.get("/report");
+    if (!report) {
+      throw new Error("Missing /report handler");
+    }
+    reportHandler = report;
+    const reportCompact = harness.commands.get("/reportcompact");
+    if (!reportCompact) {
+      throw new Error("Missing /reportcompact handler");
+    }
+    reportCompactHandler = reportCompact;
+    const reportExternal = harness.commands.get("/reportexternal");
+    if (!reportExternal) {
+      throw new Error("Missing /reportexternal handler");
+    }
+    reportExternalHandler = reportExternal;
+    const reportLong = harness.commands.get("/reportlong");
+    if (!reportLong) {
+      throw new Error("Missing /reportlong handler");
+    }
+    reportLongHandler = reportLong;
+    const unsafeConfirm = harness.commands.get("/unsafeconfirm");
+    if (!unsafeConfirm) {
+      throw new Error("Missing /unsafeconfirm handler");
+    }
+    unsafeConfirmHandler = unsafeConfirm;
 
     const argMenu = harness.actions.get("openclaw_cmdarg");
     if (!argMenu) {
       throw new Error("Missing arg-menu action handler");
     }
     argMenuHandler = argMenu;
+    const argMenuOptions = harness.options.get("openclaw_cmdarg");
+    if (!argMenuOptions) {
+      throw new Error("Missing arg-menu options handler");
+    }
+    argMenuOptionsHandler = argMenuOptions;
   });
 
   beforeEach(() => {
@@ -172,8 +347,121 @@ describe("Slack native command argument menus", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
-    expect(payload.blocks?.[0]?.type).toBe("section");
-    expect(payload.blocks?.[1]?.type).toBe("actions");
+    expect(payload.blocks?.[0]?.type).toBe("header");
+    expect(payload.blocks?.[1]?.type).toBe("section");
+    expect(payload.blocks?.[2]?.type).toBe("context");
+    const actions = findFirstActionsBlock(payload);
+    const elementType = actions?.elements?.[0]?.type;
+    expect(elementType).toBe("button");
+    expect(actions?.elements?.[0]?.confirm).toBeTruthy();
+  });
+
+  it("shows a static_select menu when choices exceed button row size", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    expect(payload.blocks?.[0]?.type).toBe("header");
+    expect(payload.blocks?.[1]?.type).toBe("section");
+    expect(payload.blocks?.[2]?.type).toBe("context");
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("static_select");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.confirm).toBeTruthy();
+  });
+
+  it("falls back to buttons when static_select value limit would be exceeded", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportLongHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const actions = findFirstActionsBlock(payload);
+    const firstElement = actions?.elements?.[0];
+    expect(firstElement?.type).toBe("button");
+    expect(firstElement?.confirm).toBeTruthy();
+  });
+
+  it("shows an overflow menu when choices fit compact range", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportCompactHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("overflow");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.confirm).toBeTruthy();
+  });
+
+  it("escapes mrkdwn characters in confirm dialog text", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await unsafeConfirmHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0] as
+      | { confirm?: { text?: { text?: string } } }
+      | undefined;
+    expect(element?.confirm?.text?.text).toContain(
+      "Run */unsafeconfirm* with *mode\\_\\*\\`\\~&lt;&amp;&gt;* set to this value?",
+    );
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
@@ -194,6 +482,126 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/usage tokens");
+  });
+
+  it("dispatches the command when a static_select option is chosen", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await argMenuHandler({
+      ack: vi.fn().mockResolvedValue(undefined),
+      action: {
+        selected_option: {
+          value: encodeValue({ command: "report", arg: "period", value: "month", userId: "U1" }),
+        },
+      },
+      body: {
+        user: { id: "U1", name: "Ada" },
+        channel: { id: "C1", name: "directmessage" },
+        trigger_id: "t1",
+      },
+      respond,
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+    expect(call.ctx?.Body).toBe("/report month");
+  });
+
+  it("dispatches the command when an overflow option is chosen", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await argMenuHandler({
+      ack: vi.fn().mockResolvedValue(undefined),
+      action: {
+        selected_option: {
+          value: encodeValue({
+            command: "reportcompact",
+            arg: "period",
+            value: "quarter",
+            userId: "U1",
+          }),
+        },
+      },
+      body: {
+        user: { id: "U1", name: "Ada" },
+        channel: { id: "C1", name: "directmessage" },
+        trigger_id: "t1",
+      },
+      respond,
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+    expect(call.ctx?.Body).toBe("/reportcompact quarter");
+  });
+
+  it("shows an external_select menu when choices exceed static_select options max", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportExternalHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const actions = findFirstActionsBlock(payload);
+    const element = actions?.elements?.[0];
+    expect(element?.type).toBe("external_select");
+    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(payload.blocks?.find((block) => block.type === "actions")?.block_id).toContain(
+      "openclaw_cmdarg_ext:",
+    );
+  });
+
+  it("serves filtered options for external_select menus", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+
+    await reportExternalHandler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "C1",
+        channel_name: "directmessage",
+        text: "",
+        trigger_id: "t1",
+      },
+      ack,
+      respond,
+    });
+
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "period 12",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    expect(ackOptions).toHaveBeenCalledTimes(1);
+    const optionsPayload = ackOptions.mock.calls[0]?.[0] as {
+      options?: Array<{ text?: { text?: string }; value?: string }>;
+    };
+    const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
+    expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
   });
 
   it("rejects menu clicks from other users", async () => {

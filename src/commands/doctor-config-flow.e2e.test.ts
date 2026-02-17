@@ -229,4 +229,220 @@ describe("doctor config flow", () => {
       ]);
     });
   });
+
+  it('adds allowFrom ["*"] when dmPolicy="open" and allowFrom is missing on repair', async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          discord: {
+            token: "test-token",
+            dmPolicy: "open",
+            groupPolicy: "open",
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: { discord: { allowFrom: string[]; dmPolicy: string } };
+    };
+    expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.discord.dmPolicy).toBe("open");
+  });
+
+  it("adds * to existing allowFrom array when dmPolicy is open on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            dmPolicy: "open",
+            allowFrom: ["U123"],
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: { slack: { allowFrom: string[] } };
+    };
+    expect(cfg.channels.slack.allowFrom).toContain("*");
+    expect(cfg.channels.slack.allowFrom).toContain("U123");
+  });
+
+  it("repairs nested dm.allowFrom when top-level allowFrom is absent on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          discord: {
+            token: "test-token",
+            dmPolicy: "open",
+            dm: { allowFrom: ["123"] },
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: { discord: { dm: { allowFrom: string[] }; allowFrom?: string[] } };
+    };
+    // When dmPolicy is set at top level but allowFrom only exists nested in dm,
+    // the repair adds "*" to dm.allowFrom
+    if (cfg.channels.discord.dm) {
+      expect(cfg.channels.discord.dm.allowFrom).toContain("*");
+      expect(cfg.channels.discord.dm.allowFrom).toContain("123");
+    } else {
+      // If doctor flattened the config, allowFrom should be at top level
+      expect(cfg.channels.discord.allowFrom).toContain("*");
+    }
+  });
+
+  it("skips repair when allowFrom already includes *", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          discord: {
+            token: "test-token",
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: { discord: { allowFrom: string[] } };
+    };
+    expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
+  });
+
+  it("repairs per-account dmPolicy open without allowFrom on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          discord: {
+            token: "test-token",
+            accounts: {
+              work: {
+                token: "test-token-2",
+                dmPolicy: "open",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        discord: { accounts: { work: { allowFrom: string[]; dmPolicy: string } } };
+      };
+    };
+    expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
+  });
+
+  it("repairs googlechat dm.policy open by setting dm.allowFrom on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          googlechat: {
+            dm: {
+              policy: "open",
+            },
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        googlechat: {
+          dm: {
+            policy: string;
+            allowFrom: string[];
+          };
+          allowFrom?: string[];
+        };
+      };
+    };
+
+    expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
+  });
+
+  it("repairs googlechat account dm.policy open by setting dm.allowFrom on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          googlechat: {
+            accounts: {
+              work: {
+                dm: {
+                  policy: "open",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        googlechat: {
+          accounts: {
+            work: {
+              dm: {
+                policy: string;
+                allowFrom: string[];
+              };
+              allowFrom?: string[];
+            };
+          };
+        };
+      };
+    };
+
+    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
+  });
+
+  it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          googlechat: {
+            allowFrom: ["*"],
+            dm: {
+              policy: "open",
+            },
+          },
+        },
+      },
+    });
+
+    const cfg = result.cfg as unknown as {
+      channels: {
+        googlechat: {
+          dm: {
+            policy: string;
+            allowFrom: string[];
+          };
+          allowFrom?: string[];
+        };
+      };
+    };
+
+    expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
+  });
 });
