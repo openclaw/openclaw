@@ -12,6 +12,9 @@
   "devDependencies": {
     "openclaw": "workspace:*"
   },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.14"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

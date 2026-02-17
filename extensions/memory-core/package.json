@@ -8,7 +8,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.1.26"
+    "openclaw": ">=2026.2.14"
   },
   "openclaw": {
     "extensions": [
