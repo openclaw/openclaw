@@ -553,7 +553,11 @@ export async function approveChannelPairingCode(params: {
       const { requests: pruned, removed } = await readPrunedPairingRequests(filePath);
       const normalizedAccountId = normalizePairingAccountId(params.accountId);
       const idx = pruned.findIndex((r) => {
-        if (String(r.code ?? "").toUpperCase() !== code) {
+        const stored = String(r.code ?? "").toUpperCase();
+        // Use timing-safe comparison to prevent side-channel leakage of pairing codes.
+        const a = Buffer.from(stored, "utf8");
+        const b = Buffer.from(code, "utf8");
+        if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
           return false;
         }
         return requestMatchesAccountId(r, normalizedAccountId);

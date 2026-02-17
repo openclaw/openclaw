@@ -218,4 +218,32 @@ describe("pairing store", () => {
       expect(scoped).toEqual(["1002", "1001"]);
     });
   });
+
+  it("approves pairing code using timing-safe comparison", async () => {
+    await withTempStateDir(async () => {
+      const created = await upsertChannelPairingRequest({
+        channel: "signal",
+        id: "+15559999999",
+      });
+      expect(created.created).toBe(true);
+
+      // Correct code (case-insensitive) should approve
+      const approved = await approveChannelPairingCode({
+        channel: "signal",
+        code: created.code.toLowerCase(),
+      });
+      expect(approved?.id).toBe("+15559999999");
+
+      // Wrong code should not approve
+      const created2 = await upsertChannelPairingRequest({
+        channel: "signal",
+        id: "+15558888888",
+      });
+      const rejected = await approveChannelPairingCode({
+        channel: "signal",
+        code: "ZZZZZZZZ",
+      });
+      expect(rejected).toBeNull();
+    });
+  });
 });
