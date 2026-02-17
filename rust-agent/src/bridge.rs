@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use serde_json::json;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -11,8 +10,8 @@ use tracing::{debug, info, warn};
 
 use crate::channels::DriverRegistry;
 use crate::config::GatewayConfig;
+use crate::protocol::{decision_event_frame, parse_frame_text, ConnectFrame};
 use crate::security::ActionEvaluator;
-use crate::types::decision_event_frame;
 
 pub struct GatewayBridge {
     gateway: GatewayConfig,
@@ -56,18 +55,7 @@ impl GatewayBridge {
         let (decision_tx, mut decision_rx) = mpsc::channel::<serde_json::Value>(self.max_queue);
         let inflight = Arc::new(Semaphore::new(self.max_queue));
 
-        let connect_frame = json!({
-            "type": "req",
-            "id": "connect-openclaw-agent-rs",
-            "method": "connect",
-            "params": {
-                "client": "openclaw-agent-rs",
-                "role": "client",
-                "auth": {
-                    "token": self.gateway.token.clone().unwrap_or_default()
-                }
-            }
-        });
+        let connect_frame = ConnectFrame::new(self.gateway.token.as_deref()).to_value();
         write
             .send(Message::Text(connect_frame.to_string()))
             .await
@@ -90,7 +78,7 @@ impl GatewayBridge {
                     };
                     match message {
                         Ok(Message::Text(text)) => {
-                            let frame = match serde_json::from_str::<serde_json::Value>(&text) {
+                            let frame = match parse_frame_text(&text) {
                                 Ok(v) => v,
                                 Err(err) => {
                                     debug!("skip non-json frame: {err}");

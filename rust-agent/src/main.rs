@@ -2,6 +2,7 @@ mod bridge;
 mod channels;
 mod config;
 mod memory;
+mod protocol;
 mod runtime;
 mod security;
 mod state;

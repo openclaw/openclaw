@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::protocol::{frame_root, frame_source};
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionAction {
@@ -34,10 +36,7 @@ pub struct ActionRequest {
 
 impl ActionRequest {
     pub fn from_gateway_frame(frame: &Value) -> Option<Self> {
-        let root = frame
-            .get("payload")
-            .or_else(|| frame.get("params"))
-            .unwrap_or(frame);
+        let root = frame_root(frame);
 
         let prompt = find_first_string(root, &["prompt", "message", "text", "input"]);
         let command = find_first_string(root, &["command", "shell", "bash", "exec"]);
@@ -75,12 +74,7 @@ impl ActionRequest {
         )
         .unwrap_or_else(|| "unknown".to_owned());
         let session_id = find_first_string(root, &["session_id", "sessionId"]);
-        let source = frame
-            .get("event")
-            .and_then(Value::as_str)
-            .or_else(|| frame.get("method").and_then(Value::as_str))
-            .unwrap_or("gateway")
-            .to_owned();
+        let source = frame_source(frame);
 
         Some(Self {
             id,
@@ -95,35 +89,6 @@ impl ActionRequest {
             raw: root.clone(),
         })
     }
-}
-
-pub fn decision_event_frame(
-    event_name: &str,
-    request: &ActionRequest,
-    decision: &Decision,
-) -> Value {
-    let mut payload = Map::new();
-    payload.insert("requestId".to_owned(), Value::String(request.id.clone()));
-    payload.insert("sessionId".to_owned(), opt_str(&request.session_id));
-    payload.insert("source".to_owned(), Value::String(request.source.clone()));
-    payload.insert("channel".to_owned(), opt_str(&request.channel));
-    payload.insert(
-        "decision".to_owned(),
-        serde_json::to_value(decision).unwrap_or(Value::Null),
-    );
-
-    let mut out = Map::new();
-    out.insert("type".to_owned(), Value::String("event".to_owned()));
-    out.insert("event".to_owned(), Value::String(event_name.to_owned()));
-    out.insert("payload".to_owned(), Value::Object(payload));
-    Value::Object(out)
-}
-
-fn opt_str(value: &Option<String>) -> Value {
-    value
-        .as_ref()
-        .map(|v| Value::String(v.clone()))
-        .unwrap_or(Value::Null)
 }
 
 fn find_first_string(root: &Value, keys: &[&str]) -> Option<String> {
