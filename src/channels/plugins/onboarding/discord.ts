@@ -152,6 +152,77 @@ function parseDiscordAllowFromInput(raw: string): string[] {
     .filter(Boolean);
 }
 
+function parseDiscordUserId(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const mention = trimmed.match(/^<@!?(\d+)>$/);
+  if (mention) {
+    return mention[1];
+  }
+  const prefixed = trimmed.replace(/^(user:|discord:)/i, "");
+  if (/^\d+$/.test(prefixed)) {
+    return prefixed;
+  }
+  return null;
+}
+
+export async function resolveDiscordAllowFromEntries(params: {
+  token?: string | null;
+  entries: string[];
+  resolveUsers?: typeof resolveDiscordUserAllowlist;
+}): Promise<{
+  ids: string[];
+  unresolved: string[];
+  lookupFailed: boolean;
+}> {
+  const directIds: string[] = [];
+  const usernames: string[] = [];
+  for (const entry of params.entries) {
+    const userId = parseDiscordUserId(entry);
+    if (userId) {
+      directIds.push(userId);
+      continue;
+    }
+    usernames.push(entry);
+  }
+  if (!params.token) {
+    return {
+      ids: directIds,
+      unresolved: usernames,
+      lookupFailed: false,
+    };
+  }
+  if (usernames.length === 0) {
+    return {
+      ids: directIds,
+      unresolved: [],
+      lookupFailed: false,
+    };
+  }
+  const resolveUsers = params.resolveUsers ?? resolveDiscordUserAllowlist;
+  try {
+    const results = await resolveUsers({
+      token: params.token,
+      entries: usernames,
+    });
+    const resolvedIds = results.filter((res) => res.resolved && res.id).map((res) => res.id as string);
+    const unresolved = results.filter((res) => !res.resolved || !res.id).map((res) => res.input);
+    return {
+      ids: [...directIds, ...resolvedIds],
+      unresolved,
+      lookupFailed: false,
+    };
+  } catch {
+    return {
+      ids: directIds,
+      unresolved: usernames,
+      lookupFailed: true,
+    };
+  }
+}
+
 async function promptDiscordAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -179,22 +250,6 @@ async function promptDiscordAllowFrom(params: {
   );
 
   const parseInputs = (value: string) => parseDiscordAllowFromInput(value);
-  const parseId = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const mention = trimmed.match(/^<@!?(\d+)>$/);
-    if (mention) {
-      return mention[1];
-    }
-    const prefixed = trimmed.replace(/^(user:|discord:)/i, "");
-    if (/^\d+$/.test(prefixed)) {
-      return prefixed;
-    }
-    return null;
-  };
-
   while (true) {
     const entry = await params.prompter.text({
       message: "Discord allowFrom (usernames or ids)",
@@ -203,37 +258,29 @@ async function promptDiscordAllowFrom(params: {
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
     const parts = parseInputs(String(entry));
-    if (!token) {
-      const ids = parts.map(parseId).filter(Boolean) as string[];
-      if (ids.length !== parts.length) {
+    const resolved = await resolveDiscordAllowFromEntries({
+      token,
+      entries: parts,
+    });
+    if (resolved.lookupFailed && resolved.ids.length === 0) {
+      await params.prompter.note("Failed to resolve usernames. Try again.", "Discord allowlist");
+      continue;
+    }
+    if (resolved.unresolved.length > 0) {
+      if (!token) {
         await params.prompter.note(
           "Bot token missing; use numeric user ids (or mention form) only.",
           "Discord allowlist",
         );
         continue;
       }
-      const unique = mergeAllowFromEntries(existing, ids);
-      return setDiscordAllowFrom(params.cfg, unique);
-    }
-
-    const results = await resolveDiscordUserAllowlist({
-      token,
-      entries: parts,
-    }).catch(() => null);
-    if (!results) {
-      await params.prompter.note("Failed to resolve usernames. Try again.", "Discord allowlist");
-      continue;
-    }
-    const unresolved = results.filter((res) => !res.resolved || !res.id);
-    if (unresolved.length > 0) {
       await params.prompter.note(
-        `Could not resolve: ${unresolved.map((res) => res.input).join(", ")}`,
+        `Could not resolve: ${resolved.unresolved.join(", ")}`,
         "Discord allowlist",
       );
       continue;
     }
-    const ids = results.map((res) => res.id as string);
-    const unique = mergeAllowFromEntries(existing, ids);
+    const unique = mergeAllowFromEntries(existing, resolved.ids);
     return setDiscordAllowFrom(params.cfg, unique);
   }
 }
