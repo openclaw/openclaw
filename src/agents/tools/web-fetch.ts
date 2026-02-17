@@ -467,6 +467,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  urlAllowlist?: string[];
 };
 
 function toFirecrawlContentParams(
@@ -559,6 +560,24 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
+
+    // Check redirect target against allowlist
+    const redirectAllowlist = params.urlAllowlist;
+    if (
+      redirectAllowlist &&
+      redirectAllowlist.length > 0 &&
+      !isUrlAllowedByAllowlist(finalUrl, redirectAllowlist)
+    ) {
+      if (release) {
+        await release();
+      }
+      return jsonResult({
+        error: "url_not_allowed",
+        message: `Redirect target not in allowlist. Allowed domains: ${redirectAllowlist.join(", ")}`,
+        blockedUrl: finalUrl,
+        blockedHostname: new URL(finalUrl).hostname,
+      }) as unknown as Record<string, unknown>;
+    }
 
     // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");
@@ -807,6 +826,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        urlAllowlist,
       });
       return jsonResult(result);
     },
