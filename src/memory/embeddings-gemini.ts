@@ -1,7 +1,7 @@
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;

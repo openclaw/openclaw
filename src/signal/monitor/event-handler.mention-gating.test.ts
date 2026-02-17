@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
 import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
 
 type SignalMsgContext = MsgContext & {

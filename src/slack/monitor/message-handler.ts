@@ -1,12 +1,12 @@
-import type { ResolvedSlackAccount } from "../accounts.js";
-import type { SlackMessageEvent } from "../types.js";
-import type { SlackMonitorContext } from "./context.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import type { ResolvedSlackAccount } from "../accounts.js";
+import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
+import type { SlackMonitorContext } from "./context.js";
 import { dispatchPreparedSlackMessage } from "./message-handler/dispatch.js";
 import { prepareSlackMessage } from "./message-handler/prepare.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";

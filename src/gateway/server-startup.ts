@@ -1,6 +1,3 @@
-import type { CliDeps } from "../cli/deps.js";
-import type { loadConfig } from "../config/config.js";
-import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -10,6 +7,8 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import type { CliDeps } from "../cli/deps.js";
+import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { startGmailWatcher } from "../hooks/gmail-watcher.js";
 import {
@@ -19,6 +18,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {

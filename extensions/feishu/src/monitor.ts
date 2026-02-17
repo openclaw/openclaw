@@ -1,16 +1,16 @@
-import * as Lark from "@larksuiteoapi/node-sdk";
 import * as http from "http";
+import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   type ClawdbotConfig,
   type RuntimeEnv,
   type HistoryEntry,
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk";
-import type { ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;

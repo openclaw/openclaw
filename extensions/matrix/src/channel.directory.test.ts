@@ -1,8 +1,8 @@
 import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "./types.js";
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
+import type { CoreConfig } from "./types.js";
 
 vi.mock("@vector-im/matrix-bot-sdk", () => ({
   ConsoleLogger: class {

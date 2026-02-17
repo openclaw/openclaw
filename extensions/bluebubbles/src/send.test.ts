@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import type { BlueBubblesSendTarget } from "./types.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget } from "./send.js";
 import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
+import type { BlueBubblesSendTarget } from "./types.js";
 
 const mockFetch = vi.fn();
 
