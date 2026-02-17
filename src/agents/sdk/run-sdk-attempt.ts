@@ -12,9 +12,12 @@
  * OpenClaw's plugin hooks are bridged via the SDK's hook system.
  */
 
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -456,6 +459,18 @@ export async function runSdkAttempt(
 
       clearTimeout(timeoutTimer);
 
+      // Persist user + assistant messages to the OpenClaw transcript so
+      // chat.history returns them (the SDK has its own separate persistence).
+      const finalAssistantText = result.assistantTexts.join("\n\n").trim();
+      persistToTranscript({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        prompt: params.prompt,
+        assistantText: finalAssistantText,
+        modelId: params.modelId,
+        provider: params.provider,
+      });
+
       // Emit lifecycle end/error so the gateway finalizes the webchat response.
       if (result.error) {
         emitAgentEvent({
@@ -555,4 +570,62 @@ function deriveMaxTurns(timeoutMs: number): number {
   // Allow roughly 1 turn per 10 seconds of timeout, with a minimum of 5 and max of 200
   const estimated = Math.floor(timeoutMs / 10_000);
   return Math.max(5, Math.min(200, estimated));
+}
+
+/**
+ * Persist user prompt and assistant reply to the OpenClaw transcript file
+ * so that `chat.history` can return them. The SDK manages its own session
+ * persistence, but the gateway's WebChat reads from the OpenClaw transcript.
+ */
+function persistToTranscript(params: {
+  sessionFile: string;
+  sessionId: string;
+  prompt: string;
+  assistantText: string;
+  modelId: string;
+  provider: string;
+}): void {
+  try {
+    // Ensure the transcript file exists with a proper header.
+    if (!fsSync.existsSync(params.sessionFile)) {
+      fsSync.mkdirSync(path.dirname(params.sessionFile), { recursive: true });
+      const header = {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: params.sessionId,
+        timestamp: new Date().toISOString(),
+        cwd: process.cwd(),
+      };
+      fsSync.writeFileSync(params.sessionFile, `${JSON.stringify(header)}\n`, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+    }
+
+    const sm = SessionManager.open(params.sessionFile);
+    const now = Date.now();
+
+    // Append user message
+    sm.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: params.prompt }],
+      timestamp: now,
+    });
+
+    // Append assistant message
+    if (params.assistantText.trim()) {
+      sm.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: params.assistantText }],
+        timestamp: Date.now(),
+        stopReason: "stop",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        api: "anthropic-messages",
+        provider: params.provider,
+        model: params.modelId,
+      } as Parameters<SessionManager["appendMessage"]>[0]);
+    }
+  } catch {
+    // Non-fatal: failing to persist doesn't break the run itself.
+  }
 }
