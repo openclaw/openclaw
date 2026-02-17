@@ -839,11 +839,35 @@ export function renderApp(state: AppViewState) {
                 },
                 onChatScroll: (event) => state.handleChatScroll(event),
                 onDraftChange: (next) => (state.chatMessage = next),
+                onDraftInput: (next) =>
+                  (state as unknown as OpenClawApp).handleChatDraftInput(next),
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
                 onSend: () => state.handleSendChat(),
                 canAbort: Boolean(state.chatRunId),
                 onAbort: () => void state.handleAbortChat(),
+                autoSendEnabled: state.settings.chatAutoSendEnabled,
+                autoSendPauseMs: state.settings.chatAutoSendPauseMs,
+                autoSendQuestionMark: state.settings.chatAutoSendQuestionMark,
+                onAutoSendEnabledChange: (next) => {
+                  state.applySettings({
+                    ...state.settings,
+                    chatAutoSendEnabled: next,
+                  });
+                  if (!next) {
+                    (state as unknown as OpenClawApp).clearChatAutoSendTimer();
+                  }
+                },
+                onAutoSendPauseMsChange: (next) =>
+                  state.applySettings({
+                    ...state.settings,
+                    chatAutoSendPauseMs: Math.max(0, Math.floor(next)),
+                  }),
+                onAutoSendQuestionMarkChange: (next) =>
+                  state.applySettings({
+                    ...state.settings,
+                    chatAutoSendQuestionMark: next,
+                  }),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,

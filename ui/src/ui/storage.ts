@@ -11,6 +11,9 @@ export type UiSettings = {
   theme: ThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
+  chatAutoSendEnabled: boolean;
+  chatAutoSendPauseMs: number;
+  chatAutoSendQuestionMark: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
@@ -31,6 +34,9 @@ export function loadSettings(): UiSettings {
     theme: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatAutoSendEnabled: false,
+    chatAutoSendPauseMs: 2000,
+    chatAutoSendQuestionMark: true,
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
@@ -67,6 +73,18 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
           : defaults.chatShowThinking,
+      chatAutoSendEnabled:
+        typeof parsed.chatAutoSendEnabled === "boolean"
+          ? parsed.chatAutoSendEnabled
+          : defaults.chatAutoSendEnabled,
+      chatAutoSendPauseMs:
+        typeof parsed.chatAutoSendPauseMs === "number" && parsed.chatAutoSendPauseMs >= 0
+          ? parsed.chatAutoSendPauseMs
+          : defaults.chatAutoSendPauseMs,
+      chatAutoSendQuestionMark:
+        typeof parsed.chatAutoSendQuestionMark === "boolean"
+          ? parsed.chatAutoSendQuestionMark
+          : defaults.chatAutoSendQuestionMark,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&

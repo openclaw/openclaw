@@ -125,6 +125,8 @@ export class OpenClawApp extends LitElement {
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
+  private chatAutoSendTimer: number | null = null;
+  private chatAutoSendPlannedText: string | null = null;
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
@@ -454,11 +456,59 @@ export class OpenClawApp extends LitElement {
     messageOverride?: string,
     opts?: Parameters<typeof handleSendChatInternal>[2],
   ) {
+    this.clearChatAutoSendTimer();
     await handleSendChatInternal(
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
     );
+  }
+
+  handleChatDraftInput(next: string) {
+    this.chatMessage = next;
+    this.scheduleChatAutoSend(next);
+  }
+
+  clearChatAutoSendTimer() {
+    if (this.chatAutoSendTimer != null) {
+      window.clearTimeout(this.chatAutoSendTimer);
+      this.chatAutoSendTimer = null;
+    }
+    this.chatAutoSendPlannedText = null;
+  }
+
+  private scheduleChatAutoSend(next: string) {
+    if (!this.connected || !this.settings.chatAutoSendEnabled) {
+      this.clearChatAutoSendTimer();
+      return;
+    }
+    const trimmed = next.trim();
+    if (!trimmed) {
+      this.clearChatAutoSendTimer();
+      return;
+    }
+
+    const shouldSendOnQuestion =
+      this.settings.chatAutoSendQuestionMark && trimmed.endsWith("?");
+    const delayMs = shouldSendOnQuestion
+      ? 250
+      : Math.max(0, this.settings.chatAutoSendPauseMs || 0);
+
+    this.clearChatAutoSendTimer();
+    this.chatAutoSendPlannedText = next;
+    this.chatAutoSendTimer = window.setTimeout(() => {
+      if (!this.connected || !this.settings.chatAutoSendEnabled) {
+        return;
+      }
+      const current = this.chatMessage;
+      if (this.chatAutoSendPlannedText !== current) {
+        return;
+      }
+      if (!current.trim()) {
+        return;
+      }
+      void this.handleSendChat();
+    }, delayMs);
   }
 
   async handleWhatsAppStart(force: boolean) {
