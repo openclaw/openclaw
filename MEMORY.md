@@ -1,0 +1,1 @@
+/data/.clawdbot/MEMORY.md
