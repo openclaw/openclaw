@@ -217,6 +217,32 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an anthropic forward-compat fallback for claude-sonnet-4-6", () => {
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      templateModel: buildForwardCompatTemplate({
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+      }),
+    });
+
+    expectResolvedForwardCompatFallback({
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      expectedModel: {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+      },
+    });
+  });
+
   it("builds an antigravity forward-compat fallback for claude-opus-4-6-thinking", () => {
     mockDiscoveredModel({
       provider: "google-antigravity",
