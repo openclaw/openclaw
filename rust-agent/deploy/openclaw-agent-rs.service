@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenClaw Rust Agent Defender
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw/rust-agent
+Environment=RUST_LOG=info
+Environment=OPENCLAW_RS_CONFIG=%h/openclaw/rust-agent/openclaw-rs.toml
+ExecStart=%h/openclaw/rust-agent/target/release/openclaw-agent-rs --config %h/openclaw/rust-agent/openclaw-rs.toml
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/openclaw/rust-agent/.openclaw-rs
+
+[Install]
+WantedBy=default.target

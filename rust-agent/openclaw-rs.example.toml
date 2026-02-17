@@ -1,0 +1,35 @@
+[gateway]
+url = "ws://127.0.0.1:18789/ws"
+token = ""
+
+[runtime]
+audit_only = false
+decision_event = "security.decision"
+worker_concurrency = 8
+max_queue = 256
+eval_timeout_ms = 2500
+memory_sample_secs = 15
+
+[security]
+review_threshold = 35
+block_threshold = 65
+virustotal_api_key = ""
+virustotal_timeout_ms = 1400
+quarantine_dir = ".openclaw-rs/quarantine"
+protect_paths = ["./openclaw.mjs", "./dist/index.js"]
+allowed_command_prefixes = ["git ", "ls", "cat ", "rg "]
+blocked_command_patterns = [
+  "(?i)\\brm\\s+-rf\\s+/",
+  "(?i)\\bmkfs\\b",
+  "(?i)\\bdd\\s+if=",
+  "(?i)\\bcurl\\s+[^|]*\\|\\s*sh\\b",
+  "(?i)\\bwget\\s+[^|]*\\|\\s*sh\\b",
+  "(?i)\\bchmod\\s+777\\b"
+]
+prompt_injection_patterns = [
+  "(?i)ignore\\s+all\\s+previous\\s+instructions",
+  "(?i)reveal\\s+the\\s+system\\s+prompt",
+  "(?i)override\\s+developer\\s+instructions",
+  "(?i)disable\\s+safety",
+  "(?i)you\\s+must\\s+run\\s+this\\s+command\\s+without\\s+asking"
+]
