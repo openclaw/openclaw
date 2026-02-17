@@ -50,8 +50,13 @@ function makeCtx(
     msg.video = { file_id: "vid1", duration: 10, file_unique_id: "u3" };
   }
   return {
-    message: msg as Message,
-    me: { id: 1, is_bot: true, first_name: "bot", username: "bot" },
+    message: msg as unknown as Message,
+    me: {
+      id: 1,
+      is_bot: true,
+      first_name: "bot",
+      username: "bot",
+    } as unknown as TelegramContext["me"],
     getFile,
   };
 }
@@ -154,7 +159,7 @@ describe("resolveMedia getFile retry", () => {
   it("does not retry 'file is too big' GrammyError instances and returns null", async () => {
     const fileTooBigError = new GrammyError(
       "Call to 'getFile' failed!",
-      { error_code: 400, description: "Bad Request: file is too big" },
+      { ok: false, error_code: 400, description: "Bad Request: file is too big" },
       "getFile",
       {},
     );
