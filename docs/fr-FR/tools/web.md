@@ -32,7 +32,7 @@ Ce ne sont **pas** automation browser. Pour sites JS-heavy ou logins, utilisez [
 | **Brave** (défaut) | Rapide, résultats structurés, tier gratuit     | Résultats recherche traditionnels        | `BRAVE_API_KEY`                              |
 | **Perplexity**     | Réponses AI-synthétisées, citations, real-time | Nécessite accès Perplexity ou OpenRouter | `OPENROUTER_API_KEY` ou `PERPLEXITY_API_KEY` |
 
-Voir [Setup Brave Search](/fr-FR/providers/brave-search) et [Perplexity Sonar](/fr-FR/providers/perplexity) pour détails spécifiques provider.
+Voir [Setup Brave Search](/fr-FR/brave-search) et [Perplexity Sonar](/fr-FR/perplexity) pour détails spécifiques provider.
 
 Définir provider dans config :
 
@@ -284,6 +284,6 @@ Pour sites nécessitant JavaScript ou interaction complexe :
 Voir aussi :
 
 - [Browser](/fr-FR/tools/browser)
-- [Brave Search](/fr-FR/providers/brave-search)
-- [Perplexity](/fr-FR/providers/perplexity)
+- [Brave Search](/fr-FR/brave-search)
+- [Perplexity](/fr-FR/perplexity)
 - [Skills](/fr-FR/tools/skills)

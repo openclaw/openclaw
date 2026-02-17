@@ -98,9 +98,3 @@ openclaw sandbox recreate --all
 # ou juste un agent :
 openclaw sandbox recreate --agent family
 ```
-
-## Voir aussi
-
-- [Sandboxing](/fr-FR/concepts/sandboxing)
-- [Configuration](/fr-FR/gateway/configuration)
-- [Docker](/fr-FR/install/docker)

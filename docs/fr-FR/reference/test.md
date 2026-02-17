@@ -180,4 +180,3 @@ Voir aussi :
 
 - [Testing](/fr-FR/help/testing)
 - [Debugging](/fr-FR/help/debugging)
-- [CI/CD](/fr-FR/help/cicd)

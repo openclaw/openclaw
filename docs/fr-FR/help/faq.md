@@ -1446,8 +1446,6 @@ Pourquoi c'est comme ça :
 - **Cohérence shell.** La Passerelle n'est pas un "shell executor" - elle ne peut pas deviner quel profil shell l'utilisateur veut.
 - **Sécurité.** Des vars limitées au service réduisent la surface d'exposition.
 
-Docs : [Variables d'environnement](/fr-FR/help/environment), [Systemd](/fr-FR/install/linux#systemd-gestion-de-service).
-
 ### Comment gérer plusieurs environnements (staging, prod) avec des clés API différentes ?
 
 **Utilisez plusieurs Passerelles** ou **variables d'environnement externes**. OpenClaw ne supporte pas les fichiers `.env.staging` / `.env.prod` dans la même instance, et nous ne recommandons pas de définir plusieurs Passerelles sur un seul hôte sauf configuration très avancée (voir [Passerelles multiples](/fr-FR/gateway/multiple-gateways)).
@@ -1486,8 +1484,6 @@ Comportement attendu. `system.run` hérite du **processus Passerelle**, pas de v
 - Ou définissez-les dans la définition de service daemon si vous utilisez systemd/launchd.
 
 Vous ne pouvez pas "hériter depuis zsh" car l'agent ne démarre pas un zsh login shell ; il exécute `bash -c` par défaut (configurable via `agents.*.sandbox.shell`).
-
-Docs : [Variables d'environnement](/fr-FR/help/environment), [Exec système](/fr-FR/tools/system-run).
 
 ## Sessions et chats multiples
 
@@ -1846,8 +1842,6 @@ Corrections :
    - Windows : `netstat -ano | findstr 18789`
 3. Changez le port si nécessaire : `gateway.port: 18790`.
 
-Docs : [Passerelle déjà en cours d'exécution](/fr-FR/gateway/gateway-already-running), [Troubleshooting](/fr-FR/help/troubleshooting).
-
 ### Puis-je exécuter plusieurs passerelles sur le même hôte ?
 
 Oui, mais cela nécessite une **configuration avancée** : différents répertoires config, différents ports, services isolés. Voir [Passerelles multiples](/fr-FR/gateway/multiple-gateways).
@@ -1884,8 +1878,6 @@ La passerelle elle-même ne gère pas TLS directement. Utilisez **un proxy inver
 - **Tailscale Serve** : intégré, certifiés automatiques, liaison loopback uniquement (recommandé).
 - **nginx/Caddy** : reverse proxy sur VPS public avec Let's Encrypt.
 
-Docs : [Tailscale](/fr-FR/gateway/tailscale), [Proxy inverse](/fr-FR/gateway/reverse-proxy).
-
 ### Comment redémarrer la passerelle ?
 
 Dépend de votre système :
@@ -1895,13 +1887,9 @@ Dépend de votre système :
 - **Systemd** : `sudo systemctl restart openclaw-gateway`
 - **macOS menubar (daemon)** : `scripts/restart-mac.sh` ou utilisez l'app
 
-Docs : [CLI Passerelle](/fr-FR/cli/gateway), [Systemd](/fr-FR/install/linux#systemd-gestion-de-service).
-
 ### La passerelle peut-elle gérer plusieurs canaux simultanément ?
 
 Oui. C'est le **modèle central** d'OpenClaw. Une passerelle peut gérer Telegram, WhatsApp, Signal, Slack, Discord, etc., tous en même temps et router les messages entrants vers les agents appropriés.
-
-Docs : [Canaux](/fr-FR/channels), [Routage multi-agent](/fr-FR/concepts/multi-agent).
 
 ### J'ai défini gateway.bind: "lan" mais cURL échoue toujours. Pourquoi ?
 
@@ -1916,8 +1904,6 @@ Test :
 ```bash
 curl -H "Authorization: Bearer YOUR_TOKEN" http://<lan-ip>:18789/api/health
 ```
-
-Docs : [Protocole passerelle](/fr-FR/gateway/protocol), [Auth de passerelle](/fr-FR/gateway/auth).
 
 ## Journalisation et débogage
 
@@ -1939,8 +1925,6 @@ sudo journalctl -u openclaw-gateway -f
 - Par défaut : stdout/stderr
 - Config : `logging.file` pour journalisation fichier
 
-Docs : [Journalisation](/fr-FR/concepts/logging), [macOS journaux](/fr-FR/platforms/mac/logs).
-
 ### Comment activer les journaux de débogage ?
 
 Définissez `logging.level: "debug"` dans la config ou définissez `OPENCLAW_LOG_LEVEL=debug` :
@@ -1958,8 +1942,6 @@ Ou via env :
 ```bash
 OPENCLAW_LOG_LEVEL=debug openclaw gateway run
 ```
-
-Docs : [Journalisation](/fr-FR/concepts/logging), [Débogage](/fr-FR/help/debugging).
 
 ### Comment déboguer les échecs de connexion LLM ?
 
@@ -1983,7 +1965,7 @@ Oui. Activez `logging.verboseModels: true` pour journaliser les charges utiles c
 }
 ```
 
-Docs : [Journalisation](/fr-FR/concepts/logging).
+Docs : [Journalisation](/fr-FR/logging).
 
 ### Y a-t-il un dashboard de surveillance ?
 
@@ -2013,25 +1995,17 @@ Dépend du canal :
 - **UI de contrôle** : bouton de téléchargement (si disponible dans cette version).
 - **CLI** : utilisez `openclaw agent --message "..." --attach file.png`.
 
-Docs : [Pièces jointes](/fr-FR/concepts/attachments), [Outils médias](/fr-FR/tools/media).
-
 ### L'agent peut-il générer des images ?
 
 Oui. Utilisez `generate_image` (si DALL·E ou Stable Diffusion est configuré), ou demandez simplement "génère une image de..." et l'agent appellera l'outil approprié.
-
-Docs : [DALL·E](/fr-FR/tools/dalle), [Génération d'images](/fr-FR/tools/image-generation).
 
 ### Comment envoyer des vidéos ou de l'audio ?
 
 La plupart des canaux supportent les pièces jointes vidéo/audio. L'agent peut les transcrire (via Whisper si configuré) ou les analyser (selon capacités du modèle).
 
-Docs : [Whisper](/fr-FR/tools/whisper), [Pièces jointes](/fr-FR/concepts/attachments).
-
 ### Les médias générés sont-ils enregistrés quelque part ?
 
 Oui, dans le **workspace de l'agent** (`~/.openclaw/workspace/<agentId>/` par défaut). Les fichiers générés (images, PDFs, CSVs, etc.) persistent jusqu'à suppression manuelle ou nettoyage de workspace.
-
-Docs : [Agent workspace](/fr-FR/concepts/agent-workspace), [Gestion de workspace](/fr-FR/concepts/workspace-management).
 
 ### Puis-je définir un répertoire de téléchargement personnalisé pour les fichiers générés ?
 
@@ -2053,8 +2027,6 @@ Docs : [Config agents](/fr-FR/cli/configure#agents), [Agent workspace](/fr-FR/co
 
 OpenClaw diffuse les pièces jointes et peut gérer des fichiers relativement volumineux (limité par les restrictions du canal et la config serveur). Pour des fichiers énormes (100+ MB), considérez les diviser ou utiliser le téléchargement direct de workspace.
 
-Docs : [Pièces jointes](/fr-FR/concepts/attachments).
-
 ## Sécurité et contrôle d'accès
 
 ### OpenClaw est-il sécurisé par défaut ?
@@ -2067,8 +2039,6 @@ Bonnes pratiques :
 - Activez `gateway.auth` avec un token fort pour liaisons non-loopback.
 - Utilisez des listes autorisées canal (`allowFrom`, `allowChannels`) pour restreindre qui peut contacter l'agent.
 - N'exposez jamais la passerelle publiquement sans HTTPS + auth (utilisez Tailscale Serve ou un proxy inverse).
-
-Docs : [Sécurité](/fr-FR/gateway/security), [Modèle de menace](/fr-FR/security/threat-model).
 
 ### Est-ce sûr de laisser l'agent gérer des DM depuis n'importe qui ?
 
@@ -2098,16 +2068,12 @@ Il n'y a pas de défense parfaite, mais OpenClaw aide :
 
 Le prompt système inclut aussi des instructions de base sur la confiance utilisateur.
 
-Docs : [Sécurité](/fr-FR/gateway/security), [Modèle de menace](/fr-FR/security/threat-model), [Approbations d'outils](/fr-FR/tools#approbations-doutils).
-
 ### L'agent peut-il accéder à des fichiers hors de son workspace ?
 
 **Oui**, si **autorisé par config**. Par défaut, `file.*` et `system.run` peuvent accéder au système de fichiers. Pour restreindre :
 
 - Définissez `agents.<agentId>.sandbox.filesystem` pour limiter les chemins.
 - Utilisez des listes autorisées d'outils pour désactiver `file.*` ou `system.run` entièrement.
-
-Docs : [Outils filesystem](/fr-FR/tools/file), [Sandboxing](/fr-FR/concepts/sandboxing), [Sécurité](/fr-FR/gateway/security).
 
 ### Est-ce que l'appairage de nœud nécessite l'approbation de l'utilisateur ?
 
@@ -2119,23 +2085,17 @@ Docs : [Nœuds](/fr-FR/nodes), [CLI Nœuds](/fr-FR/cli/nodes).
 
 Oui. Activez `logging.level: "debug"` ou `logging.verboseModels: true` pour journaliser tous les appels d'outils. Vous pouvez aussi écrire des hooks personnalisés (`onToolCall`, `onToolResult`) pour journalisation centralisée.
 
-Docs : [Journalisation](/fr-FR/concepts/logging), [Hooks](/fr-FR/automation/hooks).
-
 ### Les credentials sont-ils stockés en sécurité ?
 
 OpenClaw stocke les credentials dans `~/.openclaw/credentials/` et la config dans `~/.openclaw/openclaw.json` (JSON5). Les deux sont **en texte clair** sur le disque.
 
 Protégez ces fichiers avec des permissions système (`chmod 600`) et considérez le chiffrement de disque complet. OpenClaw ne chiffre pas encore les credentials au repos de manière native (fonctionnalité future).
 
-Docs : [Sécurité](/fr-FR/gateway/security), [Credentials](/fr-FR/concepts/credentials).
-
 ## Commandes de chat et interruption de tâches
 
 ### Comment annuler ou aborter une tâche en cours ?
 
 Envoyez **"abort"** ou **"/abort"** dans le chat. L'agent tentera de tuer la tâche en cours et répondra.
-
-Docs : [Aborter des tâches](/fr-FR/concepts/aborting-tasks).
 
 ### Puis-je envoyer plusieurs requêtes en parallèle ?
 
@@ -2191,13 +2151,11 @@ Docs : [Cron jobs](/fr-FR/automation/cron-jobs).
 
 Oui. Activez `automation.webhooks` et pointez votre service externe vers l'endpoint webhook. L'agent peut traiter la charge utile et répondre.
 
-Docs : [Webhooks](/fr-FR/automation/webhooks).
-
 ---
 
 **Vous ne trouvez toujours pas votre réponse ?**
 
-- Consultez la [Documentation complète](/fr-FR/fr-FR)
+- Consultez la [Documentation complète](/fr-FR/start/getting-started)
 - Cherchez des problèmes sur [GitHub](https://github.com/openclaw/openclaw/issues)
 - Demandez sur le serveur [Discord OpenClaw](https://discord.gg/openclaw)
 

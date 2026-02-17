@@ -148,9 +148,3 @@ L'agent peut effectuer ces actions :
 - `type` : Taper texte
 - `select` : Sélectionner texte
 - `drag` : Glisser élément
-
-## Voir aussi
-
-- [Configuration de la Passerelle](/fr-FR/gateway/configuration)
-- [Outils](/fr-FR/tools)
-- [Nœuds](/fr-FR/gateway/nodes)

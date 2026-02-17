@@ -78,6 +78,6 @@ sudo tailscale up
 
 Voir aussi :
 
-- [VPS](/fr-FR/platforms/vps)
+- [VPS](/vps)
 - [DigitalOcean](/fr-FR/platforms/digitalocean)
 - [Installation](/fr-FR/install/index)

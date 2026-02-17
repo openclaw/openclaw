@@ -340,4 +340,3 @@ Voir aussi :
 - [Skills](/fr-FR/tools/skills)
 - [Créer Skills](/fr-FR/tools/creating-skills)
 - [Config Skills](/fr-FR/tools/skills-config)
-- [Workspace](/fr-FR/concepts/workspace)

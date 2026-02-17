@@ -259,4 +259,3 @@ Voir aussi :
 - [Sandboxing](/fr-FR/gateway/sandboxing)
 - [Configuration](/fr-FR/gateway/configuration)
 - [Mode Elevated](/fr-FR/tools/elevated)
-- [Agents](/fr-FR/concepts/agents)

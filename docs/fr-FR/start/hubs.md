@@ -15,7 +15,7 @@ Utilisez ces centres pour découvrir chaque page, y compris les analyses approfo
 
 ## Commencer ici
 
-- [Index](/fr-FR/fr-FR)
+- [Index](/fr-FR/start/getting-started)
 - [Premiers pas](/fr-FR/start/getting-started)
 - [Démarrage rapide](/fr-FR/start/quickstart)
 - [Intégration](/fr-FR/start/onboarding)

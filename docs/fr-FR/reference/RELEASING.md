@@ -98,4 +98,3 @@ Voir aussi :
 
 - [Release macOS](/fr-FR/platforms/mac/release)
 - [Testing](/fr-FR/help/testing)
-- [Build](/fr-FR/help/building)

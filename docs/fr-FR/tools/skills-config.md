@@ -238,5 +238,4 @@ Voir aussi :
 
 - [Créer Skills](/fr-FR/tools/creating-skills)
 - [Skills](/fr-FR/tools/skills)
-- [Plugins](/fr-FR/concepts/plugins)
 - [Sandboxing](/fr-FR/gateway/sandboxing)

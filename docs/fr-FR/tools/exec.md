@@ -126,5 +126,4 @@ Envoyer touches (style tmux) :
 ## Voir aussi
 
 - [Approbations Exec](/fr-FR/tools/exec-approvals)
-- [Sandboxing](/fr-FR/concepts/sandboxing)
 - [Configuration de la Passerelle](/fr-FR/gateway/configuration)

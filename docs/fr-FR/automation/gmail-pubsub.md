@@ -111,8 +111,6 @@ immédiate et un réenregistrement de la montre au démarrage de la passerelle.
 
 ## Paramètres de configuration détaillés
 
-Voir [`tools.gmail.pubsub`](/fr-FR/tools/gmail#pubsub) pour le schéma complet.
-
 Champs clés :
 
 - `enabled` : active l'abonnement Pub/Sub (par défaut : false).
@@ -143,5 +141,3 @@ Champs clés :
 - Si vous utilisez `serviceAccountKeyPath`, assurez-vous que le chemin est correct et que le fichier JSON contient
   `client_email` et `private_key`.
 - Si inline, vérifiez le format et les sauts de ligne de `private_key` (`\n`).
-
-Voir aussi : [Gmail (polling)](/fr-FR/tools/gmail), [Dépannage de l'automatisation](/fr-FR/automation/troubleshooting).

@@ -56,7 +56,7 @@ Par défaut, `clawhub` installe dans `./skills` sous votre répertoire de travai
 ## Notes de sécurité
 
 - Traitez les compétences tierces comme **code non fiable**. Lisez-les avant activation.
-- Préférez les exécutions sandboxées pour entrées non fiables et outils risqués. Voir [Sandboxing](/fr-FR/concepts/sandboxing).
+- Préférez les exécutions sandboxées pour entrées non fiables et outils risqués.
 - `skills.entries.*.env` et `skills.entries.*.apiKey` injectent des secrets dans le processus **hôte** pour ce tour agent (pas le sandbox). Gardez les secrets hors des prompts et journaux.
 - Pour un modèle de menace plus large et checklists, voir [Sécurité](/fr-FR/gateway/security).
 
@@ -232,4 +232,3 @@ Voir [Config Compétences](/fr-FR/tools/skills-config) pour le schéma configura
 - [ClawHub](/fr-FR/tools/clawhub)
 - [Plugins](/fr-FR/tools/plugin)
 - [Outils](/fr-FR/tools)
-- [Sandboxing](/fr-FR/concepts/sandboxing)

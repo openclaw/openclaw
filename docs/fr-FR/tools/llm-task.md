@@ -247,7 +247,5 @@ openclaw config set plugins.entries.llm-task.config.timeoutMs 60000
 
 Voir aussi :
 
-- [Plugins](/fr-FR/concepts/plugins)
 - [Lobster](/fr-FR/tools/lobster)
-- [Workflows](/fr-FR/automation/workflows)
 - [JSON Schema](https://json-schema.org/)
