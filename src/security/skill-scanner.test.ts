@@ -171,6 +171,117 @@ console.log(json);
     const findings = scanSource(source, "plugin.ts");
     expect(findings).toEqual([]);
   });
+
+  // --- Dynamic import() ---
+
+  it("detects dynamic import() call", () => {
+    const source = `
+const moduleName = getModuleName();
+const mod = await import(moduleName);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "dynamic-import" && f.severity === "warn")).toBe(true);
+  });
+
+  it("does not flag static import declarations", () => {
+    const source = `
+import fs from "node:fs";
+import { resolve } from "node:path";
+export const x = 1;
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "dynamic-import")).toBe(false);
+  });
+
+  // --- Prototype pollution ---
+
+  it("detects __proto__ access", () => {
+    const source = `
+const obj = JSON.parse(userInput);
+obj.__proto__.isAdmin = true;
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "prototype-pollution" && f.severity === "warn"),
+    ).toBe(true);
+  });
+
+  it("detects constructor.prototype manipulation", () => {
+    const source = `
+function exploit(target) {
+  target.constructor.prototype.polluted = true;
+}
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "prototype-pollution" && f.severity === "warn"),
+    ).toBe(true);
+  });
+
+  it("does not flag normal Object.assign usage", () => {
+    const source = `
+const defaults = { color: "blue", size: 10 };
+const config = Object.assign({}, defaults, userPrefs);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "prototype-pollution")).toBe(false);
+  });
+
+  // --- Encoded payload execution ---
+
+  it("detects atob + eval combination", () => {
+    const source = `
+const payload = atob("ZG9jdW1lbnQuY29va2ll");
+eval(payload);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "encoded-payload-execution" && f.severity === "critical"),
+    ).toBe(true);
+  });
+
+  it("detects Buffer.from + setTimeout combination", () => {
+    const source = `
+const code = Buffer.from("Y29uc29sZS5sb2coMSk=", "base64").toString();
+setTimeout(code, 0);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "encoded-payload-execution" && f.severity === "critical"),
+    ).toBe(true);
+  });
+
+  it("does not flag atob alone without eval", () => {
+    const source = `
+const decoded = atob(base64String);
+console.log(decoded);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "encoded-payload-execution")).toBe(false);
+  });
+
+  // --- Unicode obfuscation ---
+
+  it("detects unicode-escaped strings", () => {
+    const source = `
+const hidden = "\\u0072\\u0065\\u0071\\u0075\\u0069\\u0072\\u0065";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "obfuscated-code" && f.message.includes("Unicode")),
+    ).toBe(true);
+  });
+
+  it("does not flag isolated unicode escapes in normal strings", () => {
+    const source = `
+const arrow = "\\u2192";
+const smile = "\\u263A";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(
+      findings.some((f) => f.ruleId === "obfuscated-code" && f.message.includes("Unicode")),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

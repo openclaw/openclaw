@@ -102,6 +102,19 @@ const LINE_RULES: LineRule[] = [
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
   },
+  {
+    ruleId: "dynamic-import",
+    severity: "warn",
+    message:
+      "Dynamic import() can load arbitrary modules at runtime, bypassing static analysis",
+    pattern: /\bimport\s*\(/,
+  },
+  {
+    ruleId: "prototype-pollution",
+    severity: "warn",
+    message: "Potential prototype pollution — can modify Object behavior globally",
+    pattern: /__proto__|constructor\s*\.\s*prototype/,
+  },
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
@@ -133,6 +146,19 @@ const SOURCE_RULES: SourceRule[] = [
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
     requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+  },
+  {
+    ruleId: "obfuscated-code",
+    severity: "warn",
+    message: "Unicode-escaped string sequence detected (possible obfuscation)",
+    pattern: /(\\u[0-9a-fA-F]{4}){3,}/,
+  },
+  {
+    ruleId: "encoded-payload-execution",
+    severity: "critical",
+    message: "Encoded payload execution — base64 decode piped to eval/Function",
+    pattern: /\b(atob|Buffer\.from)\s*\(/,
+    requiresContext: /\b(eval|new\s+Function|setTimeout|setInterval)\s*\(/,
   },
 ];
 
