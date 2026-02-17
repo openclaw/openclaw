@@ -5,6 +5,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -61,6 +62,11 @@ export function createGatewayCloseHandler(params: {
         /* ignore */
       }
     }
+    // Best-effort: signal all active exec sessions to terminate. The underlying
+    // SIGTERM→SIGKILL escalation (via killProcessTree) is asynchronous and
+    // intentionally unref'd so it does not delay Node.js exit.
+    getProcessSupervisor().cancelAll("manual-cancel");
+
     for (const plugin of listChannelPlugins()) {
       await params.stopChannel(plugin.id);
     }
