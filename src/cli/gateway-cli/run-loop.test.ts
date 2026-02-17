@@ -99,11 +99,14 @@ describe("runGatewayLoop", () => {
     );
 
     const { runGatewayLoop } = await import("./run-loop.js");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
     const loopPromise = runGatewayLoop({
-      start,
-      runtime: {
-        exit: vi.fn(),
-      } as unknown as { exit: (code: number) => never },
+      start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+      runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
     });
 
     try {
