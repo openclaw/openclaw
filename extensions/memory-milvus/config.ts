@@ -12,6 +12,7 @@ export type MemoryConfig = {
   };
   autoCapture?: boolean;
   autoRecall?: boolean;
+  captureMaxChars?: number;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -19,6 +20,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
 const DEFAULT_COLLECTION_NAME = "openclaw_memories";
+export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -63,7 +65,11 @@ export const memoryConfigSchema = {
       throw new Error("memory config required");
     }
     const cfg = value as Record<string, unknown>;
-    assertAllowedKeys(cfg, ["embedding", "milvus", "autoCapture", "autoRecall"], "memory config");
+    assertAllowedKeys(
+      cfg,
+      ["embedding", "milvus", "autoCapture", "autoRecall", "captureMaxChars"],
+      "memory config",
+    );
 
     // Validate embedding
     const embedding = cfg.embedding as Record<string, unknown> | undefined;
@@ -84,6 +90,15 @@ export const memoryConfigSchema = {
     // Auto-detect SSL from https:// prefix
     const ssl = typeof milvus.ssl === "boolean" ? milvus.ssl : address.startsWith("https://");
 
+    const captureMaxChars =
+      typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
+    if (
+      typeof captureMaxChars === "number" &&
+      (captureMaxChars < 100 || captureMaxChars > 10_000)
+    ) {
+      throw new Error("captureMaxChars must be between 100 and 10000");
+    }
+
     return {
       embedding: {
         provider: "openai",
@@ -101,6 +116,7 @@ export const memoryConfigSchema = {
       },
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
+      captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
     };
   },
   uiHints: {
@@ -143,6 +159,12 @@ export const memoryConfigSchema = {
     autoRecall: {
       label: "Auto-Recall",
       help: "Automatically inject relevant memories into context",
+    },
+    captureMaxChars: {
+      label: "Capture Max Chars",
+      help: "Maximum message length eligible for auto-capture",
+      advanced: true,
+      placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
     },
   },
 };

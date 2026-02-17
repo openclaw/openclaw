@@ -6,13 +6,14 @@
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { randomUUID } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { MilvusClient, DataType } from "@zilliz/milvus2-sdk-node";
-import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { stringEnum } from "openclaw/plugin-sdk";
 import {
+  DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
   type MemoryCategory,
   memoryConfigSchema,
@@ -61,6 +62,7 @@ class MemoryDB {
 
     this.initPromise = this.doInitialize().catch((err) => {
       this.initPromise = null;
+      this.client = null;
       throw err;
     });
     return this.initPromise;
@@ -247,12 +249,7 @@ class Embeddings {
 // ============================================================================
 
 const PROMPT_INJECTION_PATTERNS = [
-  /ignore (all )?(previous|prior|above|earlier)/i,
-  /disregard (all )?(previous|prior|above|earlier)/i,
-  /forget (all )?(previous|prior|above|earlier)/i,
-  /new (instructions|rules|prompt)/i,
-  /you (are|must) (now|actually)/i,
-  /override (the )?(system|previous)/i,
+  /ignore (all|any|previous|above|prior) instructions/i,
   /do not follow (the )?(system|developer)/i,
   /system prompt/i,
   /developer message/i,
@@ -305,8 +302,9 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
-export function shouldCapture(text: string): boolean {
-  if (text.length < 10 || text.length > 500) {
+export function shouldCapture(text: string, options?: { maxChars?: number }): boolean {
+  const maxChars = options?.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
+  if (text.length < 10 || text.length > maxChars) {
     return false;
   }
   // Skip injected context from memory recall
@@ -577,6 +575,14 @@ const memoryPlugin = {
           });
 
         memory
+          .command("stats")
+          .description("Show memory statistics")
+          .action(async () => {
+            const count = await db.count();
+            console.log(`Total memories: ${count}`);
+          });
+
+        memory
           .command("search")
           .description("Search memories")
           .argument("<query>", "Search query")
@@ -684,7 +690,9 @@ const memoryPlugin = {
           }
 
           // Filter for capturable content
-          const toCapture = texts.filter((text) => text && shouldCapture(text));
+          const toCapture = texts.filter(
+            (text) => text && shouldCapture(text, { maxChars: cfg.captureMaxChars }),
+          );
           if (toCapture.length === 0) {
             return;
           }
