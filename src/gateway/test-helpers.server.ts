@@ -441,7 +441,7 @@ type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
-  payload?: unknown;
+  payload?: Record<string, unknown>;
   error?: { message?: string };
 };
 
@@ -573,7 +573,7 @@ export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectR
   return res.payload as { type: "hello-ok" };
 }
 
-export async function rpcReq<T = unknown>(
+export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
   params?: unknown,
@@ -586,7 +586,7 @@ export async function rpcReq<T = unknown>(
     type: "res";
     id: string;
     ok: boolean;
-    payload?: T;
+    payload?: T | null | undefined;
     error?: { message?: string; code?: string };
   }>(
     ws,
