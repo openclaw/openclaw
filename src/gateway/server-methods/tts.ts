@@ -139,7 +139,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
             id: "elevenlabs",
             name: "ElevenLabs",
             configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-            models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+            models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2"],
           },
           {
             id: "edge",
