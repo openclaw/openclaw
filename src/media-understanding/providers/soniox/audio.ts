@@ -2,7 +2,7 @@ import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../
 import { fetchWithTimeoutGuarded, normalizeBaseUrl, readErrorResponse } from "../shared.js";
 
 export const DEFAULT_SONIOX_AUDIO_BASE_URL = "https://api.soniox.com/v1";
-export const DEFAULT_SONIOX_AUDIO_MODEL = "stt-async-preview";
+export const DEFAULT_SONIOX_AUDIO_MODEL = "stt-async-v4";
 const POLL_INTERVAL_MS = 2_000;
 
 function resolveModel(model?: string): string {
@@ -135,7 +135,7 @@ async function createTranscription(params: {
 
   const { response: res, release } = await fetchWithTimeoutGuarded(
     `${params.baseUrl}/transcriptions`,
-    { method: "POST", headers, body: JSON.stringify(payload) },
+    { method: "POST", headers, body: Buffer.from(JSON.stringify(payload)) },
     params.timeoutMs,
     params.fetchFn,
   );

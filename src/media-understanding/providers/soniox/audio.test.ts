@@ -108,7 +108,7 @@ describe("transcribeSonioxAudio", () => {
     });
 
     expect(result.text).toBe("Slovenija je lepa dežela");
-    expect(result.model).toBe("stt-async-preview");
+    expect(result.model).toBe("stt-async-v4");
     expect(calls).toHaveLength(4);
     expect(calls[0].method).toBe("POST"); // upload
     expect(calls[0].url).toContain("/files");
@@ -240,7 +240,7 @@ describe("transcribeSonioxAudio", () => {
 
     const parsed = JSON.parse(capturedBody!);
     expect(parsed.language_hints).toEqual(["sl"]);
-    expect(parsed.model).toBe("stt-async-preview");
+    expect(parsed.model).toBe("stt-async-v4");
   });
 
   it("throws on upload failure", async () => {

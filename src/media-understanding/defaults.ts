@@ -31,7 +31,7 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   groq: "whisper-large-v3-turbo",
   openai: "gpt-4o-mini-transcribe",
   deepgram: "nova-3",
-  soniox: "stt-async-preview",
+  soniox: "stt-async-v4",
 };
 
 export const AUTO_AUDIO_KEY_PROVIDERS = ["openai", "groq", "deepgram", "google", "soniox"] as const;
