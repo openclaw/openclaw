@@ -37,6 +37,7 @@ export function buildSystemPromptParams(params: {
   runtime: Omit<RuntimeInfoInput, "agentId">;
   workspaceDir?: string;
   cwd?: string;
+  includeTimestamp?: boolean;
 }): SystemPromptRuntimeParams {
   const repoRoot = resolveRepoRoot({
     config: params.config,
@@ -45,7 +46,10 @@ export function buildSystemPromptParams(params: {
   });
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-  const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+  // Only generate timestamp if explicitly requested (default false for cache-friendly prompts)
+  const userTime = params.includeTimestamp
+    ? formatUserTime(new Date(), userTimezone, userTimeFormat)
+    : undefined;
   return {
     runtimeInfo: {
       agentId: params.agentId,

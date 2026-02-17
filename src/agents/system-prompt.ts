@@ -1,9 +1,9 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
@@ -630,7 +630,13 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    buildRuntimeLine(
+      runtimeInfo,
+      runtimeChannel,
+      runtimeCapabilities,
+      params.defaultThinkLevel,
+      false,
+    ),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
@@ -652,7 +658,12 @@ export function buildRuntimeLine(
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
+  includeDynamicInfo?: boolean,
 ): string {
+  // For prompt caching, exclude dynamic fields (model, node) that change each request
+  // Set includeDynamicInfo=false when cache-friendly output is needed
+  const showModel = includeDynamicInfo !== false && runtimeInfo?.model;
+  const showNode = includeDynamicInfo !== false && runtimeInfo?.node;
   return `Runtime: ${[
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
@@ -662,8 +673,8 @@ export function buildRuntimeLine(
       : runtimeInfo?.arch
         ? `arch=${runtimeInfo.arch}`
         : "",
-    runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
-    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
+    showNode ? `node=${runtimeInfo.node}` : "",
+    showModel ? `model=${runtimeInfo.model}` : "",
     runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",

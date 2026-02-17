@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
   storeDeviceAuthToken,
 } from "../infra/device-auth-store.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { clearDevicePairing } from "../infra/device-pairing.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
@@ -154,7 +155,7 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
-      // If closed due to device token mismatch, clear the stored token so next attempt can get a fresh one
+      // If closed due to device token mismatch, clear the stored token and pairing so next attempt can get a fresh one
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
@@ -163,12 +164,13 @@ export class GatewayClient {
         const role = this.opts.role ?? "operator";
         try {
           clearDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role });
+          void clearDevicePairing(this.opts.deviceIdentity.deviceId);
           logDebug(
-            `cleared stale device-auth token for device ${this.opts.deviceIdentity.deviceId}`,
+            `cleared stale device-auth token and pairing for device ${this.opts.deviceIdentity.deviceId}`,
           );
         } catch (err) {
           logDebug(
-            `failed clearing stale device-auth token for device ${this.opts.deviceIdentity.deviceId}: ${String(err)}`,
+            `failed clearing stale device-auth token/pairing for device ${this.opts.deviceIdentity.deviceId}: ${String(err)}`,
           );
         }
       }

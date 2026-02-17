@@ -535,3 +535,16 @@ export async function revokeDeviceToken(params: {
     return entry;
   });
 }
+
+export async function clearDevicePairing(deviceId: string, baseDir?: string): Promise<boolean> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalizedId = normalizeDeviceId(deviceId);
+    if (!state.pairedByDeviceId[normalizedId]) {
+      return false;
+    }
+    delete state.pairedByDeviceId[normalizedId];
+    await persistState(state, baseDir);
+    return true;
+  });
+}
