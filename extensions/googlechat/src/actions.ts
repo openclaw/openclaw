@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk";
 import {
   createActionGate,
+  extractToolSend,
   jsonResult,
   readNumberParam,
   readReactionParams,
@@ -64,16 +65,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     return Array.from(actions);
   },
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
+    return extractToolSend(args, "sendMessage");
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     const account = resolveGoogleChatAccount({

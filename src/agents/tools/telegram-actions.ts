@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createTelegramActionGate } from "../../telegram/accounts.js";
+import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -15,7 +17,6 @@ import {
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import {
-  createActionGate,
   jsonResult,
   readNumberParam,
   readReactionParams,
@@ -23,14 +24,11 @@ import {
   readStringParam,
 } from "./common.js";
 
-type TelegramButton = {
-  text: string;
-  callback_data: string;
-};
+const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
 
 export function readTelegramButtons(
   params: Record<string, unknown>,
-): TelegramButton[][] | undefined {
+): TelegramInlineButtons | undefined {
   const raw = params.buttons;
   if (raw == null) {
     return undefined;
@@ -62,7 +60,21 @@ export function readTelegramButtons(
           `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max 64 chars)`,
         );
       }
-      return { text, callback_data: callbackData };
+      const styleRaw = (button as { style?: unknown }).style;
+      const style = typeof styleRaw === "string" ? styleRaw.trim().toLowerCase() : undefined;
+      if (styleRaw !== undefined && !style) {
+        throw new Error(`buttons[${rowIndex}][${buttonIndex}] style must be string`);
+      }
+      if (style && !TELEGRAM_BUTTON_STYLES.includes(style as TelegramButtonStyle)) {
+        throw new Error(
+          `buttons[${rowIndex}][${buttonIndex}] style must be one of ${TELEGRAM_BUTTON_STYLES.join(", ")}`,
+        );
+      }
+      return {
+        text,
+        callback_data: callbackData,
+        ...(style ? { style: style as TelegramButtonStyle } : {}),
+      };
     });
   });
   const filtered = rows.filter((row) => row.length > 0);
@@ -75,7 +87,7 @@ export async function handleTelegramAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const isActionEnabled = createActionGate(cfg.channels?.telegram?.actions);
+  const isActionEnabled = createTelegramActionGate({ cfg, accountId });
 
   if (action === "react") {
     // Check reaction level first
@@ -109,11 +121,18 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+    const reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
       token,
       remove,
       accountId: accountId ?? undefined,
     });
+    if (!reactionResult.ok) {
+      return jsonResult({
+        ok: false,
+        warning: reactionResult.warning,
+        ...(remove || isEmpty ? { removed: true } : { added: emoji }),
+      });
+    }
     if (!remove && !isEmpty) {
       return jsonResult({ ok: true, added: emoji });
     }

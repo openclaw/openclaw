@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "./ansi.js";
+import { wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 describe("renderTable", () => {
@@ -128,5 +129,60 @@ describe("renderTable", () => {
     const line2Index = lines.findIndex((line) => line.includes("line2"));
     expect(line1Index).toBeGreaterThan(-1);
     expect(line2Index).toBe(line1Index + 1);
+  });
+});
+
+describe("wrapNoteMessage", () => {
+  it("preserves long filesystem paths without inserting spaces/newlines", () => {
+    const input =
+      "/Users/user/Documents/Github/impact-signals-pipeline/with/really/long/segments/file.txt";
+    const wrapped = wrapNoteMessage(input, { maxWidth: 22, columns: 80 });
+
+    expect(wrapped).toBe(input);
+  });
+
+  it("preserves long urls without inserting spaces/newlines", () => {
+    const input =
+      "https://example.com/this/is/a/very/long/url/segment/that/should/not/be/split/for-copy";
+    const wrapped = wrapNoteMessage(input, { maxWidth: 24, columns: 80 });
+
+    expect(wrapped).toBe(input);
+  });
+
+  it("preserves long file-like underscore tokens for copy safety", () => {
+    const input = "administrators_authorized_keys_with_extra_suffix";
+    const wrapped = wrapNoteMessage(input, { maxWidth: 14, columns: 80 });
+
+    expect(wrapped).toBe(input);
+  });
+
+  it("still chunks generic long opaque tokens to avoid pathological line width", () => {
+    const input = "x".repeat(70);
+    const wrapped = wrapNoteMessage(input, { maxWidth: 20, columns: 80 });
+
+    expect(wrapped).toContain("\n");
+    expect(wrapped.replace(/\n/g, "")).toBe(input);
+  });
+
+  it("wraps bullet lines while preserving bullet indentation", () => {
+    const input = "- one two three four five six seven eight nine ten";
+    const wrapped = wrapNoteMessage(input, { maxWidth: 18, columns: 80 });
+    const lines = wrapped.split("\n");
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines[0]?.startsWith("- ")).toBe(true);
+    expect(lines.slice(1).every((line) => line.startsWith("  "))).toBe(true);
+  });
+
+  it("preserves long Windows paths without inserting spaces/newlines", () => {
+    // No spaces: wrapNoteMessage splits on whitespace, so a "Program Files" style path would wrap.
+    const input = "C:\\\\State\\\\OpenClaw\\\\bin\\\\openclaw.exe";
+    const wrapped = wrapNoteMessage(input, { maxWidth: 10, columns: 80 });
+    expect(wrapped).toBe(input);
+  });
+
+  it("preserves UNC paths without inserting spaces/newlines", () => {
+    const input = "\\\\\\\\server\\\\share\\\\some\\\\really\\\\long\\\\path\\\\file.txt";
+    const wrapped = wrapNoteMessage(input, { maxWidth: 12, columns: 80 });
+    expect(wrapped).toBe(input);
   });
 });

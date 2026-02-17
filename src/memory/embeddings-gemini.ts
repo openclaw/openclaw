@@ -1,7 +1,7 @@
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
-import { isTruthyEnvValue } from "../infra/env.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseGeminiAuth } from "../infra/gemini-auth.js";
+import { debugEmbeddingsLog } from "./embeddings-debug.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -12,17 +12,9 @@ export type GeminiEmbeddingClient = {
 
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
-const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS);
-const log = createSubsystemLogger("memory/embeddings");
-
-const debugLog = (message: string, meta?: Record<string, unknown>) => {
-  if (!debugEmbeddings) {
-    return;
-  }
-  const suffix = meta ? ` ${JSON.stringify(meta)}` : "";
-  log.raw(`${message}${suffix}`);
+const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
+  "text-embedding-004": 2048,
 };
-
 function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
   const trimmed = remoteApiKey?.trim();
   if (!trimmed) {
@@ -117,6 +109,7 @@ export async function createGeminiEmbeddingProvider(
     provider: {
       id: "gemini",
       model: client.model,
+      maxInputTokens: GEMINI_MAX_INPUT_TOKENS[client.model],
       embedQuery,
       embedBatch,
     },
@@ -146,14 +139,14 @@ export async function resolveGeminiEmbeddingClient(
   const rawBaseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
   const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  const authHeaders = parseGeminiAuth(apiKey);
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "x-goog-api-key": apiKey,
+    ...authHeaders.headers,
     ...headerOverrides,
   };
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
-  debugLog("memory embeddings: gemini client", {
+  debugEmbeddingsLog("memory embeddings: gemini client", {
     rawBaseUrl,
     baseUrl,
     model,

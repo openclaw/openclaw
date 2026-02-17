@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -14,6 +12,8 @@ import {
   normalizeUsageDisplay,
   supportsXHighThinking,
 } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -100,6 +100,28 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("spawnDepth" in patch) {
+    const raw = patch.spawnDepth;
+    if (raw === null) {
+      if (typeof existing?.spawnDepth === "number") {
+        return invalid("spawnDepth cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!isSubagentSessionKey(storeKey)) {
+        return invalid("spawnDepth is only supported for subagent:* sessions");
+      }
+      const numeric = Number(raw);
+      if (!Number.isInteger(numeric) || numeric < 0) {
+        return invalid("invalid spawnDepth (use an integer >= 0)");
+      }
+      const normalized = numeric;
+      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== normalized) {
+        return invalid("spawnDepth cannot be changed once set");
+      }
+      next.spawnDepth = normalized;
+    }
+  }
+
   if ("label" in patch) {
     const raw = patch.label;
     if (raw === null) {
@@ -124,6 +146,7 @@ export async function applySessionsPatchToStore(params: {
   if ("thinkingLevel" in patch) {
     const raw = patch.thinkingLevel;
     if (raw === null) {
+      // Clear the override and fall back to model default
       delete next.thinkingLevel;
     } else if (raw !== undefined) {
       const normalized = normalizeThinkLevel(String(raw));
@@ -134,11 +157,7 @@ export async function applySessionsPatchToStore(params: {
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
         );
       }
-      if (normalized === "off") {
-        delete next.thinkingLevel;
-      } else {
-        next.thinkingLevel = normalized;
-      }
+      next.thinkingLevel = normalized;
     }
   }
 

@@ -1,27 +1,13 @@
 import type { GuardedFetchResult } from "../../infra/net/fetch-guard.js";
-import type { LookupFn, SsrFPolicy } from "../../infra/net/ssrf.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import type { LookupFn, SsrFPolicy } from "../../infra/net/ssrf.js";
+export { fetchWithTimeout } from "../../utils/fetch-timeout.js";
 
 const MAX_ERROR_CHARS = 300;
 
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
   const raw = baseUrl?.trim() || fallback;
   return raw.replace(/\/+$/, "");
-}
-
-export async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-  fetchFn: typeof fetch,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
-  try {
-    return await fetchFn(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 export async function fetchWithTimeoutGuarded(
@@ -60,4 +46,13 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
   } catch {
     return undefined;
   }
+}
+
+export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
+  if (res.ok) {
+    return;
+  }
+  const detail = await readErrorResponse(res);
+  const suffix = detail ? `: ${detail}` : "";
+  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
 }

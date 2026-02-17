@@ -6,12 +6,12 @@
  */
 
 import type { OpenClawConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
   PluginCommandResult,
 } from "./types.js";
-import { logVerbose } from "../globals.js";
 
 type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
@@ -51,6 +51,9 @@ const RESERVED_COMMANDS = new Set([
   // Agent control
   "skill",
   "subagents",
+  "kill",
+  "steer",
+  "tell",
   "model",
   "models",
   "queue",

@@ -1,7 +1,7 @@
 import path from "node:path";
-import type { PluginRecord } from "./registry.js";
 import { resolveConfigDir, shortenHomeInString } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import type { PluginRecord } from "./registry.js";
 
 export type PluginSourceRoots = {
   stock?: string;
@@ -23,7 +23,8 @@ function tryRelative(root: string, filePath: string): string | null {
   if (path.isAbsolute(rel)) {
     return null;
   }
-  return rel;
+  // Normalize to forward slashes for display (path.relative uses backslashes on Windows)
+  return rel.replaceAll("\\", "/");
 }
 
 export function resolvePluginSourceRoots(params: { workspaceDir?: string }): PluginSourceRoots {

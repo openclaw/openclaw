@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import {
+  buildOauthProviderAuthResult,
   emptyPluginConfigSchema,
+  isWSL2Sync,
   type OpenClawPluginApi,
   type ProviderAuthContext,
 } from "openclaw/plugin-sdk";
@@ -52,32 +53,8 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function isWSL(): boolean {
-  if (process.platform !== "linux") {
-    return false;
-  }
-  try {
-    const release = readFileSync("/proc/version", "utf8").toLowerCase();
-    return release.includes("microsoft") || release.includes("wsl");
-  } catch {
-    return false;
-  }
-}
-
-function isWSL2(): boolean {
-  if (!isWSL()) {
-    return false;
-  }
-  try {
-    const version = readFileSync("/proc/version", "utf8").toLowerCase();
-    return version.includes("wsl2") || version.includes("microsoft-standard");
-  } catch {
-    return false;
-  }
-}
-
 function shouldUseManualOAuthFlow(isRemote: boolean): boolean {
-  return isRemote || isWSL2();
+  return isRemote || isWSL2Sync();
 }
 
 function buildAuthUrl(params: { challenge: string; state: string }): string {
@@ -420,37 +397,19 @@ const antigravityPlugin = {
                 progress: spin,
               });
 
-              const profileId = `google-antigravity:${result.email ?? "default"}`;
-              return {
-                profiles: [
-                  {
-                    profileId,
-                    credential: {
-                      type: "oauth",
-                      provider: "google-antigravity",
-                      access: result.access,
-                      refresh: result.refresh,
-                      expires: result.expires,
-                      email: result.email,
-                      projectId: result.projectId,
-                    },
-                  },
-                ],
-                configPatch: {
-                  agents: {
-                    defaults: {
-                      models: {
-                        [DEFAULT_MODEL]: {},
-                      },
-                    },
-                  },
-                },
+              return buildOauthProviderAuthResult({
+                providerId: "google-antigravity",
                 defaultModel: DEFAULT_MODEL,
+                access: result.access,
+                refresh: result.refresh,
+                expires: result.expires,
+                email: result.email,
+                credentialExtra: { projectId: result.projectId },
                 notes: [
                   "Antigravity uses Google Cloud project quotas.",
                   "Enable Gemini for Google Cloud on your project if requests fail.",
                 ],
-              };
+              });
             } catch (err) {
               spin.stop("Antigravity OAuth failed");
               throw err;

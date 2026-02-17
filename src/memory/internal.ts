@@ -246,6 +246,27 @@ export function chunkMarkdown(
   return chunks;
 }
 
+/**
+ * Remap chunk startLine/endLine from content-relative positions to original
+ * source file positions using a lineMap.  Each entry in lineMap gives the
+ * 1-indexed source line for the corresponding 0-indexed content line.
+ *
+ * This is used for session JSONL files where buildSessionEntry() flattens
+ * messages into a plain-text string before chunking.  Without remapping the
+ * stored line numbers would reference positions in the flattened text rather
+ * than the original JSONL file.
+ */
+export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undefined): void {
+  if (!lineMap || lineMap.length === 0) {
+    return;
+  }
+  for (const chunk of chunks) {
+    // startLine/endLine are 1-indexed; lineMap is 0-indexed by content line
+    chunk.startLine = lineMap[chunk.startLine - 1] ?? chunk.startLine;
+    chunk.endLine = lineMap[chunk.endLine - 1] ?? chunk.endLine;
+  }
+}
+
 export function parseEmbedding(raw: string): number[] {
   try {
     const parsed = JSON.parse(raw) as number[];
