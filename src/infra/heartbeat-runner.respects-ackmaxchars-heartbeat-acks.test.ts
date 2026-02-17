@@ -201,7 +201,7 @@ describe("resolveHeartbeatIntervalMs", () => {
     });
   });
 
-  it("strips responsePrefix before detecting HEARTBEAT_OK and skips telegram delivery", async () => {
+  it("strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createHeartbeatConfig({
         tmpDir,
@@ -226,7 +226,7 @@ describe("resolveHeartbeatIntervalMs", () => {
         lastTo: "12345",
       });
 
-      replySpy.mockResolvedValue({ text: "[openclaw] HEARTBEAT_OK" });
+      replySpy.mockResolvedValue({ text: "[openclaw] HEARTBEAT_OK all good" });
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
@@ -238,6 +238,51 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not strip alphanumeric responsePrefix from larger words", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: {
+          every: "5m",
+          target: "telegram",
+        },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        messages: { responsePrefix: "Hi" },
+      });
+
+      await seedMainSession(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "History check complete" });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "12345",
+        "History check complete",
+        expect.any(Object),
+      );
     });
   });
 
