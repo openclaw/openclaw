@@ -662,6 +662,23 @@ export const SignalAccountSchemaBase = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+            tools: ToolPolicySchema,
+            toolsBySender: ToolPolicyBySenderSchema,
+            skills: z.array(z.string()).optional(),
+            enabled: z.boolean().optional(),
+            allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+            systemPrompt: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      )
+      .optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),

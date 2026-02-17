@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat: allow suppressing tool error warning payloads during heartbeat runs via a new heartbeat config flag. (#18497) Thanks @thewilloftheshadow.
 - Heartbeat: include sender metadata (From/To/Provider) in heartbeat prompts so model context matches the delivery target. (#18532) Thanks @dinakars777.
 - Heartbeat/Telegram: strip configured `responsePrefix` before heartbeat ack detection (with boundary-safe matching) so prefixed `HEARTBEAT_OK` replies are correctly suppressed instead of leaking into DMs. (#18602)
+- Signal: add per-group configuration schema (`channels.signal.groups`) matching Telegram/iMessage/WhatsApp patterns, so `requireMention`, `tools`, `skills`, `allowFrom`, `enabled`, and `systemPrompt` can be set per group. (#18635)
 
 ## 2026.2.15
 
