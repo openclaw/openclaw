@@ -188,6 +188,7 @@ export const MessagesSchema = z
       .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
+    mediaLocalRoots: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
