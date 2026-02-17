@@ -1,10 +1,17 @@
-import { describe, it, expect, vi } from "vitest";
 import { ChannelType } from "@buape/carbon";
+import { describe, it, expect, vi } from "vitest";
 import { maybeCreateDiscordAutoThread } from "./threading.js";
 
 describe("maybeCreateDiscordAutoThread", () => {
-  const mockClient = { rest: { post: vi.fn(), get: vi.fn() } } as any;
-  const mockMessage = { id: "msg1", timestamp: "123" } as any;
+  const postMock = vi.fn();
+  const getMock = vi.fn();
+  const mockClient = {
+    rest: { post: postMock, get: getMock },
+  } as unknown as Parameters<typeof maybeCreateDiscordAutoThread>[0]["client"];
+  const mockMessage = {
+    id: "msg1",
+    timestamp: "123",
+  } as unknown as Parameters<typeof maybeCreateDiscordAutoThread>[0]["message"];
 
   it("skips auto-thread if channelType is GuildForum", async () => {
     const result = await maybeCreateDiscordAutoThread({
@@ -18,7 +25,7 @@ describe("maybeCreateDiscordAutoThread", () => {
       combinedBody: "test",
     });
     expect(result).toBeUndefined();
-    expect(mockClient.rest.post).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
   });
 
   it("skips auto-thread if channelType is GuildMedia", async () => {
@@ -33,11 +40,11 @@ describe("maybeCreateDiscordAutoThread", () => {
       combinedBody: "test",
     });
     expect(result).toBeUndefined();
-    expect(mockClient.rest.post).not.toHaveBeenCalled();
+    expect(postMock).not.toHaveBeenCalled();
   });
 
   it("creates auto-thread if channelType is GuildText", async () => {
-    mockClient.rest.post.mockResolvedValueOnce({ id: "thread1" });
+    postMock.mockResolvedValueOnce({ id: "thread1" });
     const result = await maybeCreateDiscordAutoThread({
       client: mockClient,
       message: mockMessage,
@@ -49,6 +56,6 @@ describe("maybeCreateDiscordAutoThread", () => {
       combinedBody: "test",
     });
     expect(result).toBe("thread1");
-    expect(mockClient.rest.post).toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalled();
   });
 });

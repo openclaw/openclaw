@@ -8,10 +8,7 @@ vi.mock("../../config/sessions.js", () => ({
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
-import {
-  loadSessionStore,
-  evaluateSessionFreshness,
-} from "../../config/sessions.js";
+import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
 describe("resolveCronSession", () => {
@@ -153,8 +150,8 @@ describe("resolveCronSession", () => {
         "webhook:stable-key": {
           updatedAt: Date.now() - 1000,
           modelOverride: "some-model",
-        } as any,
-      });
+        },
+      } as ReturnType<typeof loadSessionStore>);
       vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
 
       const result = resolveCronSession({

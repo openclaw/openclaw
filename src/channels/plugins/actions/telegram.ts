@@ -235,31 +235,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       );
     }
 
-    if (action === "poll") {
-      const to = readStringParam(params, "to", { required: true });
-      const question =
-        readStringParam(params, "pollQuestion") ??
-        readStringParam(params, "question", { required: true });
-      const options =
-        readStringArrayParam(params, "pollOption") ?? readStringArrayParam(params, "options");
-      const threadId = readStringParam(params, "threadId");
-      const replyTo = readStringParam(params, "replyTo");
-      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
-      return await handleTelegramAction(
-        {
-          action: "sendPoll",
-          to,
-          question,
-          options,
-          replyTo: replyTo != null ? Number(replyTo) : undefined,
-          threadId: threadId != null ? Number(threadId) : undefined,
-          silent,
-          accountId: accountId ?? undefined,
-        },
-        cfg,
-      );
-    }
-
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
   },
 };

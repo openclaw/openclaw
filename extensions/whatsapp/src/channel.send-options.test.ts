@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { whatsappPlugin } from "./channel.js";
 
 // Mock runtime
-const mockSendMessageWhatsApp = vi.fn().mockResolvedValue({ messageId: "123", toJid: "123@s.whatsapp.net" });
+const mockSendMessageWhatsApp = vi
+  .fn()
+  .mockResolvedValue({ messageId: "123", toJid: "123@s.whatsapp.net" });
 
 vi.mock("./runtime.js", () => ({
   getWhatsAppRuntime: () => ({
@@ -35,7 +37,7 @@ describe("whatsappPlugin.outbound.sendText", () => {
       "http://example.com",
       expect.objectContaining({
         linkPreview: false,
-      })
+      }),
     );
   });
 
@@ -50,7 +52,7 @@ describe("whatsappPlugin.outbound.sendText", () => {
       "hello",
       expect.objectContaining({
         linkPreview: undefined,
-      })
+      }),
     );
   });
 });

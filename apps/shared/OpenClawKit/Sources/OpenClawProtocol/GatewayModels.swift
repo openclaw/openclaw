@@ -2757,6 +2757,144 @@ public struct ChatEvent: Codable, Sendable {
     }
 }
 
+public struct MeshPlanParams: Codable, Sendable {
+    public let goal: String
+    public let steps: [[String: AnyCodable]]?
+
+    public init(
+        goal: String,
+        steps: [[String: AnyCodable]]?
+    ) {
+        self.goal = goal
+        self.steps = steps
+    }
+    private enum CodingKeys: String, CodingKey {
+        case goal
+        case steps
+    }
+}
+
+public struct MeshPlanAutoParams: Codable, Sendable {
+    public let goal: String
+    public let maxsteps: Int?
+    public let agentid: String?
+    public let sessionkey: String?
+    public let thinking: String?
+    public let timeoutms: Int?
+    public let lane: String?
+
+    public init(
+        goal: String,
+        maxsteps: Int?,
+        agentid: String?,
+        sessionkey: String?,
+        thinking: String?,
+        timeoutms: Int?,
+        lane: String?
+    ) {
+        self.goal = goal
+        self.maxsteps = maxsteps
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.thinking = thinking
+        self.timeoutms = timeoutms
+        self.lane = lane
+    }
+    private enum CodingKeys: String, CodingKey {
+        case goal
+        case maxsteps = "maxSteps"
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case thinking
+        case timeoutms = "timeoutMs"
+        case lane
+    }
+}
+
+public struct MeshWorkflowPlan: Codable, Sendable {
+    public let planid: String
+    public let goal: String
+    public let createdat: Int
+    public let steps: [[String: AnyCodable]]
+
+    public init(
+        planid: String,
+        goal: String,
+        createdat: Int,
+        steps: [[String: AnyCodable]]
+    ) {
+        self.planid = planid
+        self.goal = goal
+        self.createdat = createdat
+        self.steps = steps
+    }
+    private enum CodingKeys: String, CodingKey {
+        case planid = "planId"
+        case goal
+        case createdat = "createdAt"
+        case steps
+    }
+}
+
+public struct MeshRunParams: Codable, Sendable {
+    public let plan: MeshWorkflowPlan
+    public let continueonerror: Bool?
+    public let maxparallel: Int?
+    public let defaultsteptimeoutms: Int?
+    public let lane: String?
+
+    public init(
+        plan: MeshWorkflowPlan,
+        continueonerror: Bool?,
+        maxparallel: Int?,
+        defaultsteptimeoutms: Int?,
+        lane: String?
+    ) {
+        self.plan = plan
+        self.continueonerror = continueonerror
+        self.maxparallel = maxparallel
+        self.defaultsteptimeoutms = defaultsteptimeoutms
+        self.lane = lane
+    }
+    private enum CodingKeys: String, CodingKey {
+        case plan
+        case continueonerror = "continueOnError"
+        case maxparallel = "maxParallel"
+        case defaultsteptimeoutms = "defaultStepTimeoutMs"
+        case lane
+    }
+}
+
+public struct MeshStatusParams: Codable, Sendable {
+    public let runid: String
+
+    public init(
+        runid: String
+    ) {
+        self.runid = runid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+    }
+}
+
+public struct MeshRetryParams: Codable, Sendable {
+    public let runid: String
+    public let stepids: [String]?
+
+    public init(
+        runid: String,
+        stepids: [String]?
+    ) {
+        self.runid = runid
+        self.stepids = stepids
+    }
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case stepids = "stepIds"
+    }
+}
+
 public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?
     public let note: String?

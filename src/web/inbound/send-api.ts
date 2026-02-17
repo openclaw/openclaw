@@ -1,4 +1,8 @@
-import type { AnyMessageContent, MiscMessageGenerationOptions, WAPresence } from "@whiskeysockets/baileys";
+import type {
+  AnyMessageContent,
+  MiscMessageGenerationOptions,
+  WAPresence,
+} from "@whiskeysockets/baileys";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
@@ -67,10 +71,14 @@ export function createWebSendApi(params: {
       } else {
         payload = { text };
       }
-      const miscOptions: MiscMessageGenerationOptions = {
-        linkPreview: sendOptions?.linkPreview === false ? null : undefined,
-      };
-      const result = await params.sock.sendMessage(jid, payload, miscOptions);
+      let result;
+      if (sendOptions?.linkPreview === false) {
+        // Baileys types have changed across releases; keep backward-compatible runtime behavior.
+        const miscOptions = { linkPreview: null } as unknown as MiscMessageGenerationOptions;
+        result = await params.sock.sendMessage(jid, payload, miscOptions);
+      } else {
+        result = await params.sock.sendMessage(jid, payload);
+      }
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);

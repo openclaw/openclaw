@@ -36,6 +36,7 @@ function createActionIO(params: { action: DaemonAction; json: boolean }) {
     message?: string;
     error?: string;
     hints?: string[];
+    warnings?: string[];
     service?: {
       label: string;
       loaded: boolean;

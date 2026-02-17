@@ -414,7 +414,6 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return { message: current };
   }
 
-
   // =========================================================================
   // Message Write Hooks
   // =========================================================================

@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 
 // Mock streamSimple for testing
@@ -13,7 +12,6 @@ vi.mock("@mariozechner/pi-ai", () => ({
 
 describe("extra-params: Z.AI tool_stream support", () => {
   it("should inject tool_stream=true for zai provider by default", () => {
-    const capturedPayloads: unknown[] = [];
     const mockStreamFn: StreamFn = vi.fn((model, context, options) => {
       // Capture the payload that would be sent
       options?.onPayload?.({ model: model.id, messages: [] });
@@ -24,7 +22,7 @@ describe("extra-params: Z.AI tool_stream support", () => {
           content: [{ type: "text", text: "ok" }],
           stopReason: "stop",
         }),
-      } as any;
+      } as unknown as ReturnType<StreamFn>;
     });
 
     const agent = { streamFn: mockStreamFn };
@@ -34,7 +32,12 @@ describe("extra-params: Z.AI tool_stream support", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg as any, "zai", "glm-5");
+    applyExtraParamsToAgent(
+      agent,
+      cfg as unknown as Parameters<typeof applyExtraParamsToAgent>[1],
+      "zai",
+      "glm-5",
+    );
 
     // The streamFn should be wrapped
     expect(agent.streamFn).toBeDefined();
@@ -42,33 +45,44 @@ describe("extra-params: Z.AI tool_stream support", () => {
   });
 
   it("should not inject tool_stream for non-zai providers", () => {
-    const mockStreamFn: StreamFn = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn().mockResolvedValue({
-        role: "assistant",
-        content: [{ type: "text", text: "ok" }],
-        stopReason: "stop",
-      }),
-    } as any));
+    const mockStreamFn: StreamFn = vi.fn(
+      () =>
+        ({
+          push: vi.fn(),
+          result: vi.fn().mockResolvedValue({
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }],
+            stopReason: "stop",
+          }),
+        }) as unknown as ReturnType<StreamFn>,
+    );
 
     const agent = { streamFn: mockStreamFn };
     const cfg = {};
 
-    applyExtraParamsToAgent(agent, cfg as any, "anthropic", "claude-opus-4-6");
+    applyExtraParamsToAgent(
+      agent,
+      cfg as unknown as Parameters<typeof applyExtraParamsToAgent>[1],
+      "anthropic",
+      "claude-opus-4-6",
+    );
 
     // Should remain unchanged (except for OpenAI wrapper)
     expect(agent.streamFn).toBeDefined();
   });
 
   it("should allow disabling tool_stream via params", () => {
-    const mockStreamFn: StreamFn = vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn().mockResolvedValue({
-        role: "assistant",
-        content: [{ type: "text", text: "ok" }],
-        stopReason: "stop",
-      }),
-    } as any));
+    const mockStreamFn: StreamFn = vi.fn(
+      () =>
+        ({
+          push: vi.fn(),
+          result: vi.fn().mockResolvedValue({
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }],
+            stopReason: "stop",
+          }),
+        }) as unknown as ReturnType<StreamFn>,
+    );
 
     const agent = { streamFn: mockStreamFn };
     const cfg = {
@@ -85,7 +99,12 @@ describe("extra-params: Z.AI tool_stream support", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg as any, "zai", "glm-5");
+    applyExtraParamsToAgent(
+      agent,
+      cfg as unknown as Parameters<typeof applyExtraParamsToAgent>[1],
+      "zai",
+      "glm-5",
+    );
 
     // The tool_stream wrapper should be applied but with enabled=false
     // In this case, it should just return the underlying streamFn

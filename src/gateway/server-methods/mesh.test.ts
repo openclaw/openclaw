@@ -73,7 +73,10 @@ describe("mesh handlers", () => {
   it("runs steps in DAG order and supports retrying failed steps", async () => {
     const runState = new Map<string, "ok" | "error">();
     mocks.agent.mockImplementation(
-      (opts: { params: { idempotencyKey: string }; respond: (ok: boolean, payload?: unknown) => void }) => {
+      (opts: {
+        params: { idempotencyKey: string };
+        respond: (ok: boolean, payload?: unknown) => void;
+      }) => {
         const agentRunId = `agent-${opts.params.idempotencyKey}`;
         runState.set(agentRunId, "ok");
         if (opts.params.idempotencyKey.includes(":review:1")) {
@@ -120,7 +123,10 @@ describe("mesh handlers", () => {
 
     // Make subsequent retries succeed
     mocks.agent.mockImplementation(
-      (opts: { params: { idempotencyKey: string }; respond: (ok: boolean, payload?: unknown) => void }) => {
+      (opts: {
+        params: { idempotencyKey: string };
+        respond: (ok: boolean, payload?: unknown) => void;
+      }) => {
         const agentRunId = `agent-${opts.params.idempotencyKey}`;
         runState.set(agentRunId, "ok");
         opts.respond(true, { runId: agentRunId, status: "accepted" });

@@ -526,8 +526,9 @@ describe("gateway mesh.plan.auto scope handling", () => {
   it("allows operator.write clients for mesh.plan.auto", async () => {
     const { handleGatewayRequest } = await import("../server-methods.js");
     const respond = vi.fn();
-    const handler = vi.fn(({ respond: send }: { respond: (ok: boolean, payload?: unknown) => void }) =>
-      send(true, { ok: true }),
+    const handler = vi.fn(
+      ({ respond: send }: { respond: (ok: boolean, payload?: unknown) => void }) =>
+        send(true, { ok: true }),
     );
 
     await handleGatewayRequest({
