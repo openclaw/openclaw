@@ -39,6 +39,14 @@ describe("isSafeRegexPattern", () => {
       expect(isSafeRegexPattern("((a{2,})?)*")).toBe(false);
     });
 
+    it("rejects triple-nested groups (((a+)))+", () => {
+      expect(isSafeRegexPattern("(((a+)))+")).toBe(false);
+    });
+
+    it("rejects deeply nested groups ((((a+))))*", () => {
+      expect(isSafeRegexPattern("((((a+))))*")).toBe(false);
+    });
+
     it("rejects patterns exceeding 500 characters", () => {
       const longPattern = "a".repeat(501);
       expect(isSafeRegexPattern(longPattern)).toBe(false);

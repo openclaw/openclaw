@@ -39,6 +39,13 @@ export function isSafeRegexPattern(pattern: string): boolean {
     return false;
   }
 
+  // Detect deeply nested groups (3+ levels) with quantifiers: (((a+)))+
+  // Collapse consecutive closing parens to normalize nesting, then recheck
+  const collapsedPattern = pattern.replace(/\)+/g, ")");
+  if (nestedQuantifierRe.test(collapsedPattern) || nestedGroupsRe.test(collapsedPattern)) {
+    return false;
+  }
+
   // Detect overlapping alternations with quantifiers: (a|a)+, (ab|ab)+
   const overlappingAltRe = /\(([^|)]+)\|\1[^)]*\)[+*]/;
   if (overlappingAltRe.test(pattern)) {
