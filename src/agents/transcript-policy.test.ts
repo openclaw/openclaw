@@ -30,6 +30,33 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict9");
   });
 
+
+  it("preserves thinking block signatures for direct Anthropic API", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("preserves thinking block signatures for Antigravity Claude models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google-antigravity",
+      modelId: "claude-3-7-sonnet@20250219",
+      modelApi: "google-antigravity",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("does not preserve signatures for non-Anthropic non-Antigravity models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
   it("disables sanitizeToolCallIds for OpenAI provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",
