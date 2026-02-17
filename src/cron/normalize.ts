@@ -81,6 +81,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "directcommand") {
+    next.kind = "directCommand";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -92,6 +94,12 @@ function coercePayload(payload: UnknownRecord) {
       typeof next.thinking === "string" ||
       typeof next.timeoutSeconds === "number" ||
       typeof next.allowUnsafeExternalContent === "boolean";
+    const hasDirectCommandHint =
+      typeof next.command === "string" ||
+      Array.isArray(next.args) ||
+      typeof next.cwd === "string" ||
+      (next.env && typeof next.env === "object" && !Array.isArray(next.env)) ||
+      typeof next.maxOutputBytes === "number";
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
@@ -99,6 +107,8 @@ function coercePayload(payload: UnknownRecord) {
     } else if (hasAgentTurnHint) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
+    } else if (hasDirectCommandHint) {
+      next.kind = "directCommand";
     }
   }
   if (typeof next.message === "string") {
@@ -137,6 +147,60 @@ function coercePayload(payload: UnknownRecord) {
       delete next.thinking;
     }
   }
+  if ("command" in next) {
+    if (typeof next.command === "string") {
+      const trimmed = next.command.trim();
+      if (trimmed) {
+        next.command = trimmed;
+      } else {
+        delete next.command;
+      }
+    } else {
+      delete next.command;
+    }
+  }
+  if ("args" in next) {
+    if (Array.isArray(next.args)) {
+      const args = next.args
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (args.length > 0) {
+        next.args = args;
+      } else {
+        delete next.args;
+      }
+    } else {
+      delete next.args;
+    }
+  }
+  if ("cwd" in next) {
+    if (typeof next.cwd === "string") {
+      const trimmed = next.cwd.trim();
+      if (trimmed) {
+        next.cwd = trimmed;
+      } else {
+        delete next.cwd;
+      }
+    } else {
+      delete next.cwd;
+    }
+  }
+  if ("env" in next) {
+    if (next.env && typeof next.env === "object" && !Array.isArray(next.env)) {
+      const envEntries = Object.entries(next.env as Record<string, unknown>)
+        .filter((entry) => typeof entry[1] === "string")
+        .map(([key, value]) => [key.trim(), value] as const)
+        .filter(([key]) => key.length > 0);
+      if (envEntries.length > 0) {
+        next.env = Object.fromEntries(envEntries);
+      } else {
+        delete next.env;
+      }
+    } else {
+      delete next.env;
+    }
+  }
   if ("timeoutSeconds" in next) {
     if (typeof next.timeoutSeconds === "number" && Number.isFinite(next.timeoutSeconds)) {
       next.timeoutSeconds = Math.max(0, Math.floor(next.timeoutSeconds));
@@ -149,6 +213,13 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if ("maxOutputBytes" in next) {
+    if (typeof next.maxOutputBytes === "number" && Number.isFinite(next.maxOutputBytes)) {
+      next.maxOutputBytes = Math.max(1, Math.floor(next.maxOutputBytes));
+    } else {
+      delete next.maxOutputBytes;
+    }
   }
   return next;
 }
@@ -416,7 +487,7 @@ export function normalizeCronJobInput(
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
       }
-      if (kind === "agentTurn") {
+      if (kind === "agentTurn" || kind === "directCommand") {
         next.sessionTarget = "isolated";
       }
     }

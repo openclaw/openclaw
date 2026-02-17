@@ -19,6 +19,21 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
   );
 }
 
+function cronDirectCommandPayloadSchema(params: { command: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("directCommand"),
+      command: params.command,
+      args: Type.Optional(Type.Array(Type.String())),
+      cwd: Type.Optional(Type.String()),
+      env: Type.Optional(Type.Record(Type.String(), Type.String())),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+      maxOutputBytes: Type.Optional(Type.Integer({ minimum: 1 })),
+    },
+    { additionalProperties: false },
+  );
+}
+
 export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
@@ -55,6 +70,7 @@ export const CronPayloadSchema = Type.Union([
     { additionalProperties: false },
   ),
   cronAgentTurnPayloadSchema({ message: NonEmptyString }),
+  cronDirectCommandPayloadSchema({ command: NonEmptyString }),
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -66,6 +82,7 @@ export const CronPayloadPatchSchema = Type.Union([
     { additionalProperties: false },
   ),
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
+  cronDirectCommandPayloadSchema({ command: Type.Optional(NonEmptyString) }),
 ]);
 
 const CronDeliverySharedProperties = {

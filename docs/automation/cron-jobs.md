@@ -166,16 +166,28 @@ your main chat history.
 
 ### Payload shapes (what runs)
 
-Two payload kinds are supported:
+Three payload kinds are supported:
 
 - `systemEvent`: main-session only, routed through the heartbeat prompt.
 - `agentTurn`: isolated-session only, runs a dedicated agent turn.
+- `directCommand`: isolated-session only, runs a direct process command without an LLM turn.
 
 Common `agentTurn` fields:
 
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
+
+Common `directCommand` fields:
+
+- `command`: required executable path or command name.
+- `args`: optional argv list.
+- `cwd`: optional working directory override.
+- `env`: optional environment map (`{ "NAME": "value" }`).
+- `timeoutSeconds`: optional timeout override.
+- `maxOutputBytes`: optional output cap for captured stdout/stderr.
+
+`directCommand` still uses `sessionTarget: "isolated"`; no separate session target is required.
 
 Delivery config:
 
