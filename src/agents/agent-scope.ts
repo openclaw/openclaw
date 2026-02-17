@@ -189,9 +189,15 @@ export function resolveAgentContextPruning(
 ): AgentContextPruningConfig | undefined {
   const perAgent = agentId ? resolveAgentConfig(cfg, agentId)?.contextPruning : undefined;
   const defaults = cfg?.agents?.defaults?.contextPruning;
-  if (!perAgent && !defaults) return undefined;
-  if (!perAgent) return defaults;
-  if (!defaults) return perAgent;
+  if (!perAgent && !defaults) {
+    return undefined;
+  }
+  if (!perAgent) {
+    return defaults;
+  }
+  if (!defaults) {
+    return perAgent;
+  }
   return { ...defaults, ...perAgent };
 }
 
