@@ -88,13 +88,35 @@ export const BrowserToolSchema = Type.Object({
   targetUrl: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
-  maxChars: Type.Optional(Type.Number()),
-  mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
-  snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
+  maxChars: Type.Optional(
+    Type.Number({
+      description:
+        "Max characters for the snapshot text. Default ~10 000. Increase for more detail.",
+    }),
+  ),
+  mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES, {
+    description:
+      "Snapshot mode. 'efficient' returns a compact ARIA role-tree view (good for large pages).",
+  }),
+  snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS, {
+    description: "Snapshot format: 'ai' (default, text with refs) or 'aria' (structured nodes).",
+  }),
   refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
-  interactive: Type.Optional(Type.Boolean()),
-  compact: Type.Optional(Type.Boolean()),
-  depth: Type.Optional(Type.Number()),
+  interactive: Type.Optional(
+    Type.Boolean({
+      description: "If true, only show interactive elements (buttons, inputs, links).",
+    }),
+  ),
+  compact: Type.Optional(
+    Type.Boolean({
+      description: "If true, use compact formatting to reduce snapshot size.",
+    }),
+  ),
+  depth: Type.Optional(
+    Type.Number({
+      description: "Max tree depth for role snapshots.",
+    }),
+  ),
   selector: Type.Optional(Type.String()),
   frame: Type.Optional(Type.String()),
   labels: Type.Optional(Type.Boolean()),
