@@ -166,7 +166,10 @@ function New-OrionConfig {
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     }
 
-    $config = @'
+    # Generate a random gateway auth token
+    $gwToken = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+
+    $config = @"
 {
   "env": {
     "vars": {
@@ -194,6 +197,12 @@ function New-OrionConfig {
       }
     }
   },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "token": "$gwToken"
+    }
+  },
   "agents": {
     "defaults": {
       "model": {
@@ -202,10 +211,11 @@ function New-OrionConfig {
     }
   }
 }
-'@
+"@
 
     Set-Content -Path $configFile -Value $config -Encoding UTF8
     Write-Ok "Config written to $configFile"
+    Write-Ok "Gateway token: $gwToken"
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
