@@ -11,20 +11,14 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
-const sendPollTelegram = vi.fn(async () => ({
-  messageId: "999",
-  chatId: "123",
-  pollId: "poll-1",
-}));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
-  reactMessageTelegram,
-  sendMessageTelegram,
-  sendStickerTelegram,
-  sendPollTelegram,
-  deleteMessageTelegram,
+  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
+  sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
+  sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
+  deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -55,7 +49,6 @@ describe("handleTelegramAction", () => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
-    sendPollTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
@@ -365,30 +358,6 @@ describe("handleTelegramAction", () => {
     expect(deleteMessageTelegram).toHaveBeenCalledWith(
       "123",
       456,
-      expect.objectContaining({ token: "tok" }),
-    );
-  });
-
-  it("sends a poll", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
-        action: "poll",
-        to: "123",
-        question: "Ready?",
-        options: ["Yes", "No"],
-      },
-      cfg,
-    );
-    expect(sendPollTelegram).toHaveBeenCalledWith(
-      "123",
-      expect.objectContaining({
-        question: "Ready?",
-        options: ["Yes", "No"],
-        maxSelections: 1,
-      }),
       expect.objectContaining({ token: "tok" }),
     );
   });
