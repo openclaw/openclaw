@@ -54,7 +54,10 @@ export async function loadChatHistory(state: ChatState) {
     }
     state.lastError = String(err);
   } finally {
-    state.chatLoading = false;
+    // Only clear loading for this session; avoid stale response clearing B's loading when A completes.
+    if (state.sessionKey === requestedSessionKey) {
+      state.chatLoading = false;
+    }
   }
 }
 
