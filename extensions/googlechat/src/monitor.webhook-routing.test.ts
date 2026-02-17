@@ -16,7 +16,10 @@ function createWebhookRequest(params: {
   payload: unknown;
   path?: string;
 }): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & { destroyed?: boolean; destroy: () => void };
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed?: boolean;
+    destroy: (error?: Error) => IncomingMessage;
+  };
   req.method = "POST";
   req.url = params.path ?? "/googlechat";
   req.headers = {
@@ -26,6 +29,7 @@ function createWebhookRequest(params: {
   req.destroyed = false;
   req.destroy = () => {
     req.destroyed = true;
+    return req;
   };
 
   void Promise.resolve().then(() => {
