@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
+import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
@@ -318,6 +318,43 @@ describe("channel-health-monitor", () => {
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
+    monitor.stop();
+  });
+
+  it("runs checks single-flight when restart work is still in progress", async () => {
+    let releaseStart: (() => void) | null = null;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const manager = createMockChannelManager({
+      getRuntimeSnapshot: vi.fn(() =>
+        snapshotWith({
+          telegram: {
+            default: {
+              running: false,
+              enabled: true,
+              configured: true,
+              lastError: "stopped",
+            },
+          },
+        }),
+      ),
+      startChannel: vi.fn(async () => {
+        await startGate;
+      }),
+    });
+    const monitor = startChannelHealthMonitor({
+      channelManager: manager,
+      checkIntervalMs: 100,
+      startupGraceMs: 0,
+      cooldownCycles: 0,
+    });
+    await vi.advanceTimersByTimeAsync(120);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    releaseStart?.();
+    await Promise.resolve();
     monitor.stop();
   });
 
