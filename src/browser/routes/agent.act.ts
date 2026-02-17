@@ -1,6 +1,5 @@
 import type { BrowserFormField } from "../client-actions-core.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import type { BrowserRouteRegistrar } from "./types.js";
 import {
   type ActKind,
   isActKind,
@@ -14,6 +13,13 @@ import {
   resolveProfileContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
+import {
+  DEFAULT_DOWNLOAD_DIR,
+  DEFAULT_UPLOAD_DIR,
+  resolvePathWithinRoot,
+  resolvePathsWithinRoot,
+} from "./path-output.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserAgentActRoutes(
@@ -306,12 +312,18 @@ export function registerBrowserAgentActRoutes(
             return jsonError(res, 400, "fn is required");
           }
           const ref = toStringOrEmpty(body.ref) || undefined;
-          const result = await pw.evaluateViaPlaywright({
+          const evalTimeoutMs = toNumber(body.timeoutMs);
+          const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
             cdpUrl,
             targetId: tab.targetId,
             fn,
             ref,
-          });
+            signal: req.signal,
+          };
+          if (evalTimeoutMs !== undefined) {
+            evalRequest.timeoutMs = evalTimeoutMs;
+          }
+          const result = await pw.evaluateViaPlaywright(evalRequest);
           return res.json({
             ok: true,
             targetId: tab.targetId,
@@ -348,6 +360,17 @@ export function registerBrowserAgentActRoutes(
       return jsonError(res, 400, "paths are required");
     }
     try {
+      const uploadPathsResult = resolvePathsWithinRoot({
+        rootDir: DEFAULT_UPLOAD_DIR,
+        requestedPaths: paths,
+        scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+      });
+      if (!uploadPathsResult.ok) {
+        res.status(400).json({ error: uploadPathsResult.error });
+        return;
+      }
+      const resolvedPaths = uploadPathsResult.paths;
+
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "file chooser hook");
       if (!pw) {
@@ -362,13 +385,13 @@ export function registerBrowserAgentActRoutes(
           targetId: tab.targetId,
           inputRef,
           element,
-          paths,
+          paths: resolvedPaths,
         });
       } else {
         await pw.armFileUploadViaPlaywright({
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
-          paths,
+          paths: resolvedPaths,
           timeoutMs: timeoutMs ?? undefined,
         });
         if (ref) {
@@ -424,7 +447,7 @@ export function registerBrowserAgentActRoutes(
     }
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
-    const out = toStringOrEmpty(body.path) || undefined;
+    const out = toStringOrEmpty(body.path) || "";
     const timeoutMs = toNumber(body.timeoutMs);
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
@@ -432,10 +455,23 @@ export function registerBrowserAgentActRoutes(
       if (!pw) {
         return;
       }
+      let downloadPath: string | undefined;
+      if (out.trim()) {
+        const downloadPathResult = resolvePathWithinRoot({
+          rootDir: DEFAULT_DOWNLOAD_DIR,
+          requestedPath: out,
+          scopeLabel: "downloads directory",
+        });
+        if (!downloadPathResult.ok) {
+          res.status(400).json({ error: downloadPathResult.error });
+          return;
+        }
+        downloadPath = downloadPathResult.path;
+      }
       const result = await pw.waitForDownloadViaPlaywright({
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
-        path: out,
+        path: downloadPath,
         timeoutMs: timeoutMs ?? undefined,
       });
       res.json({ ok: true, targetId: tab.targetId, download: result });
@@ -461,6 +497,15 @@ export function registerBrowserAgentActRoutes(
       return jsonError(res, 400, "path is required");
     }
     try {
+      const downloadPathResult = resolvePathWithinRoot({
+        rootDir: DEFAULT_DOWNLOAD_DIR,
+        requestedPath: out,
+        scopeLabel: "downloads directory",
+      });
+      if (!downloadPathResult.ok) {
+        res.status(400).json({ error: downloadPathResult.error });
+        return;
+      }
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "download");
       if (!pw) {
@@ -470,7 +515,7 @@ export function registerBrowserAgentActRoutes(
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         ref,
-        path: out,
+        path: downloadPathResult.path,
         timeoutMs: timeoutMs ?? undefined,
       });
       res.json({ ok: true, targetId: tab.targetId, download: result });

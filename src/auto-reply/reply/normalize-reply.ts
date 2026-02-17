@@ -1,7 +1,7 @@
-import type { ReplyPayload } from "../types.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
@@ -62,7 +62,7 @@ export function normalizeReplyPayload(
   }
 
   if (text) {
-    text = sanitizeUserFacingText(text);
+    text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");

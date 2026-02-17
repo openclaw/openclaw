@@ -300,4 +300,4 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 - [Tailscale integration](/gateway/tailscale) — full Tailscale docs
 - [Gateway configuration](/gateway/configuration) — all config options
 - [DigitalOcean guide](/platforms/digitalocean) — if you want paid + easier signup
-- [Hetzner guide](/platforms/hetzner) — Docker-based alternative
+- [Hetzner guide](/install/hetzner) — Docker-based alternative

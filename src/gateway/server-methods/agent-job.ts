@@ -7,7 +7,7 @@ let agentRunListenerStarted = false;
 
 type AgentRunSnapshot = {
   runId: string;
-  status: "ok" | "error";
+  status: "ok" | "error" | "timeout";
   startedAt?: number;
   endedAt?: number;
   error?: string;
@@ -55,7 +55,7 @@ function ensureAgentRunListener() {
     agentRunStarts.delete(evt.runId);
     recordAgentRunSnapshot({
       runId: evt.runId,
-      status: phase === "error" ? "error" : "ok",
+      status: phase === "error" ? "error" : evt.data?.aborted ? "timeout" : "ok",
       startedAt,
       endedAt,
       error,
@@ -118,7 +118,7 @@ export async function waitForAgentJob(params: {
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
       const snapshot: AgentRunSnapshot = {
         runId: evt.runId,
-        status: phase === "error" ? "error" : "ok",
+        status: phase === "error" ? "error" : evt.data?.aborted ? "timeout" : "ok",
         startedAt,
         endedAt,
         error,
@@ -127,7 +127,8 @@ export async function waitForAgentJob(params: {
       recordAgentRunSnapshot(snapshot);
       finish(snapshot);
     });
-    const timer = setTimeout(() => finish(null), Math.max(1, timeoutMs));
+    const timerDelayMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
+    const timer = setTimeout(() => finish(null), timerDelayMs);
   });
 }
 

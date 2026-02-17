@@ -61,6 +61,9 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC timeout.
 - `--json`: JSON output (recommended for scripting).
 
+Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+
 ## Notes
 
 - Token rotation returns a new token (sensitive). Treat it like a secret.

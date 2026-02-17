@@ -4,9 +4,8 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
-import lockfile from "proper-lockfile";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AuthProfileStore } from "./types.js";
+import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
@@ -14,6 +13,7 @@ import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import type { AuthProfileStore } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 
@@ -40,12 +40,7 @@ async function refreshOAuthTokenWithLock(params: {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
-  let release: (() => Promise<void>) | undefined;
-  try {
-    release = await lockfile.lock(authPath, {
-      ...AUTH_STORE_LOCK_OPTIONS,
-    });
-
+  return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
     const store = ensureAuthProfileStore(params.agentDir);
     const cred = store.profiles[params.profileId];
     if (!cred || cred.type !== "oauth") {
@@ -94,15 +89,7 @@ async function refreshOAuthTokenWithLock(params: {
     saveAuthProfileStore(store, params.agentDir);
 
     return result;
-  } finally {
-    if (release) {
-      try {
-        await release();
-      } catch {
-        // ignore unlock errors
-      }
-    }
-  }
+  });
 }
 
 async function tryResolveOAuthProfile(params: {
@@ -169,7 +156,11 @@ export async function resolveApiKeyForProfile(params: {
   }
 
   if (cred.type === "api_key") {
-    return { apiKey: cred.key, provider: cred.provider, email: cred.email };
+    const key = cred.key?.trim();
+    if (!key) {
+      return null;
+    }
+    return { apiKey: key, provider: cred.provider, email: cred.email };
   }
   if (cred.type === "token") {
     const token = cred.token?.trim();

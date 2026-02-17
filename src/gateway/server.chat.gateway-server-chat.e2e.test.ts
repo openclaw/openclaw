@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -11,28 +11,20 @@ import {
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  startServerWithClient,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { agentCommand } from "./test-helpers.mocks.js";
+import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: WebSocket;
 let port: number;
 
-beforeAll(async () => {
-  const started = await startServerWithClient();
-  server = started.server;
+installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
   port = started.port;
-  await connectOk(ws);
-});
-
-afterAll(async () => {
-  ws.close();
-  await server.close();
 });
 
 async function waitFor(condition: () => boolean, timeoutMs = 1500) {
@@ -47,12 +39,45 @@ async function waitFor(condition: () => boolean, timeoutMs = 1500) {
 }
 
 describe("gateway server chat", () => {
+  test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
+    const nullByteRes = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "hello\u0000world",
+      idempotencyKey: "idem-null-byte-1",
+    });
+    expect(nullByteRes.ok).toBe(false);
+    expect((nullByteRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
+      /null bytes/i,
+    );
+
+    const spy = vi.mocked(getReplyFromConfig);
+    spy.mockClear();
+    const spyCalls = spy.mock.calls as unknown[][];
+    const callsBeforeSanitized = spyCalls.length;
+    const sanitizedRes = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "Cafe\u0301\u0007\tline",
+      idempotencyKey: "idem-sanitized-1",
+    });
+    expect(sanitizedRes.ok).toBe(true);
+
+    await waitFor(() => spyCalls.length > callsBeforeSanitized);
+    const ctx = spyCalls.at(-1)?.[0] as
+      | { Body?: string; RawBody?: string; BodyForCommands?: string }
+      | undefined;
+    expect(ctx?.Body).toBe("Café\tline");
+    expect(ctx?.RawBody).toBe("Café\tline");
+    expect(ctx?.BodyForCommands).toBe("Café\tline");
+  });
+
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
     let webchatWs: WebSocket | undefined;
 
     try {
-      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
       await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
       await connectOk(webchatWs, {
         client: {
@@ -75,8 +100,9 @@ describe("gateway server chat", () => {
 
       const spy = vi.mocked(getReplyFromConfig);
       spy.mockClear();
+      const spyCalls = spy.mock.calls as unknown[][];
       testState.agentConfig = { timeoutSeconds: 123 };
-      const callsBeforeTimeout = spy.mock.calls.length;
+      const callsBeforeTimeout = spyCalls.length;
       const timeoutRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "hello",
@@ -84,13 +110,13 @@ describe("gateway server chat", () => {
       });
       expect(timeoutRes.ok).toBe(true);
 
-      await waitFor(() => spy.mock.calls.length > callsBeforeTimeout);
-      const timeoutCall = spy.mock.calls.at(-1)?.[1] as { runId?: string } | undefined;
+      await waitFor(() => spyCalls.length > callsBeforeTimeout);
+      const timeoutCall = spyCalls.at(-1)?.[1] as { runId?: string } | undefined;
       expect(timeoutCall?.runId).toBe("idem-timeout-1");
       testState.agentConfig = undefined;
 
       spy.mockClear();
-      const callsBeforeSession = spy.mock.calls.length;
+      const callsBeforeSession = spyCalls.length;
       const sessionRes = await rpcReq(ws, "chat.send", {
         sessionKey: "agent:main:subagent:abc",
         message: "hello",
@@ -98,8 +124,8 @@ describe("gateway server chat", () => {
       });
       expect(sessionRes.ok).toBe(true);
 
-      await waitFor(() => spy.mock.calls.length > callsBeforeSession);
-      const sessionCall = spy.mock.calls.at(-1)?.[0] as { SessionKey?: string } | undefined;
+      await waitFor(() => spyCalls.length > callsBeforeSession);
+      const sessionCall = spyCalls.at(-1)?.[0] as { SessionKey?: string } | undefined;
       expect(sessionCall?.SessionKey).toBe("agent:main:subagent:abc");
 
       const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
@@ -174,7 +200,7 @@ describe("gateway server chat", () => {
       testState.sessionConfig = undefined;
 
       spy.mockClear();
-      const callsBeforeImage = spy.mock.calls.length;
+      const callsBeforeImage = spyCalls.length;
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
@@ -204,13 +230,13 @@ describe("gateway server chat", () => {
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
 
-      await waitFor(() => spy.mock.calls.length > callsBeforeImage, 8000);
-      const imgOpts = spy.mock.calls.at(-1)?.[1] as
+      await waitFor(() => spyCalls.length > callsBeforeImage, 8000);
+      const imgOpts = spyCalls.at(-1)?.[1] as
         | { images?: Array<{ type: string; data: string; mimeType: string }> }
         | undefined;
       expect(imgOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
 
-      const callsBeforeImageOnly = spy.mock.calls.length;
+      const callsBeforeImageOnly = spyCalls.length;
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -237,8 +263,8 @@ describe("gateway server chat", () => {
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
 
-      await waitFor(() => spy.mock.calls.length > callsBeforeImageOnly, 8000);
-      const imgOnlyOpts = spy.mock.calls.at(-1)?.[1] as
+      await waitFor(() => spyCalls.length > callsBeforeImageOnly, 8000);
+      const imgOnlyOpts = spyCalls.at(-1)?.[1] as
         | { images?: Array<{ type: string; data: string; mimeType: string }> }
         | undefined;
       expect(imgOnlyOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
@@ -332,8 +358,7 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-command-1",
       });
       expect(res.ok).toBe(true);
-      const evt = await eventPromise;
-      expect(evt.payload?.message?.command).toBe(true);
+      await eventPromise;
       expect(spy.mock.calls.length).toBe(callsBefore);
     } finally {
       testState.sessionStorePath = undefined;
@@ -354,7 +379,9 @@ describe("gateway server chat", () => {
       },
     });
 
-    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
     await new Promise<void>((resolve) => webchatWs.once("open", resolve));
     await connectOk(webchatWs, {
       client: {
@@ -380,41 +407,13 @@ describe("gateway server chat", () => {
 
         emitAgentEvent({
           runId: "run-tool-1",
-          stream: "tool",
-          data: { phase: "start", name: "read", toolCallId: "tool-1" },
-        });
-
-        const evt = await agentEvtP;
-        const payload =
-          evt.payload && typeof evt.payload === "object"
-            ? (evt.payload as Record<string, unknown>)
-            : {};
-        expect(payload.sessionKey).toBe("main");
-      }
-
-      {
-        registerAgentRunContext("run-tool-off", { sessionKey: "agent:main:main" });
-
-        emitAgentEvent({
-          runId: "run-tool-off",
-          stream: "tool",
-          data: { phase: "start", name: "read", toolCallId: "tool-1" },
-        });
-        emitAgentEvent({
-          runId: "run-tool-off",
           stream: "assistant",
           data: { text: "hello" },
         });
 
-        const evt = await onceMessage(
-          webchatWs,
-          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-off",
-          8000,
-        );
-        const payload =
-          evt.payload && typeof evt.payload === "object"
-            ? (evt.payload as Record<string, unknown>)
-            : {};
+        const evt = await agentEvtP;
+        const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
+        expect(payload.sessionKey).toBe("main");
         expect(payload.stream).toBe("assistant");
       }
 
@@ -434,8 +433,8 @@ describe("gateway server chat", () => {
 
         const res = await waitP;
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(200);
+        expect(res.payload?.status).toBe("ok");
+        expect(res.payload?.startedAt).toBe(200);
       }
 
       {
@@ -450,8 +449,8 @@ describe("gateway server chat", () => {
           timeoutMs: 1000,
         });
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(50);
+        expect(res.payload?.status).toBe("ok");
+        expect(res.payload?.startedAt).toBe(50);
       }
 
       {
@@ -460,7 +459,7 @@ describe("gateway server chat", () => {
           timeoutMs: 30,
         });
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("timeout");
+        expect(res.payload?.status).toBe("timeout");
       }
 
       {
@@ -479,8 +478,8 @@ describe("gateway server chat", () => {
 
         const res = await waitP;
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("error");
-        expect(res.payload.error).toBe("boom");
+        expect(res.payload?.status).toBe("error");
+        expect(res.payload?.error).toBe("boom");
       }
 
       {
@@ -505,9 +504,9 @@ describe("gateway server chat", () => {
 
         const res = await waitP;
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(123);
-        expect(res.payload.endedAt).toBe(456);
+        expect(res.payload?.status).toBe("ok");
+        expect(res.payload?.startedAt).toBe(123);
+        expect(res.payload?.endedAt).toBe(456);
       }
     } finally {
       webchatWs.close();

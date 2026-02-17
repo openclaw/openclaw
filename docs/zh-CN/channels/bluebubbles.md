@@ -25,7 +25,7 @@ x-i18n:
 - OpenClaw 通过其 REST API 与之通信（`GET /api/v1/ping`、`POST /message/text`、`POST /chat/:id/*`）。
 - 传入消息通过 webhook 到达；发出的回复、输入指示器、已读回执和 tapback 均为 REST 调用。
 - 附件和贴纸作为入站媒体被接收（并在可能时呈现给智能体）。
-- 配对/白名单的工作方式与其他渠道相同（`/start/pairing` 等），使用 `channels.bluebubbles.allowFrom` + 配对码。
+- 配对/白名单的工作方式与其他渠道相同（`/channels/pairing` 等），使用 `channels.bluebubbles.allowFrom` + 配对码。
 - 回应作为系统事件呈现，与 Slack/Telegram 类似，智能体可以在回复前"提及"它们。
 - 高级功能：编辑、撤回、回复线程、消息效果、群组管理。
 
@@ -80,7 +80,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 - 批准方式：
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- 配对是默认的令牌交换方式。详情：[配对](/start/pairing)
+- 配对是默认的令牌交换方式。详情：[配对](/channels/pairing)
 
 群组：
 
@@ -268,4 +268,4 @@ OpenClaw 可能会显示*短*消息 ID（例如 `1`、`2`）以节省 token。
 - OpenClaw 会根据 BlueBubbles 服务器的 macOS 版本自动隐藏已知不可用的操作。如果在 macOS 26（Tahoe）上编辑仍然显示，请使用 `channels.bluebubbles.actions.edit=false` 手动禁用。
 - 查看状态/健康信息：`openclaw status --all` 或 `openclaw status --deep`。
 
-有关通用渠道工作流参考，请参阅[渠道](/channels)和[插件](/plugins)指南。
+有关通用渠道工作流参考，请参阅[渠道](/channels)和[插件](/tools/plugin)指南。

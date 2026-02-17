@@ -5,6 +5,7 @@ import {
   expandTextLinks,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
+  resolveTelegramThreadSpec,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -32,6 +33,34 @@ describe("resolveTelegramForumThreadId", () => {
   });
 });
 
+describe("resolveTelegramThreadSpec", () => {
+  it("returns dm scope for plain DM (no forum, no thread id)", () => {
+    expect(resolveTelegramThreadSpec({ isGroup: false })).toEqual({ scope: "dm" });
+  });
+
+  it("preserves thread id with dm scope when DM has thread id but is not a forum", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: false, isForum: false, messageThreadId: 42 }),
+    ).toEqual({ id: 42, scope: "dm" });
+  });
+
+  it("returns forum scope when DM has isForum and thread id", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: false, isForum: true, messageThreadId: 99 }),
+    ).toEqual({ id: 99, scope: "forum" });
+  });
+
+  it("falls back to dm scope when DM has isForum but no thread id", () => {
+    expect(resolveTelegramThreadSpec({ isGroup: false, isForum: true })).toEqual({ scope: "dm" });
+  });
+
+  it("delegates to group path for groups", () => {
+    expect(
+      resolveTelegramThreadSpec({ isGroup: true, isForum: true, messageThreadId: 50 }),
+    ).toEqual({ id: 50, scope: "forum" });
+  });
+});
+
 describe("buildTelegramThreadParams", () => {
   it("omits General topic thread id for message sends", () => {
     expect(buildTelegramThreadParams({ id: 1, scope: "forum" })).toBeUndefined();
@@ -43,9 +72,30 @@ describe("buildTelegramThreadParams", () => {
     });
   });
 
-  it("keeps thread id=1 for dm threads", () => {
+  it("includes thread id for dm topics", () => {
     expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
       message_thread_id: 1,
+    });
+    expect(buildTelegramThreadParams({ id: 2, scope: "dm" })).toEqual({
+      message_thread_id: 2,
+    });
+  });
+
+  it("normalizes dm thread ids and skips non-positive values", () => {
+    expect(buildTelegramThreadParams({ id: 0, scope: "dm" })).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: -1, scope: "dm" })).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: 1.9, scope: "dm" })).toEqual({
+      message_thread_id: 1,
+    });
+  });
+
+  it("handles thread id 0 for non-dm scopes", () => {
+    // id=0 should be included for forum and none scopes (not falsy)
+    expect(buildTelegramThreadParams({ id: 0, scope: "forum" })).toEqual({
+      message_thread_id: 0,
+    });
+    expect(buildTelegramThreadParams({ id: 0, scope: "none" })).toEqual({
+      message_thread_id: 0,
     });
   });
 
@@ -101,38 +151,104 @@ describe("normalizeForwardedContext", () => {
     expect(ctx?.date).toBe(456);
   });
 
-  it("handles legacy forwards with signatures", () => {
+  it("handles forward_origin channel with author_signature and message_id", () => {
     const ctx = normalizeForwardedContext({
-      forward_from_chat: {
-        title: "OpenClaw Updates",
-        username: "openclaw",
-        id: 99,
+      forward_origin: {
         type: "channel",
+        chat: {
+          title: "Tech News",
+          username: "technews",
+          id: -1001234,
+          type: "channel",
+        },
+        date: 500,
+        author_signature: "Editor",
+        message_id: 42,
       },
-      forward_signature: "Stan",
-      forward_date: 789,
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
-    expect(ctx?.from).toBe("OpenClaw Updates (Stan)");
-    expect(ctx?.fromType).toBe("legacy_channel");
-    expect(ctx?.fromId).toBe("99");
-    expect(ctx?.fromUsername).toBe("openclaw");
-    expect(ctx?.fromTitle).toBe("OpenClaw Updates");
-    expect(ctx?.fromSignature).toBe("Stan");
-    expect(ctx?.date).toBe(789);
+    expect(ctx?.from).toBe("Tech News (Editor)");
+    expect(ctx?.fromType).toBe("channel");
+    expect(ctx?.fromId).toBe("-1001234");
+    expect(ctx?.fromUsername).toBe("technews");
+    expect(ctx?.fromTitle).toBe("Tech News");
+    expect(ctx?.fromSignature).toBe("Editor");
+    expect(ctx?.fromChatType).toBe("channel");
+    expect(ctx?.fromMessageId).toBe(42);
+    expect(ctx?.date).toBe(500);
   });
 
-  it("handles legacy hidden sender names", () => {
+  it("handles forward_origin chat with sender_chat and author_signature", () => {
     const ctx = normalizeForwardedContext({
-      forward_sender_name: "Legacy Hidden",
-      forward_date: 111,
+      forward_origin: {
+        type: "chat",
+        sender_chat: {
+          title: "Discussion Group",
+          id: -1005678,
+          type: "supergroup",
+        },
+        date: 600,
+        author_signature: "Admin",
+      },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
-    expect(ctx?.from).toBe("Legacy Hidden");
-    expect(ctx?.fromType).toBe("legacy_hidden_user");
-    expect(ctx?.date).toBe(111);
+    expect(ctx?.from).toBe("Discussion Group (Admin)");
+    expect(ctx?.fromType).toBe("chat");
+    expect(ctx?.fromId).toBe("-1005678");
+    expect(ctx?.fromTitle).toBe("Discussion Group");
+    expect(ctx?.fromSignature).toBe("Admin");
+    expect(ctx?.fromChatType).toBe("supergroup");
+    expect(ctx?.date).toBe(600);
+  });
+
+  it("uses author_signature from forward_origin", () => {
+    const ctx = normalizeForwardedContext({
+      forward_origin: {
+        type: "channel",
+        chat: { title: "My Channel", id: -100999, type: "channel" },
+        date: 700,
+        author_signature: "New Sig",
+        message_id: 1,
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.fromSignature).toBe("New Sig");
+    expect(ctx?.from).toBe("My Channel (New Sig)");
+  });
+
+  it("returns undefined signature when author_signature is blank", () => {
+    const ctx = normalizeForwardedContext({
+      forward_origin: {
+        type: "channel",
+        chat: { title: "Updates", id: -100333, type: "channel" },
+        date: 860,
+        author_signature: "   ",
+        message_id: 1,
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.fromSignature).toBeUndefined();
+    expect(ctx?.from).toBe("Updates");
+  });
+
+  it("handles forward_origin channel without author_signature", () => {
+    const ctx = normalizeForwardedContext({
+      forward_origin: {
+        type: "channel",
+        chat: { title: "News", id: -100111, type: "channel" },
+        date: 900,
+        message_id: 1,
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.from).toBe("News");
+    expect(ctx?.fromSignature).toBeUndefined();
+    expect(ctx?.fromChatType).toBe("channel");
   });
 });
 

@@ -67,7 +67,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Auth profile metadata (secrets live in auth-profiles.json)
   auth: {
     profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:me@example.com": {
+        provider: "anthropic",
+        mode: "oauth",
+        email: "me@example.com",
+      },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
       "openai:default": { provider: "openai", mode: "api_key" },
       "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
@@ -160,6 +164,12 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/default/sessions/sessions.json",
+    maintenance: {
+      mode: "warn",
+      pruneAfter: "30d",
+      maxEntries: 500,
+      rotateBytes: "10mb",
+    },
     typingIntervalSeconds: 5,
     sendPolicy: {
       default: "allow",
@@ -226,13 +236,13 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       userTimezone: "America/Chicago",
       model: {
         primary: "anthropic/claude-sonnet-4-5",
-        fallbacks: ["anthropic/claude-opus-4-5", "openai/gpt-5.2"],
+        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
       },
       imageModel: {
         primary: "openrouter/anthropic/claude-sonnet-4-5",
       },
       models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
         "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
         "openai/gpt-5.2": { alias: "gpt" },
       },
@@ -344,6 +354,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     enabled: true,
     store: "~/.openclaw/cron/cron.json",
     maxConcurrentRuns: 2,
+    sessionRetention: "24h",
   },
 
   // Webhooks
@@ -352,7 +363,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     path: "/hooks",
     token: "shared-secret",
     presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
+    transformsDir: "~/.openclaw/hooks/transforms",
     mappings: [
       {
         id: "gmail-hook",
@@ -368,7 +379,10 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         to: "+15555550123",
         thinking: "low",
         timeoutSeconds: 300,
-        transform: { module: "./transforms/gmail.js", export: "transformGmail" },
+        transform: {
+          module: "gmail.js",
+          export: "transformGmail",
+        },
       },
     ],
     gmail: {
@@ -496,7 +510,7 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
     workspace: "~/.openclaw/workspace",
     model: {
       primary: "anthropic/claude-sonnet-4-5",
-      fallbacks: ["anthropic/claude-opus-4-5"],
+      fallbacks: ["anthropic/claude-opus-4-6"],
     },
   },
 }
@@ -534,7 +548,7 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
   agent: {
     workspace: "~/.openclaw/workspace",
     model: {
-      primary: "anthropic/claude-opus-4-5",
+      primary: "anthropic/claude-opus-4-6",
       fallbacks: ["minimax/MiniMax-M2.1"],
     },
   },

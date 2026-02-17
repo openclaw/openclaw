@@ -1,6 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { VoiceCallConfigSchema } from "./config.js";
+import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type {
   HangupCallInput,
@@ -13,8 +15,6 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "./types.js";
-import { VoiceCallConfigSchema } from "./config.js";
-import { CallManager } from "./manager.js";
 
 class FakeProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
@@ -135,6 +135,36 @@ describe("CallManager", () => {
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-missing");
   });
 
+  it("rejects inbound calls with anonymous caller ID when allowlist enabled", () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550001234"],
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const manager = new CallManager(config, storePath);
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    manager.processEvent({
+      id: "evt-allowlist-anon",
+      type: "call.initiated",
+      callId: "call-anon",
+      providerCallId: "provider-anon",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "anonymous",
+      to: "+15550000000",
+    });
+
+    expect(manager.getCallByProviderCallId("provider-anon")).toBeUndefined();
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-anon");
+  });
+
   it("rejects inbound calls that only match allowlist suffixes", () => {
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
@@ -163,6 +193,46 @@ describe("CallManager", () => {
     expect(manager.getCallByProviderCallId("provider-suffix")).toBeUndefined();
     expect(provider.hangupCalls).toHaveLength(1);
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-suffix");
+  });
+
+  it("rejects duplicate inbound events with a single hangup call", () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      inboundPolicy: "disabled",
+    });
+
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const manager = new CallManager(config, storePath);
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    manager.processEvent({
+      id: "evt-reject-init",
+      type: "call.initiated",
+      callId: "provider-dup",
+      providerCallId: "provider-dup",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15552222222",
+      to: "+15550000000",
+    });
+
+    manager.processEvent({
+      id: "evt-reject-ring",
+      type: "call.ringing",
+      callId: "provider-dup",
+      providerCallId: "provider-dup",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15552222222",
+      to: "+15550000000",
+    });
+
+    expect(manager.getCallByProviderCallId("provider-dup")).toBeUndefined();
+    expect(provider.hangupCalls).toHaveLength(1);
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-dup");
   });
 
   it("accepts inbound calls that exactly match the allowlist", () => {

@@ -45,6 +45,7 @@ Start with the smallest access that still works, then widen it as you gain confi
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
@@ -175,7 +176,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## DM access model (pairing / allowlist / open / disabled)
 
@@ -193,7 +194,7 @@ openclaw pairing list <channel>
 openclaw pairing approve <channel> <code>
 ```
 
-Details + files on disk: [Pairing](/start/pairing)
+Details + files on disk: [Pairing](/channels/pairing)
 
 ## DM session isolation (multi-user mode)
 
@@ -220,7 +221,7 @@ If you run multiple accounts on the same channel, use `per-account-channel-peer`
 
 OpenClaw has two separate “who can trigger me?” layers:
 
-- **DM allowlist** (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
+- **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
   - When `dmPolicy="pairing"`, approvals are written to `~/.openclaw/credentials/<channel>-allowFrom.json` (merged with config allowlists).
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
@@ -229,7 +230,7 @@ OpenClaw has two separate “who can trigger me?” layers:
     - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
-Details: [Configuration](/gateway/configuration) and [Groups](/concepts/groups)
+Details: [Configuration](/gateway/configuration) and [Groups](/channels/groups)
 
 ## Prompt injection (what it is, why it matters)
 
@@ -243,7 +244,7 @@ Even with strong system prompts, **prompt injection is not solved**. System prom
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
 - Note: sandboxing is opt-in. If sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox, and host exec does not require approvals unless you set host=gateway and configure exec approvals.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
-- **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
+- **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.6 (or the latest Opus) because it’s strong at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 
 Red flags to treat as untrusted:
 
@@ -265,6 +266,9 @@ tool calls. Reduce the blast radius by:
 - Using a read-only or tool-disabled **reader agent** to summarize untrusted content,
   then pass the summary to your main agent.
 - Keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
+- For OpenResponses URL inputs (`input_file` / `input_image`), set tight
+  `gateway.http.endpoints.responses.files.urlAllowlist` and
+  `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -342,6 +346,16 @@ The Gateway multiplexes **WebSocket + HTTP** on a single port:
 
 - Default: `18789`
 - Config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`
+
+This HTTP surface includes the Control UI and the canvas host:
+
+- Control UI (SPA assets) (default base path `/`)
+- Canvas host: `/__openclaw__/canvas/` and `/__openclaw__/a2ui/` (arbitrary HTML/JS; treat as untrusted content)
+
+If you load canvas content in a normal browser, treat it like any other untrusted web page:
+
+- Don't expose the canvas host to untrusted networks/users.
+- Don't make canvas content share the same origin as privileged web surfaces unless you fully understand the implications.
 
 Bind mode controls where the Gateway listens:
 
@@ -435,6 +449,7 @@ Auth modes:
 
 - `gateway.auth.mode: "token"`: shared bearer token (recommended for most setups).
 - `gateway.auth.mode: "password"`: password auth (prefer setting via env: `OPENCLAW_GATEWAY_PASSWORD`).
+- `gateway.auth.mode: "trusted-proxy"`: trust an identity-aware reverse proxy to authenticate users and pass identity via headers (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 
 Rotation checklist (token/password):
 
@@ -455,7 +470,7 @@ injected by Tailscale.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
-`gateway.auth.allowTailscale` and use token/password auth instead.
+`gateway.auth.allowTailscale` and use token/password auth (or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)) instead.
 
 Trusted proxies:
 
@@ -562,6 +577,11 @@ You can already build a read-only profile by combining:
 
 We may add a single `readOnlyMode` flag later to simplify this configuration.
 
+Additional hardening options:
+
+- `tools.exec.applyPatch.workspaceOnly: true` (default): ensures `apply_patch` cannot write/delete outside the workspace directory even when sandboxing is off. Set to `false` only if you intentionally want `apply_patch` to touch files outside the workspace.
+- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths to the workspace directory (useful if you allow absolute paths today and want a single guardrail).
+
 ### 5) Secure baseline (copy/paste)
 
 One “safe default” config that keeps the Gateway private, requires DM pairing, and avoids always-on group bots:
@@ -627,7 +647,7 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 
 With multi-agent routing, each agent can have its own sandbox + tool policy:
 use this to give **full access**, **read-only**, or **no access** per agent.
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for full details
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for full details
 and precedence rules.
 
 Common use cases:
@@ -690,7 +710,11 @@ Common use cases:
           scope: "agent",
           workspaceAccess: "none",
         },
+        // Session tools can reveal sensitive data from transcripts. By default OpenClaw limits these tools
+        // to the current session + spawned subagent sessions, but you can clamp further if needed.
+        // See `tools.sessions.visibility` in the configuration reference.
         tools: {
+          sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
             "sessions_history",
@@ -773,18 +797,22 @@ If it fails, there are new candidates not yet in the baseline.
 ### If CI fails
 
 1. Reproduce locally:
+
    ```bash
    detect-secrets scan --baseline .secrets.baseline
    ```
+
 2. Understand the tools:
    - `detect-secrets scan` finds candidates and compares them to the baseline.
    - `detect-secrets audit` opens an interactive review to mark each baseline
      item as real or false positive.
 3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
 4. For false positives: run the interactive audit and mark them as false:
+
    ```bash
    detect-secrets audit .secrets.baseline
    ```
+
 5. If you need new excludes, add them to `.detect-secrets.cfg` and regenerate the
    baseline with matching `--exclude-files` / `--exclude-lines` flags (the config
    file is reference-only; detect-secrets doesn’t read it automatically).
@@ -793,28 +821,24 @@ Commit the updated `.secrets.baseline` once it reflects the intended state.
 
 ## The Trust Hierarchy
 
-```
-Owner (Peter)
-  │ Full trust
-  ▼
-AI (Clawd)
-  │ Trust but verify
-  ▼
-Friends in allowlist
-  │ Limited trust
-  ▼
-Strangers
-  │ No trust
-  ▼
-Mario asking for find ~
-  │ Definitely no trust 😏
+```mermaid
+flowchart TB
+    A["Owner (Peter)"] -- Full trust --> B["AI (Clawd)"]
+    B -- Trust but verify --> C["Friends in allowlist"]
+    C -- Limited trust --> D["Strangers"]
+    D -- No trust --> E["Mario asking for find ~"]
+    E -- Definitely no trust 😏 --> F[" "]
+
+     %% The transparent box is needed to show the bottom-most label correctly
+     F:::Class_transparent_box
+    classDef Class_transparent_box fill:transparent, stroke:transparent
 ```
 
 ## Reporting Security Issues
 
 Found a vulnerability in OpenClaw? Please report responsibly:
 
-1. Email: security@openclaw.ai
+1. Email: [security@openclaw.ai](mailto:security@openclaw.ai)
 2. Don't post publicly until fixed
 3. We'll credit you (unless you prefer anonymity)
 

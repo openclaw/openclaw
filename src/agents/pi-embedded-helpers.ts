@@ -1,11 +1,15 @@
 export {
   buildBootstrapContextFiles,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
+  DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
   ensureSessionHeader,
   resolveBootstrapMaxChars,
+  resolveBootstrapTotalMaxChars,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
+  BILLING_ERROR_USER_MESSAGE,
+  formatBillingErrorMessage,
   classifyFailoverReason,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
@@ -16,6 +20,7 @@ export {
   parseApiErrorInfo,
   sanitizeUserFacingText,
   isBillingErrorMessage,
+  isCloudflareOrHtmlErrorPage,
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
   isContextOverflowError,
@@ -28,6 +33,7 @@ export {
   isRawApiErrorPayload,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
+  isTransientHttpError,
   isTimeoutErrorMessage,
   parseImageDimensionError,
   parseImageSizeError,

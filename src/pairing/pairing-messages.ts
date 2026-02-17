@@ -1,5 +1,5 @@
-import type { PairingChannel } from "./pairing-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { PairingChannel } from "./pairing-store.js";
 
 export function buildPairingReply(params: {
   channel: PairingChannel;
@@ -15,6 +15,6 @@ export function buildPairingReply(params: {
     `Pairing code: ${code}`,
     "",
     "Ask the bot owner to approve with:",
-    formatCliCommand(`openclaw pairing approve ${channel} <code>`),
+    formatCliCommand(`openclaw pairing approve ${channel} ${code}`),
   ].join("\n");
 }

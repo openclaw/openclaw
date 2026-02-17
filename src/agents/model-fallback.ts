@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
 import {
   ensureAuthProfileStore,
+  getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
@@ -13,12 +13,15 @@ import {
   isTimeoutError,
 } from "./failover-error.js";
 import {
+  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   modelKey,
-  parseModelRef,
+  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
+import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -34,7 +37,11 @@ type FallbackAttempt = {
   code?: string;
 };
 
-function isAbortError(err: unknown): boolean {
+/**
+ * Fallback abort check. Only treats explicit AbortError names as user aborts.
+ * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
+ */
+function isFallbackAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
@@ -42,47 +49,17 @@ function isAbortError(err: unknown): boolean {
     return false;
   }
   const name = "name" in err ? String(err.name) : "";
-  // Only treat explicit AbortError names as user aborts.
-  // Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
   return name === "AbortError";
 }
 
 function shouldRethrowAbort(err: unknown): boolean {
-  return isAbortError(err) && !isTimeoutError(err);
+  return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
-function buildAllowedModelKeys(
-  cfg: OpenClawConfig | undefined,
-  defaultProvider: string,
-): Set<string> | null {
-  const rawAllowlist = (() => {
-    const modelMap = cfg?.agents?.defaults?.models ?? {};
-    return Object.keys(modelMap);
-  })();
-  if (rawAllowlist.length === 0) {
-    return null;
-  }
-  const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(String(raw ?? ""), defaultProvider);
-    if (!parsed) {
-      continue;
-    }
-    keys.add(modelKey(parsed.provider, parsed.model));
-  }
-  return keys.size > 0 ? keys : null;
-}
-
-function resolveImageFallbackCandidates(params: {
-  cfg: OpenClawConfig | undefined;
-  defaultProvider: string;
-  modelOverride?: string;
-}): ModelCandidate[] {
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg ?? {},
-    defaultProvider: params.defaultProvider,
-  });
-  const allowlist = buildAllowedModelKeys(params.cfg, params.defaultProvider);
+function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
+  candidates: ModelCandidate[];
+  addCandidate: (candidate: ModelCandidate, enforceAllowlist: boolean) => void;
+} {
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
@@ -100,6 +77,39 @@ function resolveImageFallbackCandidates(params: {
     seen.add(key);
     candidates.push(candidate);
   };
+
+  return { candidates, addCandidate };
+}
+
+type ModelFallbackErrorHandler = (attempt: {
+  provider: string;
+  model: string;
+  error: unknown;
+  attempt: number;
+  total: number;
+}) => void | Promise<void>;
+
+type ModelFallbackRunResult<T> = {
+  result: T;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+};
+
+function resolveImageFallbackCandidates(params: {
+  cfg: OpenClawConfig | undefined;
+  defaultProvider: string;
+  modelOverride?: string;
+}): ModelCandidate[] {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg ?? {},
+    defaultProvider: params.defaultProvider,
+  });
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  const { candidates, addCandidate } = createModelCandidateCollector(allowlist);
 
   const addRaw = (raw: string, enforceAllowlist: boolean) => {
     const resolved = resolveModelRefFromString({
@@ -160,32 +170,20 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const provider = String(params.provider ?? "").trim() || defaultProvider;
-  const model = String(params.model ?? "").trim() || defaultModel;
+  const providerRaw = String(params.provider ?? "").trim() || defaultProvider;
+  const modelRaw = String(params.model ?? "").trim() || defaultModel;
+  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
   });
-  const allowlist = buildAllowedModelKeys(params.cfg, defaultProvider);
-  const seen = new Set<string>();
-  const candidates: ModelCandidate[] = [];
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider,
+  });
+  const { candidates, addCandidate } = createModelCandidateCollector(allowlist);
 
-  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
-    if (!candidate.provider || !candidate.model) {
-      return;
-    }
-    const key = modelKey(candidate.provider, candidate.model);
-    if (seen.has(key)) {
-      return;
-    }
-    if (enforceAllowlist && allowlist && !allowlist.has(key)) {
-      return;
-    }
-    seen.add(key);
-    candidates.push(candidate);
-  };
-
-  addCandidate({ provider, model }, false);
+  addCandidate(normalizedPrimary, false);
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
@@ -220,6 +218,50 @@ function resolveFallbackCandidates(params: {
   return candidates;
 }
 
+const lastProbeAttempt = new Map<string, number>();
+const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
+const PROBE_MARGIN_MS = 2 * 60 * 1000;
+const PROBE_SCOPE_DELIMITER = "::";
+
+function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
+  const scope = String(agentDir ?? "").trim();
+  return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+}
+
+function shouldProbePrimaryDuringCooldown(params: {
+  isPrimary: boolean;
+  hasFallbackCandidates: boolean;
+  now: number;
+  throttleKey: string;
+  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  profileIds: string[];
+}): boolean {
+  if (!params.isPrimary || !params.hasFallbackCandidates) {
+    return false;
+  }
+
+  const lastProbe = lastProbeAttempt.get(params.throttleKey) ?? 0;
+  if (params.now - lastProbe < MIN_PROBE_INTERVAL_MS) {
+    return false;
+  }
+
+  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds);
+  if (soonest === null || !Number.isFinite(soonest)) {
+    return true;
+  }
+
+  // Probe when cooldown already expired or within the configured margin.
+  return params.now >= soonest - PROBE_MARGIN_MS;
+}
+
+/** @internal – exposed for unit tests only */
+export const _probeThrottleInternals = {
+  lastProbeAttempt,
+  MIN_PROBE_INTERVAL_MS,
+  PROBE_MARGIN_MS,
+  resolveProbeThrottleKey,
+} as const;
+
 export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -228,19 +270,8 @@ export async function runWithModelFallback<T>(params: {
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
-  onError?: (attempt: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => void | Promise<void>;
-}): Promise<{
-  result: T;
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-}> {
+  onError?: ModelFallbackErrorHandler;
+}): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
@@ -253,6 +284,8 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
+  const hasFallbackCandidates = candidates.length > 1;
+
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
     if (authStore) {
@@ -264,14 +297,34 @@ export async function runWithModelFallback<T>(params: {
       const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown; skip without attempting
-        attempts.push({
-          provider: candidate.provider,
-          model: candidate.model,
-          error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-          reason: "rate_limit",
+        // All profiles for this provider are in cooldown.
+        // For the primary model (i === 0), probe it if the soonest cooldown
+        // expiry is close or already past. This avoids staying on a fallback
+        // model long after the real rate-limit window clears.
+        const now = Date.now();
+        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+        const shouldProbe = shouldProbePrimaryDuringCooldown({
+          isPrimary: i === 0,
+          hasFallbackCandidates,
+          now,
+          throttleKey: probeThrottleKey,
+          authStore,
+          profileIds,
         });
-        continue;
+        if (!shouldProbe) {
+          // Skip without attempting
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+            reason: "rate_limit",
+          });
+          continue;
+        }
+        // Primary model probe: attempt it despite cooldown to detect recovery.
+        // If it fails, the error is caught below and we fall through to the
+        // next candidate as usual.
+        lastProbeAttempt.set(probeThrottleKey, now);
       }
     }
     try {
@@ -284,6 +337,14 @@ export async function runWithModelFallback<T>(params: {
       };
     } catch (err) {
       if (shouldRethrowAbort(err)) {
+        throw err;
+      }
+      // Context overflow errors should be handled by the inner runner's
+      // compaction/retry logic, not by model fallback.  If one escapes as a
+      // throw, rethrow it immediately rather than trying a different model
+      // that may have a smaller context window and fail worse.
+      const errMessage = err instanceof Error ? err.message : String(err);
+      if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
       const normalized =
@@ -338,19 +399,8 @@ export async function runWithImageModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
-  onError?: (attempt: {
-    provider: string;
-    model: string;
-    error: unknown;
-    attempt: number;
-    total: number;
-  }) => void | Promise<void>;
-}): Promise<{
-  result: T;
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-}> {
+  onError?: ModelFallbackErrorHandler;
+}): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,

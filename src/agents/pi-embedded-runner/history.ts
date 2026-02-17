@@ -38,8 +38,9 @@ export function limitHistoryTurns(
 /**
  * Extract provider + user ID from a session key and look up dmHistoryLimit.
  * Supports per-DM overrides and provider defaults.
+ * For channel/group sessions, uses historyLimit from provider config.
  */
-export function getDmHistoryLimitFromSessionKey(
+export function getHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
   config: OpenClawConfig | undefined,
 ): number | undefined {
@@ -58,31 +59,17 @@ export function getDmHistoryLimitFromSessionKey(
   const kind = providerParts[1]?.toLowerCase();
   const userIdRaw = providerParts.slice(2).join(":");
   const userId = stripThreadSuffix(userIdRaw);
-  if (kind !== "dm") {
-    return undefined;
-  }
-
-  const getLimit = (
-    providerConfig:
-      | {
-          dmHistoryLimit?: number;
-          dms?: Record<string, { historyLimit?: number }>;
-        }
-      | undefined,
-  ): number | undefined => {
-    if (!providerConfig) {
-      return undefined;
-    }
-    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
-      return providerConfig.dms[userId].historyLimit;
-    }
-    return providerConfig.dmHistoryLimit;
-  };
 
   const resolveProviderConfig = (
     cfg: OpenClawConfig | undefined,
     providerId: string,
-  ): { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> } | undefined => {
+  ):
+    | {
+        historyLimit?: number;
+        dmHistoryLimit?: number;
+        dms?: Record<string, { historyLimit?: number }>;
+      }
+    | undefined => {
     const channels = cfg?.channels;
     if (!channels || typeof channels !== "object") {
       return undefined;
@@ -91,8 +78,38 @@ export function getDmHistoryLimitFromSessionKey(
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       return undefined;
     }
-    return entry as { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> };
+    return entry as {
+      historyLimit?: number;
+      dmHistoryLimit?: number;
+      dms?: Record<string, { historyLimit?: number }>;
+    };
   };
 
-  return getLimit(resolveProviderConfig(config, provider));
+  const providerConfig = resolveProviderConfig(config, provider);
+  if (!providerConfig) {
+    return undefined;
+  }
+
+  // For DM sessions: per-DM override -> dmHistoryLimit.
+  // Accept both "direct" (new) and "dm" (legacy) for backward compat.
+  if (kind === "dm" || kind === "direct") {
+    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
+      return providerConfig.dms[userId].historyLimit;
+    }
+    return providerConfig.dmHistoryLimit;
+  }
+
+  // For channel/group sessions: use historyLimit from provider config
+  // This prevents context overflow in long-running channel sessions
+  if (kind === "channel" || kind === "group") {
+    return providerConfig.historyLimit;
+  }
+
+  return undefined;
 }
+
+/**
+ * @deprecated Use getHistoryLimitFromSessionKey instead.
+ * Alias for backward compatibility.
+ */
+export const getDmHistoryLimitFromSessionKey = getHistoryLimitFromSessionKey;

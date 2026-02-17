@@ -1,12 +1,21 @@
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
+import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
+
+const CHANNEL_RESTART_POLICY: BackoffPolicy = {
+  initialMs: 5_000,
+  maxMs: 5 * 60_000,
+  factor: 2,
+  jitter: 0.1,
+};
+const MAX_RESTART_ATTEMPTS = 10;
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
@@ -52,12 +61,19 @@ type ChannelManagerOptions = {
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
 };
 
+type StartChannelOptions = {
+  preserveRestartAttempts?: boolean;
+  preserveManualStop?: boolean;
+};
+
 export type ChannelManager = {
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   startChannels: () => Promise<void>;
   startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
+  isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
@@ -65,6 +81,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
+  // Tracks restart attempts per channel:account. Reset on successful start.
+  const restartAttempts = new Map<string, number>();
+  // Tracks accounts that were manually stopped so we don't auto-restart them.
+  const manuallyStopped = new Set<string>();
+
+  const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
     const existing = channelStores.get(channelId);
@@ -93,12 +115,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return next;
   };
 
-  const startChannel = async (channelId: ChannelId, accountId?: string) => {
+  const startChannelInternal = async (
+    channelId: ChannelId,
+    accountId?: string,
+    opts: StartChannelOptions = {},
+  ) => {
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
       return;
     }
+    const { preserveRestartAttempts = false, preserveManualStop = false } = opts;
     const cfg = loadConfig();
     resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
@@ -119,6 +146,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (!enabled) {
           setRuntime(channelId, id, {
             accountId: id,
+            enabled: false,
+            configured: true,
             running: false,
             lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
           });
@@ -132,19 +161,32 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (!configured) {
           setRuntime(channelId, id, {
             accountId: id,
+            enabled: true,
+            configured: false,
             running: false,
             lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
           });
           return;
         }
 
+        const rKey = restartKey(channelId, id);
+        if (!preserveManualStop) {
+          manuallyStopped.delete(rKey);
+        }
+
         const abort = new AbortController();
         store.aborts.set(id, abort);
+        if (!preserveRestartAttempts) {
+          restartAttempts.delete(rKey);
+        }
         setRuntime(channelId, id, {
           accountId: id,
+          enabled: true,
+          configured: true,
           running: true,
           lastStartAt: Date.now(),
           lastError: null,
+          reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
         });
 
         const log = channelLogs[channelId];
@@ -158,30 +200,81 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
         });
-        const tracked = Promise.resolve(task)
+        const trackedPromise = Promise.resolve(task)
           .catch((err) => {
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
             log.error?.(`[${id}] channel exited: ${message}`);
           })
           .finally(() => {
-            store.aborts.delete(id);
-            store.tasks.delete(id);
             setRuntime(channelId, id, {
               accountId: id,
               running: false,
               lastStopAt: Date.now(),
             });
+          })
+          .then(async () => {
+            if (manuallyStopped.has(rKey)) {
+              return;
+            }
+            const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
+            restartAttempts.set(rKey, attempt);
+            if (attempt > MAX_RESTART_ATTEMPTS) {
+              log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
+              return;
+            }
+            const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempt);
+            log.info?.(
+              `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
+            );
+            setRuntime(channelId, id, {
+              accountId: id,
+              reconnectAttempts: attempt,
+            });
+            try {
+              await sleepWithAbort(delayMs, abort.signal);
+              if (manuallyStopped.has(rKey)) {
+                return;
+              }
+              if (store.tasks.get(id) === trackedPromise) {
+                store.tasks.delete(id);
+              }
+              if (store.aborts.get(id) === abort) {
+                store.aborts.delete(id);
+              }
+              await startChannelInternal(channelId, id, {
+                preserveRestartAttempts: true,
+                preserveManualStop: true,
+              });
+            } catch {
+              // abort or startup failure — next crash will retry
+            }
+          })
+          .finally(() => {
+            if (store.tasks.get(id) === trackedPromise) {
+              store.tasks.delete(id);
+            }
+            if (store.aborts.get(id) === abort) {
+              store.aborts.delete(id);
+            }
           });
-        store.tasks.set(id, tracked);
+        store.tasks.set(id, trackedPromise);
       }),
     );
   };
 
+  const startChannel = async (channelId: ChannelId, accountId?: string) => {
+    await startChannelInternal(channelId, accountId);
+  };
+
   const stopChannel = async (channelId: ChannelId, accountId?: string) => {
     const plugin = getChannelPlugin(channelId);
-    const cfg = loadConfig();
     const store = getStore(channelId);
+    // Fast path: nothing running and no explicit plugin shutdown hook to run.
+    if (!plugin?.gateway?.stopAccount && store.aborts.size === 0 && store.tasks.size === 0) {
+      return;
+    }
+    const cfg = loadConfig();
     const knownIds = new Set<string>([
       ...store.aborts.keys(),
       ...store.tasks.keys(),
@@ -199,6 +292,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (!abort && !task && !plugin?.gateway?.stopAccount) {
           return;
         }
+        manuallyStopped.add(restartKey(channelId, id));
         abort?.abort();
         if (plugin?.gateway?.stopAccount) {
           const account = plugin.config.resolveAccount(cfg, id);
@@ -281,6 +375,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const configured = described?.configured;
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
+        next.enabled = enabled;
+        next.configured = typeof configured === "boolean" ? configured : (next.configured ?? true);
         if (!next.running) {
           if (!enabled) {
             next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";
@@ -298,11 +394,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return { channels, channelAccounts };
   };
 
+  const isManuallyStopped_ = (channelId: ChannelId, accountId: string): boolean => {
+    return manuallyStopped.has(restartKey(channelId, accountId));
+  };
+
+  const resetRestartAttempts_ = (channelId: ChannelId, accountId: string): void => {
+    restartAttempts.delete(restartKey(channelId, accountId));
+  };
+
   return {
     getRuntimeSnapshot,
     startChannels,
     startChannel,
     stopChannel,
     markChannelLoggedOut,
+    isManuallyStopped: isManuallyStopped_,
+    resetRestartAttempts: resetRestartAttempts_,
   };
 }

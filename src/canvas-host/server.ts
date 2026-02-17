@@ -1,16 +1,15 @@
-import type { Socket } from "node:net";
-import type { Duplex } from "node:stream";
-import chokidar from "chokidar";
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import os from "node:os";
+import type { Socket } from "node:net";
 import path from "node:path";
+import type { Duplex } from "node:stream";
+import chokidar from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { RuntimeEnv } from "../runtime.js";
+import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import {
   CANVAS_HOST_PATH,
@@ -18,6 +17,7 @@ import {
   handleA2uiHttpRequest,
   injectCanvasLiveReload,
 } from "./a2ui.js";
+import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
@@ -149,50 +149,6 @@ function defaultIndexHTML() {
 `;
 }
 
-function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
-  const normalized = path.posix.normalize(decoded);
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
-async function resolveFilePath(rootReal: string, urlPath: string) {
-  const normalized = normalizeUrlPath(urlPath);
-  const rel = normalized.replace(/^\/+/, "");
-  if (rel.split("/").some((p) => p === "..")) {
-    return null;
-  }
-
-  const tryOpen = async (relative: string) => {
-    try {
-      return await openFileWithinRoot({ rootDir: rootReal, relativePath: relative });
-    } catch (err) {
-      if (err instanceof SafeOpenError) {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  if (normalized.endsWith("/")) {
-    return await tryOpen(path.posix.join(rel, "index.html"));
-  }
-
-  const candidate = path.join(rootReal, rel);
-  try {
-    const st = await fs.lstat(candidate);
-    if (st.isSymbolicLink()) {
-      return null;
-    }
-    if (st.isDirectory()) {
-      return await tryOpen(path.posix.join(rel, "index.html"));
-    }
-  } catch {
-    // ignore
-  }
-
-  return await tryOpen(rel);
-}
-
 function isDisabledByEnv() {
   if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_CANVAS_HOST)) {
     return true;
@@ -235,7 +191,7 @@ async function prepareCanvasRoot(rootDir: string) {
 }
 
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(os.homedir(), ".openclaw", "canvas")];
+  const candidates = [path.join(resolveStateDir(), "canvas")];
   const existing = candidates.find((dir) => {
     try {
       return fsSync.statSync(dir).isDirectory();
@@ -264,6 +220,10 @@ export async function createCanvasHostHandler(
   const rootReal = await prepareCanvasRoot(rootDir);
 
   const liveReload = opts.liveReload !== false;
+  const testMode = opts.allowInTests === true;
+  const reloadDebounceMs = testMode ? 12 : 75;
+  const writeStabilityThresholdMs = testMode ? 12 : 75;
+  const writePollIntervalMs = testMode ? 5 : 10;
   const wss = liveReload ? new WebSocketServer({ noServer: true }) : null;
   const sockets = new Set<WebSocket>();
   if (wss) {
@@ -293,7 +253,7 @@ export async function createCanvasHostHandler(
     debounce = setTimeout(() => {
       debounce = null;
       broadcastReload();
-    }, 75);
+    }, reloadDebounceMs);
     debounce.unref?.();
   };
 
@@ -301,8 +261,11 @@ export async function createCanvasHostHandler(
   const watcher = liveReload
     ? chokidar.watch(rootReal, {
         ignoreInitial: true,
-        awaitWriteFinish: { stabilityThreshold: 75, pollInterval: 10 },
-        usePolling: opts.allowInTests === true,
+        awaitWriteFinish: {
+          stabilityThreshold: writeStabilityThresholdMs,
+          pollInterval: writePollIntervalMs,
+        },
+        usePolling: testMode,
         ignored: [
           /(^|[\\/])\../, // dotfiles
           /(^|[\\/])node_modules([\\/]|$)/,
@@ -365,7 +328,7 @@ export async function createCanvasHostHandler(
         return true;
       }
 
-      const opened = await resolveFilePath(rootReal, urlPath);
+      const opened = await resolveFileWithinRoot(rootReal, urlPath);
       if (!opened) {
         if (urlPath === "/" || urlPath.endsWith("/")) {
           res.statusCode = 404;
@@ -449,7 +412,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
-  const bindHost = opts.listenHost?.trim() || "0.0.0.0";
+  const bindHost = opts.listenHost?.trim() || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;

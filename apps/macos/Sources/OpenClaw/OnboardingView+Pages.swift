@@ -206,7 +206,9 @@ extension OnboardingView {
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: fieldWidth)
                                     }
-                                    if let message = CommandResolver.sshTargetValidationMessage(self.state.remoteTarget) {
+                                    if let message = CommandResolver
+                                        .sshTargetValidationMessage(self.state.remoteTarget)
+                                    {
                                         GridRow {
                                             Text("")
                                                 .frame(width: labelWidth, alignment: .leading)
@@ -335,7 +337,7 @@ extension OnboardingView {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 540)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("OpenClaw supports any model — we strongly recommend Opus 4.5 for the best experience.")
+            Text("OpenClaw supports any model — we strongly recommend Opus 4.6 for the best experience.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
