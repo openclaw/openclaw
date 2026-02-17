@@ -33,7 +33,7 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionStart } =
-      await import("../agents/pi-embedded-subscribe.handlers.lifecycle.js");
+      await import("../agents/pi-embedded-subscribe.handlers.compaction.js");
 
     const ctx = {
       params: { runId: "r1", session: { messages: [1, 2, 3] } },
@@ -45,19 +45,20 @@ describe("compaction hook wiring", () => {
 
     handleAutoCompactionStart(ctx as never);
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
-    });
+    expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
 
-    const [event] = hookMocks.runner.runBeforeCompaction.mock.calls[0];
-    expect(event.messageCount).toBe(3);
+    const beforeCalls = hookMocks.runner.runBeforeCompaction.mock.calls as unknown as Array<
+      [unknown]
+    >;
+    const event = beforeCalls[0]?.[0] as { messageCount?: number } | undefined;
+    expect(event?.messageCount).toBe(3);
   });
 
   it("calls runAfterCompaction when willRetry is false", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionEnd } =
-      await import("../agents/pi-embedded-subscribe.handlers.lifecycle.js");
+      await import("../agents/pi-embedded-subscribe.handlers.compaction.js");
 
     const ctx = {
       params: { runId: "r2", session: { messages: [1, 2] } },
@@ -75,20 +76,23 @@ describe("compaction hook wiring", () => {
       } as never,
     );
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
-    });
+    expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
 
-    const [event] = hookMocks.runner.runAfterCompaction.mock.calls[0];
-    expect(event.messageCount).toBe(2);
-    expect(event.compactedCount).toBe(1);
+    const afterCalls = hookMocks.runner.runAfterCompaction.mock.calls as unknown as Array<
+      [unknown]
+    >;
+    const event = afterCalls[0]?.[0] as
+      | { messageCount?: number; compactedCount?: number }
+      | undefined;
+    expect(event?.messageCount).toBe(2);
+    expect(event?.compactedCount).toBe(1);
   });
 
   it("does not call runAfterCompaction when willRetry is true", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionEnd } =
-      await import("../agents/pi-embedded-subscribe.handlers.lifecycle.js");
+      await import("../agents/pi-embedded-subscribe.handlers.compaction.js");
 
     const ctx = {
       params: { runId: "r3", session: { messages: [] } },
@@ -107,7 +111,6 @@ describe("compaction hook wiring", () => {
       } as never,
     );
 
-    await new Promise((r) => setTimeout(r, 50));
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
   });
 });

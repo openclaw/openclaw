@@ -2,9 +2,9 @@ import { clearActiveProgressLine } from "./terminal/progress-line.js";
 import { restoreTerminalState } from "./terminal/restore.js";
 
 export type RuntimeEnv = {
-  log: typeof console.log;
-  error: typeof console.error;
-  exit: (code: number) => never;
+  log: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  exit: (code: number) => void;
 };
 
 function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -18,26 +18,7 @@ function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   return typeof maybeMockedLog.mock === "object";
 }
 
-export const defaultRuntime: RuntimeEnv = {
-  log: (...args: Parameters<typeof console.log>) => {
-    if (!shouldEmitRuntimeLog()) {
-      return;
-    }
-    clearActiveProgressLine();
-    console.log(...args);
-  },
-  error: (...args: Parameters<typeof console.error>) => {
-    clearActiveProgressLine();
-    console.error(...args);
-  },
-  exit: (code) => {
-    restoreTerminalState("runtime exit");
-    process.exit(code);
-    throw new Error("unreachable"); // satisfies tests when mocked
-  },
-};
-
-export function createNonExitingRuntime(): RuntimeEnv {
+function createRuntimeIo(): Pick<RuntimeEnv, "log" | "error"> {
   return {
     log: (...args: Parameters<typeof console.log>) => {
       if (!shouldEmitRuntimeLog()) {
@@ -50,7 +31,22 @@ export function createNonExitingRuntime(): RuntimeEnv {
       clearActiveProgressLine();
       console.error(...args);
     },
-    exit: (code: number): never => {
+  };
+}
+
+export const defaultRuntime: RuntimeEnv = {
+  ...createRuntimeIo(),
+  exit: (code) => {
+    restoreTerminalState("runtime exit", { resumeStdinIfPaused: false });
+    process.exit(code);
+    throw new Error("unreachable"); // satisfies tests when mocked
+  },
+};
+
+export function createNonExitingRuntime(): RuntimeEnv {
+  return {
+    ...createRuntimeIo(),
+    exit: (code: number) => {
       throw new Error(`exit ${code}`);
     },
   };

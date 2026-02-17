@@ -1,18 +1,20 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
-import type { ResolvedBrowserConfig } from "./config.js";
-import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
-import { browserMutationGuardMiddleware } from "./csrf.js";
-import { isAuthorizedBrowserRequest } from "./http-auth.js";
+import type { ResolvedBrowserConfig } from "./config.js";
 import { registerBrowserRoutes } from "./routes/index.js";
+import type { BrowserRouteRegistrar } from "./routes/types.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
   type ProfileContext,
 } from "./server-context.js";
+import {
+  installBrowserAuthMiddleware,
+  installBrowserCommonMiddleware,
+} from "./server-middleware.js";
 
 export type BrowserBridge = {
   server: Server;
@@ -36,35 +38,14 @@ export async function startBrowserBridgeServer(params: {
   const port = params.port ?? 0;
 
   const app = express();
-  app.use((req, res, next) => {
-    const ctrl = new AbortController();
-    const abort = () => ctrl.abort(new Error("request aborted"));
-    req.once("aborted", abort);
-    res.once("close", () => {
-      if (!res.writableEnded) {
-        abort();
-      }
-    });
-    // Make the signal available to browser route handlers (best-effort).
-    (req as unknown as { signal?: AbortSignal }).signal = ctrl.signal;
-    next();
-  });
-  app.use(express.json({ limit: "1mb" }));
-  app.use(browserMutationGuardMiddleware());
+  installBrowserCommonMiddleware(app);
 
   const authToken = params.authToken?.trim() || undefined;
   const authPassword = params.authPassword?.trim() || undefined;
   if (!authToken && !authPassword) {
     throw new Error("bridge server requires auth (authToken/authPassword missing)");
   }
-  if (authToken || authPassword) {
-    app.use((req, res, next) => {
-      if (isAuthorizedBrowserRequest(req, { token: authToken, password: authPassword })) {
-        return next();
-      }
-      res.status(401).send("Unauthorized");
-    });
-  }
+  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
 
   const state: BrowserServerState = {
     server: null as unknown as Server,

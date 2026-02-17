@@ -10,8 +10,14 @@ import {
   resolvePackedRootDir,
 } from "../infra/archive.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
+import {
+  resolveSafeInstallDir,
+  safeDirName,
+  unscopedPackageName,
+} from "../infra/install-safe-path.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
@@ -38,23 +44,6 @@ export type InstallPluginResult =
   | { ok: false; error: string };
 
 const defaultLogger: PluginInstallLogger = {};
-
-function unscopedPackageName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
-}
-
-function safeDirName(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  return trimmed.replaceAll("/", "__").replaceAll("\\", "__");
-}
-
 function safeFileName(input: string): string {
   return safeDirName(input);
 }
@@ -72,22 +61,6 @@ function validatePluginId(pluginId: string): string | null {
   return null;
 }
 
-function isPathInside(basePath: string, candidatePath: string): boolean {
-  const base = path.resolve(basePath);
-  const candidate = path.resolve(candidatePath);
-  const rel = path.relative(base, candidate);
-  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
-}
-
-function extensionUsesSkippedScannerPath(entry: string): boolean {
-  const segments = entry.split(/[\\/]+/).filter(Boolean);
-  return segments.some(
-    (segment) =>
-      segment === "node_modules" ||
-      (segment.startsWith(".") && segment !== "." && segment !== ".."),
-  );
-}
-
 async function ensureOpenClawExtensions(manifest: PackageManifest) {
   const extensions = manifest[MANIFEST_KEY]?.extensions;
   if (!Array.isArray(extensions)) {
@@ -100,6 +73,46 @@ async function ensureOpenClawExtensions(manifest: PackageManifest) {
   return list;
 }
 
+function resolvePluginInstallModeOptions(params: {
+  logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+}): { logger: PluginInstallLogger; mode: "install" | "update"; dryRun: boolean } {
+  return {
+    logger: params.logger ?? defaultLogger,
+    mode: params.mode ?? "install",
+    dryRun: params.dryRun ?? false,
+  };
+}
+
+function resolveTimedPluginInstallModeOptions(params: {
+  logger?: PluginInstallLogger;
+  timeoutMs?: number;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+}): {
+  logger: PluginInstallLogger;
+  timeoutMs: number;
+  mode: "install" | "update";
+  dryRun: boolean;
+} {
+  return {
+    ...resolvePluginInstallModeOptions(params),
+    timeoutMs: params.timeoutMs ?? 120_000,
+  };
+}
+
+function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
+  return {
+    ok: true,
+    pluginId,
+    targetDir: targetFile,
+    manifestName: undefined,
+    version: undefined,
+    extensions: [path.basename(targetFile)],
+  };
+}
+
 export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
   const extensionsBase = extensionsDir
     ? resolveUserPath(extensionsDir)
@@ -108,30 +121,15 @@ export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string
   if (pluginIdError) {
     throw new Error(pluginIdError);
   }
-  const targetDirResult = resolveSafeInstallDir(extensionsBase, pluginId);
+  const targetDirResult = resolveSafeInstallDir({
+    baseDir: extensionsBase,
+    id: pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+  });
   if (!targetDirResult.ok) {
     throw new Error(targetDirResult.error);
   }
   return targetDirResult.path;
-}
-
-function resolveSafeInstallDir(
-  extensionsDir: string,
-  pluginId: string,
-): { ok: true; path: string } | { ok: false; error: string } {
-  const targetDir = path.join(extensionsDir, safeDirName(pluginId));
-  const resolvedBase = path.resolve(extensionsDir);
-  const resolvedTarget = path.resolve(targetDir);
-  const relative = path.relative(resolvedBase, resolvedTarget);
-  if (
-    !relative ||
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    return { ok: false, error: "invalid plugin name: path traversal detected" };
-  }
-  return { ok: true, path: targetDir };
 }
 
 async function installPluginFromPackageDir(params: {
@@ -143,10 +141,7 @@ async function installPluginFromPackageDir(params: {
   dryRun?: boolean;
   expectedPluginId?: string;
 }): Promise<InstallPluginResult> {
-  const logger = params.logger ?? defaultLogger;
-  const timeoutMs = params.timeoutMs ?? 120_000;
-  const mode = params.mode ?? "install";
-  const dryRun = params.dryRun ?? false;
+  const { logger, timeoutMs, mode, dryRun } = resolveTimedPluginInstallModeOptions(params);
 
   const manifestPath = path.join(params.packageDir, "package.json");
   if (!(await fileExists(manifestPath))) {
@@ -225,7 +220,11 @@ async function installPluginFromPackageDir(params: {
     : path.join(CONFIG_DIR, "extensions");
   await fs.mkdir(extensionsDir, { recursive: true });
 
-  const targetDirResult = resolveSafeInstallDir(extensionsDir, pluginId);
+  const targetDirResult = resolveSafeInstallDir({
+    baseDir: extensionsDir,
+    id: pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+  });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };
   }
@@ -383,9 +382,7 @@ export async function installPluginFromFile(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
 }): Promise<InstallPluginResult> {
-  const logger = params.logger ?? defaultLogger;
-  const mode = params.mode ?? "install";
-  const dryRun = params.dryRun ?? false;
+  const { logger, mode, dryRun } = resolvePluginInstallModeOptions(params);
 
   const filePath = resolveUserPath(params.filePath);
   if (!(await fileExists(filePath))) {
@@ -410,27 +407,13 @@ export async function installPluginFromFile(params: {
   }
 
   if (dryRun) {
-    return {
-      ok: true,
-      pluginId,
-      targetDir: targetFile,
-      manifestName: undefined,
-      version: undefined,
-      extensions: [path.basename(targetFile)],
-    };
+    return buildFileInstallResult(pluginId, targetFile);
   }
 
   logger.info?.(`Installing to ${targetFile}…`);
   await fs.copyFile(filePath, targetFile);
 
-  return {
-    ok: true,
-    pluginId,
-    targetDir: targetFile,
-    manifestName: undefined,
-    version: undefined,
-    extensions: [path.basename(targetFile)],
-  };
+  return buildFileInstallResult(pluginId, targetFile);
 }
 
 export async function installPluginFromNpmSpec(params: {
@@ -442,10 +425,7 @@ export async function installPluginFromNpmSpec(params: {
   dryRun?: boolean;
   expectedPluginId?: string;
 }): Promise<InstallPluginResult> {
-  const logger = params.logger ?? defaultLogger;
-  const timeoutMs = params.timeoutMs ?? 120_000;
-  const mode = params.mode ?? "install";
-  const dryRun = params.dryRun ?? false;
+  const { logger, timeoutMs, mode, dryRun } = resolveTimedPluginInstallModeOptions(params);
   const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
   const specError = validateRegistryNpmSpec(spec);

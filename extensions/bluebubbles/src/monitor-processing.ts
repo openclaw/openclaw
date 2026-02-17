@@ -7,11 +7,6 @@ import {
   resolveAckReaction,
   resolveControlCommandGate,
 } from "openclaw/plugin-sdk";
-import type {
-  BlueBubblesCoreRuntime,
-  BlueBubblesRuntimeEnv,
-  WebhookTarget,
-} from "./monitor-shared.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
@@ -32,6 +27,11 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import type {
+  BlueBubblesCoreRuntime,
+  BlueBubblesRuntimeEnv,
+  WebhookTarget,
+} from "./monitor-shared.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -506,7 +506,15 @@ export async function processMessage(
       ? `${rawBody} ${replyTag}`
       : `${replyTag} ${rawBody}`
     : rawBody;
-  const fromLabel = isGroup ? undefined : message.senderName || `user:${message.senderId}`;
+  // Build fromLabel the same way as iMessage/Signal (formatInboundFromLabel):
+  // group label + id for groups, sender for DMs.
+  // The sender identity is included in the envelope body via formatInboundEnvelope.
+  const senderLabel = message.senderName || `user:${message.senderId}`;
+  const fromLabel = isGroup
+    ? `${message.chatName?.trim() || "Group"} id:${peerId}`
+    : senderLabel !== message.senderId
+      ? `${senderLabel} id:${message.senderId}`
+      : senderLabel;
   const groupSubject = isGroup ? message.chatName?.trim() || undefined : undefined;
   const groupMembers = isGroup
     ? formatGroupMembers({
@@ -522,13 +530,15 @@ export async function processMessage(
     storePath,
     sessionKey: route.sessionKey,
   });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const body = core.channel.reply.formatInboundEnvelope({
     channel: "BlueBubbles",
     from: fromLabel,
     timestamp: message.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
     body: baseBody,
+    chatType: isGroup ? "group" : "direct",
+    sender: { name: message.senderName || undefined, id: message.senderId },
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
@@ -652,9 +662,9 @@ export async function processMessage(
       .trim();
   };
 
-  const ctxPayload = {
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: body,
+    BodyForAgent: rawBody,
     RawBody: rawBody,
     CommandBody: rawBody,
     BodyForCommands: rawBody,
@@ -689,7 +699,7 @@ export async function processMessage(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
-  };
+  });
 
   let sentMessage = false;
   let streamingActive = false;

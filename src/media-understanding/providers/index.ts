@@ -1,5 +1,5 @@
-import type { MediaUnderstandingProvider } from "../types.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import type { MediaUnderstandingProvider } from "../types.js";
 import { anthropicProvider } from "./anthropic/index.js";
 import { deepgramProvider } from "./deepgram/index.js";
 import { googleProvider } from "./google/index.js";

@@ -3,6 +3,7 @@ import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugi
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { sendMessage, sendPoll } from "./message.js";
 
 const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
@@ -88,7 +89,7 @@ describe("sendMessage replyToId threading", () => {
     setRegistry(emptyRegistry);
   });
 
-  it("passes replyToId through to the outbound adapter", async () => {
+  const setupMattermostCapture = () => {
     const capturedCtx: Record<string, unknown>[] = [];
     const plugin = createMattermostLikePlugin({
       onSendText: (ctx) => {
@@ -96,6 +97,11 @@ describe("sendMessage replyToId threading", () => {
       },
     });
     setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    return capturedCtx;
+  };
+
+  it("passes replyToId through to the outbound adapter", async () => {
+    const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
@@ -110,13 +116,7 @@ describe("sendMessage replyToId threading", () => {
   });
 
   it("passes threadId through to the outbound adapter", async () => {
-    const capturedCtx: Record<string, unknown>[] = [];
-    const plugin = createMattermostLikePlugin({
-      onSendText: (ctx) => {
-        capturedCtx.push(ctx);
-      },
-    });
-    setRegistry(createTestRegistry([{ pluginId: "mattermost", source: "test", plugin }]));
+    const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
@@ -169,6 +169,56 @@ describe("sendPoll channel normalization", () => {
     };
     expect(call?.params?.channel).toBe("msteams");
     expect(result.channel).toBe("msteams");
+  });
+});
+
+describe("gateway url override hardening", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+    setRegistry(emptyRegistry);
+  });
+
+  afterEach(() => {
+    setRegistry(emptyRegistry);
+  });
+
+  it("drops gateway url overrides in backend mode (SSRF hardening)", async () => {
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost",
+          source: "test",
+          plugin: {
+            ...createMattermostLikePlugin({ onSendText: () => {} }),
+            outbound: { deliveryMode: "gateway" },
+          },
+        },
+      ]),
+    );
+
+    callGatewayMock.mockResolvedValueOnce({ messageId: "m1" });
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "hi",
+      channel: "mattermost",
+      gateway: {
+        url: "ws://169.254.169.254:80/latest/meta-data/",
+        token: "t",
+        timeoutMs: 5000,
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientDisplayName: "agent",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: undefined,
+        token: "t",
+        timeoutMs: 5000,
+      }),
+    );
   });
 });
 

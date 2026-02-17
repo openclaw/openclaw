@@ -72,7 +72,8 @@ Security notes:
 
 - Bonjour/mDNS TXT records are **unauthenticated**. Clients must treat TXT values as UX hints only.
 - Routing (host/port) should prefer the **resolved service endpoint** (SRV + A/AAAA) over TXT-provided `lanHost`, `tailnetDns`, or `gatewayPort`.
-- TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin. For first-time connections, require explicit user intent (TOFU or other out-of-band verification).
+- TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin.
+- iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require an explicit “trust this fingerprint” confirmation before storing a first-time pin (out-of-band verification).
 
 Disable/override:
 

@@ -1,8 +1,8 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { danger, info } from "../globals.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -280,7 +280,9 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
-    .description("Config helpers (get/set/unset). Run without subcommand for the wizard.")
+    .description(
+      "Non-interactive config helpers (get/set/unset). Run without subcommand for the setup wizard.",
+    )
     .addHelpText(
       "after",
       () =>
@@ -293,28 +295,8 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
-      const { CONFIGURE_WIZARD_SECTIONS, configureCommand, configureCommandWithSections } =
-        await import("../commands/configure.js");
-      const sections: string[] = Array.isArray(opts.section)
-        ? opts.section
-            .map((value: unknown) => (typeof value === "string" ? value.trim() : ""))
-            .filter(Boolean)
-        : [];
-      if (sections.length === 0) {
-        await configureCommand(defaultRuntime);
-        return;
-      }
-
-      const invalid = sections.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
-      if (invalid.length > 0) {
-        defaultRuntime.error(
-          `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      await configureCommandWithSections(sections as never, defaultRuntime);
+      const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
+      await configureCommandFromSectionsArg(opts.section, defaultRuntime);
     });
 
   cmd

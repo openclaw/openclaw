@@ -1,14 +1,14 @@
 import type { ReplyToMode } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramBotOptions } from "./bot.js";
-import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
   type TelegramMediaRef,
 } from "./bot-message-context.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -21,7 +21,6 @@ type TelegramMessageProcessorDeps = Omit<
   streamMode: TelegramStreamMode;
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;
-  resolveBotTopicsEnabled: (ctx: TelegramContext) => boolean | Promise<boolean>;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -45,7 +44,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     streamMode,
     textLimit,
     opts,
-    resolveBotTopicsEnabled,
   } = deps;
 
   return async (
@@ -86,7 +84,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       textLimit,
       telegramCfg,
       opts,
-      resolveBotTopicsEnabled,
     });
   };
 };

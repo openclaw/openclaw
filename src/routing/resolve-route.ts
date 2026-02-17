@@ -1,7 +1,9 @@
-import type { ChatType } from "../channels/chat-type.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { shouldLogVerbose } from "../globals.js";
+import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
 import {
   buildAgentMainSessionKey,
@@ -59,8 +61,14 @@ function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
-function normalizeId(value: string | undefined | null): string {
-  return (value ?? "").trim();
+function normalizeId(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value).trim();
+  }
+  return "";
 }
 
 function normalizeAccountId(value: string | undefined | null): string {
@@ -322,6 +330,29 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     };
   };
 
+  const shouldLogDebug = shouldLogVerbose();
+  const formatPeer = (value?: RoutePeer | null) =>
+    value?.kind && value?.id ? `${value.kind}:${value.id}` : "none";
+  const formatNormalizedPeer = (value: NormalizedPeerConstraint) => {
+    if (value.state === "none") {
+      return "none";
+    }
+    if (value.state === "invalid") {
+      return "invalid";
+    }
+    return `${value.kind}:${value.id}`;
+  };
+
+  if (shouldLogDebug) {
+    logDebug(
+      `[routing] resolveAgentRoute: channel=${channel} accountId=${accountId} peer=${formatPeer(peer)} guildId=${guildId || "none"} teamId=${teamId || "none"} bindings=${bindings.length}`,
+    );
+    for (const entry of bindings) {
+      logDebug(
+        `[routing] binding: agentId=${entry.binding.agentId} accountPattern=${entry.match.accountPattern || "default"} peer=${formatNormalizedPeer(entry.match.peer)} guildId=${entry.match.guildId ?? "none"} teamId=${entry.match.teamId ?? "none"} roles=${entry.match.roles?.length ?? 0}`,
+      );
+    }
+  }
   // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
   const parentPeer = input.parentPeer
     ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }
@@ -397,6 +428,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         }),
     );
     if (matched) {
+      if (shouldLogDebug) {
+        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
+      }
       return choose(matched.binding.agentId, tier.matchedBy);
     }
   }

@@ -1,5 +1,5 @@
-import type { GatewayService } from "../daemon/service.js";
 import { resolveNodeService } from "../daemon/node-service.js";
+import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
 

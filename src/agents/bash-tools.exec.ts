@@ -1,6 +1,7 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   type ExecAsk,
   type ExecHost,
@@ -15,6 +16,8 @@ import {
   recordAllowlistUse,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
+  buildSafeShellCommand,
+  buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
@@ -47,6 +50,7 @@ import {
   type ExecProcessHandle,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -77,6 +81,7 @@ export type ExecToolDefaults = {
   sessionKey?: string;
   messageProvider?: string;
   notifyOnExit?: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
 };
 
@@ -115,6 +120,97 @@ export type ExecToolDetails =
       nodeId?: string;
     };
 
+function extractScriptTargetFromCommand(
+  command: string,
+): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
+  const raw = command.trim();
+  if (!raw) {
+    return null;
+  }
+
+  // Intentionally simple parsing: we only support common forms like
+  //   python file.py
+  //   python3 -u file.py
+  //   node --experimental-something file.js
+  // If the command is more complex (pipes, heredocs, quoted paths with spaces), skip preflight.
+  const pythonMatch = raw.match(/^\s*(python3?|python)\s+(?:-[^\s]+\s+)*([^\s]+\.py)\b/i);
+  if (pythonMatch?.[2]) {
+    return { kind: "python", relOrAbsPath: pythonMatch[2] };
+  }
+  const nodeMatch = raw.match(/^\s*(node)\s+(?:--[^\s]+\s+)*([^\s]+\.js)\b/i);
+  if (nodeMatch?.[2]) {
+    return { kind: "node", relOrAbsPath: nodeMatch[2] };
+  }
+
+  return null;
+}
+
+async function validateScriptFileForShellBleed(params: {
+  command: string;
+  workdir: string;
+}): Promise<void> {
+  const target = extractScriptTargetFromCommand(params.command);
+  if (!target) {
+    return;
+  }
+
+  const absPath = path.isAbsolute(target.relOrAbsPath)
+    ? path.resolve(target.relOrAbsPath)
+    : path.resolve(params.workdir, target.relOrAbsPath);
+
+  // Best-effort: only validate if file exists and is reasonably small.
+  let stat: { isFile(): boolean; size: number };
+  try {
+    stat = await fs.stat(absPath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
+  if (stat.size > 512 * 1024) {
+    return;
+  }
+
+  const content = await fs.readFile(absPath, "utf-8");
+
+  // Common failure mode: shell env var syntax leaking into Python/JS.
+  // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
+  const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
+  const first = envVarRegex.exec(content);
+  if (first) {
+    const idx = first.index;
+    const before = content.slice(0, idx);
+    const line = before.split("\n").length;
+    const token = first[0];
+    throw new Error(
+      [
+        `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
+          absPath,
+        )}:${line}.`,
+        target.kind === "python"
+          ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
+          : `In Node.js, use process.env[${JSON.stringify(token.slice(1))}] instead of raw ${token}.`,
+        "(If this is inside a string literal on purpose, escape it or restructure the code.)",
+      ].join("\n"),
+    );
+  }
+
+  // Another recurring pattern from the issue: shell commands accidentally emitted as JS.
+  if (target.kind === "node") {
+    const firstNonEmpty = content
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    if (firstNonEmpty && /^NODE\b/.test(firstNonEmpty)) {
+      throw new Error(
+        `exec preflight: JS file starts with shell syntax (${firstNonEmpty}). ` +
+          `This looks like a shell command, not JavaScript.`,
+      );
+    }
+  }
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -133,6 +229,7 @@ export function createExecTool(
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const safeBins = resolveSafeBins(defaults?.safeBins);
   const notifyOnExit = defaults?.notifyOnExit !== false;
+  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
@@ -170,6 +267,7 @@ export function createExecTool(
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+      let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
@@ -313,7 +411,16 @@ export function createExecTool(
         });
         applyShellPath(env, shellPath);
       }
-      applyPathPrepend(env, defaultPathPrepend);
+
+      // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
+      // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
+      if (host === "node" && defaultPathPrepend.length > 0) {
+        warnings.push(
+          "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+        );
+      } else {
+        applyPathPrepend(env, defaultPathPrepend);
+      }
 
       if (host === "node") {
         const approvals = resolveExecApprovals(agentId, { security, ask });
@@ -359,10 +466,6 @@ export function createExecTool(
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
 
         const nodeEnv = params.env ? { ...params.env } : undefined;
-
-        if (nodeEnv) {
-          applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
-        }
         const baseAllowlistEval = evaluateShellAllowlist({
           command: params.command,
           allowlist: [],
@@ -741,6 +844,7 @@ export function createExecTool(
                 maxOutput,
                 pendingMaxOutput,
                 notifyOnExit: false,
+                notifyOnExitEmptySuccess: false,
                 scopeKey: defaults?.scopeKey,
                 sessionKey: notifySessionKey,
                 timeoutSec: effectiveTimeout,
@@ -804,6 +908,43 @@ export function createExecTool(
           throw new Error("exec denied: allowlist miss");
         }
 
+        // If allowlist uses safeBins, sanitize only those stdin-only segments:
+        // disable glob/var expansion by forcing argv tokens to be literal via single-quoting.
+        if (
+          hostSecurity === "allowlist" &&
+          analysisOk &&
+          allowlistSatisfied &&
+          allowlistEval.segmentSatisfiedBy.some((by) => by === "safeBins")
+        ) {
+          const safe = buildSafeBinsShellCommand({
+            command: params.command,
+            segments: allowlistEval.segments,
+            segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+            platform: process.platform,
+          });
+          if (!safe.ok || !safe.command) {
+            // Fallback: quote everything (safe, but may change glob behavior).
+            const fallback = buildSafeShellCommand({
+              command: params.command,
+              platform: process.platform,
+            });
+            if (!fallback.ok || !fallback.command) {
+              throw new Error(
+                `exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`,
+              );
+            }
+            warnings.push(
+              "Warning: safeBins hardening used fallback quoting due to parser mismatch.",
+            );
+            execCommandOverride = fallback.command;
+          } else {
+            warnings.push(
+              "Warning: safeBins hardening disabled glob/variable expansion for stdin-only segments.",
+            );
+            execCommandOverride = safe.command;
+          }
+        }
+
         if (allowlistMatches.length > 0) {
           const seen = new Set<string>();
           for (const match of allowlistMatches) {
@@ -826,8 +967,14 @@ export function createExecTool(
         typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
+
+      // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
+      // before we execute and burn tokens in cron loops.
+      await validateScriptFileForShellBleed({ command: params.command, workdir });
+
       const run = await runExecProcess({
         command: params.command,
+        execCommand: execCommandOverride,
         workdir,
         env,
         sandbox,
@@ -837,6 +984,7 @@ export function createExecTool(
         maxOutput,
         pendingMaxOutput,
         notifyOnExit,
+        notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
         timeoutSec: effectiveTimeout,
