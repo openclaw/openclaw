@@ -69,10 +69,12 @@ export async function sendMessageMessenger(
   });
   const token = resolveToken(opts.pageAccessToken, account);
   const chatId = normalizeTarget(to);
+  const mediaUrl = opts.mediaUrl?.trim();
+  const messageText = text?.trim();
 
   // Send media if provided
-  if (opts.mediaUrl?.trim()) {
-    await sendMediaMessenger(chatId, opts.mediaUrl.trim(), {
+  if (mediaUrl) {
+    await sendMediaMessenger(chatId, mediaUrl, {
       pageAccessToken: token,
       accountId: account.accountId,
       mediaType: opts.mediaType ?? "image",
@@ -80,9 +82,9 @@ export async function sendMessageMessenger(
   }
 
   // Send text message
-  if (text?.trim()) {
+  if (messageText) {
     // Split text into 2000-char chunks (Messenger limit)
-    const chunks = chunkText(text.trim(), 2000);
+    const chunks = chunkText(messageText, 2000);
 
     let lastResult: { message_id?: string } = {};
     for (const chunk of chunks) {
@@ -109,7 +111,7 @@ export async function sendMessageMessenger(
     };
   }
 
-  if (!opts.mediaUrl?.trim()) {
+  if (!mediaUrl) {
     throw new Error("Message must be non-empty for Messenger sends");
   }
 
@@ -125,6 +127,11 @@ export async function sendMediaMessenger(
     mediaType?: "image" | "video" | "audio" | "file";
   } = {},
 ): Promise<MessengerSendResult> {
+  const normalizedMediaUrl = mediaUrl.trim();
+  if (!normalizedMediaUrl) {
+    throw new Error("mediaUrl must be non-empty for Messenger sends");
+  }
+
   const cfg = loadConfig();
   const account = resolveMessengerAccount({
     cfg,
@@ -141,7 +148,7 @@ export async function sendMediaMessenger(
       attachment: {
         type: attachmentType,
         payload: {
-          url: mediaUrl,
+          url: normalizedMediaUrl,
           is_reusable: true,
         },
       },
