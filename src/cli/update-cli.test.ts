@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -136,11 +137,19 @@ describe("update-cli", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  const baseSnapshot = {
+  const baseConfig = {} as OpenClawConfig;
+  const baseSnapshot: ConfigFileSnapshot = {
+    path: "/tmp/openclaw-config.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    resolved: baseConfig,
     valid: true,
-    config: {},
+    config: baseConfig,
     issues: [],
-  } as const;
+    warnings: [],
+    legacyIssues: [],
+  };
 
   const setTty = (value: boolean | undefined) => {
     Object.defineProperty(process.stdin, "isTTY", {
@@ -252,6 +261,7 @@ describe("update-cli", () => {
       code: 0,
       signal: null,
       killed: false,
+      termination: "exit",
     });
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
@@ -358,7 +368,7 @@ describe("update-cli", () => {
   it("uses stored beta channel when configured", async () => {
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
-      config: { update: { channel: "beta" } },
+      config: { update: { channel: "beta" } } as OpenClawConfig,
     });
     vi.mocked(runGatewayUpdate).mockResolvedValue({
       status: "ok",
@@ -379,7 +389,7 @@ describe("update-cli", () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
-      config: { update: { channel: "beta" } },
+      config: { update: { channel: "beta" } } as OpenClawConfig,
     });
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: tempDir,

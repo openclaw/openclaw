@@ -154,7 +154,7 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nTranscript:\ntranscribed text",
       commandBody: "transcribed text",
     });
-    expect(ctx.BodyForAgent).toBe(ctx.Body);
+    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(ctx.Body);
   });
 
   it("skips file blocks for text-like audio when transcription succeeds", async () => {
@@ -308,7 +308,7 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(result.appliedAudio).toBe(true);
-    expect(ctx.Transcript).toBe("cli transcript");
+    expect((ctx as unknown as { Transcript?: string }).Transcript).toBe("cli transcript");
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
   });
 
