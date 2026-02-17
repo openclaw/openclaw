@@ -332,6 +332,7 @@ export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
+export const MEGANOVA_DEFAULT_MODEL_REF = "meganova/zai-org/GLM-5";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
@@ -431,6 +432,18 @@ export async function setOpencodeZenApiKey(
   upsertAuthProfile({
     profileId: "opencode:default",
     credential: buildApiKeyCredential("opencode", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setMeganovaApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "meganova:default",
+    credential: buildApiKeyCredential("meganova", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

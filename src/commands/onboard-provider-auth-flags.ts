@@ -18,6 +18,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "syntheticApiKey"
   | "veniceApiKey"
   | "togetherApiKey"
+  | "meganovaApiKey"
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
@@ -148,6 +149,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--together-api-key",
     cliOption: "--together-api-key <key>",
     description: "Together AI API key",
+  },
+  {
+    optionKey: "meganovaApiKey",
+    authChoice: "meganova-api-key",
+    cliFlag: "--meganova-api-key",
+    cliOption: "--meganova-api-key <key>",
+    description: "MegaNova API key",
   },
   {
     optionKey: "huggingfaceApiKey",
