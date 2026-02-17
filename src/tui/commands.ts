@@ -114,6 +114,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
         })),
     },
     { name: "abort", description: "Abort active run" },
+    { name: "save", description: "Save memory to disk" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
     { name: "settings", description: "Open settings" },

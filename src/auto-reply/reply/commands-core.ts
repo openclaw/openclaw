@@ -8,6 +8,7 @@ import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
+import { handleSaveCommand, runPreResetMemoryFlush } from "./commands-save.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import {
   handleCommandsListCommand,
@@ -63,6 +64,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleModelsCommand,
       handleStopCommand,
       handleCompactCommand,
+      handleSaveCommand,
       handleAbortTrigger,
     ];
   }
@@ -73,6 +75,33 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+
+  // Run pre-reset memory flush: save durable memories before the session is wiped.
+  // Active when compaction.memoryFlush is enabled (default: true).
+  if (resetRequested && params.command.isAuthorizedSender && params.sessionEntry?.sessionId) {
+    const memoryFlushSettings = (await import("./memory-flush.js")).resolveMemoryFlushSettings(params.cfg);
+    if (memoryFlushSettings) {
+      const flushResult = await runPreResetMemoryFlush({
+        cfg: params.cfg,
+        sessionEntry: params.sessionEntry,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        agentId: params.agentId,
+        workspaceDir: params.workspaceDir,
+        provider: params.provider,
+        model: params.model,
+        resolvedThinkLevel: params.resolvedThinkLevel,
+        resolvedVerboseLevel: params.resolvedVerboseLevel,
+        resolvedReasoningLevel: params.resolvedReasoningLevel,
+        ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+      });
+      if (flushResult.ok) {
+        logVerbose(`Pre-reset memory flush completed for session ${params.sessionKey}`);
+      } else {
+        logVerbose(`Pre-reset memory flush failed: ${flushResult.error}`);
+      }
+    }
   }
 
   // Trigger internal hook for reset/new commands
