@@ -261,6 +261,46 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toBe(originalText);
   });
 
+  it("normalizes invalid tool call IDs before persistence and preserves pairing", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    const rawId = " functions.exec:0";
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: rawId, name: "exec", arguments: { command: "echo hi" } }],
+      }),
+    );
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: rawId,
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+
+    const assistant = messages.find((m) => m.role === "assistant") as {
+      content: Array<{ type: string; id?: string }>;
+    };
+    const toolResult = messages.find((m) => m.role === "toolResult") as {
+      toolCallId?: string;
+    };
+
+    const persistedId = assistant.content[0]?.id;
+    expect(persistedId).toBeDefined();
+    expect(persistedId).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(persistedId).not.toBe(rawId);
+
+    expect(toolResult.toolCallId).toBe(persistedId);
+  });
+
   it("applies message persistence transform to user messages", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
