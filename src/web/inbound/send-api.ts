@@ -1,6 +1,4 @@
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
+AnyMessageContent,
   WAPresence,
 } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
