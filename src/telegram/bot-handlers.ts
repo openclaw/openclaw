@@ -766,7 +766,7 @@ export const registerTelegramHandlers = ({
               messageThreadId: callbackMessage.message_thread_id,
             }),
           ) ?? {};
-        const mergedParams = { ...callbackThreadParams, ...(params ?? {}) };
+        const mergedParams = { ...callbackThreadParams, ...params };
         const replyFn = (ctx as { reply?: unknown }).reply;
         if (typeof replyFn === "function") {
           return await ctx.reply(text, mergedParams);
