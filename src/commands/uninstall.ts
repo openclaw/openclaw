@@ -1,10 +1,10 @@
-import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import path from "node:path";
-import type { RuntimeEnv } from "../runtime.js";
+import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import { resolveCliName } from "../cli/cli-name.js";
 import { uninstallCompletionFromAllProfiles } from "../cli/completion-cli.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveHomeDir } from "../utils.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
