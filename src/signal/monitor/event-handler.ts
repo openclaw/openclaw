@@ -1,3 +1,4 @@
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -24,9 +25,10 @@ import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js
 import { normalizeSignalMessagingTarget } from "../../channels/plugins/normalize/signal.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { runSilentMessageIngest } from "../../channels/silent-ingest.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import {
-  resolveChannelGroupPolicy,
+  resolveChannelGroupIngest,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
@@ -38,7 +40,6 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { normalizeE164 } from "../../utils.js";
 import {
@@ -51,7 +52,6 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -598,59 +598,41 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
 
       // Silent ingest: run hooks on non-mentioned messages
-      const { groupConfig } = resolveChannelGroupPolicy({
+      const ingestEnabled = resolveChannelGroupIngest({
         cfg: deps.cfg,
         channel: "signal",
         groupId,
         accountId: deps.accountId,
       });
-      const ingestEnabled = groupConfig?.ingest;
-      if (ingestEnabled && groupId && pendingBodyText && pendingBodyText.trim().length > 0) {
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner) {
-          const { sanitizeUserText } = await import("../../utils/sanitize.js");
-
-          const timestamp =
-            typeof envelope.timestamp === "number" && envelope.timestamp > 0
-              ? envelope.timestamp
-              : undefined;
-          const messageIdForHook = timestamp ? String(timestamp) : undefined;
-          const sanitizedMetadata = {
+      const timestamp =
+        typeof envelope.timestamp === "number" && envelope.timestamp > 0
+          ? envelope.timestamp
+          : undefined;
+      const messageIdForHook = timestamp ? String(timestamp) : undefined;
+      void runSilentMessageIngest({
+        enabled: Boolean(ingestEnabled && groupId),
+        event: {
+          from: senderDisplay,
+          content: pendingBodyText,
+          timestamp,
+          metadata: {
             to: groupId,
             provider: "signal",
             surface: "signal",
             messageId: messageIdForHook,
             originatingChannel: "signal",
             originatingTo: groupId,
-            senderName: sanitizeUserText(senderDisplay),
-          };
-
-          const HOOK_TIMEOUT_MS = 5000;
-          const timeoutPromise = new Promise<void>((_, reject) => {
-            setTimeout(() => reject(new Error("Hook timeout")), HOOK_TIMEOUT_MS);
-          });
-
-          void Promise.race([
-            hookRunner.runMessageIngest(
-              {
-                from: senderDisplay,
-                content: pendingBodyText,
-                timestamp,
-                metadata: sanitizedMetadata,
-              },
-              {
-                channelId: "signal",
-                accountId: deps.accountId,
-                conversationId: groupId,
-              },
-            ),
-            timeoutPromise,
-          ]).catch((err) => {
-            const errorMsg = err instanceof Error ? err.message : "Unknown error";
-            logVerbose(`signal: ingest hook failed: ${errorMsg}`);
-          });
-        }
-      }
+            senderName: senderDisplay,
+          },
+        },
+        ctx: {
+          channelId: "signal",
+          accountId: deps.accountId,
+          conversationId: groupId ?? "unknown",
+        },
+        log: logVerbose,
+        logPrefix: "signal",
+      });
 
       return;
     }

@@ -1,7 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 
 export type GroupPolicyChannel = ChannelId;
 
@@ -198,6 +198,36 @@ export function resolveChannelGroupRequireMention(params: {
     return requireMentionOverride;
   }
   return true;
+}
+
+export function resolveChannelGroupIngest(params: {
+  cfg: OpenClawConfig;
+  channel: GroupPolicyChannel;
+  groupId?: string | null;
+  accountId?: string | null;
+  groupIdCaseInsensitive?: boolean;
+  ingestOverride?: boolean;
+  overrideOrder?: "before-config" | "after-config";
+}): boolean {
+  const { ingestOverride, overrideOrder = "after-config" } = params;
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  const configIngest =
+    typeof groupConfig?.ingest === "boolean"
+      ? groupConfig.ingest
+      : typeof defaultConfig?.ingest === "boolean"
+        ? defaultConfig.ingest
+        : undefined;
+
+  if (overrideOrder === "before-config" && typeof ingestOverride === "boolean") {
+    return ingestOverride;
+  }
+  if (typeof configIngest === "boolean") {
+    return configIngest;
+  }
+  if (overrideOrder !== "before-config" && typeof ingestOverride === "boolean") {
+    return ingestOverride;
+  }
+  return false;
 }
 
 export function resolveChannelGroupToolsPolicy(
