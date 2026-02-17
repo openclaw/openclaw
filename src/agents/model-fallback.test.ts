@@ -787,6 +787,14 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on ENETRESET (connection reset by network)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect ENETRESET"), { code: "ENETRESET" }),
+    });
+  });
+
   it("falls back on provider abort errors with request-aborted messages", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
