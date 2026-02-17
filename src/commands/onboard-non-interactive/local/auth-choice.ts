@@ -511,7 +511,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyKimiCodeConfig(nextConfig);
   }
 
-  if (authChoice === "stepfun-api-key") {
+  if (authChoice === "stepfun-api-key" || authChoice === "stepfun-cn") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "stepfun",
       cfg: baseConfig,
@@ -531,7 +531,10 @@ export async function applyNonInteractiveAuthChoice(params: {
       provider: "stepfun",
       mode: "api_key",
     });
-    return applyStepfunConfig(nextConfig, { endpoint: opts.stepfunEndpoint });
+    return applyStepfunConfig(
+      nextConfig,
+      authChoice === "stepfun-cn" ? { endpoint: "cn" } : undefined,
+    );
   }
 
   if (authChoice === "synthetic-api-key") {

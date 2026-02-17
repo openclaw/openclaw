@@ -487,9 +487,9 @@ export async function applyAuthChoiceApiProviders(
     return { config: nextConfig, agentModelOverride };
   }
 
-  if (authChoice === "stepfun-api-key") {
+  if (authChoice === "stepfun-api-key" || authChoice === "stepfun-cn") {
     let hasCredential = false;
-    const stepfunEndpoint = params.opts?.stepfunEndpoint;
+    const endpoint = authChoice === "stepfun-cn" ? "cn" : undefined;
 
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "stepfun") {
       await setStepfunApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
@@ -524,9 +524,9 @@ export async function applyAuthChoiceApiProviders(
         config: nextConfig,
         setDefaultModel: params.setDefaultModel,
         defaultModel: STEPFUN_DEFAULT_MODEL_REF,
-        applyDefaultConfig: (cfg) => applyStepfunConfig(cfg, { endpoint: stepfunEndpoint }),
+        applyDefaultConfig: (cfg) => applyStepfunConfig(cfg, endpoint ? { endpoint } : undefined),
         applyProviderConfig: (cfg) =>
-          applyStepfunProviderConfig(cfg, { endpoint: stepfunEndpoint }),
+          applyStepfunProviderConfig(cfg, endpoint ? { endpoint } : undefined),
         noteDefault: STEPFUN_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,

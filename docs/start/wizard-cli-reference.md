@@ -176,7 +176,7 @@ What you set:
     More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
   <Accordion title="StepFun (Step 3.5 Flash)">
-    Prompts for `STEPFUN_API_KEY` (or `--stepfun-api-key` in non-interactive mode). Use `--stepfun-endpoint <global|cn>` to choose endpoint preset.
+    Config is auto-written.
     More detail: [StepFun](/providers/stepfun).
   </Accordion>
   <Accordion title="Custom provider">

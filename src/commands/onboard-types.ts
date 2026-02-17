@@ -20,6 +20,7 @@ export type AuthChoice =
   | "moonshot-api-key-cn"
   | "kimi-code-api-key"
   | "stepfun-api-key"
+  | "stepfun-cn"
   | "synthetic-api-key"
   | "venice-api-key"
   | "together-api-key"
@@ -79,7 +80,6 @@ export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
 export type TailscaleMode = "off" | "serve" | "funnel";
 export type NodeManagerChoice = "npm" | "pnpm" | "bun";
-export type StepfunEndpoint = "global" | "cn";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
@@ -113,7 +113,6 @@ export type OnboardOptions = {
   moonshotApiKey?: string;
   kimiCodeApiKey?: string;
   stepfunApiKey?: string;
-  stepfunEndpoint?: StepfunEndpoint;
   geminiApiKey?: string;
   zaiApiKey?: string;
   xiaomiApiKey?: string;

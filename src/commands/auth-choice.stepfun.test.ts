@@ -152,7 +152,7 @@ describe("applyAuthChoice (stepfun)", () => {
     expect(parsed.profiles?.["stepfun:default"]?.key).toBe("sk-stepfun-test");
   });
 
-  it("uses CN baseUrl when stepfunEndpoint is cn", async () => {
+  it("uses CN baseUrl when auth choice is stepfun-cn", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
@@ -179,12 +179,11 @@ describe("applyAuthChoice (stepfun)", () => {
     };
 
     const result = await applyAuthChoice({
-      authChoice: "stepfun-api-key",
+      authChoice: "stepfun-cn",
       config: {},
       prompter,
       runtime,
       setDefaultModel: true,
-      opts: { stepfunEndpoint: "cn" },
     });
 
     expect(result.config.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.com/v1");

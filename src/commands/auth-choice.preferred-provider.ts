@@ -18,6 +18,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "moonshot-api-key-cn": "moonshot",
   "kimi-code-api-key": "kimi-coding",
   "stepfun-api-key": "stepfun",
+  "stepfun-cn": "stepfun",
   "gemini-api-key": "google",
   "google-antigravity": "google-antigravity",
   "google-gemini-cli": "google-gemini-cli",

@@ -37,11 +37,8 @@ For non-interactive setups (e.g. CI/CD):
 openclaw onboard --non-interactive \
   --mode local \
   --auth-choice stepfun-api-key \
-  --stepfun-api-key "$STEPFUN_API_KEY" \
-  --stepfun-endpoint cn
+  --stepfun-api-key "$STEPFUN_API_KEY"
 ```
-
-`--stepfun-endpoint` accepts `global` (default) or `cn`.
 
 This command stores your credentials and configures OpenClaw with:
 
@@ -57,6 +54,7 @@ Reference for `~/.openclaw/openclaw.json` (if you prefer manual editing):
   models: {
     providers: {
       stepfun: {
+        // Global default. For China endpoint use: "https://api.stepfun.com/v1"
         baseUrl: "https://api.stepfun.ai/v1",
         apiKey: "YOUR_API_KEY",
         auth: "api-key",
@@ -85,5 +83,5 @@ Reference for `~/.openclaw/openclaw.json` (if you prefer manual editing):
 ## Notes
 
 - Default onboarding endpoint is `global` (`https://api.stepfun.ai/v1`).
-- Use `--stepfun-endpoint cn` to write `https://api.stepfun.com/v1`.
-- If StepFun is already configured and you rerun onboarding without `--stepfun-endpoint`, OpenClaw keeps your existing `models.providers.stepfun.baseUrl`.
+- For the China endpoint, set `models.providers.stepfun.baseUrl` to `https://api.stepfun.com/v1`.
+- If StepFun is already configured and you rerun onboarding with `--auth-choice stepfun-api-key`, OpenClaw keeps your existing `models.providers.stepfun.baseUrl`.

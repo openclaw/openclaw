@@ -32,8 +32,8 @@ describe("onboard (non-interactive): StepFun", () => {
 
     const runtime = {
       log: () => {},
-      error: (msg: string) => {
-        throw new Error(msg);
+      error: (...args: unknown[]) => {
+        throw new Error(args.map(String).join(" "));
       },
       exit: (code: number) => {
         throw new Error(`exit:${code}`);
@@ -45,9 +45,8 @@ describe("onboard (non-interactive): StepFun", () => {
       await runNonInteractiveOnboarding(
         {
           nonInteractive: true,
-          authChoice: "stepfun-api-key",
+          authChoice: params?.endpoint === "cn" ? "stepfun-cn" : "stepfun-api-key",
           stepfunApiKey: "sk-stepfun-test",
-          ...(params?.endpoint ? { stepfunEndpoint: params.endpoint } : {}),
           skipHealth: true,
           skipChannels: true,
           skipSkills: true,
@@ -98,7 +97,7 @@ describe("onboard (non-interactive): StepFun", () => {
     await runStepfunOnboarding();
   }, 60_000);
 
-  it("uses CN endpoint when --stepfun-endpoint cn is provided", async () => {
+  it("uses CN endpoint when auth choice is stepfun-cn", async () => {
     await runStepfunOnboarding({ endpoint: "cn" });
   }, 60_000);
 });

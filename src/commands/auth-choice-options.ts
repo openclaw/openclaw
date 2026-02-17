@@ -61,7 +61,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "stepfun",
     label: "StepFun (Step 3.5 Flash)",
-    choices: ["stepfun-api-key"],
+    choices: ["stepfun-api-key", "stepfun-cn"],
   },
   {
     value: "google",
@@ -219,6 +219,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "stepfun-api-key",
     label: "StepFun API key",
+  },
+  {
+    value: "stepfun-cn",
+    label: "StepFun API key (CN)",
+    hint: "China endpoint (api.stepfun.com)",
   },
   { value: "synthetic-api-key", label: "Synthetic API key" },
   {

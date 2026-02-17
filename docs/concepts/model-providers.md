@@ -242,7 +242,7 @@ StepFun has first-class onboarding support and can also be configured manually:
 
 - Provider: `stepfun`
 - Auth: `STEPFUN_API_KEY`
-- CLI: `openclaw onboard --auth-choice stepfun-api-key` (optional: `--stepfun-endpoint <global|cn>`)
+- CLI: `openclaw onboard --auth-choice stepfun-api-key`
 - Base URL: `https://api.stepfun.ai/v1` (International) or `https://api.stepfun.com/v1` (China)
 - Example model: `stepfun/step-3.5-flash`
 

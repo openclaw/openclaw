@@ -1,4 +1,4 @@
-import { Option, type Command } from "commander";
+import type { Command } from "commander";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
@@ -7,7 +7,6 @@ import type {
   GatewayAuthChoice,
   GatewayBind,
   NodeManagerChoice,
-  StepfunEndpoint,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { onboardCommand } from "../../commands/onboard.js";
@@ -83,12 +82,6 @@ export function registerOnboardCommand(program: Command) {
   }
 
   command
-    .addOption(
-      new Option("--stepfun-endpoint <endpoint>", "StepFun endpoint preset: global|cn").choices([
-        "global",
-        "cn",
-      ]),
-    )
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -146,7 +139,6 @@ export function registerOnboardCommand(program: Command) {
           moonshotApiKey: opts.moonshotApiKey as string | undefined,
           kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
           stepfunApiKey: opts.stepfunApiKey as string | undefined,
-          stepfunEndpoint: opts.stepfunEndpoint as StepfunEndpoint | undefined,
           geminiApiKey: opts.geminiApiKey as string | undefined,
           zaiApiKey: opts.zaiApiKey as string | undefined,
           xiaomiApiKey: opts.xiaomiApiKey as string | undefined,

@@ -49,7 +49,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **Moonshot (Kimi K2)**: config is auto-written.
     - **Kimi Coding**: config is auto-written.
     - More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
-    - **StepFun (Step 3.5 Flash)**: prompts for `STEPFUN_API_KEY` (or `--stepfun-api-key` in non-interactive mode), supports `--stepfun-endpoint <global|cn>`, then writes provider config and default model.
+    - **StepFun (Step 3.5 Flash)**: config is auto-written.
     - More detail: [StepFun](/providers/stepfun)
     - **Skip**: no auth configured yet.
     - Pick a default model from detected options (or enter provider/model manually).
@@ -192,7 +192,6 @@ Add `--json` for a machine‑readable summary.
       --mode local \
       --auth-choice stepfun-api-key \
       --stepfun-api-key "$STEPFUN_API_KEY" \
-      --stepfun-endpoint cn \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
