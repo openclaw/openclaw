@@ -11,9 +11,11 @@ export { resolveEmbeddedSessionLane } from "./pi-embedded-runner/lanes.js";
 export { runEmbeddedPiAgent } from "./pi-embedded-runner/run.js";
 export {
   abortEmbeddedPiRun,
+  getActiveEmbeddedPiRunMeta,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
+  releaseEmbeddedPiRunLockOnTimeout,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded-runner/runs.js";
 export { buildEmbeddedSandboxInfo } from "./pi-embedded-runner/sandbox-info.js";

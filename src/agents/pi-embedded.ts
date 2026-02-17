@@ -7,9 +7,11 @@ export type {
 export {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
+  getActiveEmbeddedPiRunMeta,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
+  releaseEmbeddedPiRunLockOnTimeout,
   resolveEmbeddedSessionLane,
   runEmbeddedPiAgent,
   waitForEmbeddedPiRunEnd,

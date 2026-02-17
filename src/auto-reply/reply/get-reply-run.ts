@@ -10,8 +10,10 @@ import type { TypingController } from "./typing.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import {
   abortEmbeddedPiRun,
+  getActiveEmbeddedPiRunMeta,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
+  releaseEmbeddedPiRunLockOnTimeout,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
 import {
@@ -21,6 +23,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -50,6 +53,9 @@ type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node"
 
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.";
+const KNUTH_DISCORD_SINGLE_FLIGHT_SESSION_KEY = "agent:knuth:discord:channel:1470840583315521619";
+const KNUTH_DISCORD_SINGLE_FLIGHT_TIMEOUT_MS = 20 * 60 * 1000;
+const singleFlightLog = createSubsystemLogger("auto-reply/single-flight");
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;
@@ -335,7 +341,7 @@ export async function runPreparedReply(
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   const queueKey = sessionKey ?? sessionIdFinal;
-  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
+  let isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
@@ -353,6 +359,41 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+
+  if (sessionKey === KNUTH_DISCORD_SINGLE_FLIGHT_SESSION_KEY && isActive) {
+    const timeoutRelease = releaseEmbeddedPiRunLockOnTimeout(
+      sessionIdFinal,
+      KNUTH_DISCORD_SINGLE_FLIGHT_TIMEOUT_MS,
+    );
+    if (timeoutRelease.released) {
+      singleFlightLog.warn({
+        reason_code: "RUN_LOCK_TIMEOUT_RELEASE",
+        session_key: sessionKey,
+        session_id: sessionIdFinal,
+        agent_id: agentId,
+        active_run_id: timeoutRelease.runId,
+        lock_age_ms: timeoutRelease.ageMs,
+      });
+      isActive = isEmbeddedPiRunActive(sessionIdFinal);
+    }
+  }
+
+  if (sessionKey === KNUTH_DISCORD_SINGLE_FLIGHT_SESSION_KEY && isActive) {
+    const activeRunMeta = getActiveEmbeddedPiRunMeta(sessionIdFinal);
+    const attemptedTrigger = (commandSource || baseBodyTrimmedRaw || "").slice(0, 200) || "<empty>";
+    singleFlightLog.warn({
+      reason_code: "RUN_ALREADY_ACTIVE",
+      session_key: sessionKey,
+      session_id: sessionIdFinal,
+      agent_id: agentId,
+      active_run_id: activeRunMeta?.runId,
+      attempted_trigger: attemptedTrigger,
+    });
+    return {
+      text: `RUN_ALREADY_ACTIVE active_run_id=${activeRunMeta?.runId ?? "unknown"}`,
+    };
+  }
+
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,

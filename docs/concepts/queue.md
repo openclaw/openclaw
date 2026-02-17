@@ -87,3 +87,14 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 - If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
+
+## Knuth Discord single-flight guard
+
+For `agent:knuth:discord:channel:1470840583315521619`, inbound starts are hard-rejected while a run is active (no followup queueing). The rejection includes `RUN_ALREADY_ACTIVE` and the active run id when known.
+
+Safety release: if the lock age exceeds 20 minutes, the runtime force-aborts/releases the stale lock and logs `RUN_LOCK_TIMEOUT_RELEASE` before allowing a new run.
+
+Operator actions:
+
+- wait for current run completion, or
+- cancel active run with the session stop flow, then retry.
