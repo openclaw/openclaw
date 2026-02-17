@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Triage PR
-        uses: pranayom/security_pr@32b92f6dfd75f4fba07eaf39c3efed2c6f155c31
+        uses: pranayom/security_pr@4d4682c850ad4566c2ab0ab9016a9ac2e09e3fe0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           vision_document: .github/openclaw-vision.yaml
