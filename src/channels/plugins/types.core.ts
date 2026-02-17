@@ -267,8 +267,16 @@ export type ChannelThreadingToolContext = {
   skipCrossContextDecoration?: boolean;
 };
 
+export type ChannelNormalizedTargetResult =
+  | string
+  | {
+      ok?: boolean;
+      to?: string;
+      target?: string;
+    };
+
 export type ChannelMessagingAdapter = {
-  normalizeTarget?: (raw: string) => string | undefined;
+  normalizeTarget?: (raw: string) => ChannelNormalizedTargetResult | undefined;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
