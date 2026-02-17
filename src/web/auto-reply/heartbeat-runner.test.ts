@@ -37,6 +37,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
+  DEFAULT_ACCOUNT_ID: "default",
   normalizeMainKey: () => null,
 }));
 

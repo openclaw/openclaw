@@ -110,6 +110,7 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../routing/session-key.js", () => ({
+  DEFAULT_ACCOUNT_ID: "default",
   buildAgentMainSessionKey: vi.fn().mockReturnValue("agent:default:cron:test"),
   normalizeAgentId: vi.fn((id: string) => id),
 }));
