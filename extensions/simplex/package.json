@@ -1,0 +1,34 @@
+{
+  "name": "@openclaw/simplex",
+  "version": "2026.2.17",
+  "description": "SimpleX Chat channel plugin for OpenClaw — zero-metadata, decentralized DMs",
+  "type": "module",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "simplex",
+      "label": "SimpleX",
+      "selectionLabel": "SimpleX Chat (encrypted DMs)",
+      "docsPath": "/channels/simplex",
+      "docsLabel": "simplex",
+      "blurb": "Zero-metadata messaging. No user identifiers. Maximum privacy.",
+      "order": 56,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/simplex",
+      "localPath": "extensions/simplex",
+      "defaultChoice": "local"
+    }
+  },
+  "dependencies": {
+    "ws": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}
