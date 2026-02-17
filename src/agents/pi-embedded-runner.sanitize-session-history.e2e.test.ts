@@ -9,8 +9,7 @@ import {
   sanitizeWithOpenAIResponses,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 
-type SanitizeSessionHistory =
-  typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
+type SanitizeSessionHistory = Awaited<ReturnType<typeof loadSanitizeSessionHistoryWithCleanMocks>>;
 let sanitizeSessionHistory: SanitizeSessionHistory;
 
 vi.mock("./pi-embedded-helpers.js", async () => {

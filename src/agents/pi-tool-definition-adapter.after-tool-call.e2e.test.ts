@@ -37,7 +37,7 @@ function createReadTool() {
 }
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
-const extensionContext = {} as Parameters<ToolExecute>[3];
+const extensionContext = {} as Parameters<ToolExecute>[4];
 
 function enableAfterToolCallHook() {
   hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
@@ -45,14 +45,12 @@ function enableAfterToolCallHook() {
 
 async function executeReadTool(callId: string) {
   const defs = toToolDefinitions([createReadTool()]);
-  const args: Parameters<(typeof defs)[number]["execute"]> = [
-    callId,
-    { path: "/tmp/file" },
-    undefined,
-    extensionContext,
-    undefined,
-  ];
-  return await defs[0].execute(...args);
+  const def = defs[0];
+  if (!def) {
+    throw new Error("missing tool definition");
+  }
+  const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
+  return await execute(callId, { path: "/tmp/file" }, undefined, undefined, extensionContext);
 }
 
 function expectReadAfterToolCallPayload(result: Awaited<ReturnType<typeof executeReadTool>>) {
@@ -119,14 +117,12 @@ describe("pi tool definition adapter after_tool_call", () => {
     } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const args: Parameters<(typeof defs)[number]["execute"]> = [
-      "call-err",
-      { cmd: "ls" },
-      undefined,
-      extensionContext,
-      undefined,
-    ];
-    const result = await defs[0].execute(...args);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
+    const result = await execute("call-err", { cmd: "ls" }, undefined, undefined, extensionContext);
 
     expect(result.details).toMatchObject({
       status: "error",
