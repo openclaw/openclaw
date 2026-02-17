@@ -614,6 +614,12 @@ export type PluginHookToolContext = {
   toolName: string;
   /** Provider-specific tool call ID when available. */
   toolCallId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  intentTokenRaw?: string;
+  csrgPath?: string;
 };
 
 // before_tool_call hook
