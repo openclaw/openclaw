@@ -681,6 +681,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         agentAccountId: params.ctx.AccountId,
         agentTo: params.command.to,
         agentThreadId: params.ctx.MessageThreadId,
+        agentGroupId: params.sessionEntry?.groupId ?? null,
+        agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
+        agentGroupSpace: params.sessionEntry?.space ?? null,
       },
     );
     if (result.status === "accepted") {
