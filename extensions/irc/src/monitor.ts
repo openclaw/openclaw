@@ -147,10 +147,13 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${client.nick}`,
   );
 
-  return {
-    stop: () => {
-      client?.quit("shutdown");
-      client = null;
-    },
+  const stop = () => {
+    client?.quit("shutdown");
+    client = null;
   };
+
+  // Stay alive until the socket closes so the gateway doesn't auto-restart.
+  await client.closed;
+
+  return { stop };
 }
