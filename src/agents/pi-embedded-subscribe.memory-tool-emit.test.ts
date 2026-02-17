@@ -10,9 +10,7 @@ describe("memory tool emission suppression", () => {
   it("isInternalToolResult returns true for memory_search", async () => {
     // We test the observable behavior: the onToolResult callback must NOT
     // be invoked for memory_search or memory_get tool names.
-    const { subscribeToEmbeddedPiSession } = await import(
-      "./pi-embedded-subscribe.js"
-    );
+    const { subscribeToEmbeddedPiSession } = await import("./pi-embedded-subscribe.js");
 
     // subscribeToEmbeddedPiSession is complex to set up, so we instead
     // verify the emitToolSummary/emitToolOutput guards via a minimal

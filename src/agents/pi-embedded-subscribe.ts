@@ -320,8 +320,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   // causes the delivery to fail, corrupting the draft stream and silently
   // dropping the assistant's final reply.  Skip delivery entirely -- these
   // results have no user-facing value.
-  const isInternalToolResult = (name?: string) =>
-    name === "memory_search" || name === "memory_get";
+  const isInternalToolResult = (name?: string) => name === "memory_search" || name === "memory_get";
 
   const emitToolSummary = (toolName?: string, meta?: string) => {
     if (!params.onToolResult || isInternalToolResult(toolName)) {
