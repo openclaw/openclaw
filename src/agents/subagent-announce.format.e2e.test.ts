@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
-const agentSpy = vi.fn(async () => ({ runId: "run-main", status: "ok" }));
-const sessionsDeleteSpy = vi.fn();
-const readLatestAssistantReplyMock = vi.fn(async () => "raw subagent reply");
+type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
+type RequesterResolution = {
+  requesterSessionKey: string;
+  requesterOrigin?: Record<string, unknown>;
+} | null;
+
+const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
+const readLatestAssistantReplyMock = vi.fn(
+  async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
+);
 const embeddedRunMock = {
   isEmbeddedPiRunActive: vi.fn(() => false),
   isEmbeddedPiRunStreaming: vi.fn(() => false),
@@ -12,8 +20,8 @@ const embeddedRunMock = {
 };
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
-  countActiveDescendantRuns: vi.fn(() => 0),
-  resolveRequesterForChildSession: vi.fn(() => null),
+  countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
+  resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
 let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
