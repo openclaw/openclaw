@@ -94,7 +94,7 @@ export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] 
     {
       hostRoot: path.resolve(sandbox.workspaceDir),
       containerRoot: normalizeContainerPath(sandbox.containerWorkdir),
-      writable: sandbox.workspaceAccess === "rw",
+      writable: sandbox.workspaceAccess !== "ro",
       source: "workspace",
     },
   ];
@@ -106,7 +106,7 @@ export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] 
     mounts.push({
       hostRoot: path.resolve(sandbox.agentWorkspaceDir),
       containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
-      writable: sandbox.workspaceAccess === "rw",
+      writable: sandbox.workspaceAccess !== "ro",
       source: "agent",
     });
   }
