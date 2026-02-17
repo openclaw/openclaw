@@ -190,6 +190,11 @@
       - any-glob-to-any-file:
           - "src/agents/**"
 
+"media-understanding":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/media-understanding/**"
+
 "security":
   - changed-files:
       - any-glob-to-any-file:

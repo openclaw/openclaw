@@ -3,6 +3,7 @@ import type { MediaUnderstandingProvider } from "../types.js";
 import { anthropicProvider } from "./anthropic/index.js";
 import { deepgramProvider } from "./deepgram/index.js";
 import { googleProvider } from "./google/index.js";
+import { googleVertexProvider } from "./google-vertex/index.js";
 import { groqProvider } from "./groq/index.js";
 import { minimaxProvider } from "./minimax/index.js";
 import { openaiProvider } from "./openai/index.js";
@@ -12,6 +13,7 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   groqProvider,
   openaiProvider,
   googleProvider,
+  googleVertexProvider,
   anthropicProvider,
   minimaxProvider,
   zaiProvider,

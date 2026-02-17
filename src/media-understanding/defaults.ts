@@ -33,15 +33,22 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   deepgram: "nova-3",
 };
 
-export const AUTO_AUDIO_KEY_PROVIDERS = ["openai", "groq", "deepgram", "google"] as const;
+export const AUTO_AUDIO_KEY_PROVIDERS = [
+  "openai",
+  "groq",
+  "deepgram",
+  "google",
+  "google-vertex",
+] as const;
 export const AUTO_IMAGE_KEY_PROVIDERS = [
   "openai",
   "anthropic",
   "google",
+  "google-vertex",
   "minimax",
   "zai",
 ] as const;
-export const AUTO_VIDEO_KEY_PROVIDERS = ["google"] as const;
+export const AUTO_VIDEO_KEY_PROVIDERS = ["google", "google-vertex"] as const;
 export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
   openai: "gpt-5-mini",
   anthropic: "claude-opus-4-6",
