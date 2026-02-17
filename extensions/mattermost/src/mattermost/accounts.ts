@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createAccountListHelpers } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
@@ -24,9 +23,29 @@ export type ResolvedMattermostAccount = {
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("mattermost");
-export const listMattermostAccountIds = listAccountIds;
-export const resolveDefaultMattermostAccountId = resolveDefaultAccountId;
+function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
+  const accounts = cfg.channels?.mattermost?.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
+  return Object.keys(accounts).filter(Boolean);
+}
+
+export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
+  const ids = listConfiguredAccountIds(cfg);
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
+}
+
+export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
+  const ids = listMattermostAccountIds(cfg);
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+}
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
