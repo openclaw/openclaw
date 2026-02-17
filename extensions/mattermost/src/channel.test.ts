@@ -191,9 +191,10 @@ describe("mattermostPlugin", () => {
 
   describe("config", () => {
     it("formats allowFrom entries", () => {
-      const formatAllowFrom = mattermostPlugin.config.formatAllowFrom;
+      const formatAllowFrom = mattermostPlugin.config.formatAllowFrom!;
 
       const formatted = formatAllowFrom({
+        cfg: {} as OpenClawConfig,
         allowFrom: ["@Alice", "user:USER123", "mattermost:BOT999"],
       });
       expect(formatted).toEqual(["@alice", "user123", "bot999"]);

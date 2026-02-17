@@ -101,6 +101,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -112,6 +115,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -123,6 +129,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -134,6 +143,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("120363123456789@g.us");
   });
 
@@ -145,6 +157,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected resolution to fail");
+    }
     expect(result.error).toBeDefined();
   });
 

@@ -38,6 +38,14 @@ describe("parseSandboxBindMount", () => {
       writable: true,
     });
   });
+
+  it("parses UNC-style host paths", () => {
+    expect(parseSandboxBindMount("//server/share:/workspace:ro")).toEqual({
+      hostRoot: path.resolve("//server/share"),
+      containerRoot: "/workspace",
+      writable: false,
+    });
+  });
 });
 
 describe("resolveSandboxFsPathWithMounts", () => {
