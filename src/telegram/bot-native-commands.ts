@@ -310,7 +310,7 @@ export const registerTelegramNativeCommands = ({
       })
     : [];
   const reservedCommands = new Set(
-    listNativeCommandSpecs().map((command) => command.name.toLowerCase()),
+    listNativeCommandSpecs().map((command) => command.name.replace(/-/g, "_").toLowerCase()),
   );
   for (const command of skillCommands) {
     reservedCommands.add(command.name.toLowerCase());
@@ -326,7 +326,7 @@ export const registerTelegramNativeCommands = ({
   const pluginCommandSpecs = getPluginCommandSpecs();
   const existingCommands = new Set(
     [
-      ...nativeCommands.map((command) => command.name),
+      ...nativeCommands.map((command) => command.name.replace(/-/g, "_")),
       ...customCommands.map((command) => command.command),
     ].map((command) => command.toLowerCase()),
   );
@@ -339,7 +339,7 @@ export const registerTelegramNativeCommands = ({
   }
   const allCommandsFull: Array<{ command: string; description: string }> = [
     ...nativeCommands.map((command) => ({
-      command: command.name,
+      command: command.name.replace(/-/g, "_"),
       description: command.description,
     })),
     ...(nativeEnabled ? pluginCatalog.commands : []),
@@ -419,7 +419,8 @@ export const registerTelegramNativeCommands = ({
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
-        bot.command(command.name, async (ctx: TelegramNativeCommandContext) => {
+        const normalizedCommandName = command.name.replace(/-/g, "_");
+        bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) {
             return;
@@ -480,8 +481,8 @@ export const registerTelegramNativeCommands = ({
           const prompt = commandDefinition
             ? buildCommandTextFromArgs(commandDefinition, commandArgs)
             : rawText
-              ? `/${command.name} ${rawText}`
-              : `/${command.name}`;
+              ? `/${normalizedCommandName} ${rawText}`
+              : `/${normalizedCommandName}`;
           const menu = commandDefinition
             ? resolveCommandArgMenu({
                 command: commandDefinition,
