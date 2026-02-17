@@ -102,7 +102,8 @@ export class McpClientManager {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       transport = new WebSocketClientTransport(new URL(config.url)) as any;
     } else {
-      throw new Error(`MCP server "${name}": unsupported transport type "${config.type}"`);
+      const _exhaustiveCheck: never = config.type;
+      throw new Error(`MCP server "${name}": unsupported transport type`);
     }
 
     const client = new Client({ name: "openclaw", version: "1.0.0" }, { capabilities: {} });

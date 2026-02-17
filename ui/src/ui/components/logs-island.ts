@@ -158,8 +158,8 @@ export class LogsIsland extends LitElement {
   }
 
   private scrollToBottom() {
-    const container = this.querySelector(".log-stream") as HTMLElement | null;
-    if (container) {
+    const container = this.querySelector(".log-stream");
+    if (container instanceof HTMLElement) {
       container.scrollTop = container.scrollHeight;
     }
   }

@@ -177,9 +177,9 @@ if (import.meta.main) {
   }
 
   consolidateMemories({
-    mode: modeArg as "daily" | "weekly",
+    mode: modeArg, // Already validated above (daily or weekly only)
     agentId: agentIdArg,
-  })
+  } as Parameters<typeof consolidateMemories>[0])
     .then((result) => {
       console.log(`✅ Consolidation complete:`, result);
       process.exit(0);

@@ -155,8 +155,10 @@ export function createPlanTool(): AnyAgentTool {
           return jsonResult({ ok: true, plans });
         }
 
-        default:
-          return jsonResult({ ok: false, error: `Unknown action: ${input.action}` });
+        default: {
+          const _exhaustiveCheck: never = input.action;
+          return jsonResult({ ok: false, error: "Unknown action" });
+        }
       }
     },
   };
