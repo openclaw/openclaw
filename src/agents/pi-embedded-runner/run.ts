@@ -586,7 +586,8 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
-                `messages=${msgCount} sessionFile=${params.sessionFile} ` +
+                `messages=${msgCount} contextWindow=${ctxInfo.tokens} contextSource=${ctxInfo.source} ` +
+                `sessionFile=${params.sessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
@@ -721,12 +722,23 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            const ctxTokensHint = ctxInfo.tokens
+              ? ` Context window: ${ctxInfo.tokens.toLocaleString()} tokens (source: ${ctxInfo.source}).`
+              : "";
+            const msgCountHint =
+              (attempt.messagesSnapshot?.length ?? 0) > 0
+                ? ` Messages in session: ${attempt.messagesSnapshot!.length}.`
+                : "";
             return {
               payloads: [
                 {
                   text:
-                    "Context overflow: prompt too large for the model. " +
-                    "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+                    "Context overflow: prompt too large for the model." +
+                    ctxTokensHint +
+                    msgCountHint +
+                    " Try /reset (or /new) to start a fresh session, reduce workspace files" +
+                    " (AGENTS.md, SOUL.md, etc.), lower `agents.defaults.bootstrapMaxChars`," +
+                    " or switch to a larger-context model.",
                   isError: true,
                 },
               ],
