@@ -134,9 +134,11 @@ export async function deliverReplies(params: {
     });
     for (const mediaUrl of mediaList) {
       const isFirstMedia = first;
-      const media = await loadWebMedia(mediaUrl, undefined, {
-        optimizeImages: imageQuality !== "high",
-      });
+      const media = await loadWebMedia(
+        mediaUrl,
+        imageQuality === "high" ? 50 * 1024 * 1024 : undefined,
+        { optimizeImages: imageQuality !== "high" },
+      );
       const detectedKind = mediaKindFromMime(media.contentType ?? undefined);
       const kind =
         imageQuality === "high" && detectedKind === "image" ? ("document" as const) : detectedKind;

@@ -301,9 +301,11 @@ export async function sendMessageTelegram(
       chatId,
       accountId: account.accountId,
     });
-    const media = await loadWebMedia(mediaUrl, opts.maxBytes, {
-      optimizeImages: imageQuality !== "high",
-    });
+    const media = await loadWebMedia(
+      mediaUrl,
+      imageQuality === "high" ? (opts.maxBytes ?? 50 * 1024 * 1024) : opts.maxBytes,
+      { optimizeImages: imageQuality !== "high" },
+    );
     const detectedKind = mediaKindFromMime(media.contentType ?? undefined);
     const kind = imageQuality === "high" && detectedKind === "image" ? "document" : detectedKind;
     const isGif = isGifMedia({
