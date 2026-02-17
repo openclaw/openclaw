@@ -204,6 +204,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.model.fallbacks": "Model Fallbacks",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
+  "agents.defaults.imageMaxDimensionPx": "Image Max Dimension (px)",
   "agents.defaults.humanDelay.mode": "Human Delay Mode",
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",

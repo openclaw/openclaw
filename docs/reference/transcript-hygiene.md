@@ -57,6 +57,7 @@ Implementation:
 
 - `sanitizeSessionMessagesImages` in `src/agents/pi-embedded-helpers/images.ts`
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
+- Max image side is configurable via `agents.defaults.imageMaxDimensionPx` (default: `1200`).
 
 ---
 

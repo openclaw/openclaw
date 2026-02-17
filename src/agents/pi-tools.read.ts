@@ -1,10 +1,11 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -21,6 +22,7 @@ const MAX_ADAPTIVE_READ_PAGES = 8;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
+  imageSanitization?: ImageSanitizationLimits;
 };
 
 type ReadTruncationDetails = {
@@ -566,6 +568,7 @@ type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
+  imageSanitization?: ImageSanitizationLimits;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -574,6 +577,7 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
   }) as unknown as AnyAgentTool;
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
+    imageSanitization: params.imageSanitization,
   });
 }
 
@@ -614,7 +618,11 @@ export function createOpenClawReadTool(
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
+      return sanitizeToolResultImages(
+        normalizedResult,
+        `read:${filePath}`,
+        options?.imageSanitization,
+      );
     },
   };
 }
