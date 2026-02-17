@@ -304,14 +304,22 @@ function resolveTelegramGroupConfig(
   const telegramCfg = cfg.channels?.telegram;
   const accountGroups = telegramCfg?.accounts?.[accountId]?.groups;
   const rootGroups = telegramCfg?.groups;
-  const groups = accountGroups ?? rootGroups;
-  if (!groups) {
+  if (!accountGroups && !rootGroups) {
     return null;
   }
   // Extract group ID from peerId (handles topics like "-100123:topic:1" → "-100123")
   const groupId = peerId.split(":")[0];
   // Try: exact peer match (for topic-specific config), group match, wildcard
-  return groups[peerId] ?? groups[groupId] ?? groups["*"] ?? null;
+  // Account config takes precedence over root config at each lookup level
+  return (
+    accountGroups?.[peerId] ??
+    rootGroups?.[peerId] ??
+    accountGroups?.[groupId] ??
+    rootGroups?.[groupId] ??
+    accountGroups?.["*"] ??
+    rootGroups?.["*"] ??
+    null
+  );
 }
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
