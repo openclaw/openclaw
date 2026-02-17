@@ -1,7 +1,3 @@
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
-import type { CronJob } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -24,16 +20,11 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
-import {
-  countActiveDescendantRuns,
-  listDescendantRunsForRequester,
-} from "../../agents/subagent-registry.js";
+import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
@@ -43,15 +34,16 @@ import {
 } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -61,6 +53,7 @@ import {
   isExternalHookSession,
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
@@ -71,6 +64,13 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronSession } from "./session.js";
+import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
+import {
+  expectsSubagentFollowup,
+  isLikelyInterimCronMessage,
+  readDescendantSubagentFallbackReply,
+  waitForDescendantSubagentSummary,
+} from "./subagent-followup.js";
 
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
@@ -100,160 +100,9 @@ function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return false;
 }
 
-const CRON_SUBAGENT_WAIT_POLL_MS = 500;
-const CRON_SUBAGENT_WAIT_MIN_MS = 30_000;
-const CRON_SUBAGENT_FINAL_REPLY_GRACE_MS = 5_000;
-
-function isLikelyInterimCronMessage(value: string): boolean {
-  const text = value.trim();
-  if (!text) {
-    return true;
-  }
-  const normalized = text.toLowerCase().replace(/\s+/g, " ");
-  const words = normalized.split(" ").filter(Boolean).length;
-  const interimHints = [
-    "on it",
-    "pulling everything together",
-    "give me a few",
-    "give me a few min",
-    "few minutes",
-    "let me compile",
-    "i'll gather",
-    "i will gather",
-    "working on it",
-    "retrying now",
-    "should be about",
-    "should have your summary",
-    "subagent spawned",
-    "spawned a subagent",
-    "it'll auto-announce when done",
-    "it will auto-announce when done",
-    "auto-announce when done",
-    "both subagents are running",
-    "wait for them to report back",
-  ];
-  return words <= 45 && interimHints.some((hint) => normalized.includes(hint));
-}
-
-function expectsSubagentFollowup(value: string): boolean {
-  const normalized = value.trim().toLowerCase().replace(/\s+/g, " ");
-  if (!normalized) {
-    return false;
-  }
-  const hints = [
-    "subagent spawned",
-    "spawned a subagent",
-    "auto-announce when done",
-    "both subagents are running",
-    "wait for them to report back",
-  ];
-  return hints.some((hint) => normalized.includes(hint));
-}
-
-async function readDescendantSubagentFallbackReply(params: {
-  sessionKey: string;
-  runStartedAt: number;
-}): Promise<string | undefined> {
-  const descendants = listDescendantRunsForRequester(params.sessionKey)
-    .filter(
-      (entry) =>
-        typeof entry.endedAt === "number" &&
-        entry.endedAt >= params.runStartedAt &&
-        entry.childSessionKey.trim().length > 0,
-    )
-    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
-  if (descendants.length === 0) {
-    return undefined;
-  }
-
-  const latestByChild = new Map<string, (typeof descendants)[number]>();
-  for (const entry of descendants) {
-    const childKey = entry.childSessionKey.trim();
-    if (!childKey) {
-      continue;
-    }
-    const current = latestByChild.get(childKey);
-    if (!current || (entry.endedAt ?? 0) >= (current.endedAt ?? 0)) {
-      latestByChild.set(childKey, entry);
-    }
-  }
-
-  const replies: string[] = [];
-  const latestRuns = [...latestByChild.values()]
-    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
-    .slice(-4);
-  for (const entry of latestRuns) {
-    const reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
-    if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-      continue;
-    }
-    replies.push(reply);
-  }
-  if (replies.length === 0) {
-    return undefined;
-  }
-  if (replies.length === 1) {
-    return replies[0];
-  }
-  return replies.join("\n\n");
-}
-
-async function waitForDescendantSubagentSummary(params: {
-  sessionKey: string;
-  initialReply?: string;
-  timeoutMs: number;
-  observedActiveDescendants?: boolean;
-}): Promise<string | undefined> {
-  const initialReply = params.initialReply?.trim();
-  const deadline = Date.now() + Math.max(CRON_SUBAGENT_WAIT_MIN_MS, Math.floor(params.timeoutMs));
-  let sawActiveDescendants = params.observedActiveDescendants === true;
-  let drainedAtMs: number | undefined;
-  while (Date.now() < deadline) {
-    const activeDescendants = countActiveDescendantRuns(params.sessionKey);
-    if (activeDescendants > 0) {
-      sawActiveDescendants = true;
-      drainedAtMs = undefined;
-      await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
-      continue;
-    }
-    if (!sawActiveDescendants) {
-      return initialReply;
-    }
-    if (!drainedAtMs) {
-      drainedAtMs = Date.now();
-    }
-    const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
-    if (
-      latest &&
-      latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
-      (latest !== initialReply || !isLikelyInterimCronMessage(latest))
-    ) {
-      return latest;
-    }
-    if (Date.now() - drainedAtMs >= CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) {
-      return undefined;
-    }
-    await new Promise((resolve) => setTimeout(resolve, CRON_SUBAGENT_WAIT_POLL_MS));
-  }
-  const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
-  if (
-    latest &&
-    latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
-    (latest !== initialReply || !isLikelyInterimCronMessage(latest))
-  ) {
-    return latest;
-  }
-  return undefined;
-}
-
 export type RunCronAgentTurnResult = {
-  status: "ok" | "error" | "skipped";
-  summary?: string;
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
-  error?: string;
-  sessionId?: string;
-  sessionKey?: string;
   /**
    * `true` when the isolated run already delivered its output to the target
    * channel (via outbound payloads, the subagent announce flow, or a matching
@@ -262,7 +111,8 @@ export type RunCronAgentTurnResult = {
    * messages.  See: https://github.com/openclaw/openclaw/issues/15692
    */
   delivered?: boolean;
-};
+} & CronRunOutcome &
+  CronRunTelemetry;
 
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
@@ -295,10 +145,14 @@ export async function runCronIsolatedAgentTurn(params: {
     params.cfg.agents?.defaults,
     agentOverrideRest as Partial<AgentDefaultsConfig>,
   );
+  // Merge agent model override with defaults instead of replacing, so that
+  // `fallbacks` from `agents.defaults.model` are preserved when the agent
+  // (or its per-cron model pin) only specifies `primary`.
+  const existingModel = agentCfg.model && typeof agentCfg.model === "object" ? agentCfg.model : {};
   if (typeof overrideModel === "string") {
-    agentCfg.model = { primary: overrideModel };
+    agentCfg.model = { ...existingModel, primary: overrideModel };
   } else if (overrideModel) {
-    agentCfg.model = overrideModel;
+    agentCfg.model = { ...existingModel, ...overrideModel };
   }
   const cfgWithAgentDefaults: OpenClawConfig = {
     ...params.cfg,
@@ -520,30 +374,21 @@ export async function runCronIsolatedAgentTurn(params: {
       `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
-  let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
-  if (isFastTestEnv) {
-    // Fast unit-test mode: avoid scanning the workspace and writing session stores.
-    skillsSnapshot = skillsSnapshot ?? { prompt: "", skills: [] };
-  } else {
-    const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
-    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const needsSkillsSnapshot =
-      !existingSnapshot || existingSnapshot.version !== skillsSnapshotVersion;
-    if (needsSkillsSnapshot) {
-      skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfgWithAgentDefaults,
-        eligibility: { remote: getRemoteSkillEligibility() },
-        snapshotVersion: skillsSnapshotVersion,
-      });
-      if (skillsSnapshot) {
-        cronSession.sessionEntry = {
-          ...cronSession.sessionEntry,
-          updatedAt: Date.now(),
-          skillsSnapshot,
-        };
-        await persistSessionEntry();
-      }
-    }
+  const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
+  const skillsSnapshot = resolveCronSkillsSnapshot({
+    workspaceDir,
+    config: cfgWithAgentDefaults,
+    agentId,
+    existingSnapshot: existingSkillsSnapshot,
+    isFastTestEnv,
+  });
+  if (!isFastTestEnv && skillsSnapshot !== existingSkillsSnapshot) {
+    cronSession.sessionEntry = {
+      ...cronSession.sessionEntry,
+      updatedAt: Date.now(),
+      skillsSnapshot,
+    };
+    await persistSessionEntry();
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
@@ -625,11 +470,13 @@ export async function runCronIsolatedAgentTurn(params: {
   const payloads = runResult.payloads ?? [];
 
   // Update token+model fields in the session store.
+  // Also collect best-effort telemetry for the cron run log.
+  let telemetry: CronRunTelemetry | undefined;
   {
-    const usage = runResult.meta.agentMeta?.usage;
-    const promptTokens = runResult.meta.agentMeta?.promptTokens;
-    const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed = runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
+    const usage = runResult.meta?.agentMeta?.usage;
+    const promptTokens = runResult.meta?.agentMeta?.promptTokens;
+    const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
+    const providerUsed = runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
       agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
@@ -637,7 +484,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
-      const cliSessionId = runResult.meta.agentMeta?.sessionId?.trim();
+      const cliSessionId = runResult.meta?.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
       }
@@ -655,6 +502,21 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.outputTokens = output;
       cronSession.sessionEntry.totalTokens = totalTokens;
       cronSession.sessionEntry.totalTokensFresh = true;
+
+      telemetry = {
+        model: modelUsed,
+        provider: providerUsed,
+        usage: {
+          input_tokens: input,
+          output_tokens: output,
+          total_tokens: totalTokens,
+        },
+      };
+    } else {
+      telemetry = {
+        model: modelUsed,
+        provider: providerUsed,
+      };
     }
     await persistSessionEntry();
   }
@@ -700,10 +562,11 @@ export async function runCronIsolatedAgentTurn(params: {
           error: resolvedDelivery.error.message,
           summary,
           outputText,
+          ...telemetry,
         });
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
-      return withRunSession({ status: "ok", summary, outputText });
+      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
     if (!resolvedDelivery.to) {
       const message = "cron delivery target is missing";
@@ -713,10 +576,11 @@ export async function runCronIsolatedAgentTurn(params: {
           error: message,
           summary,
           outputText,
+          ...telemetry,
         });
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
-      return withRunSession({ status: "ok", summary, outputText });
+      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 
@@ -750,7 +614,13 @@ export async function runCronIsolatedAgentTurn(params: {
         }
       } catch (err) {
         if (!deliveryBestEffort) {
-          return withRunSession({ status: "error", summary, outputText, error: String(err) });
+          return withRunSession({
+            status: "error",
+            summary,
+            outputText,
+            error: String(err),
+            ...telemetry,
+          });
         }
       }
     } else if (synthesizedText) {
@@ -794,7 +664,7 @@ export async function runCronIsolatedAgentTurn(params: {
       if (activeSubagentRuns > 0) {
         // Parent orchestration is still in progress; avoid announcing a partial
         // update to the main requester.
-        return withRunSession({ status: "ok", summary, outputText });
+        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       if (
         (hadActiveDescendants || expectedSubagentFollowup) &&
@@ -804,10 +674,10 @@ export async function runCronIsolatedAgentTurn(params: {
       ) {
         // Descendants existed but no post-orchestration synthesis arrived, so
         // suppress stale parent text like "on it, pulling everything together".
-        return withRunSession({ status: "ok", summary, outputText });
+        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-        return withRunSession({ status: "ok", summary, outputText });
+        return withRunSession({ status: "ok", summary, outputText, ...telemetry });
       }
       try {
         const didAnnounce = await runSubagentAnnounceFlow({
@@ -841,18 +711,25 @@ export async function runCronIsolatedAgentTurn(params: {
               summary,
               outputText,
               error: message,
+              ...telemetry,
             });
           }
           logWarn(`[cron:${params.job.id}] ${message}`);
         }
       } catch (err) {
         if (!deliveryBestEffort) {
-          return withRunSession({ status: "error", summary, outputText, error: String(err) });
+          return withRunSession({
+            status: "error",
+            summary,
+            outputText,
+            error: String(err),
+            ...telemetry,
+          });
         }
         logWarn(`[cron:${params.job.id}] ${String(err)}`);
       }
     }
   }
 
-  return withRunSession({ status: "ok", summary, outputText, delivered });
+  return withRunSession({ status: "ok", summary, outputText, delivered, ...telemetry });
 }

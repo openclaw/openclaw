@@ -1,14 +1,15 @@
+import { t } from "../i18n/index.ts";
 import type { IconName } from "./icons.js";
 
 export const TAB_GROUPS = [
-  { label: "Chat", tabs: ["chat"] },
+  { label: "chat", tabs: ["chat"] },
   {
-    label: "Control",
+    label: "control",
     tabs: ["overview", "channels", "providers", "instances", "sessions", "usage", "health", "cron"],
   },
-  { label: "Agent", tabs: ["agents", "hierarchy", "skills", "nodes", "voice"] },
-  { label: "Settings", tabs: ["config", "security", "debug", "logs"] },
-  { label: "Integrations", tabs: ["twitter", "resources"] },
+  { label: "agent", tabs: ["agents", "hierarchy", "skills", "nodes", "voice"] },
+  { label: "settings", tabs: ["config", "security", "debug", "logs"] },
+  { label: "integrations", tabs: ["twitter", "resources"] },
 ] as const;
 
 export type Tab =
@@ -185,95 +186,9 @@ export function iconForTab(tab: Tab): IconName {
 }
 
 export function titleForTab(tab: Tab) {
-  switch (tab) {
-    case "agents":
-      return "Agents";
-    case "overview":
-      return "Overview";
-    case "channels":
-      return "Channels";
-    case "providers":
-      return "Providers";
-    case "instances":
-      return "Instances";
-    case "sessions":
-      return "Sessions";
-    case "usage":
-      return "Usage";
-    case "health":
-      return "Health";
-    case "cron":
-      return "Cron Jobs";
-    case "hierarchy":
-      return "Hierarchy";
-    case "skills":
-      return "Skills";
-    case "nodes":
-      return "Nodes";
-    case "voice":
-      return "Voice";
-    case "chat":
-      return "Chat";
-    case "config":
-      return "Config";
-    case "security":
-      return "Security";
-    case "debug":
-      return "Debug";
-    case "logs":
-      return "Logs";
-    case "twitter":
-      return "Twitter";
-    case "resources":
-      return "Resources";
-    default:
-      return "Control";
-  }
+  return t(`tabs.${tab}`);
 }
 
 export function subtitleForTab(tab: Tab) {
-  switch (tab) {
-    case "agents":
-      return "Manage agent workspaces, tools, and identities.";
-    case "overview":
-      return "Gateway status, entry points, and a fast health read.";
-    case "channels":
-      return "Manage channels and settings.";
-    case "providers":
-      return "Model providers, OAuth status, and API key health.";
-    case "instances":
-      return "Presence beacons from connected clients and nodes.";
-    case "sessions":
-      return "Inspect active sessions and adjust per-session defaults.";
-    case "usage":
-      return "";
-    case "health":
-      return "Gateway health checks and channel diagnostics.";
-    case "cron":
-      return "Schedule wakeups and recurring agent runs.";
-    case "hierarchy":
-      return "Agent delegation tree and parent-child relationships.";
-    case "skills":
-      return "Manage skill availability and API key injection.";
-    case "nodes":
-      return "Paired devices, capabilities, and command exposure.";
-    case "voice":
-      return "Text-to-speech, wake words, and talk mode settings.";
-    case "chat":
-      return "Direct gateway chat session for quick interventions.";
-    case "config":
-      return "Edit ~/.openclaw/openclaw.json safely.";
-    case "security":
-      return "Security events, alerts, and audit reports.";
-    case "debug":
-      return "Gateway snapshots, events, and manual RPC calls.";
-    case "logs":
-      return "Live tail of the gateway file logs.";
-    case "twitter":
-      return "Twitter integration dashboard and relationships.";
-    case "resources":
-      return "Agent resources and external data sources.";
-    default:
-      return "";
-  }
+  return t(`subtitles.${tab}`);
 }

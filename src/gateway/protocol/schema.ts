@@ -9,6 +9,7 @@ export * from "./schema/devices.js";
 export * from "./schema/fs.js";
 export * from "./schema/frames.js";
 export * from "./schema/logs-chat.js";
+export * from "./schema/mesh.js";
 export * from "./schema/nodes.js";
 export * from "./schema/projects.js";
 export * from "./schema/protocol-schemas.js";

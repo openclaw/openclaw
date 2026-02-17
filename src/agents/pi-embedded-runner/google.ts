@@ -1,7 +1,7 @@
+import { EventEmitter } from "node:events";
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import { EventEmitter } from "node:events";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { TSchema } from "@sinclair/typebox";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
   hasInterSessionUserProvenance,
@@ -20,6 +20,7 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
@@ -237,11 +238,15 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
   return violations;
 }
 
-export function sanitizeToolsForGoogle(params: {
-  tools: AgentTool[];
+export function sanitizeToolsForGoogle<TSchemaType extends TSchema = TSchema, TResult = unknown>(params: {
+  tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
-}): AgentTool[] {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+}): AgentTool<TSchemaType, TResult>[] {
+  // google-antigravity serves Anthropic models (e.g. claude-opus-4-6-thinking),
+  // NOT Gemini. Applying Gemini schema cleaning strips JSON Schema keywords
+  // (minimum, maximum, format, etc.) that Anthropic's API requires for
+  // draft 2020-12 compliance. Only clean for actual Gemini providers.
+  if (params.provider !== "google-gemini-cli") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -250,8 +255,9 @@ export function sanitizeToolsForGoogle(params: {
     }
     return {
       ...tool,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      parameters: cleanToolSchemaForGemini(tool.parameters as Record<string, unknown>) as any,
+      parameters: cleanToolSchemaForGemini(
+        tool.parameters as Record<string, unknown>,
+      ) as TSchemaType,
     };
   });
 }
@@ -452,10 +458,9 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-      : sanitizedToolResults;
+  const sanitizedOpenAI = isOpenAIResponsesApi
+    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+    : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

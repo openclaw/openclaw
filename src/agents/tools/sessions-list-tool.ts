@@ -1,16 +1,18 @@
-import { Type } from "@sinclair/typebox";
 import path from "node:path";
-import type { AnyAgentTool } from "./common.js";
+import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
+  createSessionVisibilityGuard,
   createAgentToAgentPolicy,
   classifySessionKind,
   deriveChannel,
   resolveDisplaySessionKey,
+  resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
   type SessionListRow,
@@ -42,6 +44,11 @@ export function createSessionsListTool(opts?: {
           agentSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed,
         });
+      const effectiveRequesterKey = requesterInternalKey ?? alias;
+      const visibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
         value.trim().toLowerCase(),
@@ -72,15 +79,21 @@ export function createSessionsListTool(opts?: {
           activeMinutes,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
-          spawnedBy: restrictToSpawned ? requesterInternalKey : undefined,
+          spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
         },
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
+      const visibilityGuard = await createSessionVisibilityGuard({
+        action: "list",
+        requesterSessionKey: effectiveRequesterKey,
+        visibility,
+        a2aPolicy,
+      });
       const rows: SessionListRow[] = [];
+      const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -90,10 +103,8 @@ export function createSessionsListTool(opts?: {
         if (!key) {
           continue;
         }
-
-        const entryAgentId = resolveAgentIdFromSessionKey(key);
-        const crossAgent = entryAgentId !== requesterAgentId;
-        if (crossAgent && !a2aPolicy.isAllowed(requesterAgentId, entryAgentId)) {
+        const access = visibilityGuard.check(key);
+        if (!access.allowed) {
           continue;
         }
 
@@ -188,23 +199,39 @@ export function createSessionsListTool(opts?: {
           lastAccountId,
           transcriptPath,
         };
-
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
             key: displayKey,
             alias,
             mainKey,
           });
-          const history = await callGateway<{ messages: Array<unknown> }>({
-            method: "chat.history",
-            params: { sessionKey: resolvedKey, limit: messageLimit },
-          });
-          const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
-          const filtered = stripToolMessages(rawMessages);
-          row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+          historyTargets.push({ row, resolvedKey });
         }
-
         rows.push(row);
+      }
+
+      if (messageLimit > 0 && historyTargets.length > 0) {
+        const maxConcurrent = Math.min(4, historyTargets.length);
+        let index = 0;
+        const worker = async () => {
+          while (true) {
+            const next = index;
+            index += 1;
+            if (next >= historyTargets.length) {
+              return;
+            }
+            const target = historyTargets[next];
+            const history = await callGateway<{ messages: Array<unknown> }>({
+              method: "chat.history",
+              params: { sessionKey: target.resolvedKey, limit: messageLimit },
+            });
+            const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
+            const filtered = stripToolMessages(rawMessages);
+            target.row.messages =
+              filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+          }
+        };
+        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
       }
 
       return jsonResult({

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   agentCommand,
   getFreePort,
@@ -12,17 +12,17 @@ import {
   testState,
 } from "./test-helpers.js";
 
+const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
+
 installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let gatewayPort: number;
-let prevGatewayPort: string | undefined;
-let prevGatewayToken: string | undefined;
 const gatewayToken = "test-token";
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
-  prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-  prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
   gatewayPort = await getFreePort();
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
@@ -32,16 +32,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
-  if (prevGatewayPort === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-  } else {
-    process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
-  }
-  if (prevGatewayToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
-  }
+  envSnapshot.restore();
 });
 
 describe("sessions_send gateway loopback", () => {
@@ -121,6 +112,18 @@ describe("sessions_send gateway loopback", () => {
 
 describe("sessions_send label lookup", () => {
   it("finds session by label and sends message", { timeout: 60_000 }, async () => {
+    // This is an operator feature; enable broader session tool targeting for this test.
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+    }
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ tools: { sessions: { visibility: "all" } } }, null, 2) + "\n",
+      "utf-8",
+    );
+
     const spy = vi.mocked(agentCommand);
     spy.mockImplementation(async (opts) => {
       const params = opts as {

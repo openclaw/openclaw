@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { GatewayRequestHandlers } from "./types.js";
 import { resolveConfiguredModelRef } from "../../agents/model-selection.js";
 import { resolveProjectsRootDir } from "../../agents/projects.js";
 import { getBrowserControlState } from "../../browser/control-service.js";
@@ -25,6 +24,7 @@ import {
   validateFsPickDirectoryParams,
   validateProjectsListParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
   "system.info": ({ respond }) => {

@@ -1,7 +1,7 @@
 import type { SlashCommand } from "@mariozechner/pi-tui";
-import type { OpenClawConfig } from "../config/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { getMarkdownSlashCommands } from "./markdown-commands.js";
 import { listThemeNames } from "./theme/theme-registry.js";
 

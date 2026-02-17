@@ -23,6 +23,23 @@ async function makeStorePath() {
   };
 }
 
+async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string, unknown>> {
+  const cron = new CronService({
+    storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+  });
+
+  await cron.start();
+  cron.stop();
+
+  const loaded = await loadCronStore(storePath);
+  return loaded.jobs[0] as Record<string, unknown>;
+}
+
 describe("cron store migration", () => {
   beforeEach(() => {
     noopLogger.debug.mockClear();
@@ -41,6 +58,7 @@ describe("cron store migration", () => {
     const legacyJob = {
       id: "job-1",
       agentId: undefined,
+      sessionKey: "  agent:main:discord:channel:ops  ",
       name: "Legacy job",
       description: null,
       enabled: true,
@@ -64,20 +82,8 @@ describe("cron store migration", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    cron.stop();
-
-    const loaded = await loadCronStore(store.storePath);
-    const migrated = loaded.jobs[0] as Record<string, unknown>;
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
+    expect(migrated.sessionKey).toBe("agent:main:discord:channel:ops");
     expect(migrated.delivery).toEqual({
       mode: "announce",
       channel: "telegram",
@@ -123,20 +129,7 @@ describe("cron store migration", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
-
-    await cron.start();
-    cron.stop();
-
-    const loaded = await loadCronStore(store.storePath);
-    const migrated = loaded.jobs[0] as Record<string, unknown>;
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
     const schedule = migrated.schedule as Record<string, unknown>;
     expect(schedule.kind).toBe("every");
     expect(schedule.anchorMs).toBe(createdAtMs);

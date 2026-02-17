@@ -1,5 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
@@ -8,25 +8,39 @@ const sign = (body: string, secret: string) =>
 
 function createRes() {
   const headers: Record<string, string> = {};
-  const res = {
+  const resObj = {
     statusCode: 0,
     headersSent: false,
     setHeader: (k: string, v: string) => {
       headers[k.toLowerCase()] = v;
     },
     end: vi.fn((data?: unknown) => {
-      res.headersSent = true;
+      resObj.headersSent = true;
       // Keep payload available for assertions
-      (res as { body?: unknown }).body = data;
+      resObj.body = data;
     }),
-  } as unknown as ServerResponse & { body?: unknown };
+    body: undefined as unknown,
+  };
+  const res = resObj as unknown as ServerResponse & { body?: unknown };
   return { res, headers };
+}
+
+function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
+  const bot = { handleWebhook: vi.fn(async () => {}) };
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const handler = createLineNodeWebhookHandler({
+    channelSecret: secret,
+    bot,
+    runtime,
+    readBody: async () => rawBody,
+  });
+  return { bot, handler, secret };
 }
 
 describe("createLineNodeWebhookHandler", () => {
   it("returns 200 for GET", async () => {
     const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { error: vi.fn() };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
       bot,
@@ -42,15 +56,8 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("returns 200 for verification request (empty events, no signature)", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { error: vi.fn() };
     const rawBody = JSON.stringify({ events: [] });
-    const handler = createLineNodeWebhookHandler({
-      channelSecret: "secret",
-      bot,
-      runtime,
-      readBody: async () => rawBody,
-    });
+    const { bot, handler } = createPostWebhookTestHarness(rawBody);
 
     const { res, headers } = createRes();
     await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
@@ -62,15 +69,8 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("rejects missing signature when events are non-empty", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { error: vi.fn() };
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    const handler = createLineNodeWebhookHandler({
-      channelSecret: "secret",
-      bot,
-      runtime,
-      readBody: async () => rawBody,
-    });
+    const { bot, handler } = createPostWebhookTestHarness(rawBody);
 
     const { res } = createRes();
     await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
@@ -80,15 +80,8 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("rejects invalid signature", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { error: vi.fn() };
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    const handler = createLineNodeWebhookHandler({
-      channelSecret: "secret",
-      bot,
-      runtime,
-      readBody: async () => rawBody,
-    });
+    const { bot, handler } = createPostWebhookTestHarness(rawBody);
 
     const { res } = createRes();
     await handler(
@@ -101,16 +94,8 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("accepts valid signature and dispatches events", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { error: vi.fn() };
-    const secret = "secret";
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    const handler = createLineNodeWebhookHandler({
-      channelSecret: secret,
-      bot,
-      runtime,
-      readBody: async () => rawBody,
-    });
+    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
 
     const { res } = createRes();
     await handler(
@@ -128,16 +113,8 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { error: vi.fn() };
-    const secret = "secret";
     const rawBody = "not json";
-    const handler = createLineNodeWebhookHandler({
-      channelSecret: secret,
-      bot,
-      runtime,
-      readBody: async () => rawBody,
-    });
+    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
 
     const { res } = createRes();
     await handler(

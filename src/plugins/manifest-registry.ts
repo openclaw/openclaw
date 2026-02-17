@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginMcpServerConfig } from "./manifest.js";
-import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -69,6 +69,10 @@ export type PluginManifestRegistry = {
 const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
 
 const DEFAULT_MANIFEST_CACHE_MS = 200;
+
+export function clearPluginManifestRegistryCache(): void {
+  registryCache.clear();
+}
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();

@@ -1,7 +1,6 @@
 import type { HealthSummary } from "../commands/health.js";
-import type { ChatRunEntry } from "./server-chat.js";
-import type { DedupeEntry } from "./server-shared.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -9,6 +8,7 @@ import {
   MODEL_CATALOG_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
+import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 

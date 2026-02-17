@@ -39,66 +39,68 @@ function makeMoonshotConfig(home: string, storePath: string) {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
+  async function runMoonshotModelDirective(params: {
+    home: string;
+    storePath: string;
+    body: string;
+  }) {
+    return await getReplyFromConfig(
+      { Body: params.body, From: "+1222", To: "+1222", CommandAuthorized: true },
+      {},
+      makeMoonshotConfig(params.home, params.storePath),
+    );
+  }
+
+  function expectMoonshotSelectionFromResponse(params: {
+    response: Awaited<ReturnType<typeof getReplyFromConfig>>;
+    storePath: string;
+  }) {
+    const text = Array.isArray(params.response) ? params.response[0]?.text : params.response?.text;
+    expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview.");
+    assertModelSelection(params.storePath, {
+      provider: "moonshot",
+      model: "kimi-k2-0905-preview",
+    });
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+  }
+
   it("supports fuzzy model matches on /model directive", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
-        { Body: "/model kimi", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        makeMoonshotConfig(home, storePath),
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview.");
-      assertModelSelection(storePath, {
-        provider: "moonshot",
-        model: "kimi-k2-0905-preview",
+      const res = await runMoonshotModelDirective({
+        home,
+        storePath,
+        body: "/model kimi",
       });
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+
+      expectMoonshotSelectionFromResponse({ response: res, storePath });
     });
   });
   it("resolves provider-less exact model ids via fuzzy matching when unambiguous", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/model kimi-k2-0905-preview",
-          From: "+1222",
-          To: "+1222",
-          CommandAuthorized: true,
-        },
-        {},
-        makeMoonshotConfig(home, storePath),
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview.");
-      assertModelSelection(storePath, {
-        provider: "moonshot",
-        model: "kimi-k2-0905-preview",
+      const res = await runMoonshotModelDirective({
+        home,
+        storePath,
+        body: "/model kimi-k2-0905-preview",
       });
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+
+      expectMoonshotSelectionFromResponse({ response: res, storePath });
     });
   });
   it("supports fuzzy matches within a provider on /model provider/model", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
-        { Body: "/model moonshot/kimi", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        makeMoonshotConfig(home, storePath),
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview.");
-      assertModelSelection(storePath, {
-        provider: "moonshot",
-        model: "kimi-k2-0905-preview",
+      const res = await runMoonshotModelDirective({
+        home,
+        storePath,
+        body: "/model moonshot/kimi",
       });
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+
+      expectMoonshotSelectionFromResponse({ response: res, storePath });
     });
   });
   it("picks the best fuzzy match when multiple models match", async () => {

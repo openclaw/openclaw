@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
-import type { PresenceEntry } from "../types.ts";
 import { icons } from "../icons.ts";
 import { formatPresenceAge, formatPresenceSummary } from "../presenter.ts";
 import { renderEmptyState } from "../render-utils.ts";
+import type { PresenceEntry } from "../types.ts";
 
 export type InstancesProps = {
   loading: boolean;

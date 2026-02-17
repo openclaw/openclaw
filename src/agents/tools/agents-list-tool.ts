@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import {
   DEFAULT_AGENT_ID,
@@ -9,6 +8,7 @@ import {
 import { resolveAgentConfig } from "../agent-scope.js";
 import { getAgentCapabilities } from "../capabilities-registry.js";
 import { zodToToolJsonSchema } from "../schema/zod-tool-schema.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 

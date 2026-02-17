@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { appendCdpPath } from "./cdp.helpers.js";
@@ -18,7 +17,11 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
-import { DEFAULT_OPENCLAW_BROWSER_COLOR } from "./constants.js";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import {
+  DEFAULT_OPENCLAW_BROWSER_COLOR,
+  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+} from "./constants.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 
@@ -211,6 +214,11 @@ export async function launchOpenClawChrome(
 
     // Stealth: hide navigator.webdriver from automation detection (#80)
     args.push("--disable-blink-features=AutomationControlled");
+
+    // Append user-configured extra arguments (e.g., stealth flags, window size)
+    if (resolved.extraArgs.length > 0) {
+      args.push(...resolved.extraArgs);
+    }
 
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");

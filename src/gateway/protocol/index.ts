@@ -125,6 +125,18 @@ import {
   LogsTailParamsSchema,
   type LogsTailResult,
   LogsTailResultSchema,
+  type MeshPlanParams,
+  MeshPlanParamsSchema,
+  type MeshPlanAutoParams,
+  MeshPlanAutoParamsSchema,
+  type MeshRetryParams,
+  MeshRetryParamsSchema,
+  type MeshRunParams,
+  MeshRunParamsSchema,
+  type MeshStatusParams,
+  MeshStatusParamsSchema,
+  type MeshWorkflowPlan,
+  MeshWorkflowPlanSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   NodeDescribeParamsSchema,
@@ -332,7 +344,12 @@ export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
 );
-export const validateLogsTailParams = ajv.compile(LogsTailParamsSchema);
+export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
+export const validateMeshPlanParams = ajv.compile<MeshPlanParams>(MeshPlanParamsSchema);
+export const validateMeshPlanAutoParams = ajv.compile<MeshPlanAutoParams>(MeshPlanAutoParamsSchema);
+export const validateMeshRunParams = ajv.compile<MeshRunParams>(MeshRunParamsSchema);
+export const validateMeshStatusParams = ajv.compile<MeshStatusParams>(MeshStatusParamsSchema);
+export const validateMeshRetryParams = ajv.compile<MeshRetryParams>(MeshRetryParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile(ChatAbortParamsSchema);
@@ -418,6 +435,12 @@ export {
   StateVersionSchema,
   AgentEventSchema,
   ChatEventSchema,
+  MeshPlanParamsSchema,
+  MeshPlanAutoParamsSchema,
+  MeshWorkflowPlanSchema,
+  MeshRunParamsSchema,
+  MeshStatusParamsSchema,
+  MeshRetryParamsSchema,
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,
@@ -517,6 +540,12 @@ export type {
   AgentIdentityResult,
   AgentWaitParams,
   ChatEvent,
+  MeshPlanParams,
+  MeshPlanAutoParams,
+  MeshWorkflowPlan,
+  MeshRunParams,
+  MeshStatusParams,
+  MeshRetryParams,
   TickEvent,
   ShutdownEvent,
   WakeParams,

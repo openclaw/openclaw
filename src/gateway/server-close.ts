@@ -1,11 +1,11 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import type { PluginServicesHandle } from "../plugins/services.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { stopHierarchyEventBroadcaster } from "./server-hierarchy-events.js";
+import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;

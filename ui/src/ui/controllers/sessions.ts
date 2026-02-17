@@ -1,6 +1,6 @@
+import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsListResult } from "../types.ts";
-import { toNumber } from "../format.ts";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -111,26 +111,27 @@ export async function patchSession(
   }
 }
 
-export async function deleteSession(state: SessionsState, key: string) {
+export async function deleteSession(state: SessionsState, key: string): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   if (state.sessionsLoading) {
-    return;
+    return false;
   }
   const confirmed = window.confirm(
     `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
   );
   if (!confirmed) {
-    return;
+    return false;
   }
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
     await state.client.request("sessions.delete", { key, deleteTranscript: true });
-    await loadSessions(state);
+    return true;
   } catch (err) {
     state.sessionsError = String(err);
+    return false;
   } finally {
     state.sessionsLoading = false;
   }
@@ -179,4 +180,13 @@ export async function compactSession(state: SessionsState, key: string) {
   } finally {
     state.sessionsLoading = false;
   }
+}
+
+export async function deleteSessionAndRefresh(state: SessionsState, key: string): Promise<boolean> {
+  const deleted = await deleteSession(state, key);
+  if (!deleted) {
+    return false;
+  }
+  await loadSessions(state);
+  return true;
 }
