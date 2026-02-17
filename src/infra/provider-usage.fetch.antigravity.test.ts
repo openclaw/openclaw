@@ -13,7 +13,7 @@ const toRequestUrl = (input: Parameters<typeof fetch>[0]): string =>
 const createAntigravityFetch = (
   handler: (url: string, init?: Parameters<typeof fetch>[1]) => Promise<Response> | Response,
 ) =>
-  vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input, init) =>
+  vi.fn(async (input: string | Request | URL, init?: RequestInit) =>
     handler(toRequestUrl(input), init),
   );
 
@@ -38,7 +38,7 @@ function createEndpointFetch(spec: {
 }
 
 async function runUsage(mockFetch: ReturnType<typeof createAntigravityFetch>) {
-  return fetchAntigravityUsage("token-123", 5000, mockFetch);
+  return fetchAntigravityUsage("token-123", 5000, mockFetch as unknown as typeof fetch);
 }
 
 function findWindow(snapshot: Awaited<ReturnType<typeof fetchAntigravityUsage>>, label: string) {
