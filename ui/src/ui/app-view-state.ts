@@ -44,6 +44,8 @@ export type AppViewState = {
   connected: boolean;
   theme: ThemeMode;
   themeResolved: "light" | "dark";
+  mode: "basic" | "advanced" | "configure";
+  tabVisibility: Record<string, boolean>;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   eventLog: EventLogEntry[];

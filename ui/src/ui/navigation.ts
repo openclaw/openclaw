@@ -71,7 +71,9 @@ const ALL_TABS: Tab[] = [
  * @param mode - The current app mode ("basic", "advanced", or "configure")
  * @returns Array of visible tabs based on mode
  */
-export function getVisibleTabs(mode: AppMode): readonly Tab[] {
+export function getVisibleTabs(
+  mode: AppMode,
+): ReadonlyArray<{ readonly label: string; readonly tabs: readonly Tab[] }> {
   const visibleSet = mode === "basic" ? BASIC_TABS : mode === "advanced" ? ADVANCED_TABS : ALL_TABS;
   return TAB_GROUPS.map((group) => ({
     ...group,
@@ -88,7 +90,7 @@ export function getVisibleTabs(mode: AppMode): readonly Tab[] {
 export function getVisibleTabsWithOverrides(
   mode: AppMode,
   overrides: TabVisibility,
-): readonly Tab[] {
+): ReadonlyArray<{ readonly label: string; readonly tabs: readonly Tab[] }> {
   if (mode === "configure") {
     // In configure mode, show all tabs so user can toggle them
     return TAB_GROUPS.map((group) => ({

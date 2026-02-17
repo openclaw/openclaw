@@ -50,8 +50,8 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
   const inConfigureMode = state.mode === "configure";
-  const tabVisibility = (state as any).tabVisibility || {};
-  const isVisible = tabVisibility[tab] !== false;
+  const tabVisibility = state.tabVisibility || {};
+  const isVisible = tabVisibility[tab];
 
   const handleToggleVisibility = (event: MouseEvent) => {
     event.preventDefault();
