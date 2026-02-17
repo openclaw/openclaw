@@ -6,6 +6,7 @@ import type { loadConfig } from "../config/config.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { IdleTriggerRunner } from "../infra/idle-trigger-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
@@ -22,6 +23,7 @@ import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   heartbeatRunner: HeartbeatRunner;
+  idleTriggerRunner: IdleTriggerRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
 };
@@ -61,6 +63,7 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
+      nextState.idleTriggerRunner.updateConfig(nextConfig);
     }
 
     resetDirectoryCache();

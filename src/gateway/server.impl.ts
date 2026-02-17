@@ -28,6 +28,7 @@ import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { startIdleTriggerRunner } from "../infra/idle-trigger-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
@@ -503,6 +504,8 @@ export async function startGatewayServer(
       }
     : startHeartbeatRunner({ cfg: cfgAtStart });
 
+  let idleTriggerRunner = startIdleTriggerRunner({ cfg: cfgAtStart });
+
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
   const channelHealthMonitor = healthCheckDisabled
@@ -654,12 +657,14 @@ export async function startGatewayServer(
           getState: () => ({
             hooksConfig,
             heartbeatRunner,
+            idleTriggerRunner,
             cronState,
             browserControl,
           }),
           setState: (nextState) => {
             hooksConfig = nextState.hooksConfig;
             heartbeatRunner = nextState.heartbeatRunner;
+            idleTriggerRunner = nextState.idleTriggerRunner;
             cronState = nextState.cronState;
             cron = cronState.cron;
             cronStorePath = cronState.storePath;
@@ -697,6 +702,7 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    idleTriggerRunner,
     nodePresenceTimers,
     broadcast,
     tickInterval,
