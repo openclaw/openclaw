@@ -1681,10 +1681,10 @@ export async function runRlmHarness(params: RlmHarnessParams): Promise<{
         });
         // NOTE: Node.js vm is NOT a security sandbox. The model already has tool
         // access (exec, file I/O) in normal operation so this does not expand the
-        // trust boundary. The vm context prevents accidental Node.js API use and
-        // enforces a synchronous timeout. RLM is gated behind tools.rlm.enabled.
-        const context = vm.createContext({
-          ...runtimeApi,
+        // trust boundary. We still use a null-prototype sandbox to reduce accidental
+        // constructor-chain access to Node globals, and rely on runtime tool-policy
+        // allowlists as the actual control boundary. RLM is gated behind tools.rlm.enabled.
+        const sandbox = Object.assign(Object.create(null), runtimeApi, {
           Math,
           JSON,
           Date,
@@ -1692,7 +1692,7 @@ export async function runRlmHarness(params: RlmHarnessParams): Promise<{
         // vm's built-in timeout throws inside runInContext. Avoid Promise.race timeouts here,
         // because a rejected timer promise would outlive the race winner and trigger unhandled
         // rejections later.
-        returnValue = await script.runInContext(context, { timeout: 1_500 });
+        returnValue = await script.runInContext(vm.createContext(sandbox), { timeout: 1_500 });
       } catch (err) {
         scriptError = err;
       }

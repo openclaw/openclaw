@@ -472,6 +472,49 @@ describe("harness-rlm behavior", () => {
     });
   });
 
+  it("does not expose Node.js globals (process, require, Buffer) in VM sandbox", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValue(
+      resultWithText(
+        [
+          "```js",
+          "const results = [",
+          '  typeof process === "undefined",',
+          '  typeof require === "undefined",',
+          '  typeof Buffer === "undefined",',
+          '  typeof global === "undefined",',
+          '  typeof globalThis === "undefined" || globalThis === this,',
+          '  typeof module === "undefined",',
+          '  typeof __filename === "undefined",',
+          '  typeof __dirname === "undefined",',
+          "].join(',');",
+          "submit(results);",
+          "```",
+        ].join("\n"),
+      ),
+    );
+
+    await withHarnessRun(async (ctx) => {
+      const out = await runRlmHarness({
+        cfg: undefined,
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+        sessionId: "sess",
+        sessionFile: ctx.sessionFile,
+        timeoutMs: 20_000,
+        runId: "run",
+        maxDepth: 0,
+        userPrompt: "root",
+      });
+      const answer = out.result.payloads?.[0]?.text ?? "";
+      // Every check should be "true" — no Node.js globals leak into sandbox
+      for (const val of answer.split(",")) {
+        expect(val).toBe("true");
+      }
+    });
+  });
+
   it("rejects invalid object shapes for runtime text inputs", async () => {
     runEmbeddedPiAgentMock.mockResolvedValue(
       resultWithText(
