@@ -14,6 +14,7 @@ import {
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveDmPolicy, resolveGroupPolicy } from "../../channels/policy-resolve.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
@@ -138,8 +139,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = imessageCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
-  const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
+  const groupPolicy = resolveGroupPolicy({
+    accountPolicy: imessageCfg.groupPolicy,
+    defaultPolicy: defaultGroupPolicy ?? "open",
+  });
+  const dmPolicy = resolveDmPolicy({
+    accountPolicy: imessageCfg.dmPolicy,
+    defaultPolicy: "pairing",
+  });
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";

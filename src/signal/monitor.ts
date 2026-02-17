@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
+import { resolveDmPolicy, resolveGroupPolicy } from "../channels/policy-resolve.js";
 import { loadConfig } from "../config/config.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -282,7 +283,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const chunkMode = resolveChunkMode(cfg, "signal", accountInfo.accountId);
   const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
   const account = opts.account?.trim() || accountInfo.config.account?.trim();
-  const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
+  const dmPolicy = resolveDmPolicy({
+    accountPolicy: accountInfo.config.dmPolicy,
+    defaultPolicy: "pairing",
+  });
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
   const groupAllowFrom = normalizeAllowList(
     opts.groupAllowFrom ??
@@ -292,7 +296,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         : []),
   );
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = accountInfo.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const groupPolicy = resolveGroupPolicy({
+    accountPolicy: accountInfo.config.groupPolicy,
+    defaultPolicy: defaultGroupPolicy ?? "allowlist",
+  });
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;

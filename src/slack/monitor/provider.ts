@@ -11,6 +11,7 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
+import { resolveDmPolicy, resolveGroupPolicy } from "../../channels/policy-resolve.js";
 import { loadConfig } from "../../config/config.js";
 import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
@@ -93,13 +94,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const dmConfig = slackCfg.dm;
 
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = slackCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
+  const dmPolicy = resolveDmPolicy({
+    accountPolicy: slackCfg.dmPolicy,
+    legacyPolicy: dmConfig?.policy,
+    defaultPolicy: "pairing",
+  });
   let allowFrom = slackCfg.allowFrom ?? dmConfig?.allowFrom;
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
+  const groupPolicy = resolveGroupPolicy({
+    accountPolicy: slackCfg.groupPolicy,
+    defaultPolicy: defaultGroupPolicy ?? "open",
+  });
   if (
     slackCfg.groupPolicy === undefined &&
     slackCfg.channels === undefined &&
