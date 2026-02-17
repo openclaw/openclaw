@@ -53,6 +53,9 @@ Separate from transcript hygiene, session files are repaired (if needed) before 
 Image payloads are always sanitized to prevent provider-side rejection due to size
 limits (downscale/recompress oversized base64 images).
 
+This also helps control image-driven token pressure for vision-capable models.
+Lower max dimensions generally reduce token usage; higher dimensions preserve detail.
+
 Implementation:
 
 - `sanitizeSessionMessagesImages` in `src/agents/pi-embedded-helpers/images.ts`
