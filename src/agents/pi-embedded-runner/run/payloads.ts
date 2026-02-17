@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import { stripHeartbeatToken } from "../../../auto-reply/heartbeat.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
@@ -286,16 +287,32 @@ export function buildEmbeddedRunPayloads(params: {
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
-    .map((item) => ({
-      text: item.text?.trim() ? item.text.trim() : undefined,
-      mediaUrls: item.media?.length ? item.media : undefined,
-      mediaUrl: item.media?.[0],
-      isError: item.isError,
-      replyToId: item.replyToId,
-      replyToTag: item.replyToTag,
-      replyToCurrent: item.replyToCurrent,
-      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
-    }))
+    .map((item) => {
+      let text = item.text?.trim() ? item.text.trim() : undefined;
+      const mediaUrls = item.media?.length ? item.media : undefined;
+      const mediaUrl = item.media?.[0];
+      const hasMedia = Boolean(mediaUrl || (mediaUrls?.length ?? 0) > 0);
+
+      if (text) {
+        const stripped = stripHeartbeatToken(text, { mode: "message" });
+        if (stripped.shouldSkip && !hasMedia) {
+          text = undefined;
+        } else if (stripped.didStrip) {
+          text = stripped.text;
+        }
+      }
+
+      return {
+        text,
+        mediaUrls,
+        mediaUrl,
+        isError: item.isError,
+        replyToId: item.replyToId,
+        replyToTag: item.replyToTag,
+        replyToCurrent: item.replyToCurrent,
+        audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      };
+    })
     .filter((p) => {
       if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
         return false;
