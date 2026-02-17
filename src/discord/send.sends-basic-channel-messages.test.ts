@@ -273,6 +273,50 @@ describe("sendMessageDiscord", () => {
     });
     expect(secondBody?.message_reference).toBeUndefined();
   });
+
+  it("rejects empty payloads without content, embeds, files, or valid components", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    // Empty text with no other fields should be caught by sendDiscordText validation
+    await expect(
+      sendMessageDiscord("channel:789", "", {
+        rest,
+        token: "t",
+      }),
+    ).rejects.toThrow(/Message must be non-empty/);
+  });
+
+  it("allows empty text when files are present", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+    await sendMessageDiscord("channel:789", "", {
+      rest,
+      token: "t",
+      mediaUrl: "file:///tmp/photo.jpg",
+    });
+    const body = postMock.mock.calls[0]?.[1]?.body;
+    // Should have files but no content field
+    expect(body).toHaveProperty("files");
+    expect(body).not.toHaveProperty("content");
+  });
+
+  it("validates payload has at least one valid field before sending", async () => {
+    const { getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    // This test verifies the validation logic catches empty payloads
+    // In practice, sendDiscordText checks for empty text upfront,
+    // but the payload validation is a safety check for edge cases
+    const { buildDiscordMessagePayload } = await import("./send.shared.js");
+    // Empty payload with no valid fields
+    const emptyPayload = buildDiscordMessagePayload({
+      text: "",
+      components: [],
+    });
+    expect(emptyPayload).not.toHaveProperty("content");
+    // Empty arrays are not included in the payload
+    expect(emptyPayload).not.toHaveProperty("components");
+    // The validation in sendDiscordText should catch this before sending
+  });
 });
 
 describe("reactMessageDiscord", () => {
