@@ -684,6 +684,48 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/templates",
       category: "session",
     }),
+    defineChatCommand({
+      key: "name",
+      description: "Get or set the session display name.",
+      textAlias: "/name",
+      category: "session",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "name",
+          description: "Display name for this session",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "copy",
+      description: "Copy the last assistant message to clipboard.",
+      textAlias: "/copy",
+      category: "session",
+    }),
+    defineChatCommand({
+      key: "reload",
+      description: "Reload skills, extensions, and templates.",
+      textAlias: "/reload",
+      category: "tools",
+    }),
+    defineChatCommand({
+      key: "fork",
+      description: "Record a fork of the current session.",
+      textAlias: "/fork",
+      category: "session",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "name",
+          description: "Optional name for this fork",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
     ...listChannelDocks()
       .filter((dock) => dock.capabilities.nativeCommands)
       .map((dock) => defineDockCommand(dock)),

@@ -10,7 +10,9 @@ import { handleBashCommand } from "./commands-bash.js";
 import { handleBookmarkCreateCommand, handleBookmarkListCommand } from "./commands-bookmarks.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { handleCopyCommand } from "./commands-copy.js";
 import { handleFastCommand } from "./commands-fast.js";
+import { handleForkCommand } from "./commands-fork.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -24,6 +26,8 @@ import { handleMeshCommand } from "./commands-mesh.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePlanCommand } from "./commands-plan.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { handleReloadCommand } from "./commands-reload.js";
+import { handleSessionNameCommand } from "./commands-session-name.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -78,6 +82,10 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handlePlanCommand,
       handleInitCommand,
       handleShareSessionCommand,
+      handleSessionNameCommand,
+      handleCopyCommand,
+      handleReloadCommand,
+      handleForkCommand,
       // Template expansion must come after all built-in command handlers so
       // it only fires when no other handler claims the slash command.
       handleTemplatesCommand,

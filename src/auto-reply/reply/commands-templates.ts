@@ -153,12 +153,74 @@ export const handleTemplatesCommand: CommandHandler = async (params, allowTextCo
   };
 };
 
+// ---------------------------------------------------------------------------
+// Template variable helpers
+// ---------------------------------------------------------------------------
+
 /**
- * Intercepts `/name` patterns and expands matching templates.
+ * Parse `key=value` pairs from a string of args.
+ * Handles `key=value` and `key=value with spaces` (space-separated tokens, but
+ * values can be multi-word if no next `key=` follows them).
+ *
+ * Format: `focus=security language=typescript verbose=yes`
+ */
+export function parseTemplateArgs(argsStr: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!argsStr.trim()) {
+    return result;
+  }
+  // Match key=value pairs where value extends to the next key= or end-of-string
+  const regex = /([\w-]+)=([^=]+?)(?=\s+[\w-]+=|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(argsStr)) !== null) {
+    const key = m[1];
+    const value = m[2].trim();
+    if (key) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
+ * Detect all `{{key}}` variable placeholders in a template string.
+ */
+function detectTemplateVars(content: string): string[] {
+  const vars: string[] = [];
+  const seen = new Set<string>();
+  const regex = /\{\{(\w+)\}\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(content)) !== null) {
+    const key = m[1];
+    if (key && !seen.has(key)) {
+      vars.push(key);
+      seen.add(key);
+    }
+  }
+  return vars;
+}
+
+/**
+ * Substitute `{{key}}` placeholders in content with provided values.
+ */
+function substituteTemplateVars(content: string, vars: Record<string, string>): string {
+  return content.replace(/\{\{(\w+)\}\}/g, (match, key: string) => vars[key] ?? match);
+}
+
+// ---------------------------------------------------------------------------
+// Template expansion handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Intercepts `/name` and `/name key=value …` patterns and expands matching templates.
  *
  * When a template is found the handler returns `{ shouldContinue: true,
  * expandedBody }` so the pipeline replaces the inbound body with the template
  * content before forwarding to the agent runner.
+ *
+ * **Template variables:** templates may include `{{key}}` placeholders.
+ * - Pass values as: `/template-name key=value other=text`
+ * - Missing values → returns an error listing which vars are needed.
  */
 export const handleTemplateExpansion: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -167,13 +229,14 @@ export const handleTemplateExpansion: CommandHandler = async (params, allowTextC
 
   const body = params.command.commandBodyNormalized.trim();
 
-  // Must be a bare `/word` — no spaces, no trailing args
-  const match = body.match(/^\/([\w-]+)\s*$/);
+  // Match `/word` or `/word args…`
+  const match = body.match(/^\/([\w-]+)(?:\s+(.+))?$/);
   if (!match) {
     return null;
   }
 
   const templateName = match[1];
+  const argsStr = match[2] ?? "";
 
   // Let the explicit `/templates` handler take priority
   if (templateName === "templates") {
@@ -191,6 +254,41 @@ export const handleTemplateExpansion: CommandHandler = async (params, allowTextC
       `Ignoring template expansion /${templateName} from unauthorized sender: ${params.command.senderId ?? "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+
+  // Detect variables in the template
+  const templateVars = detectTemplateVars(content);
+
+  if (templateVars.length > 0) {
+    // Parse user-supplied key=value args
+    const suppliedArgs = parseTemplateArgs(argsStr);
+    const missingVars = templateVars.filter((v) => !(v in suppliedArgs));
+
+    if (missingVars.length > 0) {
+      // Some variables are missing — list them and show usage hint
+      const missing = missingVars.map((v) => `{{${v}}}`).join(", ");
+      const exampleArgs = templateVars.map((v) => `${v}=value`).join(" ");
+      return {
+        shouldContinue: false,
+        reply: {
+          text: [
+            `⚠️ Template **/${templateName}** requires variables: ${missing}`,
+            "",
+            `Usage: \`/${templateName} ${exampleArgs}\``,
+          ].join("\n"),
+        },
+      };
+    }
+
+    // All vars supplied — substitute and expand
+    const expandedContent = substituteTemplateVars(content, suppliedArgs);
+    logVerbose(
+      `Expanding template: ${templateName} (with vars: ${Object.keys(suppliedArgs).join(", ")})`,
+    );
+    return {
+      shouldContinue: true,
+      expandedBody: expandedContent,
+    };
   }
 
   logVerbose(`Expanding template: ${templateName}`);
