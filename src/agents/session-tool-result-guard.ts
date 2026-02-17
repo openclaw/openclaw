@@ -244,8 +244,8 @@ export function installSessionToolResultGuard(
 
       return {
         ...(message as unknown as Record<string, unknown>),
-        ...(nextToolCallId !== undefined ? { toolCallId: nextToolCallId } : null),
-        ...(nextToolUseId !== undefined ? { toolUseId: nextToolUseId } : null),
+        ...(nextToolCallId !== undefined ? { toolCallId: nextToolCallId } : {}),
+        ...(nextToolUseId !== undefined ? { toolUseId: nextToolUseId } : {}),
       } as AgentMessage;
     }
 
