@@ -33,4 +33,22 @@ describe("cron tool flat-params", () => {
     expect(call.method).toBe("cron.add");
     expect(call.params?.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
+
+  it("rejects deleteAfterRun for recurring schedules", async () => {
+    const tool = createCronTool();
+    await expect(
+      tool.execute("call-recurring-delete-after-run", {
+        action: "add",
+        job: {
+          name: "bad-recurring-job",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "ping" },
+          deleteAfterRun: true,
+        },
+      }),
+    ).rejects.toThrow('deleteAfterRun=true is only valid with schedule.kind="at"');
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
 });

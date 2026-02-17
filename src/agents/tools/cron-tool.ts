@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
+import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -777,6 +777,20 @@ function sanitizeCronPatchForGateway(raw: unknown): Record<string, unknown> | nu
   return next;
 }
 
+function validateDeleteAfterRunCompatibility(job: Record<string, unknown>) {
+  if (job.deleteAfterRun !== true) {
+    return;
+  }
+  const schedule = isRecord(job.schedule) ? job.schedule : null;
+  const scheduleKind = schedule ? normalizeScheduleKind(schedule.kind) : undefined;
+  if (scheduleKind && scheduleKind !== "at") {
+    throw new Error(
+      `deleteAfterRun=true is only valid with schedule.kind="at" (one-shot). ` +
+        `Use schedule.kind="at" for one-time reminders, or set deleteAfterRun=false for recurring jobs.`,
+    );
+  }
+}
+
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   return {
     label: "Cron",
@@ -833,6 +847,8 @@ SCHEDULE TYPES (schedule.kind):
 - "cron": cron expression
   { "kind": "cron", "expr": "*/10 * * * *", "tz": "<optional>" }
 - IMPORTANT: include only the fields for the chosen kind (do not mix at/every/cron fields).
+- IMPORTANT: deleteAfterRun=true only applies to one-shot schedules (kind="at"), not "every" or "cron".
+- For "in N minutes/hours" reminders, compute an absolute ISO timestamp and use kind="at".
 
 ISO timestamps without explicit timezone are treated as UTC.
 
@@ -855,6 +871,7 @@ CRITICAL CONSTRAINTS:
 - delivery.channel/to are only supported for sessionTarget="isolated"
 - for webhook callbacks, use delivery.mode="webhook" and set delivery.to URL
 - when outbound announce delivery fails, runtime can route fallback notices using job.sessionKey
+- do not send placeholder/empty fields (e.g., empty at/expr/message); include only fields required by the selected schema
 
 EXAMPLE (valid add, main/systemEvent):
 {
@@ -963,6 +980,9 @@ Use jobId as canonical identifier; id is accepted for compatibility.`,
           }
           const normalizedJob = normalizeCronJobCreate(params.job) ?? params.job;
           const job = sanitizeCronAddJobForGateway(normalizedJob) ?? normalizedJob;
+          if (job && typeof job === "object") {
+            validateDeleteAfterRunCompatibility(job as Record<string, unknown>);
+          }
           if (job && typeof job === "object") {
             const cfg = loadConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
