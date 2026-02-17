@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.js";
 import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -53,7 +54,7 @@ function forbiddenResult(error: string): SpawnSubagentResult {
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-};
+} satisfies OpenClawConfig;
 
 describe("/subagents spawn command", () => {
   beforeEach(() => {

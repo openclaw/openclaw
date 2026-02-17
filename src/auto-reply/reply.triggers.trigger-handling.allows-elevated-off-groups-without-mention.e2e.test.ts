@@ -38,7 +38,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode disabled.");
 
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(cfg.session!.store);
       expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("off");
     });
   });
@@ -64,7 +64,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode set to ask");
 
-      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const storeRaw = await fs.readFile(cfg.session!.store, "utf-8");
       const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
       expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("on");
     });
