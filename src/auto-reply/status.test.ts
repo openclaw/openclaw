@@ -13,7 +13,9 @@ import {
 } from "./status.js";
 
 const { listPluginCommands } = vi.hoisted(() => ({
-  listPluginCommands: vi.fn(() => []),
+  listPluginCommands: vi.fn(
+    (): Array<{ name: string; description: string; pluginId: string }> => [],
+  ),
 }));
 
 vi.mock("../plugins/commands.js", () => ({
