@@ -6,6 +6,11 @@ type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 
 const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
 
+/**
+ * Register a listener for session transcript updates.
+ * Returns an unsubscribe function. Listeners are guarded with try/catch
+ * so a throwing subscriber cannot prevent other listeners from firing.
+ */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
   SESSION_TRANSCRIPT_LISTENERS.add(listener);
   return () => {
