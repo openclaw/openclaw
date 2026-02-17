@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { isMainSession } from "../app-render.helpers.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
@@ -244,6 +245,7 @@ function renderRow(
   return html`
     <div class="table-row">
       <div class="mono session-key-cell">
+        ${isMainSession(row.key) ? html`<span class="session-main-badge" title="Main session">★</span> ` : nothing}
         ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
       </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSessionKey, resolveSessionDisplayName } from "./app-render.helpers.ts";
+import { isMainSession, parseSessionKey, resolveSessionDisplayName } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -89,6 +89,36 @@ describe("parseSessionKey", () => {
       prefix: "",
       fallbackName: "something-unknown",
     });
+  });
+});
+
+/* ================================================================
+ *  isMainSession – identifies main session keys
+ * ================================================================ */
+
+describe("isMainSession", () => {
+  it("returns true for 'main'", () => {
+    expect(isMainSession("main")).toBe(true);
+  });
+
+  it("returns true for 'agent:main:main'", () => {
+    expect(isMainSession("agent:main:main")).toBe(true);
+  });
+
+  it("returns false for subagent sessions", () => {
+    expect(isMainSession("agent:main:subagent:abc-123")).toBe(false);
+  });
+
+  it("returns false for cron sessions", () => {
+    expect(isMainSession("agent:main:cron:daily")).toBe(false);
+  });
+
+  it("returns false for channel sessions", () => {
+    expect(isMainSession("agent:main:telegram:direct:user123")).toBe(false);
+  });
+
+  it("returns false for unknown keys", () => {
+    expect(isMainSession("something-else")).toBe(false);
   });
 });
 
