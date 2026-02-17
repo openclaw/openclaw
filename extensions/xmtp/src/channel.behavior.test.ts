@@ -66,13 +66,14 @@ vi.mock("./xmtp-bus.js", async () => {
   };
 });
 
-function createConfig(): OpenClawConfig {
+function createConfig(overrides?: Record<string, unknown>): OpenClawConfig {
   return {
     channels: {
       xmtp: {
         walletKey: TEST_WALLET_KEY,
         dbEncryptionKey: TEST_DB_KEY,
         env: "dev",
+        ...overrides,
       },
     },
   };
@@ -88,6 +89,16 @@ function createRuntime(cfg: OpenClawConfig) {
     }) => {},
   );
   const recordInboundSession = vi.fn(async () => {});
+  const readAllowFromStore = vi.fn(async () => [] as string[]);
+  const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-123", created: true }));
+  const buildPairingReply = vi.fn(
+    (params: { channel: string; idLine: string; code: string }) =>
+      `[${params.channel}] ${params.idLine} code=${params.code}`,
+  );
+  const activityRecord = vi.fn();
+  const shouldHandleTextCommands = vi.fn(() => true);
+  const isControlCommandMessage = vi.fn((body: string) => body.trim().startsWith("/"));
+  const outboundLogger = { debug: vi.fn() };
 
   const runtime = {
     config: {
@@ -115,6 +126,21 @@ function createRuntime(cfg: OpenClawConfig) {
         resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
         recordInboundSession,
       },
+      pairing: {
+        readAllowFromStore,
+        upsertPairingRequest,
+        buildPairingReply,
+      },
+      commands: {
+        shouldHandleTextCommands,
+        isControlCommandMessage,
+      },
+      activity: {
+        record: activityRecord,
+      },
+    },
+    logging: {
+      getChildLogger: vi.fn(() => outboundLogger),
     },
   } as unknown as PluginRuntime;
 
@@ -123,6 +149,13 @@ function createRuntime(cfg: OpenClawConfig) {
     finalizeInboundContext,
     dispatchReplyWithBufferedBlockDispatcher,
     recordInboundSession,
+    readAllowFromStore,
+    upsertPairingRequest,
+    buildPairingReply,
+    activityRecord,
+    shouldHandleTextCommands,
+    isControlCommandMessage,
+    outboundLogger,
   };
 }
 
@@ -180,45 +213,19 @@ describe("xmtpPlugin behavior", () => {
       throw new Error("startAccount is not available");
     }
 
-    const lifecycle = (await startAccount(createGatewayContext(cfg, account))) as {
+    const gatewayCtx = createGatewayContext(cfg, account);
+    const lifecycle = (await startAccount(gatewayCtx)) as {
       stop: () => Promise<void>;
     };
     activeStop = lifecycle.stop;
-    return runtimeBundle;
+    return { runtimeBundle, gatewayCtx };
   }
 
-  it("routes outbound sends to address targets via bus", async () => {
-    await startGateway();
-
-    await xmtpPlugin.outbound?.sendText?.({
-      cfg: createConfig(),
-      to: TEST_SENDER,
-      text: "hello outbound",
-      accountId: "default",
-    });
-
-    expect(busState.sendText).toHaveBeenCalledWith(TEST_SENDER, "hello outbound");
-  });
-
-  it("uses address target for pairing approval notifications", async () => {
-    await startGateway();
-
-    await xmtpPlugin.pairing?.notifyApproval?.({
-      cfg: createConfig(),
-      id: TEST_SENDER,
-    });
-
-    expect(busState.sendText).toHaveBeenCalledWith(TEST_SENDER, PAIRING_APPROVED_MESSAGE);
-  });
-
-  it("uses inbound XMTP message id as MessageSid", async () => {
-    const runtimeBundle = createRuntime(createConfig());
-    await startGateway({ runtime: runtimeBundle });
-
+  async function emitInboundMessage(text: string) {
     const onMessage = busState.getOnMessage();
     expect(onMessage).toBeTypeOf("function");
     if (!onMessage) {
-      return;
+      throw new Error("onMessage handler was not registered");
     }
 
     await onMessage({
@@ -226,9 +233,71 @@ describe("xmtpPlugin behavior", () => {
       senderInboxId: "inbox-1",
       conversationId: "conversation-123",
       isDm: true,
-      text: "hello inbound",
+      text,
       messageId: "xmtp-message-123",
     });
+  }
+
+  it("routes outbound sends to address targets via bus and records activity", async () => {
+    const cfg = createConfig();
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ cfg, runtime: runtimeBundle });
+
+    await xmtpPlugin.outbound?.sendText?.({
+      cfg,
+      to: TEST_SENDER,
+      text: "hello outbound",
+      accountId: "default",
+    });
+
+    expect(busState.sendText).toHaveBeenCalledWith(TEST_SENDER, "hello outbound");
+    expect(runtimeBundle.activityRecord).toHaveBeenCalledWith({
+      channel: "xmtp",
+      accountId: "default",
+      direction: "outbound",
+    });
+    expect(runtimeBundle.outboundLogger.debug).toHaveBeenCalledWith(
+      expect.stringContaining("xmtp outbound:"),
+    );
+  });
+
+  it("uses address target for pairing approval notifications", async () => {
+    const cfg = createConfig();
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ cfg, runtime: runtimeBundle });
+
+    await xmtpPlugin.pairing?.notifyApproval?.({
+      cfg,
+      id: TEST_SENDER,
+    });
+
+    expect(busState.sendText).toHaveBeenCalledWith(TEST_SENDER, PAIRING_APPROVED_MESSAGE);
+    expect(runtimeBundle.activityRecord).toHaveBeenCalledWith({
+      channel: "xmtp",
+      accountId: "default",
+      direction: "outbound",
+    });
+  });
+
+  it("fails pairing approval notify when gateway bus is not running", async () => {
+    const cfg = createConfig();
+    const runtimeBundle = createRuntime(cfg);
+    setXmtpRuntime(runtimeBundle.runtime);
+
+    await expect(
+      xmtpPlugin.pairing?.notifyApproval?.({
+        cfg,
+        id: TEST_SENDER,
+      }),
+    ).rejects.toThrow("XMTP bus not running");
+  });
+
+  it("uses inbound XMTP message id as MessageSid and records inbound sessions", async () => {
+    const cfg = createConfig({ dmPolicy: "open" });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("hello inbound");
 
     expect(runtimeBundle.finalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -237,10 +306,18 @@ describe("xmtpPlugin behavior", () => {
       }),
     );
     expect(runtimeBundle.recordInboundSession).toHaveBeenCalled();
+    expect(runtimeBundle.activityRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "xmtp",
+        accountId: "default",
+        direction: "inbound",
+      }),
+    );
   });
 
-  it("replies to inbound messages using conversation id", async () => {
-    const runtimeBundle = createRuntime(createConfig());
+  it("replies to inbound messages using conversation id and records outbound activity", async () => {
+    const cfg = createConfig({ dmPolicy: "open" });
+    const runtimeBundle = createRuntime(cfg);
     runtimeBundle.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async (params: {
         dispatcherOptions: {
@@ -251,23 +328,112 @@ describe("xmtpPlugin behavior", () => {
       },
     );
 
-    await startGateway({ runtime: runtimeBundle });
-
-    const onMessage = busState.getOnMessage();
-    expect(onMessage).toBeTypeOf("function");
-    if (!onMessage) {
-      return;
-    }
-
-    await onMessage({
-      senderAddress: TEST_SENDER,
-      senderInboxId: "inbox-1",
-      conversationId: "conversation-123",
-      isDm: true,
-      text: "hello inbound",
-      messageId: "xmtp-message-123",
-    });
+    const { gatewayCtx } = await startGateway({ runtime: runtimeBundle, cfg });
+    await emitInboundMessage("hello inbound");
 
     expect(busState.sendText).toHaveBeenCalledWith("conversation-123", "reply text");
+    expect(runtimeBundle.activityRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: "outbound",
+      }),
+    );
+    expect(gatewayCtx.log.debug).toHaveBeenCalledWith(expect.stringContaining("xmtp outbound:"));
+  });
+
+  it("blocks unauthorized DM senders when dmPolicy is allowlist", async () => {
+    const cfg = createConfig({ dmPolicy: "allowlist", allowFrom: [] });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("hello inbound");
+
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeBundle.upsertPairingRequest).not.toHaveBeenCalled();
+    expect(busState.sendText).not.toHaveBeenCalled();
+  });
+
+  it("creates pairing requests and replies for unauthorized DM senders in pairing mode", async () => {
+    const cfg = createConfig({ dmPolicy: "pairing", allowFrom: [] });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("hello inbound");
+
+    expect(runtimeBundle.upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "xmtp",
+      id: TEST_SENDER,
+      accountId: "default",
+      meta: {
+        inboxId: "inbox-1",
+      },
+    });
+    expect(runtimeBundle.buildPairingReply).toHaveBeenCalledWith({
+      channel: "xmtp",
+      idLine: `Your XMTP address: ${TEST_SENDER}`,
+      code: "PAIR-123",
+    });
+    expect(busState.sendText).toHaveBeenCalledWith(
+      "conversation-123",
+      expect.stringContaining("code=PAIR-123"),
+    );
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("allows configured or paired DM senders and sets command authorization", async () => {
+    const cfg = createConfig({ dmPolicy: "allowlist", allowFrom: [] });
+    const runtimeBundle = createRuntime(cfg);
+    runtimeBundle.readAllowFromStore.mockResolvedValue([TEST_SENDER]);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("/status");
+
+    expect(runtimeBundle.finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        CommandAuthorized: true,
+      }),
+    );
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+  });
+
+  it("blocks control commands in open mode when sender is not command-authorized", async () => {
+    const cfg = createConfig({ dmPolicy: "open", allowFrom: [] });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("/status");
+
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeBundle.finalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it("drops all inbound DMs when dmPolicy is disabled", async () => {
+    const cfg = createConfig({ dmPolicy: "disabled", allowFrom: [TEST_SENDER] });
+    const runtimeBundle = createRuntime(cfg);
+    await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("hello inbound");
+
+    expect(runtimeBundle.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(runtimeBundle.finalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it("logs pairing and inbound diagnostics for troubleshooting", async () => {
+    const cfg = createConfig({ dmPolicy: "pairing", allowFrom: [] });
+    const runtimeBundle = createRuntime(cfg);
+    const { gatewayCtx } = await startGateway({ runtime: runtimeBundle, cfg });
+
+    await emitInboundMessage("hello inbound");
+
+    expect(gatewayCtx.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("xmtp pairing request"),
+    );
+
+    runtimeBundle.readAllowFromStore.mockResolvedValue([TEST_SENDER]);
+    await emitInboundMessage("hello after allow");
+
+    expect(gatewayCtx.log.debug).toHaveBeenCalledWith(
+      expect.stringContaining("xmtp pairing reply"),
+    );
+    expect(gatewayCtx.log.debug).toHaveBeenCalledWith(expect.stringContaining("xmtp inbound:"));
   });
 });
