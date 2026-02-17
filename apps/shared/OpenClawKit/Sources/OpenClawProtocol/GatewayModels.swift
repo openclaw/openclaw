@@ -1045,6 +1045,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let spawndepth: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
+    public let activedialogid: AnyCodable?
 
     public init(
         key: String,
@@ -1062,7 +1063,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         spawnedby: AnyCodable?,
         spawndepth: AnyCodable?,
         sendpolicy: AnyCodable?,
-        groupactivation: AnyCodable?
+        groupactivation: AnyCodable?,
+        activedialogid: AnyCodable?
     ) {
         self.key = key
         self.label = label
@@ -1080,6 +1082,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.spawndepth = spawndepth
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
+        self.activedialogid = activedialogid
     }
     private enum CodingKeys: String, CodingKey {
         case key
@@ -1098,6 +1101,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case spawndepth = "spawnDepth"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
+        case activedialogid = "activeDialogId"
     }
 }
 
