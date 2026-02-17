@@ -90,8 +90,8 @@ targets:
           - CFBundleURLName: ai.openclaw.ios
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.2.16"
-        CFBundleVersion: "20260216"
+        CFBundleShortVersionString: "2026.2.17"
+        CFBundleVersion: "20260217"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -161,5 +161,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.2.16"
-        CFBundleVersion: "20260216"
+        CFBundleShortVersionString: "2026.2.17"
+        CFBundleVersion: "20260217"
