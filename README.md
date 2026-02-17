@@ -126,6 +126,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
 - **[Live Canvas](https://docs.openclaw.ai/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui).
 - **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
+- **[MCP integration](https://docs.openclaw.ai/tools/mcp)** — connect any Model Context Protocol server (stdio or SSE) with approval workflows, health monitoring, and per-tool timeouts.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
 - **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
 
@@ -162,6 +163,9 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - [Nodes](https://docs.openclaw.ai/nodes): camera snap/clip, screen record, [location.get](https://docs.openclaw.ai/nodes/location-command), notifications.
 - [Cron + wakeups](https://docs.openclaw.ai/automation/cron-jobs); [webhooks](https://docs.openclaw.ai/automation/webhook); [Gmail Pub/Sub](https://docs.openclaw.ai/automation/gmail-pubsub).
 - [Skills platform](https://docs.openclaw.ai/tools/skills): bundled, managed, and workspace skills with install gating + UI.
+- [MCP servers](https://docs.openclaw.ai/tools/mcp): connect external tool servers (stdio/SSE) with approval workflows, health monitoring, per-tool timeouts, and OTEL diagnostics.
+- [A2A typed contracts](https://docs.openclaw.ai/tools/a2a-contracts): JSON-Schema contracts for inter-agent `sessions_send` with validation, versioning, and deprecation.
+- [Env profiles](https://docs.openclaw.ai/gateway/env-profiles): `$env` directive for environment-based config switching with typo detection.
 
 ### Runtime + safety
 
@@ -253,8 +257,60 @@ Details: [Nodes](https://docs.openclaw.ai/nodes) · [macOS app](https://docs.ope
 - `sessions_list` — discover active sessions (agents) and their metadata.
 - `sessions_history` — fetch transcript logs for a session.
 - `sessions_send` — message another session; optional reply‑back ping‑pong + announce step (`REPLY_SKIP`, `ANNOUNCE_SKIP`).
+- **Typed contracts** — define JSON-Schema contracts for inter-agent messages; `sessions_send` validates payloads at the gate and rejects freeform text when contracts exist. Supports versioning, deprecation warnings, and schema constraints (minLength, pattern, min/max, additionalProperties, etc.).
 
-Details: [Session tools](https://docs.openclaw.ai/concepts/session-tool)
+Details: [Session tools](https://docs.openclaw.ai/concepts/session-tool) · [A2A contracts](https://docs.openclaw.ai/tools/a2a-contracts)
+
+## MCP integration (Model Context Protocol)
+
+Connect external tool servers over the [Model Context Protocol](https://modelcontextprotocol.io). OpenClaw manages the full lifecycle — spawn/connect, handshake, tool discovery, approval gating, health monitoring, and teardown.
+
+```json5
+// openclaw.json5
+{
+  mcp: {
+    servers: {
+      filesystem: {
+        command: "npx",
+        args: ["-y", "@anthropic/mcp-filesystem", "/home/user"],
+        approval: "allowlist",
+        approvedTools: ["read_file", "list_directory"],
+        toolTimeouts: { search_files: 30000 },
+        healthCheckIntervalMs: 60000
+      }
+    }
+  }
+}
+```
+
+**What you get:**
+
+- **Stdio + SSE transports** — launch local processes or connect to remote SSE endpoints (with SSRF-safe origin validation).
+- **Approval workflows** — `none` (auto-approve), `always` (ask every time), or `allowlist` (pre-approved subset). Unrecognised modes fail closed.
+- **Per-tool timeouts** — override the default 60 s timeout for slow tools.
+- **Health monitoring** — periodic `ping()` with automatic `reconnect()` on failure.
+- **Environment isolation** — child processes receive only a safe whitelist of env vars (`PATH`, `HOME`, `NODE_ENV`, …) plus explicitly configured values.
+- **OTEL diagnostics** — every tool call emits `mcp.tool.call` / `mcp.tool.result` spans visible in your tracing backend.
+- **CLI** — `openclaw mcp status`, `list-tools`, `validate`, `call-tool`, `test-tool`.
+
+Details: [MCP guide](https://docs.openclaw.ai/tools/mcp) · [Approvals](https://docs.openclaw.ai/tools/mcp-approvals) · [Diagnostics](https://docs.openclaw.ai/diagnostics/mcp)
+
+## Environment profiles ($env)
+
+Switch config blocks by setting `OPENCLAW_ENV`:
+
+```json5
+{
+  $env: {
+    development: { agents: { default: { model: "gpt-4o-mini" } } },
+    production:  { agents: { default: { model: "claude-sonnet-4-20250514" } } }
+  }
+}
+```
+
+Typo detection with Levenshtein distance — `"producton"` suggests `"production"`.
+
+Details: [Env profiles](https://docs.openclaw.ai/gateway/env-profiles)
 
 ## Skills registry (ClawHub)
 

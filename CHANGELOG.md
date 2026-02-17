@@ -6,6 +6,18 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- MCP: add Model Context Protocol client integration — connect external tool servers via stdio or SSE transport with JSON-RPC handshake, capability negotiation, and automatic tool discovery. Tools are bridged to native `AgentTool` instances with JSON Schema → TypeBox parameter conversion.
+- MCP/Approvals: add approval workflows for MCP tools — `none` (auto-approve), `always` (require confirmation every call), or `allowlist` (pre-approved subset). Unrecognised approval modes fail closed to `always`.
+- MCP/Health: add periodic health monitoring with configurable `healthCheckIntervalMs` — automatic `ping()` and `reconnect()` on failure with connection-state tracking.
+- MCP/Timeouts: add per-tool timeout overrides via `toolTimeouts` config map, falling back to a default 60 s ceiling.
+- MCP/Security: isolate child-process environment to a safe whitelist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `TERM`, `NODE_ENV`, `TMPDIR`) plus explicitly configured vars. SSE endpoints validated against origin to prevent SSRF on redirects. URL credentials redacted in CLI logging.
+- MCP/Diagnostics: emit `mcp.tool.call` and `mcp.tool.result` diagnostic events with OTEL span instrumentation in the diagnostics-otel extension.
+- MCP/CLI: add `openclaw mcp` subcommands — `status`, `list-tools`, `validate`, `call-tool <server> <tool> [json]`, and `test-tool <server> <tool> [json]`.
+- A2A/Contracts: add typed message contracts for `sessions_send` — define JSON-Schema contracts per agent, validate payloads at the gate, reject freeform text when contracts exist. Includes schema constraints: minLength, maxLength, pattern, minimum, maximum, additionalProperties, minItems, maxItems.
+- A2A/Versioning: add contract versioning with `version`, `deprecated`, and `supersededBy` fields. `listDeprecatedContracts()` discovery and deprecation warnings in validation results.
+- Config/Env: add `$env` directive for environment-based config composition — set `OPENCLAW_ENV` to select a profile block. Includes Levenshtein-based typo detection for unknown environment names against well-known set.
+- Plugins/CLI: add `openclaw plugins create <name>` scaffolding command with template generation; guards against empty plugin IDs from scoped packages.
+- Docs: add 7 documentation pages for MCP integration, MCP approvals, MCP diagnostics/health, A2A contracts, env profiles, and plugin creation.
 - iOS/Talk: add a `Background Listening` toggle that keeps Talk Mode active while the app is backgrounded (off by default for battery safety). Thanks @zeulewan.
 - iOS/Talk: harden barge-in behavior by disabling interrupt-on-speech when output route is built-in speaker/receiver, reducing false interruptions from local TTS bleed-through. Thanks @zeulewan.
 - iOS/Talk: add a `Voice Directive Hint` toggle for Talk Mode prompts so users can disable ElevenLabs voice-switching instructions to save tokens when not needed. (#18250) Thanks @zeulewan.
