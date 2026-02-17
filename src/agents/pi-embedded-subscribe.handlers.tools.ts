@@ -241,6 +241,26 @@ export async function handleToolExecutionStart(
       }
     }
   }
+
+  // Final check after all state mutations to prevent dirty state on late unsubscribe.
+  // If unsubscribe happened after we set state above, clean up before returning.
+  if (ctx.state.unsubscribed) {
+    ctx.log.debug(`tool_execution_start cleanup (unsubscribed after state set): tool=${toolName}`);
+    ctx.state.toolExecutionCount = Math.max(0, ctx.state.toolExecutionCount - 1);
+    ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
+    if (ctx.state.activeToolCallId === toolCallId) {
+      ctx.state.activeToolName = undefined;
+      ctx.state.activeToolCallId = undefined;
+      ctx.state.activeToolStartTime = undefined;
+    }
+    ctx.state.toolStartData.delete(toolCallId);
+    ctx.state.toolMetaById.delete(toolCallId);
+    ctx.state.toolSummaryById.delete(toolCallId);
+    ctx.state.pendingMessagingTexts.delete(toolCallId);
+    ctx.state.pendingMessagingTargets.delete(toolCallId);
+    ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+    return;
+  }
 }
 
 export function handleToolExecutionUpdate(
