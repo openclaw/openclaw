@@ -17,9 +17,31 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     return false;
   }
 
+  // Prefer the async Clipboard API (requires secure context: HTTPS or localhost).
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to legacy fallback.
+    }
+  }
+
+  // Legacy fallback for non-secure contexts (e.g. HTTP, Tailscale serve, iframes).
   try {
-    await navigator.clipboard.writeText(text);
-    return true;
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    // Avoid scrolling to bottom on iOS.
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
   } catch {
     return false;
   }
