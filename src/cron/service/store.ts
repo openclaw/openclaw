@@ -127,7 +127,7 @@ function copyTopLevelAgentTurnFields(
     typeof raw.timeoutSeconds === "number" &&
     Number.isFinite(raw.timeoutSeconds)
   ) {
-    payload.timeoutSeconds = Math.max(1, Math.floor(raw.timeoutSeconds));
+    payload.timeoutSeconds = Math.max(0, Math.floor(raw.timeoutSeconds));
     mutated = true;
   }
 
