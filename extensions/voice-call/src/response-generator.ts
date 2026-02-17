@@ -28,6 +28,7 @@ export type VoiceResponseParams = {
 export type VoiceResponseResult = {
   text: string | null;
   error?: string;
+  endCall?: boolean;
 };
 
 type VoiceResponsePayload = {
@@ -233,7 +234,9 @@ export async function generateVoiceResponse(
   // Build system prompt with conversation history
   const basePrompt =
     voiceConfig.responseSystemPrompt ??
-    `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
+    `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.
+
+When the conversation is naturally over or the caller says goodbye, say a brief farewell and end your response with the exact tag [END_CALL]. This signals the system to hang up the phone after your farewell is spoken.`;
 
   let extraSystemPrompt = basePrompt;
   if (transcript.length > 0) {
@@ -249,6 +252,8 @@ export async function generateVoiceResponse(
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
+    let endCallRequested = false;
+
     const result = await agentRuntime.runEmbeddedPiAgent({
       sessionId,
       sessionKey,
@@ -268,13 +273,19 @@ export async function generateVoiceResponse(
       agentDir,
     });
 
-    const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);
+    let text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);
 
     if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
     }
 
-    return { text };
+    // Check for [END_CALL] marker and strip it from spoken text
+    if (text && text.includes("[END_CALL]")) {
+      endCallRequested = true;
+      text = text.replace(/\s*\[END_CALL\]\s*/g, "").trim() || null;
+    }
+
+    return { text, endCall: endCallRequested };
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, error: String(err) };
