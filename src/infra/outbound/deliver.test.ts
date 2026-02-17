@@ -117,6 +117,32 @@ describe("deliverOutboundPayloads", () => {
     }
   });
 
+  it("keeps payload replyToId across all chunked telegram sends", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    try {
+      await deliverOutboundPayloads({
+        cfg: telegramChunkConfig,
+        channel: "telegram",
+        to: "123",
+        payloads: [{ text: "abcd", replyToId: "777" }],
+        deps: { sendTelegram },
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(2);
+      for (const call of sendTelegram.mock.calls) {
+        expect(call[2]).toEqual(expect.objectContaining({ replyToMessageId: 777 }));
+      }
+    } finally {
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+    }
+  });
+
   it("passes explicit accountId to sendTelegram", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
@@ -530,12 +556,10 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendWhatsApp },
     });
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "+1555", content: "hello", success: true }),
-        expect.objectContaining({ channelId: "whatsapp" }),
-      );
-    });
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "+1555", content: "hello", success: true }),
+      expect.objectContaining({ channelId: "whatsapp" }),
+    );
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {
@@ -563,12 +587,10 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
     });
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
-        expect.objectContaining({ channelId: "matrix" }),
-      );
-    });
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
   });
 
   it("emits message_sent failure when delivery errors", async () => {
@@ -585,17 +607,15 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("downstream failed");
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "+1555",
-          content: "hi",
-          success: false,
-          error: "downstream failed",
-        }),
-        expect.objectContaining({ channelId: "whatsapp" }),
-      );
-    });
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "hi",
+        success: false,
+        error: "downstream failed",
+      }),
+      expect.objectContaining({ channelId: "whatsapp" }),
+    );
   });
 });
 

@@ -234,6 +234,24 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("Cron: Nightly Sync");
   });
 
+  it("does not double-prefix cron labels that already include Cron:", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:cron:abc-123",
+        row({ key: "agent:main:cron:abc-123", label: "Cron: Nightly Sync" }),
+      ),
+    ).toBe("Cron: Nightly Sync");
+  });
+
+  it("does not double-prefix subagent display names that already include Subagent:", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:subagent:abc-123",
+        row({ key: "agent:main:subagent:abc-123", displayName: "Subagent: Runner" }),
+      ),
+    ).toBe("Subagent: Runner");
+  });
+
   it("does not prefix non-typed sessions with labels", () => {
     expect(
       resolveSessionDisplayName(

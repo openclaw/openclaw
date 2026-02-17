@@ -146,6 +146,16 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("+15551234567");
   });
 
+  it("includes message_id in conversation info", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "  msg-123  ",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("msg-123");
+  });
+
   it("falls back to SenderId when sender phone is missing", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
