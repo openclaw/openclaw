@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import type { HealthData, SystemResourceMetrics } from "../controllers/health.ts";
-import { renderSpinner } from "../app-render.helpers.ts";
+import { renderSpinner } from "../render-utils.ts";
 
 export type HealthProps = {
   loading: boolean;

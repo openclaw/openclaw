@@ -1,6 +1,6 @@
 import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import type { EventLogEntry } from "../app-events.ts";
+import type { EventLogEntry } from "../types.ts";
 import { gateway } from "../../services/gateway.ts";
 import { renderDebug, type DebugProps } from "../views/debug.ts";
 

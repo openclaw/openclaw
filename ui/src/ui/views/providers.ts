@@ -6,8 +6,8 @@ import type {
   ProviderModelEntry,
   UsageWindowEntry,
 } from "../controllers/providers-health.ts";
-import { renderEmptyState } from "../app-render.helpers.ts";
 import { icons } from "../icons.ts";
+import { renderEmptyState } from "../render-utils.ts";
 
 export type ProvidersProps = {
   loading: boolean;

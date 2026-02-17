@@ -5,7 +5,6 @@
  */
 
 import { html, nothing } from "lit";
-import { renderSpinner } from "../app-render.helpers.ts";
 import {
   type SecurityEvent,
   type SecurityEventCategory,
@@ -17,6 +16,7 @@ import {
   formatSecurityTime,
 } from "../controllers/security.ts";
 import { icons } from "../icons.ts";
+import { renderSpinner } from "../render-utils.ts";
 
 export type SecurityProps = {
   loading: boolean;

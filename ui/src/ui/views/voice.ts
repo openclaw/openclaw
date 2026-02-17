@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { renderSpinner } from "../app-render.helpers.ts";
+import { renderSpinner } from "../render-utils.ts";
 
 export type VoiceProps = {
   loading: boolean;

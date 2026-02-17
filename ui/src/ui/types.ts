@@ -627,3 +627,5 @@ export type AgentHierarchyResult = {
   collaborationEdges?: CollaborationEdge[];
   updatedAt: number;
 };
+
+export type EventLogEntry = { ts: number; event: string; payload?: unknown };

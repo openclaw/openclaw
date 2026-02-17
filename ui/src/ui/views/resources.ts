@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { AgentResourcesResult } from "../controllers/agent-resources.ts";
-import { renderEmptyState, renderSpinner } from "../app-render.helpers.ts";
 import { icons } from "../icons.ts";
+import { renderEmptyState, renderSpinner } from "../render-utils.ts";
 
 export type ResourcesProps = {
   loading: boolean;
