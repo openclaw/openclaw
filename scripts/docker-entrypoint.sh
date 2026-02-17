@@ -18,8 +18,7 @@ if [ -d "$INIT_DIR" ] && [ "$(ls -A "$INIT_DIR" 2>/dev/null)" ]; then
     [ -f "$script" ] || continue
     if [ -x "$script" ]; then
       echo "[openclaw-init] Running $(basename "$script")..."
-      output=$("$script" 2>&1) || echo "[openclaw-init] WARNING: $(basename "$script") exited with status $?"
-      [ -n "$output" ] && printf '%s\n' "$output" | sed 's/^/  /'
+      "$script" 2>&1 | sed "s/^/  /"
     else
       echo "[openclaw-init] Skipping $(basename "$script") (not executable)"
     fi
