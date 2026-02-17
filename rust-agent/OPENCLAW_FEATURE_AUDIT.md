@@ -26,7 +26,7 @@ Status legend:
 | Runtime portability | macOS/Linux/Windows workflow; Linux service deployment | `Implemented` | Rust toolchain pinned to 1.83; Ubuntu build script and systemd user unit included. |
 | Gateway protocol connectivity | WS control plane (`connect`, events, session/gateway methods) | `Partial` | Rust bridge uses typed frame helpers (`req`/`resp`/`event`), method-family classification, and known-method registry; full RPC dispatch parity still pending. |
 | Full Gateway replacement | Sessions, presence, routing, config mutations, cron/webhooks, control UI serving | `Not Started` | Still provided by upstream TypeScript Gateway. |
-| Session model | `main` session, group isolation, activation/queue policies, reply-back | `Partial` | Session state counters + last-decision persistence added with JSON default and optional SQLite WAL backend (`sqlite-state`); scheduler/routing parity still pending. |
+| Session model | `main` session, group isolation, activation/queue policies, reply-back | `Partial` | First-pass per-session FIFO scheduler added with bounded pending queue, plus state counters + last-decision persistence (JSON default, optional SQLite WAL); advanced routing/group policies still pending. |
 | Channel integrations | WhatsApp, Telegram, Discord, Slack, IRC, Signal, Google Chat, Teams, Matrix, etc. | `Partial` | Rust adapter scaffold includes `whatsapp`, `telegram`, `slack`, `discord`, and generic extraction; full channel runtime parity remains pending. |
 | Tool execution layer | `exec`, `process`, `apply_patch`, browser/canvas/nodes, message, gateway, sessions_* | `Deferred` | Rust currently evaluates risk for actions instead of hosting the tool layer. |
 | Nodes + device features | macOS/iOS/Android nodes, camera/screen/location/system.run, canvas A2UI | `Deferred` | No node host in Rust yet. |
@@ -85,5 +85,5 @@ Status legend:
 
 1. Add Docker compose profile for: Gateway + Rust defender + mock action producer + assertor.
 2. Expand policy engine with tamper-evident signed policy bundle loading.
-3. Add deterministic scheduler/routing parity tests over the Rust session model.
+3. Expand session model parity to include group isolation, activation policy tuning, and reply-back semantics.
 4. Expand channel runtime parity beyond extraction adapters (transport lifecycle, retry/backoff, webhook ingress).

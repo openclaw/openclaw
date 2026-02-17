@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
@@ -15,7 +15,9 @@ use crate::protocol::{
     classify_method, decision_event_frame, frame_kind, parse_frame_text, parse_rpc_request,
     parse_rpc_response, ConnectFrame, FrameKind,
 };
+use crate::scheduler::{SessionScheduler, SubmitOutcome};
 use crate::security::ActionEvaluator;
+use crate::types::ActionRequest;
 
 pub struct GatewayBridge {
     gateway: GatewayConfig,
@@ -69,6 +71,7 @@ impl GatewayBridge {
         let (mut write, mut read) = stream.split();
         let (decision_tx, mut decision_rx) = mpsc::channel::<serde_json::Value>(self.max_queue);
         let inflight = Arc::new(Semaphore::new(self.max_queue));
+        let scheduler = Arc::new(SessionScheduler::new(self.max_queue));
 
         let connect_frame = ConnectFrame::new(self.gateway.token.as_deref()).to_value();
         write
@@ -141,19 +144,36 @@ impl GatewayBridge {
                             }
 
                             if let Some(request) = self.drivers.extract(&frame) {
-                                let Ok(slot) = inflight.clone().try_acquire_owned() else {
-                                    warn!("decision queue saturated, dropping request {}", request.id);
-                                    continue;
-                                };
-                                let tx = decision_tx.clone();
-                                let local_eval = evaluator.clone();
-                                let decision_event = self.decision_event.clone();
-                                tokio::spawn(async move {
-                                    let decision = local_eval.evaluate(request.clone()).await;
-                                    let out = decision_event_frame(&decision_event, &request, &decision);
-                                    let _ = tx.send(out).await;
-                                    drop(slot);
-                                });
+                                match scheduler.submit(request).await {
+                                    SubmitOutcome::Dispatch(dispatch_request) => {
+                                        let Ok(slot) = inflight.clone().try_acquire_owned() else {
+                                            warn!(
+                                                "decision queue saturated, dropping request {}",
+                                                dispatch_request.id
+                                            );
+                                            let _ = scheduler.complete(&dispatch_request).await;
+                                            continue;
+                                        };
+                                        spawn_session_worker(
+                                            dispatch_request,
+                                            slot,
+                                            evaluator.clone(),
+                                            decision_tx.clone(),
+                                            self.decision_event.clone(),
+                                            scheduler.clone(),
+                                        );
+                                    }
+                                    SubmitOutcome::Queued => {}
+                                    SubmitOutcome::Dropped {
+                                        request_id,
+                                        session_id,
+                                    } => {
+                                        warn!(
+                                            "session queue full, dropping request {} (session={})",
+                                            request_id, session_id
+                                        );
+                                    }
+                                }
                             }
                         }
                         Ok(Message::Binary(_)) => {}
@@ -176,6 +196,32 @@ impl GatewayBridge {
 
         Ok(())
     }
+}
+
+fn spawn_session_worker(
+    request: ActionRequest,
+    slot: OwnedSemaphorePermit,
+    evaluator: Arc<dyn ActionEvaluator>,
+    decision_tx: mpsc::Sender<serde_json::Value>,
+    decision_event: String,
+    scheduler: Arc<SessionScheduler>,
+) {
+    tokio::spawn(async move {
+        let _permit = slot;
+        let mut current = request;
+        loop {
+            let decision = evaluator.evaluate(current.clone()).await;
+            let out = decision_event_frame(&decision_event, &current, &decision);
+            let _ = decision_tx.send(out).await;
+
+            match scheduler.complete(&current).await {
+                Some(next) => {
+                    current = next;
+                }
+                None => break,
+            }
+        }
+    });
 }
 
 #[cfg(test)]

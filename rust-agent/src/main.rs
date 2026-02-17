@@ -5,6 +5,7 @@ mod gateway;
 mod memory;
 mod protocol;
 mod runtime;
+mod scheduler;
 mod security;
 mod state;
 mod types;

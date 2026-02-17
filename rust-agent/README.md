@@ -12,7 +12,7 @@ What is implemented now:
 - VirusTotal lookups (file hash + URL) to add external threat intelligence.
 - Host integrity baseline checks for key runtime files.
 - Bounded concurrency and queue limits to reduce memory spikes.
-- Session decision state tracking + idempotency cache.
+- Session FIFO scheduling + decision state tracking + idempotency cache.
 - Typed protocol frame foundation (`req`/`resp`/`event` classification).
 - Channel adapter scaffold (`whatsapp`, `telegram`, `slack`, `discord`, generic).
 

@@ -22,12 +22,13 @@
 ### Phase 2 (in progress)
 
 - Move session scheduler and idempotency dedupe cache to Rust.
+- Implemented first-pass session FIFO scheduler (one active request per session, bounded pending queue).
 - Implemented first pass idempotency dedupe cache with TTL + bounded entries.
 - Implemented dual-backend session state tracking:
   - JSON (default)
   - SQLite WAL backend behind `sqlite-state` feature (auto-selected for `.db/.sqlite/.sqlite3` paths)
 - Introduce a compact internal event model (`bytes` + pooled buffers).
-- Keep scheduler/routing parity migration in progress.
+- Keep advanced routing parity (group isolation/activation policies/reply-back) in progress.
 
 ### Phase 3 (in progress)
 
