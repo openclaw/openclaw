@@ -356,22 +356,26 @@ persistent actor class UserVault(initOwner : Principal) {
   // -- QUERY CALLS (free, no consensus needed) --
 
   /// Recall a specific memory by key.
-  public query func recall(key : Text) : async ?Types.MemoryEntry {
+  public query ({ caller }) func recall(key : Text) : async ?Types.MemoryEntry {
+    assert (caller == owner);
     Trie.get(memories, textKey(key), Text.equal);
   };
 
   /// Get vault statistics.
-  public query func getStats() : async Types.VaultStats {
+  public query ({ caller }) func getStats() : async Types.VaultStats {
+    assert (caller == owner);
     buildStats();
   };
 
   /// Get unique categories.
-  public query func getCategories() : async [Text] {
+  public query ({ caller }) func getCategories() : async [Text] {
+    assert (caller == owner);
     getUniqueCategories();
   };
 
   /// Get paginated audit log entries (chronological order).
-  public query func getAuditLog(offset : Nat, limit : Nat) : async [Types.AuditEntry] {
+  public query ({ caller }) func getAuditLog(offset : Nat, limit : Nat) : async [Types.AuditEntry] {
+    assert (caller == owner);
     let size = auditLog.size();
     if (offset >= size) { return [] };
     let end = if (offset + limit > size) { size } else { offset + limit };
@@ -379,7 +383,8 @@ persistent actor class UserVault(initOwner : Principal) {
   };
 
   /// Get total audit log size.
-  public query func getAuditLogSize() : async Nat {
+  public query ({ caller }) func getAuditLogSize() : async Nat {
+    assert (caller == owner);
     auditLog.size();
   };
 
@@ -391,7 +396,8 @@ persistent actor class UserVault(initOwner : Principal) {
   // -- COMPOSITE QUERIES (free, single round trip) --
 
   /// Dashboard: stats + recent memories + recent sessions in one call.
-  public composite query func getDashboard() : async Types.DashboardData {
+  public composite query ({ caller }) func getDashboard() : async Types.DashboardData {
+    assert (caller == owner);
     {
       stats = buildStats();
       recentMemories = getRecentMemories(10);
@@ -400,11 +406,12 @@ persistent actor class UserVault(initOwner : Principal) {
   };
 
   /// Search memories by category and/or key prefix, with limit.
-  public composite query func recallRelevant(
+  public composite query ({ caller }) func recallRelevant(
     category : ?Text,
     prefix : ?Text,
     limit : Nat,
   ) : async [Types.MemoryEntry] {
+    assert (caller == owner);
     var result : [Types.MemoryEntry] = [];
     for ((_, entry) in Trie.iter(memories)) {
       if (result.size() < limit) {
@@ -425,7 +432,8 @@ persistent actor class UserVault(initOwner : Principal) {
   };
 
   /// Sync manifest: checksums for differential sync.
-  public composite query func getSyncManifest() : async Types.SyncManifest {
+  public composite query ({ caller }) func getSyncManifest() : async Types.SyncManifest {
+    assert (caller == owner);
     let cats = getUniqueCategories();
     let checksums = Array.map<Text, (Text, Text)>(cats, func(cat) {
       (cat, categoryChecksum(cat));

@@ -9,8 +9,8 @@ export interface IcStorageConfig {
   syncOnAgentEnd: boolean;
 }
 
-// Default factory canister ID (set after mainnet deployment)
-const DEFAULT_FACTORY_CANISTER_ID = "";
+// Default factory canister ID (deployed to IC mainnet)
+const DEFAULT_FACTORY_CANISTER_ID = "v7tpn-laaaa-aaaac-bcmdq-cai";
 
 const ALLOWED_KEYS = new Set([
   "canisterId",

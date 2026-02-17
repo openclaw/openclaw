@@ -14,8 +14,9 @@ persistent actor Factory {
 
   // -- Configuration --
 
-  // Cycles to seed each new vault with (500B cycles ~= $0.65)
-  let VAULT_CREATION_CYCLES : Nat = 500_000_000_000;
+  // Cycles to seed each new vault with (1.2T cycles ~= $1.56)
+  // IC requires ~1.1T for canister installation as of 2026
+  let VAULT_CREATION_CYCLES : Nat = 1_200_000_000_000;
 
   // -- State (auto-persisted via EOP) --
 
