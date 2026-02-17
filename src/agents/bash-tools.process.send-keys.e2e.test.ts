@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "vitest";
-import { sleep } from "../utils";
-import { resetProcessRegistryForTests } from "./bash-process-registry";
-import { createExecTool } from "./bash-tools.exec";
-import { createProcessTool } from "./bash-tools.process";
+import { sleep } from "../utils.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { createExecTool } from "./bash-tools.exec.js";
+import { createProcessTool } from "./bash-tools.process.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();

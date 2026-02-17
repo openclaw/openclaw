@@ -269,7 +269,7 @@ describe("installSessionToolResultGuard", () => {
           ? ({
               ...(message as unknown as Record<string, unknown>),
               provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-            } as AgentMessage)
+            } as unknown as AgentMessage)
           : message,
     });
 
