@@ -104,9 +104,11 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
-  "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
-  "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
-  "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
+  "tools.web.search.enabled":
+    "Enable the web_search tool (requires a provider API key, except DuckDuckGo which is free).",
+  "tools.web.search.provider": 'Search provider ("brave", "perplexity", "grok", or "duckduckgo").',
+  "tools.web.search.apiKey":
+    "Brave Search API key (fallback: BRAVE_API_KEY env var). Not needed for DuckDuckGo.",
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
