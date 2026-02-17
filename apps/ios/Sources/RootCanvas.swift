@@ -97,9 +97,8 @@ struct RootCanvas: View {
                     .environment(self.gatewayController)
             case .chat:
                 ChatSheet(
-                    // Mobile chat UI should use the node role RPC surface (chat.* / sessions.*)
-                    // to avoid requiring operator scopes like operator.read.
-                    gateway: self.appModel.gatewaySession,
+                    // Chat RPCs run on the operator session (read/write scopes).
+                    gateway: self.appModel.operatorSession,
                     sessionKey: self.appModel.mainSessionKey,
                     agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
