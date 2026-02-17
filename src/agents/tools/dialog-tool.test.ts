@@ -14,8 +14,9 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-function parseResult(result: { content?: Array<{ text?: string }> }) {
-  const text = result.content?.[0]?.text ?? "{}";
+function parseResult(result: unknown) {
+  const r = result as { content?: Array<{ text?: string }> };
+  const text = r.content?.[0]?.text ?? "{}";
   return JSON.parse(text);
 }
 
