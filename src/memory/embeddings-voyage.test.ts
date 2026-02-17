@@ -53,7 +53,9 @@ describe("voyage embedding provider", () => {
       expect.objectContaining({ provider: "voyage" }),
     );
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [url, init] = call as [RequestInfo | URL, RequestInit | undefined];
     expect(url).toBe("https://api.voyageai.com/v1/embeddings");
 
     const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -86,7 +88,9 @@ describe("voyage embedding provider", () => {
 
     await result.provider.embedQuery("test");
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [url, init] = call as [RequestInfo | URL, RequestInit | undefined];
     expect(url).toBe("https://proxy.example.com/embeddings");
 
     const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -123,7 +127,9 @@ describe("voyage embedding provider", () => {
 
     await result.provider.embedBatch(["doc1", "doc2"]);
 
-    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [, init] = call as [RequestInfo | URL, RequestInit | undefined];
     const body = JSON.parse(init?.body as string);
     expect(body).toEqual({
       model: "voyage-4-large",
