@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { randomUUID } from "node:crypto";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -371,6 +371,17 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   const responseUrlRaw = payload.responseUrl;
   const responseUrl =
     typeof responseUrlRaw === "string" && responseUrlRaw.trim() ? responseUrlRaw.trim() : undefined;
+  if (responseUrl) {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(responseUrl);
+    } catch {
+      return { ok: false, error: "responseUrl is not a valid URL" };
+    }
+    if (parsedUrl.protocol !== "https:") {
+      return { ok: false, error: "responseUrl must use HTTPS" };
+    }
+  }
   const responseSecretRaw = payload.responseSecret;
   const responseSecret =
     typeof responseSecretRaw === "string" && responseSecretRaw.trim()
