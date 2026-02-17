@@ -476,9 +476,9 @@ export async function sendMSTeamsMessages(params: {
         throw err;
       }
       const runtime = getMSTeamsRuntime();
-      runtime?.warn?.(
-        "Thread reply context expired (proxy revoked); falling back to proactive messaging",
-      );
+      runtime.logging
+        .getChildLogger({ name: "msteams:send" })
+        .warn("Thread reply context expired (proxy revoked); falling back to proactive messaging");
       // Fall through to the proactive messaging path below.
     }
   }
