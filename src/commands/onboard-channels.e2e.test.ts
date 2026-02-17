@@ -22,7 +22,7 @@ function createUnexpectedPromptGuards() {
   return {
     multiselect: vi.fn(async () => {
       throw new Error("unexpected multiselect");
-    }),
+    }) as unknown as WizardPrompter["multiselect"],
     text: vi.fn(async ({ message }: { message: string }) => {
       throw new Error(`unexpected text prompt: ${message}`);
     }) as unknown as WizardPrompter["text"],

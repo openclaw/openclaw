@@ -1,7 +1,11 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { nostrPlugin, resolveNostrTimestampMs } from "./channel.js";
-import { startNostrBus } from "./nostr-bus.js";
+import {
+  startNostrBus,
+  type NostrInboundMessage,
+  type NostrOutboundMessageOptions,
+} from "./nostr-bus.js";
 import { setNostrRuntime } from "./runtime.js";
 
 vi.mock("./nostr-bus.js", async (importOriginal) => {
@@ -31,7 +35,10 @@ describe("nostrPlugin gateway.startAccount", () => {
     const mockReplyDispatcher = vi.fn(async () => undefined);
 
     let capturedOnMessage:
-      | ((payload: unknown, reply: () => Promise<void>) => Promise<void>)
+      | ((
+          message: NostrInboundMessage,
+          reply: (text: string, options?: NostrOutboundMessageOptions) => Promise<void>,
+        ) => Promise<void>)
       | null = null;
 
     vi.mocked(startNostrBus).mockImplementation(async ({ onMessage }) => {
@@ -77,6 +84,9 @@ describe("nostrPlugin gateway.startAccount", () => {
 
     setNostrRuntime(runtime);
 
+    if (!nostrPlugin.gateway?.startAccount) {
+      throw new Error("nostr plugin startAccount is not defined");
+    }
     await nostrPlugin.gateway.startAccount({
       account: {
         accountId: "default",
@@ -109,7 +119,7 @@ describe("nostrPlugin gateway.startAccount", () => {
         eventId: "event-id",
         kind: 25802,
       },
-      async () => undefined,
+      async (_text, _options) => undefined,
     );
 
     const expectedTimestampMs = resolveNostrTimestampMs(1_700_000_000);

@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => {
     };
   }> = [];
 
-  const publishMock = vi.fn(async () => undefined);
+  const publishMock = vi.fn(async (_relays: string[], _event: unknown) => undefined);
   const closeMock = vi.fn();
   const getConversationKeyMock = vi.fn(
     (_secret: Uint8Array, toPubkey: string): string => `shared-${toPubkey}`,

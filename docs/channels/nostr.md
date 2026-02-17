@@ -206,7 +206,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 ### Automated protocol loop with `nak`
 
-Use this loop script for protocol-accurate end-to-end checks:
+Use this maintained loop script for protocol-accurate end-to-end checks:
 
 ```bash
 NOSTR_BOT_SECRET=<bot_hex_or_nsec> \

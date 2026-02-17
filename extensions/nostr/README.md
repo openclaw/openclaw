@@ -114,7 +114,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 ### Automated Protocol Debug Loop (nak)
 
-Use `nak` to run a repeatable NIP-63 smoke loop against your bot:
+Use `nak` to run a repeatable NIP-63 smoke loop against your bot with the maintained helper script:
 
 ```bash
 NOSTR_BOT_SECRET=<bot_hex_or_nsec> \

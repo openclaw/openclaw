@@ -154,7 +154,7 @@ describe("Nostr channel UI", () => {
       },
     });
 
-    const keyInput = container.querySelector('input[type="password"]');
+    const keyInput = container.querySelector<HTMLInputElement>('input[type="password"]');
     expect(container.textContent).toContain("Nostr onboarding");
     expect(keyInput).not.toBeNull();
     expect(keyInput?.value).toBe("");
@@ -185,7 +185,7 @@ describe("Nostr channel UI", () => {
 
     expect(onConfigPatch).toHaveBeenCalledWith(["channels", "nostr", "privateKey"], "nsec-new-key");
 
-    const relayTextarea = container.querySelector("textarea");
+    const relayTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
     expect(relayTextarea).not.toBeNull();
     if (relayTextarea) {
       relayTextarea.value = "wss://a\nwss://b,   wss://c";
