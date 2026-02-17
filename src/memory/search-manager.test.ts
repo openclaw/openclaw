@@ -70,7 +70,8 @@ vi.mock("./manager.js", () => ({
 
 import { QmdMemoryManager } from "./qmd-manager.js";
 import { getMemorySearchManager } from "./search-manager.js";
-const createQmdManagerMock = vi.mocked(QmdMemoryManager.create.bind(QmdMemoryManager));
+// eslint-disable-next-line @typescript-eslint/unbound-method -- mocked static function
+const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
 type SearchManager = NonNullable<SearchManagerResult["manager"]>;
