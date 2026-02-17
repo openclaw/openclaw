@@ -11,6 +11,7 @@
  * Designed to complement (not replace) the regex-based scanner.
  */
 
+import path from "node:path";
 import ts from "typescript";
 import type { SkillScanFinding, SkillScanSeverity } from "./skill-scanner.js";
 
@@ -79,6 +80,8 @@ function detectDynamicRequire(node: ts.Node, sf: ts.SourceFile, findings: AstFin
 }
 
 function detectIndirectEval(node: ts.Node, sf: ts.SourceFile, findings: AstFinding[]): void {
+  const GLOBAL_OBJECTS = new Set(["globalThis", "window", "global", "self"]);
+
   // Catch: globalThis["eval"](...), window["eval"](...), global["eval"](...)
   if (
     ts.isCallExpression(node) &&
@@ -93,6 +96,24 @@ function detectIndirectEval(node: ts.Node, sf: ts.SourceFile, findings: AstFindi
         ruleId: "indirect-eval",
         severity: "critical",
         message: "Indirect eval/Function via computed property access",
+        line: nodeLine(node, sf),
+        evidence: nodeEvidence(node, sf),
+      });
+    }
+  }
+
+  // Catch: globalThis.eval(...), window.Function(...)
+  if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    (node.expression.name.text === "eval" || node.expression.name.text === "Function")
+  ) {
+    const obj = node.expression.expression;
+    if (ts.isIdentifier(obj) && GLOBAL_OBJECTS.has(obj.text)) {
+      findings.push({
+        ruleId: "indirect-eval",
+        severity: "critical",
+        message: "Indirect eval/Function via global object property access",
         line: nodeLine(node, sf),
         evidence: nodeEvidence(node, sf),
       });
@@ -149,6 +170,24 @@ function detectPrototypePollution(
       });
     }
   }
+
+  // Catch: Object.setPrototypeOf(...), Reflect.setPrototypeOf(...)
+  if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "setPrototypeOf"
+  ) {
+    const obj = node.expression.expression;
+    if (ts.isIdentifier(obj) && (obj.text === "Object" || obj.text === "Reflect")) {
+      findings.push({
+        ruleId: "prototype-pollution",
+        severity: "critical",
+        message: "Prototype pollution — setPrototypeOf call detected",
+        line: nodeLine(node, sf),
+        evidence: nodeEvidence(node, sf),
+      });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,18 +204,35 @@ const DETECTORS = [
 export function scanSourceAst(source: string, filePath: string): SkillScanFinding[] {
   let sourceFile: ts.SourceFile;
   try {
+    const ext = path.extname(filePath).toLowerCase();
+    const scriptKind =
+      ext === ".tsx"
+        ? ts.ScriptKind.TSX
+        : ext === ".jsx"
+          ? ts.ScriptKind.JSX
+          : [".mjs", ".cjs", ".js"].includes(ext)
+            ? ts.ScriptKind.JS
+            : ts.ScriptKind.TS;
     sourceFile = ts.createSourceFile(
       filePath,
       source,
       ts.ScriptTarget.Latest,
-      /* setParentNodes */ true,
-      filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
-        ? ts.ScriptKind.TSX
-        : ts.ScriptKind.TS,
+      /* setParentNodes */ false,
+      scriptKind,
     );
   } catch {
-    // If parsing fails, skip AST analysis — the regex scanner still runs.
-    return [];
+    // Report that AST analysis could not run — a malicious skill could use
+    // intentionally malformed syntax to bypass AST detection.
+    return [
+      {
+        ruleId: "ast-parse-error",
+        severity: "warn" as SkillScanSeverity,
+        file: filePath,
+        line: 1,
+        message: "AST parse failed — file not fully analyzed by structural scanner",
+        evidence: "",
+      },
+    ];
   }
 
   const astFindings: AstFinding[] = [];
@@ -202,7 +258,7 @@ export function scanSourceAst(source: string, filePath: string): SkillScanFindin
       file: filePath,
       line: f.line,
       message: f.message,
-      evidence: f.evidence.length > 120 ? `${f.evidence.slice(0, 120)}…` : f.evidence,
+      evidence: f.evidence,
     });
   }
 

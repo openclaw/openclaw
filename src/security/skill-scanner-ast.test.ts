@@ -9,6 +9,16 @@ describe("skill-scanner-ast", () => {
   it("flags dynamic import with variable specifier", () => {
     const source = `const mod = getModuleName();\nawait import(mod);`;
     const findings = scanSourceAst(source, "test.ts");
+    const finding = findings.find((f) => f.ruleId === "dynamic-import");
+    expect(finding).toBeDefined();
+    expect(finding!.severity).toBe("critical");
+    expect(finding!.line).toBe(2);
+    expect(finding!.evidence).toContain("import(");
+  });
+
+  it("flags template literal import with substitution", () => {
+    const source = `const lang = "en";\nawait import(\`./locales/\${lang}.json\`);`;
+    const findings = scanSourceAst(source, "test.ts");
     expect(findings.some((f) => f.ruleId === "dynamic-import")).toBe(true);
   });
 
@@ -38,8 +48,20 @@ describe("skill-scanner-ast", () => {
   // Indirect eval
   // -----------------------------------------------------------------------
 
-  it("flags globalThis['eval'](...)", () => {
+  it("flags globalThis['eval'](...) — bracket notation", () => {
     const source = `globalThis["eval"]("alert(1)");`;
+    const findings = scanSourceAst(source, "test.ts");
+    expect(findings.some((f) => f.ruleId === "indirect-eval")).toBe(true);
+  });
+
+  it("flags globalThis.eval(...) — dot notation", () => {
+    const source = `globalThis.eval("alert(1)");`;
+    const findings = scanSourceAst(source, "test.ts");
+    expect(findings.some((f) => f.ruleId === "indirect-eval")).toBe(true);
+  });
+
+  it("flags window.Function(...) — dot notation", () => {
+    const source = `const fn = window.Function("return 1");\nfn();`;
     const findings = scanSourceAst(source, "test.ts");
     expect(findings.some((f) => f.ruleId === "indirect-eval")).toBe(true);
   });
@@ -78,12 +100,23 @@ describe("skill-scanner-ast", () => {
     expect(findings.some((f) => f.ruleId === "prototype-pollution")).toBe(true);
   });
 
+  it("flags Object.setPrototypeOf()", () => {
+    const source = `Object.setPrototypeOf(target, maliciousProto);`;
+    const findings = scanSourceAst(source, "test.ts");
+    expect(findings.some((f) => f.ruleId === "prototype-pollution")).toBe(true);
+  });
+
+  it("flags Reflect.setPrototypeOf()", () => {
+    const source = `Reflect.setPrototypeOf(target, maliciousProto);`;
+    const findings = scanSourceAst(source, "test.ts");
+    expect(findings.some((f) => f.ruleId === "prototype-pollution")).toBe(true);
+  });
+
   // -----------------------------------------------------------------------
   // Integration: regex bypass that AST catches
   // -----------------------------------------------------------------------
 
   it("catches concatenated require that evades regex", () => {
-    // This bypasses the regex pattern for child_process detection
     const source = `const m = "child_" + "process";\nconst cp = require(m);\ncp.exec("whoami");`;
     const findings = scanSourceAst(source, "test.js");
     expect(findings.some((f) => f.ruleId === "dynamic-require")).toBe(true);
@@ -93,9 +126,12 @@ describe("skill-scanner-ast", () => {
   // Edge cases
   // -----------------------------------------------------------------------
 
-  it("returns empty array for unparseable source", () => {
+  it("returns no findings for malformed source (TS parser is error-tolerant)", () => {
+    // TypeScript's parser recovers from syntax errors rather than throwing,
+    // so malformed source produces an empty findings list (no detectable patterns).
     const findings = scanSourceAst("}{not valid at all{{", "broken.ts");
-    expect(findings).toEqual([]);
+    const detectionFindings = findings.filter((f) => f.ruleId !== "ast-parse-error");
+    expect(detectionFindings).toHaveLength(0);
   });
 
   it("deduplicates findings per ruleId", () => {
@@ -108,6 +144,12 @@ describe("skill-scanner-ast", () => {
   it("handles TSX files", () => {
     const source = `const mod = getModule();\nawait import(mod);\nconst App = () => <div />;`;
     const findings = scanSourceAst(source, "component.tsx");
+    expect(findings.some((f) => f.ruleId === "dynamic-import")).toBe(true);
+  });
+
+  it("handles JSX files with correct ScriptKind", () => {
+    const source = `const mod = getModule();\nawait import(mod);\nconst App = () => <div />;`;
+    const findings = scanSourceAst(source, "component.jsx");
     expect(findings.some((f) => f.ruleId === "dynamic-import")).toBe(true);
   });
 });

@@ -364,13 +364,12 @@ describe("scanSource — AST integration", () => {
 
   it("does not double-report when regex already catches eval", () => {
     // eval(...) is caught by regex rule "dynamic-code-execution"
-    // AST should not add a duplicate finding
+    // AST should not add a duplicate finding for the same ruleId
     const source = `eval("alert(1)");`;
     const findings = scanSource(source, "direct-eval.js");
     const evalFindings = findings.filter(
-      (f) => f.message.toLowerCase().includes("eval") || f.message.toLowerCase().includes("dynamic code"),
+      (f) => f.ruleId === "dynamic-code-execution",
     );
-    // Should have exactly one finding, not two
-    expect(evalFindings.length).toBeLessThanOrEqual(1);
+    expect(evalFindings).toHaveLength(1);
   });
 });

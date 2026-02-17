@@ -241,7 +241,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   // --- AST rules (catch evasion techniques that regex misses) ---
   const astFindings = scanSourceAst(source, filePath);
   // Only add AST findings for ruleIds not already covered by regex rules.
-  const coveredRuleIds = new Set([...matchedLineRules, ...matchedSourceRules]);
+  // matchedSourceRules uses "ruleId::message" keys — normalize to bare ruleId.
+  const coveredRuleIds = new Set<string>();
+  for (const id of matchedLineRules) coveredRuleIds.add(id);
+  for (const key of matchedSourceRules) coveredRuleIds.add(key.split("::")[0]);
   for (const af of astFindings) {
     if (!coveredRuleIds.has(af.ruleId)) {
       findings.push(af);
