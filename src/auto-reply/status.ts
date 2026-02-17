@@ -342,8 +342,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const provider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   let model = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
   let contextTokens =
-    entry?.contextTokens ??
     args.agent?.contextTokens ??
+    entry?.contextTokens ??
     lookupContextTokens(model) ??
     DEFAULT_CONTEXT_TOKENS;
 
