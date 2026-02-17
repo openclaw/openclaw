@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { TypingMode } from "../../config/types.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -297,7 +298,8 @@ export async function runReplyAgent(params: {
       agentId,
       sessionCtx.MessageThreadId,
     );
-    nextEntry.sessionFile = nextSessionFile;
+    // Store relative path (basename) instead of absolute path to avoid validation errors
+    nextEntry.sessionFile = path.basename(nextSessionFile);
     activeSessionStore[sessionKey] = nextEntry;
     try {
       await updateSessionStore(storePath, (store) => {
