@@ -330,7 +330,6 @@ describe("diagnostics-otel service", () => {
       outcome: "completed",
       durationMs: 1200,
       traceId,
-      parentSpanId,
     });
 
     emitDiagnosticEvent({
