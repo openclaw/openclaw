@@ -434,3 +434,66 @@ export function resolveDiscordReplyDeliveryPlan(params: {
   });
   return { deliverTarget, replyTarget, replyReference };
 }
+
+export type DiscordThreadMessage = {
+  text: string;
+  userId?: string;
+  username?: string;
+  isBot: boolean;
+  messageId: string;
+  timestamp?: number;
+};
+
+/**
+ * Fetches recent messages in a Discord thread (excluding the current message).
+ * Used to populate thread context when a new thread session starts, mirroring
+ * Slack's resolveSlackThreadHistory behavior.
+ *
+ * Discord's GET /channels/{id}/messages returns messages newest-first.
+ * We reverse the result to present them in chronological order.
+ * Max 100 messages per request (Discord API limit).
+ */
+export async function resolveDiscordThreadHistory(params: {
+  threadChannelId: string;
+  client: Client;
+  currentMessageId?: string;
+  limit?: number;
+}): Promise<DiscordThreadMessage[]> {
+  const maxMessages = params.limit ?? 20;
+  if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
+    return [];
+  }
+  try {
+    const fetchLimit = Math.min(100, maxMessages);
+    const queryParams: Record<string, string | number> = { limit: fetchLimit };
+    if (params.currentMessageId) {
+      queryParams.before = params.currentMessageId;
+    }
+    const messages = (await params.client.rest.get(
+      Routes.channelMessages(params.threadChannelId),
+      queryParams,
+    )) as Array<{
+      id: string;
+      content?: string;
+      author?: { id?: string; username?: string; bot?: boolean };
+      webhook_id?: string;
+      application_id?: string;
+      timestamp?: string;
+    }>;
+
+    // Discord returns newest-first; reverse to get chronological order
+    const reversed = [...messages].toReversed();
+    return reversed
+      .filter((msg) => (msg.content ?? "").trim().length > 0)
+      .map((msg) => ({
+        text: (msg.content ?? "").trim(),
+        userId: msg.author?.id,
+        username: msg.author?.username,
+        isBot: Boolean(msg.author?.bot || msg.webhook_id || msg.application_id),
+        messageId: msg.id,
+        timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}

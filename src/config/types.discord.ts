@@ -158,6 +158,11 @@ export type DiscordAccountConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
+  /** Thread-specific configuration. */
+  thread?: {
+    /** Max messages to fetch for new thread sessions (default: 20, 0 = disabled). */
+    initialHistoryLimit?: number;
+  };
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   /** Retry policy for outbound Discord API calls. */

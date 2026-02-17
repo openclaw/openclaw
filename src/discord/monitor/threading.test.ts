@@ -6,6 +6,7 @@ import {
   resolveDiscordAutoThreadContext,
   resolveDiscordAutoThreadReplyPlan,
   resolveDiscordReplyDeliveryPlan,
+  resolveDiscordThreadHistory,
 } from "./threading.js";
 
 describe("resolveDiscordAutoThreadContext", () => {
@@ -175,6 +176,226 @@ describe("maybeCreateDiscordAutoThread", () => {
     });
 
     expect(result).toBeUndefined();
+  });
+});
+
+describe("resolveDiscordThreadHistory", () => {
+  it("returns empty array when limit is 0", async () => {
+    const client = { rest: { get: async () => [] } } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 0,
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array on API error", async () => {
+    const client = {
+      rest: {
+        get: async () => {
+          throw new Error("Discord API error");
+        },
+      },
+    } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 20,
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("fetches messages with before param when currentMessageId is provided", async () => {
+    let capturedParams: Record<string, unknown> = {};
+    const client = {
+      rest: {
+        get: async (_route: string, params: Record<string, unknown>) => {
+          capturedParams = params;
+          return [];
+        },
+      },
+    } as unknown as Client;
+    await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      currentMessageId: "msg123",
+      limit: 10,
+    });
+    expect(capturedParams.before).toBe("msg123");
+    expect(capturedParams.limit).toBe(10);
+  });
+
+  it("returns messages in chronological order (reversed from Discord API)", async () => {
+    // Discord returns newest-first: [msg3, msg2, msg1]
+    // We should return chronological: [msg1, msg2, msg3]
+    const client = {
+      rest: {
+        get: async () => [
+          {
+            id: "msg3",
+            content: "third",
+            author: { id: "u1", username: "alice" },
+            timestamp: "2024-01-01T03:00:00Z",
+          },
+          {
+            id: "msg2",
+            content: "second",
+            author: { id: "u1", username: "alice" },
+            timestamp: "2024-01-01T02:00:00Z",
+          },
+          {
+            id: "msg1",
+            content: "first",
+            author: { id: "u1", username: "alice" },
+            timestamp: "2024-01-01T01:00:00Z",
+          },
+        ],
+      },
+    } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 20,
+    });
+    expect(result).toHaveLength(3);
+    expect(result[0].messageId).toBe("msg1");
+    expect(result[1].messageId).toBe("msg2");
+    expect(result[2].messageId).toBe("msg3");
+  });
+
+  it("filters out messages with empty content", async () => {
+    const client = {
+      rest: {
+        get: async () => [
+          {
+            id: "msg2",
+            content: "hello",
+            author: { id: "u1", username: "alice" },
+            timestamp: "2024-01-01T02:00:00Z",
+          },
+          {
+            id: "msg1",
+            content: "   ",
+            author: { id: "u1", username: "alice" },
+            timestamp: "2024-01-01T01:00:00Z",
+          },
+        ],
+      },
+    } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 20,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe("hello");
+  });
+
+  it("marks bot messages (author.bot=true) as isBot=true", async () => {
+    const client = {
+      rest: {
+        get: async () => [
+          {
+            id: "msg1",
+            content: "bot reply",
+            author: { id: "bot1", username: "MyBot", bot: true },
+            timestamp: "2024-01-01T01:00:00Z",
+          },
+        ],
+      },
+    } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 20,
+    });
+    expect(result[0].isBot).toBe(true);
+  });
+
+  it("marks webhook messages (webhook_id set) as isBot=true", async () => {
+    const client = {
+      rest: {
+        get: async () => [
+          {
+            id: "msg1",
+            content: "webhook msg",
+            author: { id: "u1", username: "webhook" },
+            webhook_id: "wh1",
+            timestamp: "2024-01-01T01:00:00Z",
+          },
+        ],
+      },
+    } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 20,
+    });
+    expect(result[0].isBot).toBe(true);
+  });
+
+  it("marks application messages (application_id set) as isBot=true", async () => {
+    const client = {
+      rest: {
+        get: async () => [
+          {
+            id: "msg1",
+            content: "app msg",
+            author: { id: "app1", username: "App" },
+            application_id: "app1",
+            timestamp: "2024-01-01T01:00:00Z",
+          },
+        ],
+      },
+    } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 20,
+    });
+    expect(result[0].isBot).toBe(true);
+  });
+
+  it("caps fetch limit at 100 (Discord API maximum)", async () => {
+    let capturedLimit: unknown;
+    const client = {
+      rest: {
+        get: async (_route: string, params: Record<string, unknown>) => {
+          capturedLimit = params.limit;
+          return [];
+        },
+      },
+    } as unknown as Client;
+    await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 500,
+    });
+    expect(capturedLimit).toBe(100);
+  });
+
+  it("marks regular user messages as isBot=false", async () => {
+    const client = {
+      rest: {
+        get: async () => [
+          {
+            id: "msg1",
+            content: "hello",
+            author: { id: "u1", username: "alice", bot: false },
+            timestamp: "2024-01-01T01:00:00Z",
+          },
+        ],
+      },
+    } as unknown as Client;
+    const result = await resolveDiscordThreadHistory({
+      threadChannelId: "thread1",
+      client,
+      limit: 20,
+    });
+    expect(result[0].isBot).toBe(false);
+    expect(result[0].userId).toBe("u1");
+    expect(result[0].username).toBe("alice");
   });
 });
 

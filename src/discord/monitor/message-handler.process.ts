@@ -36,7 +36,11 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+import {
+  resolveDiscordAutoThreadReplyPlan,
+  resolveDiscordThreadHistory,
+  resolveDiscordThreadStarter,
+} from "./threading.js";
 import { sendTyping } from "./typing.js";
 
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
@@ -208,6 +212,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let threadStarterBody: string | undefined;
   let threadLabel: string | undefined;
   let parentSessionKey: string | undefined;
+  let threadHistoryBody: string | undefined;
+  let threadSessionPreviousTimestamp: number | undefined;
   if (threadChannel) {
     const includeThreadStarter = channelConfig?.includeThreadStarter !== false;
     if (includeThreadStarter) {
@@ -233,6 +239,44 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
       });
+    }
+
+    // Fetch full thread history for new thread sessions to provide prior-turn context.
+    const threadInitialHistoryLimit = discordConfig?.thread?.initialHistoryLimit ?? 20;
+    if (threadInitialHistoryLimit > 0) {
+      threadSessionPreviousTimestamp = readSessionUpdatedAt({
+        storePath,
+        sessionKey: threadKeys.sessionKey,
+      });
+      if (!threadSessionPreviousTimestamp) {
+        const threadHistory = await resolveDiscordThreadHistory({
+          threadChannelId: messageChannelId,
+          client,
+          currentMessageId: message.id,
+          limit: threadInitialHistoryLimit,
+        });
+        if (threadHistory.length > 0) {
+          const historyParts: string[] = [];
+          for (const historyMsg of threadHistory) {
+            const role = historyMsg.isBot ? "assistant" : "user";
+            const msgSenderName = historyMsg.username ?? "Unknown";
+            historyParts.push(
+              formatInboundEnvelope({
+                channel: "Discord",
+                from: `${msgSenderName} (${role})`,
+                timestamp: historyMsg.timestamp,
+                body: `${historyMsg.text} [id:${historyMsg.messageId} channel:${messageChannelId}]`,
+                chatType: "channel",
+                envelope: envelopeOptions,
+              }),
+            );
+          }
+          threadHistoryBody = historyParts.join("\n\n");
+          logVerbose(
+            `discord: populated thread history with ${threadHistory.length} messages for new session`,
+          );
+        }
+      }
     }
   }
   const mediaPayload = buildDiscordMediaPayload(mediaList);
@@ -309,6 +353,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ReplyToSender: replyContext?.sender,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
+    ThreadHistoryBody: threadHistoryBody,
+    IsFirstThreadTurn: threadChannel && !threadSessionPreviousTimestamp ? true : undefined,
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
     ...mediaPayload,
