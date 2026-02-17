@@ -53,6 +53,7 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { detectTccError } from "./tcc-detect.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -388,9 +389,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = normalizeNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+  const tccHint = detectTccError(session.aggregated, session.exitCode ?? null);
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}${tccHint || ""}`
+    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})${tccHint || ""}`;
   enqueueSystemEvent(summary, { sessionKey });
   requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
 }
@@ -1599,7 +1601,8 @@ export function createExecTool(
               return;
             }
             if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
+              const tccHint = detectTccError(outcome.aggregated, outcome.exitCode);
+              reject(new Error((outcome.reason ?? "Command failed.") + (tccHint || "")));
               return;
             }
             resolve({
