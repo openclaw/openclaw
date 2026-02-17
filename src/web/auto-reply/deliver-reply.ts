@@ -133,8 +133,25 @@ export async function deliverWebReply(params: {
     const normalized = rawMediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "").trim();
     const isRemote = /^https?:\/\//i.test(normalized);
     const isFileUrl = /^file:\/\//i.test(normalized);
-    const isLocalPath =
-      normalized.startsWith("/") || normalized.startsWith("./") || normalized.startsWith("../");
+
+    // Accept:
+    // - absolute paths (/...)
+    // - explicit relative paths (./..., ../...)
+    // - home paths (~/...)
+    // - plain relative paths like "image.png" or "images/foo.jpg" (regression guard)
+    // Reject:
+    // - placeholders like "image" / "document" (no extension)
+    const hasSeparator = normalized.includes("/") || normalized.includes("\\\\");
+    const hasExtension = /\.[A-Za-z0-9]{2,8}$/.test(normalized);
+    const startsLikePath =
+      normalized.startsWith("/") ||
+      normalized.startsWith("./") ||
+      normalized.startsWith("../") ||
+      normalized.startsWith("~/") ||
+      normalized === "~";
+    const isPlainRelativePath = (hasSeparator || hasExtension) && !/\s/.test(normalized);
+
+    const isLocalPath = startsLikePath || isPlainRelativePath;
 
     if (!isRemote && !isFileUrl && !isLocalPath) {
       whatsappOutboundLog.warn(

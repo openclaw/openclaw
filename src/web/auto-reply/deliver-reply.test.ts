@@ -69,4 +69,28 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledTimes(1);
     expect(msg.reply).toHaveBeenCalledWith("caption");
   });
+
+  it("accepts ~ and plain relative media paths (e.g. image.png)", async () => {
+    const msg = makeMsg();
+
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/png",
+      kind: "image",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "image.png" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 5000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledWith("image.png", 1024 * 1024);
+    expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+  });
 });
