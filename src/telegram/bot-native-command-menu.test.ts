@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { normalizeTelegramCommandName } from "../config/telegram-custom-commands.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
@@ -85,5 +86,25 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(callOrder).toEqual(["delete", "set"]);
+  });
+
+  it("normalizes hyphenated command names to underscores", () => {
+    expect(normalizeTelegramCommandName("export-session")).toBe("export_session");
+    expect(normalizeTelegramCommandName("/export-session")).toBe("export_session");
+    expect(normalizeTelegramCommandName("my-cool-command")).toBe("my_cool_command");
+  });
+
+  it("normalizes plugin commands with hyphens instead of rejecting them", () => {
+    const existingCommands = new Set<string>();
+
+    const result = buildPluginTelegramMenuCommands({
+      specs: [{ name: "export-session", description: "Export current session" }],
+      existingCommands,
+    });
+
+    expect(result.commands).toEqual([
+      { command: "export_session", description: "Export current session" },
+    ]);
+    expect(result.issues).toHaveLength(0);
   });
 });
