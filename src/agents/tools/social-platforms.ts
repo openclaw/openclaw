@@ -26,7 +26,7 @@ import {
 // Constants
 // ---------------------------------------------------------------------------
 
-const SOCIAL_PLATFORMS = ["instagram", "tiktok", "youtube"] as const;
+const SOCIAL_PLATFORMS = ["instagram", "tiktok", "youtube", "linkedin", "twitter"] as const;
 type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
 
 const INSTAGRAM_MODES = ["url", "search"] as const;
@@ -39,10 +39,24 @@ const DEFAULT_MAX_RESULTS = 20;
 const MAX_RESULT_CHARS = 50_000;
 const HTTP_TIMEOUT_MS = 30_000;
 
-const ACTOR_IDS: Record<SocialPlatform, string> = {
+const LINKEDIN_ACTIONS = ["profiles", "company", "jobs"] as const;
+type LinkedinAction = (typeof LINKEDIN_ACTIONS)[number];
+
+const LINKEDIN_RUN_TYPES = ["profiles", "company_details", "company_posts", "jobs"] as const;
+type LinkedinRunType = (typeof LINKEDIN_RUN_TYPES)[number];
+
+const ACTOR_IDS: Record<string, string> = {
   instagram: "shu8hvrXbJbY3Eb9W",
   tiktok: "GdWCkxBtKWOsKjdch",
   youtube: "h7sDV53CddomktSi5",
+  twitter: "61RPP7dywgiy0JPD0",
+};
+
+const LINKEDIN_ACTOR_IDS: Record<LinkedinRunType, string> = {
+  profiles: "GOvL4O4RwFqsdIqXF",
+  company_details: "AjfNXEI9qTA2IdaAX",
+  company_posts: "eUv8d0ndjClMLtT1B",
+  jobs: "hKByXkMQaC5Qt9UMN",
 };
 
 const SOCIAL_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
@@ -73,14 +87,27 @@ const RequestSchema = Type.Object({
       description: "TikTok input type: search queries, hashtags, video URLs, or profiles.",
     }),
   ),
+  linkedinAction: Type.Optional(
+    stringEnum(LINKEDIN_ACTIONS, {
+      description:
+        "LinkedIn action: profiles (profile details), company (details + optionally posts), or jobs.",
+    }),
+  ),
+  includePosts: Type.Optional(
+    Type.Boolean({
+      description:
+        "LinkedIn company action: also scrape company posts alongside details (default: true).",
+    }),
+  ),
   urls: Type.Optional(
     Type.Array(Type.String(), {
-      description: "URLs to scrape (Instagram URLs, TikTok video URLs, YouTube URLs).",
+      description: "URLs to scrape (Instagram, TikTok, YouTube, LinkedIn, or Twitter/X URLs).",
     }),
   ),
   queries: Type.Optional(
     Type.Array(Type.String(), {
-      description: "Search terms (Instagram search, TikTok search, YouTube search).",
+      description:
+        "Search terms (Instagram search, TikTok search, YouTube search, LinkedIn company names, Twitter/X search).",
     }),
   ),
   hashtags: Type.Optional(
@@ -90,7 +117,7 @@ const RequestSchema = Type.Object({
   ),
   profiles: Type.Optional(
     Type.Array(Type.String(), {
-      description: "Profile usernames (TikTok profiles).",
+      description: "Profile usernames/handles (TikTok, LinkedIn, or Twitter/X — without @).",
     }),
   ),
   maxResults: Type.Optional(
@@ -114,6 +141,9 @@ const RunRefSchema = Type.Object({
   runId: Type.String({ description: "Apify run ID from start response." }),
   platform: stringEnum(SOCIAL_PLATFORMS, { description: "Platform of this run." }),
   datasetId: Type.String({ description: "Dataset ID from start response." }),
+  linkedinAction: Type.Optional(
+    stringEnum(LINKEDIN_RUN_TYPES, { description: "LinkedIn run type (for LinkedIn runs)." }),
+  ),
 });
 
 const SocialPlatformsSchema = Type.Object({
@@ -275,6 +305,108 @@ function buildYoutubeInput(params: {
     };
   }
   throw new ToolInputError("YouTube requires 'urls' or 'queries' parameter.");
+}
+
+function buildTwitterInput(params: {
+  urls?: string[];
+  queries?: string[];
+  profiles?: string[];
+  maxResults: number;
+}): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    maxItems: params.maxResults,
+  };
+  if (params.urls?.length) {
+    input.startUrls = params.urls;
+  }
+  if (params.queries?.length) {
+    input.searchTerms = params.queries;
+  }
+  if (params.profiles?.length) {
+    input.twitterHandles = params.profiles;
+  }
+  if (!params.urls?.length && !params.queries?.length && !params.profiles?.length) {
+    throw new ToolInputError(
+      "Twitter requires at least one of: urls (Twitter URLs), queries (search terms), or profiles (handles).",
+    );
+  }
+  return input;
+}
+
+interface LinkedInPreparedRun {
+  actorId: string;
+  input: Record<string, unknown>;
+  runType: LinkedinRunType;
+}
+
+function prepareLinkedInRuns(params: {
+  action: LinkedinAction;
+  urls?: string[];
+  profiles?: string[];
+  queries?: string[];
+  maxResults: number;
+  includePosts: boolean;
+  actorInput: Record<string, unknown>;
+}): LinkedInPreparedRun[] {
+  switch (params.action) {
+    case "profiles": {
+      const usernames = [...(params.urls ?? []), ...(params.profiles ?? [])];
+      if (!usernames.length) {
+        throw new ToolInputError(
+          "LinkedIn profiles action requires 'urls' (profile URLs) or 'profiles' (usernames).",
+        );
+      }
+      return [
+        {
+          actorId: LINKEDIN_ACTOR_IDS.profiles,
+          input: { usernames, ...params.actorInput },
+          runType: "profiles",
+        },
+      ];
+    }
+    case "company": {
+      if (!params.urls?.length) {
+        throw new ToolInputError(
+          "LinkedIn company action requires 'urls' (LinkedIn company profile URLs).",
+        );
+      }
+      const runs: LinkedInPreparedRun[] = [
+        {
+          actorId: LINKEDIN_ACTOR_IDS.company_details,
+          input: { profileUrls: params.urls, ...params.actorInput },
+          runType: "company_details",
+        },
+      ];
+      if (params.includePosts) {
+        runs.push({
+          actorId: LINKEDIN_ACTOR_IDS.company_posts,
+          input: {
+            company_names: params.urls,
+            limit: Math.min(params.maxResults, 100),
+            ...params.actorInput,
+          },
+          runType: "company_posts",
+        });
+      }
+      return runs;
+    }
+    case "jobs": {
+      if (!params.urls?.length) {
+        throw new ToolInputError(
+          "LinkedIn jobs action requires 'urls' (LinkedIn jobs search URLs).",
+        );
+      }
+      return [
+        {
+          actorId: LINKEDIN_ACTOR_IDS.jobs,
+          input: { urls: params.urls, ...params.actorInput },
+          runType: "jobs",
+        },
+      ];
+    }
+    default:
+      throw new ToolInputError(`Unknown LinkedIn action: ${String(params.action)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,13 +619,241 @@ function formatYoutubeItem(item: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
-function formatPlatformResults(platform: SocialPlatform, items: unknown[]): string {
+// LinkedIn profile scraper returns { results: { [username]: {...} }, failedUsernames, ... }
+function formatLinkedInProfileItem(item: Record<string, unknown>): string {
+  if (item.results && typeof item.results === "object") {
+    const results = item.results as Record<string, Record<string, unknown>>;
+    const parts: string[] = [];
+    for (const [username, profile] of Object.entries(results)) {
+      const lines: string[] = [`## LinkedIn Profile: ${username}`];
+      const basicInfo = profile.basic_info as Record<string, unknown> | undefined;
+      if (basicInfo?.location && typeof basicInfo.location === "object") {
+        const loc = basicInfo.location as Record<string, unknown>;
+        lines.push(`**Location**: ${str(loc.full || loc.city || loc.country)}`);
+      }
+      const experience = profile.experience as Record<string, unknown>[] | undefined;
+      if (experience?.length) {
+        lines.push("**Experience**:");
+        for (const exp of experience.slice(0, 5)) {
+          lines.push(`  - ${str(exp.title)} at ${str(exp.company)} (${str(exp.duration)})`);
+        }
+      }
+      const education = profile.education as Record<string, unknown>[] | undefined;
+      if (education?.length) {
+        lines.push("**Education**:");
+        for (const edu of education.slice(0, 3)) {
+          lines.push(`  - ${str(edu.school)} — ${str(edu.degree)}`);
+        }
+      }
+      lines.push(
+        `\n<details><summary>Raw data</summary>\n\n\`\`\`json\n${JSON.stringify(profile, null, 2)}\n\`\`\`\n</details>`,
+      );
+      parts.push(lines.join("\n"));
+    }
+    const failed = item.failedUsernames as string[] | undefined;
+    if (failed?.length) {
+      parts.push(`**Failed usernames**: ${failed.join(", ")}`);
+    }
+    return parts.join("\n\n---\n\n");
+  }
+  return `\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\``;
+}
+
+function formatLinkedInCompanyItem(item: Record<string, unknown>): string {
+  const lines: string[] = [`## LinkedIn Company: ${str(item.name || item.companyName)}`];
+  if (item.industry) {
+    lines.push(`**Industry**: ${str(item.industry)}`);
+  }
+  if (item.website) {
+    lines.push(`**Website**: ${str(item.website)}`);
+  }
+  if (item.employeesCount ?? item.staffCount) {
+    lines.push(`**Employees**: ${num(item.employeesCount ?? item.staffCount)}`);
+  }
+  if (item.description) {
+    lines.push(`**Description**: ${str(item.description)}`);
+  }
+  if (item.specialities) {
+    lines.push(`**Specialities**: ${str(item.specialities)}`);
+  }
+  if (item.foundedYear ?? item.founded) {
+    lines.push(`**Founded**: ${str(item.foundedYear ?? item.founded)}`);
+  }
+  if (item.headquarters) {
+    lines.push(`**Headquarters**: ${str(item.headquarters)}`);
+  }
+  if (item.followerCount ?? item.followersCount) {
+    lines.push(`**Followers**: ${num(item.followerCount ?? item.followersCount)}`);
+  }
+  if (item.linkedinUrl ?? item.url) {
+    lines.push(`**LinkedIn**: ${str(item.linkedinUrl ?? item.url)}`);
+  }
+  lines.push(
+    `\n<details><summary>Raw data</summary>\n\n\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\`\n</details>`,
+  );
+  return lines.join("\n");
+}
+
+function formatLinkedInPostItem(item: Record<string, unknown>): string {
+  const lines: string[] = [`## LinkedIn Post`];
+  if (item.company ?? item.companyName) {
+    lines.push(`**Company**: ${str(item.company ?? item.companyName)}`);
+  }
+  if (item.postUrl ?? item.url) {
+    lines.push(`**URL**: ${str(item.postUrl ?? item.url)}`);
+  }
+  const stats: string[] = [];
+  if (item.totalReactionCount !== undefined) {
+    stats.push(`Reactions: ${num(item.totalReactionCount)}`);
+  }
+  if (item.commentsCount !== undefined) {
+    stats.push(`Comments: ${num(item.commentsCount)}`);
+  }
+  if (stats.length) {
+    lines.push(`**${stats.join(" | ")}**`);
+  }
+  if (item.text ?? item.content) {
+    lines.push(`**Content**: ${str(item.text ?? item.content)}`);
+  }
+  if (item.postedAt ?? item.publishedAt) {
+    lines.push(`**Posted**: ${str(item.postedAt ?? item.publishedAt)}`);
+  }
+  lines.push(
+    `\n<details><summary>Raw data</summary>\n\n\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\`\n</details>`,
+  );
+  return lines.join("\n");
+}
+
+function formatLinkedInJobItem(item: Record<string, unknown>): string {
+  const lines: string[] = [`## ${str(item.title)}`];
+  if (item.companyName) {
+    lines.push(`**Company**: ${str(item.companyName)}`);
+  }
+  if (item.location) {
+    lines.push(`**Location**: ${str(item.location)}`);
+  }
+  if (item.link) {
+    lines.push(`**URL**: ${str(item.link)}`);
+  }
+  if (Array.isArray(item.salaryInfo) && item.salaryInfo.length) {
+    lines.push(`**Salary**: ${(item.salaryInfo as string[]).join(" - ")}`);
+  }
+  if (item.employmentType) {
+    lines.push(`**Type**: ${str(item.employmentType)}`);
+  }
+  if (item.seniorityLevel) {
+    lines.push(`**Level**: ${str(item.seniorityLevel)}`);
+  }
+  if (item.postedAt) {
+    lines.push(`**Posted**: ${str(item.postedAt)}`);
+  }
+  if (item.applicantsCount) {
+    lines.push(`**Applicants**: ${str(item.applicantsCount)}`);
+  }
+  if (item.descriptionText) {
+    const desc = str(item.descriptionText);
+    lines.push(`**Description**: ${desc.length > 500 ? desc.slice(0, 500) + "…" : desc}`);
+  }
+  lines.push(
+    `\n<details><summary>Raw data</summary>\n\n\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\`\n</details>`,
+  );
+  return lines.join("\n");
+}
+
+function formatTwitterItem(item: Record<string, unknown>): string {
+  const author = item.author as Record<string, unknown> | undefined;
+  const authorName = author?.name ? `${str(author.name)} (@${str(author.userName)})` : "";
+  const lines: string[] = [`## Tweet${authorName ? ` by ${authorName}` : ""}`];
+  if (item.url ?? item.twitterUrl) {
+    lines.push(`**URL**: ${str(item.url ?? item.twitterUrl)}`);
+  }
+  const stats: string[] = [];
+  if (item.likeCount !== undefined) {
+    stats.push(`Likes: ${num(item.likeCount)}`);
+  }
+  if (item.retweetCount !== undefined) {
+    stats.push(`Retweets: ${num(item.retweetCount)}`);
+  }
+  if (item.replyCount !== undefined) {
+    stats.push(`Replies: ${num(item.replyCount)}`);
+  }
+  if (item.quoteCount !== undefined) {
+    stats.push(`Quotes: ${num(item.quoteCount)}`);
+  }
+  if (item.bookmarkCount !== undefined) {
+    stats.push(`Bookmarks: ${num(item.bookmarkCount)}`);
+  }
+  if (stats.length) {
+    lines.push(`**${stats.join(" | ")}**`);
+  }
+  if (item.text) {
+    lines.push(`**Text**: ${str(item.text)}`);
+  }
+  if (item.createdAt) {
+    lines.push(`**Posted**: ${str(item.createdAt)}`);
+  }
+  if (item.lang) {
+    lines.push(`**Language**: ${str(item.lang)}`);
+  }
+  if (item.isRetweet) {
+    lines.push(`**Retweet**: yes`);
+  }
+  if (item.isQuote) {
+    lines.push(`**Quote**: yes`);
+  }
+  if (author) {
+    const authorStats: string[] = [];
+    if (author.followers !== undefined) {
+      authorStats.push(`Followers: ${num(author.followers)}`);
+    }
+    if (author.isVerified) {
+      authorStats.push("Verified");
+    }
+    if (author.isBlueVerified) {
+      authorStats.push("Blue");
+    }
+    if (authorStats.length) {
+      lines.push(`**Author**: ${authorStats.join(" | ")}`);
+    }
+  }
+  lines.push(
+    `\n<details><summary>Raw data</summary>\n\n\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\`\n</details>`,
+  );
+  return lines.join("\n");
+}
+
+function resolveLinkedInFormatter(
+  runType?: LinkedinRunType,
+): (item: Record<string, unknown>) => string {
+  switch (runType) {
+    case "profiles":
+      return formatLinkedInProfileItem;
+    case "company_details":
+      return formatLinkedInCompanyItem;
+    case "company_posts":
+      return formatLinkedInPostItem;
+    case "jobs":
+      return formatLinkedInJobItem;
+    default:
+      return (item) => `\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\``;
+  }
+}
+
+function formatPlatformResults(
+  platform: SocialPlatform,
+  items: unknown[],
+  linkedinRunType?: LinkedinRunType,
+): string {
   const formatter =
     platform === "instagram"
       ? formatInstagramItem
       : platform === "tiktok"
         ? formatTiktokItem
-        : formatYoutubeItem;
+        : platform === "linkedin"
+          ? resolveLinkedInFormatter(linkedinRunType)
+          : platform === "twitter"
+            ? formatTwitterItem
+            : formatYoutubeItem;
 
   const parts = items.map((item) => {
     try {
@@ -517,7 +877,7 @@ function formatPlatformResults(platform: SocialPlatform, items: unknown[]): stri
 function buildToolDescription(allowed: Set<SocialPlatform>): string {
   const lines = [
     "Scrape structured data from social media platforms via Apify.",
-    "Always prefer this tool over web_fetch for Instagram, TikTok, and YouTube data.",
+    "Always prefer this tool over web_fetch for Instagram, TikTok, YouTube, LinkedIn, and Twitter/X data.",
     "",
     "TWO-PHASE ASYNC PATTERN:",
     '1. Call with action="start" and a requests array → fires off all scraping jobs concurrently, returns immediately with run IDs.',
@@ -527,13 +887,13 @@ function buildToolDescription(allowed: Set<SocialPlatform>): string {
     "START ACTION:",
     '  action: "start"',
     "  requests: array of request objects (one per scraping job, no limit per platform). Each request has:",
-    '    - platform (required): "instagram" | "tiktok" | "youtube"',
+    '    - platform (required): "instagram" | "tiktok" | "youtube" | "linkedin" | "twitter"',
     "    - platform-specific parameters (see below)",
     "    - maxResults (optional, 1-100, default 20)",
     "",
     "COLLECT ACTION:",
     '  action: "collect"',
-    "  runs: array of { runId, platform, datasetId } objects from the start response.",
+    "  runs: array of { runId, platform, datasetId, linkedinAction? } objects from the start response.",
     "  Returns completed results + lists any still-pending runs. Call again if runs are pending.",
     "",
   ];
@@ -621,6 +981,65 @@ function buildToolDescription(allowed: Set<SocialPlatform>): string {
     );
   }
 
+  if (allowed.has("twitter")) {
+    lines.push(
+      'TWITTER/X (platform="twitter"):',
+      "  Provide urls (Twitter/X URLs), queries (search terms), and/or profiles (handles without @).",
+      "  At least one is required. Supports advanced search syntax (e.g. 'from:NASA since:2024-01-01').",
+      "  actorInput options for Twitter:",
+      '    sort: string — sort search results: "Top" | "Latest" (default: "Latest")',
+      "    tweetLanguage: string — ISO 639-1 language code (e.g. 'en', 'es', 'fr')",
+      "    onlyVerifiedUsers: boolean — only tweets from verified users (default: false)",
+      "    onlyTwitterBlue: boolean — only tweets from Twitter Blue subscribers (default: false)",
+      "    onlyImage: boolean — only tweets with images (default: false)",
+      "    onlyVideo: boolean — only tweets with videos (default: false)",
+      "    onlyQuote: boolean — only quote tweets (default: false)",
+      "    author: string — filter by tweet author (Twitter handle)",
+      "    inReplyTo: string — tweets that are replies to this user",
+      "    mentioning: string — tweets mentioning this user",
+      "    minimumRetweets: number — min retweet count",
+      "    minimumFavorites: number — min favorite/like count",
+      "    minimumReplies: number — min reply count",
+      '    start: string — tweets after this date (e.g. "2024-01-01")',
+      '    end: string — tweets before this date (e.g. "2024-06-01")',
+      "    geotaggedNear: string — tweets near a location",
+      "    withinRadius: string — radius for geo filter",
+      "    conversationIds: string[] — specific conversation IDs",
+      "",
+    );
+  }
+
+  if (allowed.has("linkedin")) {
+    lines.push(
+      'LINKEDIN (platform="linkedin"):',
+      "  Requires: linkedinAction.",
+      "",
+      '  linkedinAction="profiles" — scrape LinkedIn profile details:',
+      "    Provide urls (profile URLs) and/or profiles (usernames).",
+      "    Returns: profile info, work experience, education, certifications.",
+      "    Up to 1000 profiles per batch.",
+      "",
+      '  linkedinAction="company" — scrape LinkedIn company details (+ optionally posts):',
+      "    Requires: urls (LinkedIn company profile URLs, e.g. https://www.linkedin.com/company/tesla-motors).",
+      "    includePosts: boolean (default true) — also scrape company posts using the same URLs.",
+      "    When includePosts=true, fires TWO concurrent runs (details + posts) returning two run references.",
+      "    Returns: company name, industry, website, employee count, description, specialities.",
+      "",
+      '  linkedinAction="jobs" — scrape LinkedIn job listings:',
+      "    Requires: urls (LinkedIn jobs search URLs from linkedin.com/jobs/search/).",
+      "    Returns: job title, company, location, salary, description.",
+      "",
+      "  actorInput options for LinkedIn:",
+      "    profiles: includeEmail (boolean, default false) — include email if available",
+      "    company posts: limit (number, 1-100, default 100) — max posts per company",
+      "    jobs: scrapeCompany (boolean, default true) — include company details with job listings",
+      "    jobs: count (number, min 100) — limit total jobs scraped",
+      "    jobs: splitByLocation (boolean, default false) — split search by city to bypass 1000 job limit",
+      "    jobs: splitCountry (string) — country code for location split (e.g. 'US', 'GB')",
+      "",
+    );
+  }
+
   lines.push(
     "EXAMPLE — scrape Instagram and TikTok concurrently:",
     '  { action: "start", requests: [',
@@ -629,6 +1048,12 @@ function buildToolDescription(allowed: Set<SocialPlatform>): string {
     "  ]}",
     "  → returns { runs: [{ runId, platform, datasetId }, ...] }",
     '  Then: { action: "collect", runs: <runs from above> }',
+    "",
+    "EXAMPLE — scrape LinkedIn company details + posts, and profiles in parallel:",
+    '  { action: "start", requests: [',
+    '    { platform: "linkedin", linkedinAction: "company", urls: ["https://www.linkedin.com/company/tesla-motors"] },',
+    '    { platform: "linkedin", linkedinAction: "profiles", profiles: ["satyanadella", "neal-mohan"] }',
+    "  ]}",
   );
 
   return lines.join("\n");
@@ -654,6 +1079,7 @@ async function handleStart(params: {
     platform: SocialPlatform;
     actorId: string;
     input: Record<string, unknown>;
+    linkedinRunType?: LinkedinRunType;
   }[] = [];
 
   for (const req of params.requests) {
@@ -667,13 +1093,38 @@ async function handleStart(params: {
     const queries = readStringArrayParam(req, "queries");
     const hashtags = readStringArrayParam(req, "hashtags");
     const profiles = readStringArrayParam(req, "profiles");
-    const actorId = ACTOR_IDS[platform];
 
     const actorInput =
       req.actorInput && typeof req.actorInput === "object" && !Array.isArray(req.actorInput)
         ? (req.actorInput as Record<string, unknown>)
         : {};
 
+    if (platform === "linkedin") {
+      const action = readStringParam(req, "linkedinAction", {
+        required: true,
+      }) as LinkedinAction;
+      const includePosts = req.includePosts !== false;
+      const linkedInRuns = prepareLinkedInRuns({
+        action,
+        urls,
+        profiles,
+        queries,
+        maxResults,
+        includePosts,
+        actorInput,
+      });
+      for (const run of linkedInRuns) {
+        prepared.push({
+          platform,
+          actorId: run.actorId,
+          input: run.input,
+          linkedinRunType: run.runType,
+        });
+      }
+      continue;
+    }
+
+    const actorId = ACTOR_IDS[platform];
     let input: Record<string, unknown>;
     switch (platform) {
       case "instagram": {
@@ -697,6 +1148,15 @@ async function handleStart(params: {
         input = { ...buildYoutubeInput({ urls, queries, maxResults }), ...actorInput };
         break;
       }
+      case "twitter": {
+        input = {
+          ...buildTwitterInput({ urls, queries, profiles, maxResults }),
+          ...actorInput,
+        };
+        break;
+      }
+      default:
+        throw new ToolInputError(`Unknown platform: ${String(platform)}`);
     }
 
     prepared.push({ platform, actorId, input });
@@ -704,7 +1164,7 @@ async function handleStart(params: {
 
   // Fire all Actor starts concurrently.
   const results = await Promise.allSettled(
-    prepared.map(async ({ platform, actorId, input }) => {
+    prepared.map(async ({ platform, actorId, input, linkedinRunType }) => {
       const run = await startApifyActorRun({
         actorId,
         input,
@@ -716,11 +1176,12 @@ async function handleStart(params: {
         runId: run.id,
         datasetId: run.defaultDatasetId,
         status: run.status,
+        ...(linkedinRunType ? { linkedinAction: linkedinRunType } : {}),
       };
     }),
   );
 
-  const runs: { runId: string; platform: SocialPlatform; datasetId: string; status: string }[] = [];
+  const runs: Record<string, unknown>[] = [];
   const errors: { index: number; platform: string; error: string }[] = [];
 
   results.forEach((result, i) => {
@@ -767,6 +1228,9 @@ async function handleCollect(params: {
         required: true,
       }) as SocialPlatform;
       const datasetId = readStringParam(runRef, "datasetId", { required: true });
+      const linkedinRunType = readStringParam(runRef, "linkedinAction") as
+        | LinkedinRunType
+        | undefined;
 
       // Return from cache if we already fetched this run.
       const cacheKey = normalizeCacheKey(`social:run:${runId}`);
@@ -807,7 +1271,7 @@ async function handleCollect(params: {
         baseUrl: params.baseUrl,
       });
 
-      const text = formatPlatformResults(platform, items);
+      const text = formatPlatformResults(platform, items, linkedinRunType);
       const wrapped = wrapExternalContent(text, {
         source: "social_platforms",
         includeWarning: false,
