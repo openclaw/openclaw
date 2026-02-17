@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
+import { scanSourceAst } from "./skill-scanner-ast.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -235,6 +236,17 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       evidence: truncateEvidence(matchEvidence),
     });
     matchedSourceRules.add(ruleKey);
+  }
+
+  // --- AST rules (catch evasion techniques that regex misses) ---
+  const astFindings = scanSourceAst(source, filePath);
+  // Only add AST findings for ruleIds not already covered by regex rules.
+  const coveredRuleIds = new Set([...matchedLineRules, ...matchedSourceRules]);
+  for (const af of astFindings) {
+    if (!coveredRuleIds.has(af.ruleId)) {
+      findings.push(af);
+      coveredRuleIds.add(af.ruleId);
+    }
   }
 
   return findings;

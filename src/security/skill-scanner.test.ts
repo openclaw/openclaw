@@ -343,3 +343,34 @@ describe("scanDirectoryWithSummary", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// AST integration — scanSource includes AST-detected findings
+// ---------------------------------------------------------------------------
+
+describe("scanSource — AST integration", () => {
+  it("catches dynamic import that regex misses", () => {
+    // No child_process string, no eval keyword — regex won't flag this
+    const source = `const name = getTarget();\nawait import(name);`;
+    const findings = scanSource(source, "evasion.ts");
+    expect(findings.some((f) => f.ruleId === "dynamic-import")).toBe(true);
+  });
+
+  it("catches prototype pollution via AST", () => {
+    const source = `obj["__proto__"]["isAdmin"] = true;`;
+    const findings = scanSource(source, "pollution.js");
+    expect(findings.some((f) => f.ruleId === "prototype-pollution")).toBe(true);
+  });
+
+  it("does not double-report when regex already catches eval", () => {
+    // eval(...) is caught by regex rule "dynamic-code-execution"
+    // AST should not add a duplicate finding
+    const source = `eval("alert(1)");`;
+    const findings = scanSource(source, "direct-eval.js");
+    const evalFindings = findings.filter(
+      (f) => f.message.toLowerCase().includes("eval") || f.message.toLowerCase().includes("dynamic code"),
+    );
+    // Should have exactly one finding, not two
+    expect(evalFindings.length).toBeLessThanOrEqual(1);
+  });
+});
