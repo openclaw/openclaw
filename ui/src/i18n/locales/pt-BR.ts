@@ -61,6 +61,7 @@ export const pt_BR: TranslationMap = {
       sessionKey: "Chave de Sessão Padrão",
       language: "Idioma",
       connectHint: "Clique em Conectar para aplicar as alterações de conexão.",
+      trustedProxy: "Autenticado por proxy confiável.",
     },
     snapshot: {
       title: "Snapshot",
