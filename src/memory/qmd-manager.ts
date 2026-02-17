@@ -25,7 +25,7 @@ import { requireNodeSqlite } from "./sqlite.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-config.js";
-import { QmdDaemon } from "./qmd-daemon.js";
+import { QmdDaemon, type QmdDaemonQueryResult } from "./qmd-daemon.js";
 import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
 
 const log = createSubsystemLogger("memory");
@@ -410,17 +410,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
+    const minScore = opts?.minScore ?? 0;
     const collectionNames = this.listManagedCollectionNames();
-
-    // Try daemon path first
-    const daemonResults = await this.tryDaemonSearch(trimmed, limit, collectionNames);
-    if (daemonResults !== null) {
-      return daemonResults;
-    }
-
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
+    }
+
+    // Try daemon path first
+    const daemonResults = await this.tryDaemonSearch(trimmed, limit, minScore, collectionNames);
+    if (daemonResults !== null) {
+      return daemonResults;
     }
     const qmdSearchCommand = this.qmd.searchMode;
     let parsed: QmdQueryResult[];
@@ -469,7 +469,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
       const lines = this.extractSnippetLines(snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
-      const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
         continue;
       }
@@ -1248,6 +1247,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async tryDaemonSearch(
     query: string,
     limit: number,
+    minScore: number,
     collections: string[] = [],
   ): Promise<MemorySearchResult[] | null> {
     if (!this.daemon) {
@@ -1255,58 +1255,130 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     const tool = this.resolveMcpTool();
-    // MCP tool accepts a single collection string; pass only when exactly one collection
-    const collection = collections.length === 1 ? collections[0] : undefined;
     try {
+      const queryTimeoutMs = this.daemon.isReady()
+        ? this.qmd.daemon.warmTimeoutMs
+        : this.qmd.daemon.coldStartTimeoutMs;
+
       if (this.daemon.isReady()) {
-        // Warm path
-        const raw = await this.daemon.query(query, {
-          tool,
-          limit,
-          collection,
-          timeoutMs: this.qmd.daemon.warmTimeoutMs,
-        });
-        return this.formatDaemonResults(raw, limit);
+        const raw =
+          collections.length === 1
+            ? await this.queryDaemonToolWithFallback({
+                query,
+                tool,
+                limit,
+                timeoutMs: queryTimeoutMs,
+                collection: collections[0],
+              })
+            : await this.queryDaemonAcrossCollections({
+                query,
+                tool,
+                limit,
+                timeoutMs: queryTimeoutMs,
+                collectionNames: collections,
+              });
+        return this.formatDaemonResults(raw, limit, minScore);
       }
 
       // Cold start path — daemon enabled but not running
       await this.daemon.waitForBackoff();
       await this.daemon.start();
-      const raw = await this.daemon.query(query, {
-        tool,
-        limit,
-        collection,
-        timeoutMs: this.qmd.daemon.coldStartTimeoutMs,
-      });
-      return this.formatDaemonResults(raw, limit);
+
+      const raw =
+        collections.length === 1
+          ? await this.queryDaemonToolWithFallback({
+              query,
+              tool,
+              limit,
+              timeoutMs: this.qmd.daemon.coldStartTimeoutMs,
+              collection: collections[0],
+            })
+          : await this.queryDaemonAcrossCollections({
+              query,
+              tool,
+              limit,
+              timeoutMs: this.qmd.daemon.coldStartTimeoutMs,
+              collectionNames: collections,
+            });
+      return this.formatDaemonResults(raw, limit, minScore);
     } catch (err) {
-      // If query mode fails due to context size, retry with vsearch (no reranker)
-      const errMsg = String(err);
-      if (tool === "deep_search" && errMsg.includes("context size")) {
-        log.warn("qmd daemon deep_search hit context size limit, retrying with vector_search");
-        try {
-          const timeoutMs = this.daemon.isReady()
-            ? this.qmd.daemon.warmTimeoutMs
-            : this.qmd.daemon.coldStartTimeoutMs;
-          const raw = await this.daemon.query(query, {
-            tool: "vector_search",
-            limit,
-            collection,
-            timeoutMs,
-          });
-          return this.formatDaemonResults(raw, limit);
-        } catch (retryErr) {
-          log.warn(`qmd daemon vsearch fallback also failed: ${String(retryErr)}`);
-        }
-      }
-      log.warn(`qmd daemon search failed, falling back to spawn-per-query: ${errMsg}`);
+      log.warn(`qmd daemon search failed, falling back to spawn-per-query: ${String(err)}`);
       return null;
     }
   }
 
+  private async queryDaemonToolWithFallback(params: {
+    query: string;
+    tool: string;
+    limit: number;
+    timeoutMs: number;
+    collection: string;
+  }): Promise<QmdDaemonQueryResult[]> {
+    if (!this.daemon) {
+      return [];
+    }
+    const { query, tool, limit, timeoutMs, collection } = params;
+    try {
+      return await this.daemon.query(query, {
+        tool,
+        limit,
+        collection,
+        timeoutMs,
+      });
+    } catch (err) {
+      const errMsg = String(err);
+      if (tool === "deep_search" && errMsg.includes("context size")) {
+        log.warn("qmd daemon deep_search hit context size limit, retrying with vector_search");
+        return await this.daemon.query(query, {
+          tool: "vector_search",
+          limit,
+          collection,
+          timeoutMs,
+        });
+      }
+      throw err;
+    }
+  }
+
+  private async queryDaemonAcrossCollections(params: {
+    query: string;
+    tool: string;
+    limit: number;
+    timeoutMs: number;
+    collectionNames: string[];
+  }): Promise<QmdDaemonQueryResult[]> {
+    const { query, tool, limit, timeoutMs, collectionNames } = params;
+    const bestById = new Map<string, QmdDaemonQueryResult>();
+    for (const collectionName of collectionNames) {
+      const raw = await this.queryDaemonToolWithFallback({
+        query,
+        tool,
+        limit,
+        timeoutMs,
+        collection: collectionName,
+      });
+      for (const entry of raw) {
+        const id =
+          (typeof entry.docid === "string" && entry.docid.trim()) ||
+          (typeof entry.file === "string" && entry.file.trim());
+        if (!id) {
+          continue;
+        }
+        const prev = bestById.get(id);
+        const prevScore = typeof prev?.score === "number" ? prev.score : Number.NEGATIVE_INFINITY;
+        const nextScore = typeof entry.score === "number" ? entry.score : Number.NEGATIVE_INFINITY;
+        if (!prev || nextScore > prevScore) {
+          bestById.set(id, entry);
+        }
+      }
+    }
+    return [...bestById.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }
+
   private async formatDaemonResults(
-    raw: Array<{ docid?: string; file?: string; score?: number; snippet?: string }>,
+    raw: QmdDaemonQueryResult[],
     limit: number,
+    minScore: number,
   ): Promise<MemorySearchResult[]> {
     const results: MemorySearchResult[] = [];
     for (const entry of raw) {
@@ -1324,6 +1396,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
       const lines = this.extractSnippetLines(snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
+      if (score < minScore) {
+        continue;
+      }
       results.push({
         path: doc.rel,
         startLine: lines.startLine,

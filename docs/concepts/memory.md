@@ -222,7 +222,7 @@ out to QMD for retrieval. Key points:
 
 **Example**
 
-````json5
+```json5
 memory: {
   backend: "qmd",
   citations: "auto",
@@ -249,6 +249,7 @@ memory: {
     ]
   }
 }
+```
 
 **Citations & fallback**
 
@@ -271,7 +272,7 @@ agents: {
     }
   }
 }
-````
+```
 
 Notes:
 
