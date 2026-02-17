@@ -40,7 +40,7 @@ describe("web auto-reply", () => {
         {
           agentId: "work",
           match: {
-            provider: "whatsapp",
+            channel: "whatsapp",
             peer: { kind: "group", id: "123@g.us" },
           },
         },

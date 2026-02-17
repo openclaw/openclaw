@@ -1,1 +1,0 @@
-/Users/treygoff/Development/openclaw/package.json

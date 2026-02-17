@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
+import { clearConfigCache } from "../config/io.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
@@ -23,11 +24,17 @@ if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
 }
 
 export function setLoadConfigMock(fn: unknown) {
+  if (process.env.OPENCLAW_DEBUG_WEB_CFG === "1") {
+    // eslint-disable-next-line no-console
+    console.log("DEBUG_SET_LOAD_CONFIG", JSON.stringify(fn, null, 2));
+  }
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = typeof fn === "function" ? fn : () => fn;
+  clearConfigCache();
 }
 
 export function resetLoadConfigMock() {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
+  clearConfigCache();
 }
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -36,6 +43,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     loadConfig: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
+      if (process.env.OPENCLAW_DEBUG_WEB_CFG === "1") {
+        // eslint-disable-next-line no-console
+        console.log("DEBUG_MOCK_LOAD_CONFIG", typeof getter);
+      }
       if (typeof getter === "function") {
         return getter();
       }
@@ -56,6 +67,31 @@ vi.mock("../../config/config.js", async (importOriginal) => {
     ...actual,
     loadConfig: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
+      if (process.env.OPENCLAW_DEBUG_WEB_CFG === "1") {
+        // eslint-disable-next-line no-console
+        console.log("DEBUG_MOCK_LOAD_CONFIG_ALT", typeof getter);
+      }
+      if (typeof getter === "function") {
+        return getter();
+      }
+      return DEFAULT_CONFIG;
+    },
+  };
+});
+
+// Some auto-reply monitor modules are nested one level deeper and import config via
+// `../../../config/config.js`; mock that specifier too so group-gating tests can
+// reliably override config per test case.
+vi.mock("../../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => {
+      const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
+      if (process.env.OPENCLAW_DEBUG_WEB_CFG === "1") {
+        // eslint-disable-next-line no-console
+        console.log("DEBUG_MOCK_LOAD_CONFIG_DEEP", typeof getter);
+      }
       if (typeof getter === "function") {
         return getter();
       }
