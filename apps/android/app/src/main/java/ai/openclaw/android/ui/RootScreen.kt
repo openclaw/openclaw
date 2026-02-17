@@ -65,6 +65,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.ContextCompat
+import ai.openclaw.android.node.CanvasController
 import ai.openclaw.android.CameraHudKind
 import ai.openclaw.android.MainViewModel
 
@@ -352,7 +353,7 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
               }
               // Fall back to the local scaffold on network errors (gateway offline,
               // timeout, etc.) instead of showing Chrome's net::ERR page.
-              view.loadUrl("file:///android_asset/CanvasScaffold/scaffold.html")
+              view.loadUrl(CanvasController.SCAFFOLD_ASSET_URL)
             }
 
             override fun onReceivedHttpError(
@@ -371,7 +372,7 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
               // displaying raw JSON error text.  The canvas will be re-navigated
               // automatically once the gateway session is established.
               if (errorResponse.statusCode == 401 || errorResponse.statusCode == 403) {
-                view.loadUrl("file:///android_asset/CanvasScaffold/scaffold.html")
+                view.loadUrl(CanvasController.SCAFFOLD_ASSET_URL)
               }
             }
 
