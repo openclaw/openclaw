@@ -1,7 +1,7 @@
 # Contact Entry
 
 ## Name
-(Write the name here)
+(Your text)
 
 ## Type
 Person / Project / Community / Organization
@@ -13,4 +13,4 @@ Person / Project / Community / Organization
 - 
 
 ## Notes
-(Why this contact matters, what they do, how they relate to OpenClaw)
+(Your text)
