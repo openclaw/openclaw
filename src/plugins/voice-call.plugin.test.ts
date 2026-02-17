@@ -28,12 +28,12 @@ const noopLogger = {
 };
 
 type Registered = {
-  methods: Map<string, (ctx: Record<string, unknown>) => unknown>;
+  methods: Map<string, unknown>;
   tools: unknown[];
 };
 
 function setup(config: Record<string, unknown>): Registered {
-  const methods = new Map<string, (ctx: Record<string, unknown>) => unknown>();
+  const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
   plugin.register({
     id: "voice-call",
@@ -43,14 +43,16 @@ function setup(config: Record<string, unknown>): Registered {
     source: "test",
     config: {},
     pluginConfig: config,
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } },
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as Parameters<
+      typeof plugin.register
+    >[0]["runtime"],
     logger: noopLogger,
-    registerGatewayMethod: (method, handler) => methods.set(method, handler),
-    registerTool: (tool) => tools.push(tool),
+    registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
+    registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
     registerService: () => {},
     resolvePath: (p: string) => p,
-  });
+  } as unknown as Parameters<typeof plugin.register>[0]);
   return { methods, tools };
 }
 
@@ -87,7 +89,12 @@ describe("voice-call plugin", () => {
 
   it("initiates a call via voicecall.initiate", async () => {
     const { methods } = setup({ provider: "mock" });
-    const handler = methods.get("voicecall.initiate");
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
     const respond = vi.fn();
     await handler?.({ params: { message: "Hi" }, respond });
     expect(runtimeStub.manager.initiateCall).toHaveBeenCalled();
@@ -98,7 +105,12 @@ describe("voice-call plugin", () => {
 
   it("returns call status", async () => {
     const { methods } = setup({ provider: "mock" });
-    const handler = methods.get("voicecall.status");
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
     const respond = vi.fn();
     await handler?.({ params: { callId: "call-1" }, respond });
     const [ok, payload] = respond.mock.calls[0];

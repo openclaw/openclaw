@@ -26,8 +26,8 @@ describe("voyage embedding provider", () => {
   });
 
   it("configures client with correct defaults and headers", async () => {
-    const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = createFetchMock() as ReturnType<typeof vi.fn>;
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "voyage-key-123",
@@ -64,8 +64,8 @@ describe("voyage embedding provider", () => {
   });
 
   it("respects remote overrides for baseUrl and apiKey", async () => {
-    const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = createFetchMock() as ReturnType<typeof vi.fn>;
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const result = await createVoyageEmbeddingProvider({
       config: {} as never,
@@ -96,8 +96,8 @@ describe("voyage embedding provider", () => {
       json: async () => ({
         data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
       }),
-    })) as unknown as typeof fetch;
-    vi.stubGlobal("fetch", fetchMock);
+    })) as ReturnType<typeof vi.fn>;
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "voyage-key-123",
