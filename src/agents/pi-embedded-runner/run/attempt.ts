@@ -1,9 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs/promises";
+import os from "node:os";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -106,7 +107,6 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -650,13 +650,19 @@ export async function runEmbeddedAttempt(
       // Strip unsigned thinking blocks between tool-call iterations.
       // Antigravity returns thinking blocks without signatures; pi-ai's agent loop
       // accumulates them in context.messages and replays them on the next API call.
+      // NOTE: transformContext is not in Agent's public TS interface; if the upstream
+      // pi-agent-core library renames/removes this hook the assignment silently no-ops.
+      // The runtime check below detects that scenario.
       if (transcriptPolicy.normalizeAntigravityThinkingBlocks) {
-        (
-          activeSession.agent as unknown as {
-            transformContext: (msgs: AgentMessage[]) => Promise<AgentMessage[]>;
-          }
-        ).transformContext = async (messages: AgentMessage[]) =>
+        const agentRecord = activeSession.agent as Record<string, unknown>;
+        const hook = async (messages: AgentMessage[]) =>
           sanitizeAntigravityThinkingBlocks(messages);
+        agentRecord.transformContext = hook;
+        if (agentRecord.transformContext !== hook) {
+          log.warn(
+            "transformContext hook could not be set on agent — unsigned thinking blocks may not be stripped",
+          );
+        }
       }
 
       if (cacheTrace) {
