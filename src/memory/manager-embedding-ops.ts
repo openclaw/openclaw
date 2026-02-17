@@ -116,7 +116,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return out;
   }
 
-  private upsertEmbeddingCache(entries: Array<{ hash: string; embedding: number[] }>): void {
+  private async upsertEmbeddingCache(
+    entries: Array<{ hash: string; embedding: number[] }>,
+  ): Promise<void> {
     if (!this.cache.enabled || !this.provider) {
       return;
     }
@@ -134,7 +136,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     );
     for (const entry of entries) {
       const embedding = entry.embedding ?? [];
-      stmt.run(
+      await stmt.run(
         this.provider.id,
         this.provider.model,
         this.providerKey,
@@ -146,7 +148,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
     if (!this.cache.enabled) {
       return;
     }
@@ -154,15 +156,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!max || max <= 0) {
       return;
     }
-    const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
-      | { c: number }
-      | undefined;
+    const row = (await this.db
+      .prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`)
+      .get()) as { c: number } | undefined;
     const count = row?.c ?? 0;
     if (count <= max) {
       return;
     }
     const excess = count - max;
-    this.db
+    await this.db
       .prepare(
         `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
           ` WHERE rowid IN (\n` +
@@ -200,7 +202,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       }
       cursor += batch.length;
     }
-    this.upsertEmbeddingCache(toCache);
+    await this.upsertEmbeddingCache(toCache);
     return embeddings;
   }
 
@@ -320,11 +322,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return { requests, mapping };
   }
 
-  private applyBatchEmbeddings(params: {
+  private async applyBatchEmbeddings(params: {
     byCustomId: Map<string, number[]>;
     mapping: Map<string, { index: number; hash: string }>;
     embeddings: number[][];
-  }): void {
+  }): Promise<void> {
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     for (const [customId, embedding] of params.byCustomId.entries()) {
       const mapped = params.mapping.get(customId);
@@ -334,7 +336,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       params.embeddings[mapped.index] = embedding;
       toCache.push({ hash: mapped.hash, embedding });
     }
-    this.upsertEmbeddingCache(toCache);
+    await this.upsertEmbeddingCache(toCache);
   }
 
   private buildEmbeddingBatchRunnerOptions<TRequest>(params: {
@@ -404,7 +406,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (Array.isArray(batchResult)) {
       return batchResult;
     }
-    this.applyBatchEmbeddings({ byCustomId: batchResult, mapping, embeddings });
+    await this.applyBatchEmbeddings({ byCustomId: batchResult, mapping, embeddings });
     return embeddings;
   }
 
@@ -451,7 +453,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (Array.isArray(batchResult)) {
       return batchResult;
     }
-    this.applyBatchEmbeddings({ byCustomId: batchResult, mapping, embeddings });
+    await this.applyBatchEmbeddings({ byCustomId: batchResult, mapping, embeddings });
     return embeddings;
   }
 
@@ -495,7 +497,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (Array.isArray(batchResult)) {
       return batchResult;
     }
-    this.applyBatchEmbeddings({ byCustomId: batchResult, mapping, embeddings });
+    await this.applyBatchEmbeddings({ byCustomId: batchResult, mapping, embeddings });
     return embeddings;
   }
 
@@ -728,7 +730,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const now = Date.now();
     if (vectorReady) {
       try {
-        this.db
+        await this.db
           .prepare(
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
@@ -737,12 +739,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     if (this.fts.enabled && this.fts.available) {
       try {
-        this.db
+        await this.db
           .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
           .run(entry.path, options.source, this.provider.model);
       } catch {}
     }
-    this.db
+    await this.db
       .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
       .run(entry.path, options.source);
     for (let i = 0; i < chunks.length; i++) {
@@ -751,7 +753,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const id = hashText(
         `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${this.provider.model}`,
       );
-      this.db
+      await this.db
         .prepare(
           `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -776,14 +778,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
       if (vectorReady && embedding.length > 0) {
         try {
-          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
+          await this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
         } catch {}
-        this.db
+        await this.db
           .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
           .run(id, vectorToBlob(embedding));
       }
       if (this.fts.enabled && this.fts.available) {
-        this.db
+        await this.db
           .prepare(
             `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
               ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -799,7 +801,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           );
       }
     }
-    this.db
+    await this.db
       .prepare(
         `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
