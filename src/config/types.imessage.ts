@@ -13,6 +13,8 @@ export type IMessageAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Whether sender identities are cryptographically/verifiably trusted for DM tool policies. */
+  verified?: boolean;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
@@ -61,6 +63,8 @@ export type IMessageAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** DM sender-specific tool policy map (applies to direct chats). */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   groups?: Record<
     string,
     {

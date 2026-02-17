@@ -204,6 +204,10 @@ export async function handleToolsInvokeHttpRequest(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
   const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
+  const senderId = getHeader(req, "x-openclaw-sender-id")?.trim() || undefined;
+  const senderName = getHeader(req, "x-openclaw-sender-name")?.trim() || undefined;
+  const senderUsername = getHeader(req, "x-openclaw-sender-username")?.trim() || undefined;
+  const senderE164 = getHeader(req, "x-openclaw-sender-e164")?.trim() || undefined;
 
   const {
     agentId,
@@ -229,6 +233,10 @@ export async function handleToolsInvokeHttpRequest(
     sessionKey,
     messageProvider: messageChannel ?? undefined,
     accountId: accountId ?? null,
+    senderId,
+    senderName,
+    senderUsername,
+    senderE164,
   });
   const subagentPolicy = isSubagentSessionKey(sessionKey)
     ? resolveSubagentToolPolicy(cfg)

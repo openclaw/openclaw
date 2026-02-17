@@ -978,6 +978,7 @@ export async function runEmbeddedPiAgent(
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+            suppressToolErrorFallback: params.suppressToolErrorFallback,
             inlineToolResultsAllowed: false,
           });
 

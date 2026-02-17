@@ -40,6 +40,8 @@ export type WhatsAppConfig = {
   accounts?: Record<string, WhatsAppAccountConfig>;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Whether sender identities are cryptographically/verifiably trusted for DM tool policies. */
+  verified?: boolean;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
@@ -94,6 +96,8 @@ export type WhatsAppConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: WhatsAppActionConfig;
+  /** DM sender-specific tool policy map (applies to direct chats). */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   groups?: Record<string, WhatsAppGroupConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
@@ -108,6 +112,8 @@ export type WhatsAppAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Whether sender identities are cryptographically/verifiably trusted for DM tool policies. */
+  verified?: boolean;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
@@ -142,6 +148,8 @@ export type WhatsAppAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** DM sender-specific tool policy map (applies to direct chats). */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   groups?: Record<string, WhatsAppGroupConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;

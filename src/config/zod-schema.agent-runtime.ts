@@ -224,6 +224,10 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
   }
 }).optional();
 
+export const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+
+export const ChannelVerifiedSchema = z.boolean().optional();
+
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),

@@ -207,6 +207,53 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("recovered");
   });
 
+  it("omits tool error fallback when suppression is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+      suppressToolErrorFallback: true,
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("adds tool error fallback when assistant content is missing", () => {
+    const lastAssistant = {
+      ...makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+      }),
+      content: undefined,
+    } as AssistantMessage;
+    const payloads = buildPayloads({
+      lastAssistant,
+      lastToolError: { toolName: "search", error: "connection reset" },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Search");
+    expect(payloads[0]?.text).toContain("connection reset");
+  });
+
+  it("adds tool error fallback when assistant content is malformed", () => {
+    const lastAssistant = {
+      ...makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+      }),
+      content: {},
+    } as AssistantMessage;
+    const payloads = buildPayloads({
+      lastAssistant,
+      lastToolError: { toolName: "search", error: "timeout" },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("Search");
+    expect(payloads[0]?.text).toContain("timeout");
+  });
+
   it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "url required" },

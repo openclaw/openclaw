@@ -77,6 +77,7 @@ export function buildEmbeddedRunPayloads(params: {
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
+  suppressToolErrorFallback?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -247,10 +248,11 @@ export function buildEmbeddedRunPayloads(params: {
     hasUserFacingAssistantReply = true;
   }
 
-  if (params.lastToolError) {
+  if (params.lastToolError && !params.suppressToolErrorFallback) {
+    const hasUserFacingReply = hasUserFacingAssistantReply;
     const shouldShowToolError = shouldShowToolErrorWarning({
       lastToolError: params.lastToolError,
-      hasUserFacingReply: hasUserFacingAssistantReply,
+      hasUserFacingReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
     });

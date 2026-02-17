@@ -317,7 +317,75 @@ describe("installSessionToolResultGuard", () => {
     const messages = getPersistedMessages(sm);
     expect(messages.map((m) => m.role)).toEqual(["assistant"]);
   });
+  it("normalizes missing toolResult content to a default text block", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
 
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: undefined,
+      }),
+    );
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    const toolResult = messages.find((m) => m.role === "toolResult") as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    expect(toolResult).toBeDefined();
+    expect(toolResult.content).toEqual([{ type: "text", text: "(no output)" }]);
+  });
+
+  it("normalizes toolResult primitive/object content into text blocks", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: "hello",
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: { type: "text", text: "text block preserved" },
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: { type: "toolResultText", text: "ignored object" },
+      }),
+    );
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message)
+      .filter((m) => m.role === "toolResult");
+
+    expect(messages).toHaveLength(3);
+
+    const [first, second, third] = messages;
+    const firstText = first?.content?.find((block) => block.type === "text");
+    const secondText = second?.content?.find((block) => block.type === "text");
+    const thirdText = third?.content?.find((block) => block.type === "text");
+    expect(firstText?.text).toBe("hello");
+    expect(secondText?.text).toBe("text block preserved");
+    expect(thirdText?.text).toBe('{"type":"toolResultText","text":"ignored object"}');
+  });
   it("applies message persistence transform to user messages", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {

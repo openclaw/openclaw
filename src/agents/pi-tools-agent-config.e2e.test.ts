@@ -410,6 +410,66 @@ describe("Agent-specific tool filtering", () => {
     expect(bobNames).not.toContain("exec");
   });
 
+  it("should apply DM sender policy for direct sessions", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          toolsBySender: {
+            "+14155550101": { allow: ["read", "exec"] },
+            "*": { deny: ["*"] },
+          },
+        },
+      },
+    };
+
+    const trustedTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:direct:+14155550101",
+      messageProvider: "whatsapp",
+      workspaceDir: "/tmp/test-dm-trusted",
+      agentDir: "/tmp/agent-dm",
+    });
+    const trustedNames = trustedTools.map((t) => t.name);
+    expect(trustedNames).toContain("read");
+    expect(trustedNames).toContain("exec");
+
+    const unknownTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:direct:+14155550199",
+      messageProvider: "whatsapp",
+      workspaceDir: "/tmp/test-dm-unknown",
+      agentDir: "/tmp/agent-dm",
+    });
+    const unknownNames = unknownTools.map((t) => t.name);
+    expect(unknownNames).not.toContain("read");
+    expect(unknownNames).not.toContain("exec");
+  });
+
+  it("should ignore sender-specific DM policy on unverified channels", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          verified: false,
+          toolsBySender: {
+            "+14155550101": { allow: ["read", "exec"] },
+            "*": { deny: ["*"] },
+          },
+        },
+      },
+    };
+
+    const trustedTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:whatsapp:direct:+14155550101",
+      messageProvider: "whatsapp",
+      workspaceDir: "/tmp/test-dm-unverified",
+      agentDir: "/tmp/agent-dm-unverified",
+    });
+    const trustedNames = trustedTools.map((t) => t.name);
+    expect(trustedNames).not.toContain("read");
+    expect(trustedNames).not.toContain("exec");
+  });
+
   it("should not let default sender policy override group tools", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -676,5 +736,63 @@ describe("Agent-specific tool filtering", () => {
     });
     const helperDetails = helperResult?.details as { status?: string } | undefined;
     expect(helperDetails?.status).toBe("completed");
+  });
+
+  it("should block empty exec commands before running a process", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["exec"],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-empty-exec",
+      agentDir: "/tmp/agent-empty-exec",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+
+    const result = await execTool?.execute("call-empty", {
+      command: "   ",
+    });
+
+    expect(result?.details.status).toBe("error");
+    expect(result?.content).toHaveLength(1);
+    const details = JSON.parse(result?.content[0]!.text ?? "{}") as {
+      status?: string;
+      error?: string;
+    };
+    expect(details.error).toContain("non-empty");
+  });
+
+  it("should return a structured error when scoped exec command is denied", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["exec:qmd *"],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-blocked-exec",
+      agentDir: "/tmp/agent-blocked-exec",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+
+    const result = await execTool?.execute("call-blocked", {
+      command: "python -c 'print(1)'",
+    });
+
+    expect(result?.details.status).toBe("error");
+    const details = JSON.parse(result?.content[0]!.text ?? "{}") as {
+      status?: string;
+      error?: string;
+    };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("exec command blocked by policy");
   });
 });
