@@ -3,7 +3,7 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 
-type AssistantThinking = { type?: string; thinking?: string; thinkingSignature?: string };
+type AssistantThinking = { type?: string; thinking?: string; thinkingSignature?: string; signature?: string };
 
 function getAssistantMessage(out: AgentMessage[]) {
   const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as
