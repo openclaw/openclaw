@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
+import { createCronServiceState } from "./state.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { runMissedJobs } from "./timer.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-",
@@ -28,6 +30,21 @@ describe("CronService restart catch-up", () => {
       requestHeartbeatNow: params.requestHeartbeatNow as never,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
     });
+  }
+
+  function createOverdueEveryJob(id: string, nextRunAtMs: number) {
+    return {
+      id,
+      name: `job-${id}`,
+      enabled: true,
+      createdAtMs: nextRunAtMs - 60_000,
+      updatedAtMs: nextRunAtMs - 60_000,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: nextRunAtMs - 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: `tick-${id}` },
+      state: { nextRunAtMs },
+    };
   }
 
   it("executes an overdue recurring job immediately on start", async () => {
@@ -349,6 +366,49 @@ describe("CronService restart catch-up", () => {
     expect(requestHeartbeatNow).toHaveBeenCalled();
 
     cron.stop();
+    await store.cleanup();
+  });
+
+  it("reschedules deferred missed jobs from the post-catchup clock so they stay in the future", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    let now = startNow;
+
+    await writeStoreJobs(store.storePath, [
+      createOverdueEveryJob("stagger-0", startNow - 60_000),
+      createOverdueEveryJob("stagger-1", startNow - 50_000),
+      createOverdueEveryJob("stagger-2", startNow - 40_000),
+    ]);
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        now += 6_000;
+        return { status: "ok" as const, summary: "ok" };
+      }),
+      maxMissedJobsPerRestart: 1,
+      missedJobStaggerMs: 5_000,
+    });
+
+    await runMissedJobs(state);
+
+    const staggeredJobs = (state.store?.jobs ?? [])
+      .filter((job) => job.id.startsWith("stagger-") && job.id !== "stagger-0")
+      .toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+
+    expect(staggeredJobs).toHaveLength(2);
+    expect(staggeredJobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
+    expect(staggeredJobs[1]?.state.nextRunAtMs).toBeGreaterThan(
+      staggeredJobs[0]?.state.nextRunAtMs ?? 0,
+    );
+    expect((staggeredJobs[1]?.state.nextRunAtMs ?? 0) - (staggeredJobs[0]?.state.nextRunAtMs ?? 0))
+      .toBe(5_000);
+
     await store.cleanup();
   });
 });

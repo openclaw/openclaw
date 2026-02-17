@@ -38,6 +38,9 @@ const MAX_TIMER_DELAY_MS = 60_000;
  * but always breaks an infinite re-trigger cycle.  (See #17821)
  */
 const MIN_REFIRE_GAP_MS = 2_000;
+
+const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
+const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 
@@ -829,10 +832,18 @@ export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string> },
 ) {
-  const startupCandidates = await locked(state, async () => {
+  const staggerMs = Math.max(0, state.deps.missedJobStaggerMs ?? DEFAULT_MISSED_JOB_STAGGER_MS);
+  const maxImmediate = Math.max(
+    0,
+    state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
+  );
+  const selection = await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (!state.store) {
-      return [] as Array<{ jobId: string; job: CronJob }>;
+      return {
+        deferredJobIds: [] as string[],
+        startupCandidates: [] as Array<{ jobId: string; job: CronJob }>,
+      };
     }
     const now = state.deps.nowMs();
     const skipJobIds = opts?.skipJobIds;
@@ -842,26 +853,47 @@ export async function runMissedJobs(
       allowCronMissedRunByLastRun: true,
     });
     if (missed.length === 0) {
-      return [] as Array<{ jobId: string; job: CronJob }>;
+      return {
+        deferredJobIds: [] as string[],
+        startupCandidates: [] as Array<{ jobId: string; job: CronJob }>,
+      };
     }
-    state.deps.log.info(
-      { count: missed.length, jobIds: missed.map((j) => j.id) },
-      "cron: running missed jobs after restart",
-    );
-    for (const job of missed) {
+    const sorted = missed.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    const startupCandidates = sorted.slice(0, maxImmediate);
+    const deferred = sorted.slice(maxImmediate);
+    if (deferred.length > 0) {
+      state.deps.log.info(
+        {
+          immediateCount: startupCandidates.length,
+          deferredCount: deferred.length,
+          totalMissed: missed.length,
+        },
+        "cron: staggering missed jobs to prevent gateway overload",
+      );
+    }
+    if (startupCandidates.length > 0) {
+      state.deps.log.info(
+        { count: startupCandidates.length, jobIds: startupCandidates.map((j) => j.id) },
+        "cron: running missed jobs after restart",
+      );
+    }
+    for (const job of startupCandidates) {
       job.state.runningAtMs = now;
       job.state.lastError = undefined;
     }
     await persist(state);
-    return missed.map((job) => ({ jobId: job.id, job }));
+    return {
+      deferredJobIds: deferred.map((job) => job.id),
+      startupCandidates: startupCandidates.map((job) => ({ jobId: job.id, job })),
+    };
   });
 
-  if (startupCandidates.length === 0) {
+  if (selection.startupCandidates.length === 0 && selection.deferredJobIds.length === 0) {
     return;
   }
 
   const outcomes: Array<TimedCronRunOutcome> = [];
-  for (const candidate of startupCandidates) {
+  for (const candidate of selection.startupCandidates) {
     const startedAt = state.deps.nowMs();
     emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
     try {
@@ -899,6 +931,19 @@ export async function runMissedJobs(
 
     for (const result of outcomes) {
       applyOutcomeToStoredJob(state, result);
+    }
+
+    if (selection.deferredJobIds.length > 0) {
+      const baseNow = state.deps.nowMs();
+      let offset = staggerMs;
+      for (const jobId of selection.deferredJobIds) {
+        const job = state.store.jobs.find((entry) => entry.id === jobId);
+        if (!job || !job.enabled) {
+          continue;
+        }
+        job.state.nextRunAtMs = baseNow + offset;
+        offset += staggerMs;
+      }
     }
 
     // Preserve any new past-due nextRunAtMs values that became due while
