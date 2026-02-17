@@ -2,6 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import type { FeishuConfig } from "./types.js";
 import { createFeishuClient } from "./client.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 
 // ============ Helpers ============
 
@@ -532,13 +533,32 @@ const UpdateRecordSchema = Type.Object({
 // ============ Tool Registration ============
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
-  const feishuCfg = api.config?.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg?.appId || !feishuCfg?.appSecret) {
-    api.logger.debug?.("feishu_bitable: Feishu credentials not configured, skipping bitable tools");
+  if (!api.config) {
+    api.logger.debug?.("feishu_bitable: No config available, skipping bitable tools");
     return;
   }
 
-  const getClient = () => createFeishuClient(feishuCfg);
+  let validCfg: FeishuConfig;
+
+  const feishuCfg = api.config?.channels?.feishu as FeishuConfig | undefined;
+  
+  // Try single account config first (backward compatible)
+  if (feishuCfg?.appId && feishuCfg?.appSecret) {
+    // Single account mode - use top-level config
+    validCfg = feishuCfg;
+  } else {
+    // Multiple account mode - check accounts
+    const accounts = listEnabledFeishuAccounts(api.config);
+    if (accounts.length === 0) {
+      api.logger.debug?.("feishu_bitable: No Feishu accounts with credentials configured, skipping bitable tools");
+      return;
+    }
+    // Use the first account with credentials (include accountId for proper caching)
+    const account = accounts[0];
+    validCfg = { ...account.config, accountId: account.accountId };
+  }
+
+  const getClient = () => createFeishuClient(validCfg);
 
   // Tool 0: feishu_bitable_get_meta (helper to parse URLs)
   api.registerTool(
