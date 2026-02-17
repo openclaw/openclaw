@@ -9,11 +9,11 @@ export type DraftStreamLoop = {
 export function createDraftStreamLoop(params: {
   throttleMs: number;
   isStopped: () => boolean;
-  sendOrEditStreamMessage: (text: string) => Promise<void>;
+  sendOrEditStreamMessage: (text: string) => Promise<void | boolean>;
 }): DraftStreamLoop {
   let lastSentAt = 0;
   let pendingText = "";
-  let inFlightPromise: Promise<void> | undefined;
+  let inFlightPromise: Promise<void | boolean> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const flush = async () => {
@@ -32,14 +32,18 @@ export function createDraftStreamLoop(params: {
         return;
       }
       pendingText = "";
-      lastSentAt = Date.now();
       const current = params.sendOrEditStreamMessage(text).finally(() => {
         if (inFlightPromise === current) {
           inFlightPromise = undefined;
         }
       });
       inFlightPromise = current;
-      await current;
+      const sent = await current;
+      if (sent === false) {
+        pendingText = text;
+        return;
+      }
+      lastSentAt = Date.now();
       if (!pendingText) {
         return;
       }
