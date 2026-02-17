@@ -13,7 +13,12 @@ pub struct DriverRegistry {
 impl DriverRegistry {
     pub fn default_registry() -> Self {
         Self {
-            drivers: vec![Box::new(DiscordDriver), Box::new(GenericDriver)],
+            drivers: vec![
+                Box::new(TelegramDriver),
+                Box::new(SlackDriver),
+                Box::new(DiscordDriver),
+                Box::new(GenericDriver),
+            ],
         }
     }
 
@@ -39,35 +44,59 @@ struct DiscordDriver;
 
 impl ChannelDriver for DiscordDriver {
     fn extract(&self, frame: &Value) -> Option<ActionRequest> {
-        let mut request = ActionRequest::from_gateway_frame(frame)?;
-        if request.channel.is_some() {
-            if request
-                .channel
-                .as_deref()
-                .is_some_and(|channel| normalize(channel) == "discord")
-            {
-                return Some(request);
-            }
-            return None;
-        }
+        extract_with_hints(frame, "discord", &["discord"])
+    }
+}
 
-        let source = frame
-            .get("event")
-            .and_then(Value::as_str)
-            .or_else(|| frame.get("method").and_then(Value::as_str))
-            .map(normalize);
+struct TelegramDriver;
 
-        if source.as_deref().is_some_and(|src| src.contains("discord")) {
-            request.channel = Some("discord".to_owned());
-            return Some(request);
-        }
+impl ChannelDriver for TelegramDriver {
+    fn extract(&self, frame: &Value) -> Option<ActionRequest> {
+        extract_with_hints(frame, "telegram", &["telegram", "grammy"])
+    }
+}
 
-        None
+struct SlackDriver;
+
+impl ChannelDriver for SlackDriver {
+    fn extract(&self, frame: &Value) -> Option<ActionRequest> {
+        extract_with_hints(frame, "slack", &["slack"])
     }
 }
 
 fn normalize(input: &str) -> String {
     input.trim().to_ascii_lowercase()
+}
+
+fn extract_with_hints(
+    frame: &Value,
+    canonical_channel: &str,
+    hints: &[&str],
+) -> Option<ActionRequest> {
+    let mut request = ActionRequest::from_gateway_frame(frame)?;
+    if let Some(channel) = request.channel.as_deref() {
+        if normalize(channel) == canonical_channel {
+            return Some(request);
+        }
+        return None;
+    }
+
+    let source = frame
+        .get("event")
+        .and_then(Value::as_str)
+        .or_else(|| frame.get("method").and_then(Value::as_str))
+        .map(normalize);
+
+    let matched = source
+        .as_deref()
+        .is_some_and(|src| hints.iter().any(|hint| src.contains(hint)));
+
+    if matched {
+        request.channel = Some(canonical_channel.to_owned());
+        return Some(request);
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -106,5 +135,37 @@ mod tests {
         });
         let request = registry.extract(&frame).expect("request");
         assert_eq!(request.id, "req-2");
+    }
+
+    #[test]
+    fn telegram_driver_detects_source() {
+        let registry = DriverRegistry::default_registry();
+        let frame = json!({
+            "type": "event",
+            "event": "telegram.message",
+            "payload": {
+                "id": "req-3",
+                "tool": "exec",
+                "command": "git status"
+            }
+        });
+        let request = registry.extract(&frame).expect("request");
+        assert_eq!(request.channel.as_deref(), Some("telegram"));
+    }
+
+    #[test]
+    fn slack_driver_detects_source() {
+        let registry = DriverRegistry::default_registry();
+        let frame = json!({
+            "type": "event",
+            "event": "slack.message",
+            "payload": {
+                "id": "req-4",
+                "tool": "exec",
+                "command": "git status"
+            }
+        });
+        let request = registry.extract(&frame).expect("request");
+        assert_eq!(request.channel.as_deref(), Some("slack"));
     }
 }
