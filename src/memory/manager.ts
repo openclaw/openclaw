@@ -21,6 +21,7 @@ import {
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type VertexEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
@@ -58,6 +59,7 @@ export class MemoryIndexManager implements MemorySearchManager {
   private fallbackReason?: string;
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
+  private vertex?: VertexEmbeddingClient;
   private voyage?: VoyageEmbeddingClient;
   private batch: {
     enabled: boolean;
@@ -162,6 +164,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.fallbackReason = params.providerResult.fallbackReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
+    this.vertex = params.providerResult.vertex;
     this.voyage = params.providerResult.voyage;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
