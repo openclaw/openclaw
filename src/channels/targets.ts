@@ -43,6 +43,30 @@ export function ensureTargetId(params: {
   return params.candidate;
 }
 
+export function parseTargetMention(params: {
+  raw: string;
+  mentionPattern: RegExp;
+  kind: MessagingTargetKind;
+}): MessagingTarget | undefined {
+  const match = params.raw.match(params.mentionPattern);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return buildMessagingTarget(params.kind, match[1], params.raw);
+}
+
+export function parseTargetPrefix(params: {
+  raw: string;
+  prefix: string;
+  kind: MessagingTargetKind;
+}): MessagingTarget | undefined {
+  if (!params.raw.startsWith(params.prefix)) {
+    return undefined;
+  }
+  const id = params.raw.slice(params.prefix.length).trim();
+  return id ? buildMessagingTarget(params.kind, id, params.raw) : undefined;
+}
+
 export function requireTargetKind(params: {
   platform: string;
   target: MessagingTarget | undefined;
