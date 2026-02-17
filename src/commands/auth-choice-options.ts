@@ -133,7 +133,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "meganova",
     label: "MegaNova AI",
-    hint: "API key (30+ models)",
+    hint: "API key (15+ models)",
     choices: ["meganova-api-key"],
   },
   {
@@ -231,7 +231,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "meganova-api-key",
     label: "MegaNova AI API key",
-    hint: "30+ models — Claude, GPT-5, Gemini, DeepSeek, and more",
+    hint: "15+ models — GLM, DeepSeek, Kimi, Llama, Qwen, and more",
   },
   {
     value: "huggingface-api-key",

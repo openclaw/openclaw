@@ -910,8 +910,8 @@ export async function applyAuthChoiceApiProviders(
     if (!hasCredential) {
       await params.prompter.note(
         [
-          "MegaNova AI provides access to 30+ leading models through an OpenAI-compatible API,",
-          "including Claude, GPT-5, Gemini, DeepSeek, Llama, Qwen, and more.",
+          "MegaNova AI provides access to 15+ open-source and reasoning models through an OpenAI-compatible API,",
+          "including GLM-5, DeepSeek, Kimi, Llama, Qwen, and more.",
           "Get your API key at: https://meganova.ai",
         ].join("\n"),
         "MegaNova AI",
