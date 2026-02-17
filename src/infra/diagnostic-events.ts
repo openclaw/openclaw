@@ -168,46 +168,40 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     : never
   : never;
 
-type DiagnosticEventsGlobalState = {
+// Share event bus state via globalThis so plugin bundles (which may get a
+// separate copy of this module) see the same listeners as core.
+// Uses the same Symbol.for() pattern as src/plugins/runtime.ts.
+const BUS_KEY = Symbol.for("openclaw.diagnosticEventBus");
+type DiagnosticBus = {
   seq: number;
   listeners: Set<(evt: DiagnosticEventPayload) => void>;
   dispatchDepth: number;
 };
-
-function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
-  const globalStore = globalThis as typeof globalThis & {
-    __openclawDiagnosticEventsState?: DiagnosticEventsGlobalState;
-  };
-  if (!globalStore.__openclawDiagnosticEventsState) {
-    globalStore.__openclawDiagnosticEventsState = {
-      seq: 0,
-      listeners: new Set<(evt: DiagnosticEventPayload) => void>(),
-      dispatchDepth: 0,
-    };
-  }
-  return globalStore.__openclawDiagnosticEventsState;
-}
+const bus: DiagnosticBus = ((globalThis as Record<symbol, unknown>)[BUS_KEY] ??= {
+  seq: 0,
+  listeners: new Set(),
+  dispatchDepth: 0,
+}) as DiagnosticBus;
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
-  const state = getDiagnosticEventsState();
-  if (state.dispatchDepth > 100) {
+  if (bus.dispatchDepth > 100) {
     console.error(
-      `[diagnostic-events] recursion guard tripped at depth=${state.dispatchDepth}, dropping type=${event.type}`,
+      `[diagnostic-events] recursion guard tripped at depth=${bus.dispatchDepth}, dropping type=${event.type}`,
     );
     return;
   }
 
   const enriched = {
     ...event,
-    seq: (state.seq += 1),
+    seq: (bus.seq += 1),
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
-  state.dispatchDepth += 1;
-  for (const listener of state.listeners) {
+  bus.dispatchDepth += 1;
+  for (const listener of bus.listeners) {
     try {
       listener(enriched);
     } catch (err) {
@@ -223,20 +217,16 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
       // Ignore listener failures.
     }
   }
-  state.dispatchDepth -= 1;
+  bus.dispatchDepth -= 1;
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  const state = getDiagnosticEventsState();
-  state.listeners.add(listener);
-  return () => {
-    state.listeners.delete(listener);
-  };
+  bus.listeners.add(listener);
+  return () => bus.listeners.delete(listener);
 }
 
 export function resetDiagnosticEventsForTest(): void {
-  const state = getDiagnosticEventsState();
-  state.seq = 0;
-  state.listeners.clear();
-  state.dispatchDepth = 0;
+  bus.seq = 0;
+  bus.listeners.clear();
+  bus.dispatchDepth = 0;
 }

@@ -79,6 +79,47 @@ describe("infra store", () => {
       expect(seqs).toEqual([1, 2]);
     });
 
+    it("reset clears listeners from shared globalThis-backed bus", () => {
+      const before: string[] = [];
+      const stop = onDiagnosticEvent((evt) => before.push(evt.type));
+      emitDiagnosticEvent({ type: "model.usage", usage: { total: 1 } });
+      expect(before).toHaveLength(1);
+
+      resetDiagnosticEventsForTest();
+
+      // Old listener was cleared -- new events don't reach it.
+      emitDiagnosticEvent({ type: "model.usage", usage: { total: 2 } });
+      expect(before).toHaveLength(1);
+
+      // A fresh listener picks up events after reset.
+      const after: string[] = [];
+      const stop2 = onDiagnosticEvent((evt) => after.push(evt.type));
+      emitDiagnosticEvent({ type: "webhook.received", channel: "test" });
+      expect(after).toEqual(["webhook.received"]);
+
+      stop();
+      stop2();
+    });
+
+    it("unsubscribe removes only the target listener", () => {
+      resetDiagnosticEventsForTest();
+      const a: string[] = [];
+      const b: string[] = [];
+      const stopA = onDiagnosticEvent((evt) => a.push(evt.type));
+      const stopB = onDiagnosticEvent((evt) => b.push(evt.type));
+
+      emitDiagnosticEvent({ type: "webhook.received", channel: "test" });
+      expect(a).toHaveLength(1);
+      expect(b).toHaveLength(1);
+
+      stopA();
+      emitDiagnosticEvent({ type: "webhook.received", channel: "test" });
+      expect(a).toHaveLength(1); // no new events
+      expect(b).toHaveLength(2); // still receiving
+
+      stopB();
+    });
+
     it("emits message-flow events", async () => {
       resetDiagnosticEventsForTest();
       const types: string[] = [];

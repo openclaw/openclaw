@@ -151,6 +151,7 @@ describe("diagnostics-otel service", () => {
     logShutdown.mockClear();
     traceExporterCtor.mockClear();
     registerLogTransportMock.mockReset();
+    traceExporterCtor.mockClear();
   });
 
   test("records message-flow metrics and spans", async () => {

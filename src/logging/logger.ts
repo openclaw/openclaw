@@ -35,7 +35,12 @@ export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
-const externalTransports = new Set<LogTransport>();
+// Share transport registry via globalThis so plugin bundles (which may get a
+// separate copy of this module) can register transports that reach the logger.
+const TRANSPORTS_KEY = Symbol.for("openclaw.logExternalTransports");
+const externalTransports: Set<LogTransport> = ((globalThis as Record<symbol, unknown>)[
+  TRANSPORTS_KEY
+] ??= new Set<LogTransport>()) as Set<LogTransport>;
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
