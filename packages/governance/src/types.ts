@@ -292,6 +292,47 @@ export interface Project {
   createdAt: string;
 }
 
+// ── Entity Type ──────────────────────────────────────────────────────────────
+
+/**
+ * Business entity type — drives governance defaults, agent templates,
+ * maturity starting levels, and onboarding questions.
+ *
+ * Selecting an entity type at tenant creation scaffolds intelligent defaults
+ * for the entire governance configuration.
+ */
+export type EntityType =
+  | "personal"
+  | "sole-proprietor"
+  | "partnership"
+  | "llc"
+  | "s-corp"
+  | "franchise"
+  | "non-profit";
+
+/**
+ * Entity-type-specific configuration captured during onboarding.
+ *
+ * Each entity type has different relevant fields. Only the fields
+ * applicable to the entity type will be populated.
+ */
+export interface EntityConfig {
+  /** Number of partners (partnership). */
+  partnerCount?: number;
+  /** Single-member or multi-member (LLC). */
+  memberStructure?: "single" | "multi";
+  /** Number of members (LLC multi-member). */
+  memberCount?: number;
+  /** Franchisor or franchisee (franchise). */
+  franchiseRole?: "franchisor" | "franchisee";
+  /** Parent tenant ID for franchisees. */
+  parentTenantId?: string;
+  /** Business category — drives agent roster suggestions. */
+  businessCategory?: string;
+  /** Multi-sig threshold override (default inferred from entity type). */
+  multiSigThreshold?: number;
+}
+
 // ── Tenant ──────────────────────────────────────────────────────────────────
 
 /**
@@ -324,7 +365,15 @@ export interface Tenant {
   /** Tenant identity — did:web for domain-verifiable org identity. */
   did: DID;
   name: string;
+  /** Business entity type — drives governance defaults. */
+  entityType: EntityType;
+  /** Entity-type-specific configuration. */
+  entityConfig: EntityConfig;
   isolation: TenantIsolation;
+  /** Whether multi-sig is required for governance actions. */
+  multiSigRequired: boolean;
+  /** Multi-sig threshold (e.g., 2 of 3 partners). 0 = no multi-sig. */
+  multiSigThreshold: number;
   defaultMaturity: MaturityConfig;
   /** Tenant-scoped agents (CEO, COO, CFO, etc.). */
   agents: Agent[];
@@ -332,6 +381,34 @@ export interface Tenant {
   humans: Human[];
   createdAt: string;
   updatedAt: string;
+}
+
+// ── Tenant Templates ────────────────────────────────────────────────────────
+
+/** An agent template used during tenant scaffolding. */
+export interface AgentTemplate {
+  name: string;
+  role: string;
+  suggestedModel?: string;
+  skills: string[];
+}
+
+/**
+ * A tenant template — the defaults scaffolded from an entity type.
+ *
+ * When a user selects an entity type during onboarding, the system
+ * generates a TenantTemplate with smart defaults. The user can then
+ * customize before finalizing.
+ */
+export interface TenantTemplate {
+  entityType: EntityType;
+  isolation: TenantIsolation;
+  multiSigRequired: boolean;
+  multiSigThreshold: number;
+  defaultMaturity: MaturityConfig;
+  suggestedAgents: AgentTemplate[];
+  meetingCadence: string[];
+  escalationTiers: number;
 }
 
 // ── Auth Context ────────────────────────────────────────────────────────────

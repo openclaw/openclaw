@@ -7,7 +7,10 @@
   "exports": {
     ".": "./src/types.ts",
     "./types": "./src/types.ts",
-    "./identity": "./src/identity/did.ts"
+    "./identity": "./src/identity/did.ts",
+    "./ledger": "./src/ledger/index.ts",
+    "./contracts": "./src/contracts/index.ts",
+    "./tenants": "./src/tenants/index.ts"
   },
   "scripts": {
     "build": "tsc",
@@ -15,10 +18,13 @@
   },
   "dependencies": {
     "@noble/ed25519": "^2.1.0",
-    "@noble/hashes": "^1.4.0"
+    "@noble/hashes": "^1.4.0",
+    "@scure/base": "^1.2.0",
+    "borsh": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.0"
   }
 }

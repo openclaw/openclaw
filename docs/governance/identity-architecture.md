@@ -22,7 +22,8 @@
 11. [Integration With Other Layers](#integration-with-other-layers)
 12. [Key Lifecycle Management](#key-lifecycle-management)
 13. [Interoperability](#interoperability)
-14. [Implementation Reference](#implementation-reference)
+14. [External Identity Providers](#external-identity-providers)
+15. [Implementation Reference](#implementation-reference)
 
 ---
 
@@ -709,6 +710,278 @@ This enables cross-platform agent discovery — another platform's agents can fi
 The VC format we use for permission contracts is compatible with the European Digital Identity Wallet framework. If regulatory requirements emerge for AI agent identity (likely), our agents already carry W3C-standard credentials that can be verified by eIDAS-compliant systems.
 
 The gap: eIDAS credentials require issuance by a trusted authority (government, regulated entity). Our VCs are self-issued within the governance framework. Bridging to eIDAS would require a trusted third party to attest to our agent identities — this is a future integration point, not a current requirement.
+
+---
+
+## External Identity Providers
+
+The Six Fingered Man uses DIDs as the canonical internal identity, but humans often already have identities in enterprise IdPs. Rather than replacing those systems, we integrate with them — the IdP handles _authentication_ ("who are you?"), and our DID system handles _authorization_ ("what are you allowed to do?") and _accountability_ ("what did you do?").
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    External Identity Providers                    │
+│                                                                  │
+│  ┌───────────────┐  ┌──────────────┐  ┌────────────────────┐    │
+│  │   Entra ID    │  │    Okta      │  │  Google Workspace  │    │
+│  │  (Azure AD)   │  │              │  │                    │    │
+│  └──────┬────────┘  └──────┬───────┘  └────────┬───────────┘    │
+│         │                  │                    │                │
+│         └──────────┬───────┘────────────────────┘                │
+│                    │                                             │
+│              OIDC / OAuth 2.0                                    │
+│                    │                                             │
+└────────────────────┼─────────────────────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                Identity Binding Layer                              │
+│                                                                    │
+│  JWT from IdP ──► Verify token ──► Look up or create DID binding  │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  Identity Binding Table                                      │  │
+│  │                                                              │  │
+│  │  Entra OID: 8a3f...  ←──► did:key:z6MkJay...               │  │
+│  │  Entra OID: 2b7c...  ←──► did:key:z6MkSarah...             │  │
+│  │  Okta UID:  00u4...  ←──► did:key:z6MkMike...              │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│  DID is canonical. External ID is linked, not replacing.           │
+│  All ledger entries, grants, and contracts reference the DID.      │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+The external IdP is a _claim source_, not the _identity source_. The DID remains the identity used throughout the governance system — for signing, authorization, ledger entries, and contracts.
+
+### Microsoft Entra ID (Azure AD) Integration
+
+Entra ID is a natural fit because Microsoft's Entra Verified ID service is built on the same W3C DID and Verifiable Credential standards we use.
+
+**Integration Points:**
+
+| Capability                              | How It Integrates                                                                                                  | Value                                                                     |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| **OIDC Authentication**                 | Human logs into dashboard via "Sign in with Microsoft". JWT validated, Entra object ID bound to human's DID.       | Enterprise SSO — humans don't need a separate login                       |
+| **Conditional Access**                  | Entra Conditional Access policies (device compliance, location, risk score) evaluated before command authorization | Inherit org security policies without reimplementation                    |
+| **FIDO/Passkey Enrollment**             | FIDO keys enrolled in Entra are recognized as phish-resistant devices in our DeviceEnrollment                      | Single FIDO key works for both Entra and agent commands                   |
+| **Entra Verified ID (VC Issuance)**     | Entra issues W3C Verifiable Credentials that our system can verify                                                 | Cross-org credential verification ("this human works at Colleen Energy")  |
+| **Entra Verified ID (VC Verification)** | Our system issues VCs (PermissionContracts) that Entra-integrated systems can verify                               | Agents carry portable credentials verifiable by any W3C-compatible system |
+| **Group/Role Claims**                   | Entra group memberships can seed initial PermissionGrants                                                          | Faster onboarding — Entra admins map groups to governance roles           |
+
+**Authentication Flow with Entra ID:**
+
+```
+Human clicks "Sign in with Microsoft" on dashboard
+│
+├── 1. OIDC redirect to Entra ID
+│       └── login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize
+│
+├── 2. Human authenticates (MFA enforced by Entra Conditional Access)
+│       ├── Password + FIDO key (phish-resistant)
+│       ├── Passwordless (Windows Hello, passkey)
+│       └── Password + authenticator app (TOTP, not phish-resistant)
+│
+├── 3. Entra returns JWT (id_token + access_token)
+│       ├── oid: "8a3f..." (Entra object ID)
+│       ├── preferred_username: "jay@nerdplanet.com"
+│       ├── groups: ["governance-operators", "bhr-team"]
+│       ├── amr: ["mfa", "fido"] (authentication methods reference)
+│       └── deviceid: "device-abc" (if Conditional Access is device-bound)
+│
+├── 4. Identity Binding Layer
+│       ├── Validate JWT signature against Entra's JWKS endpoint
+│       ├── Look up oid "8a3f..." in binding table
+│       │   ├── Found: return did:key:z6MkJay...
+│       │   └── Not found: first login flow (see below)
+│       ├── Extract auth strength from amr claim
+│       │   ├── "fido" in amr → phishResistant: true
+│       │   └── "otp" only in amr → phishResistant: false
+│       └── Build AuthContext for ledger
+│
+├── 5. Authorization proceeds using the DID
+│       ├── Check grants for did:key:z6MkJay...
+│       ├── If grant requires requirePhishResistant and amr lacks "fido" → DENY
+│       └── All checks pass → session established
+│
+└── 6. Ledger entry
+        ├── actorDid: did:key:z6MkJay...
+        ├── authContext.method: "fido" (from Entra amr claim)
+        ├── authContext.externalIdp: "entra"
+        ├── authContext.externalId: "8a3f..." (Entra oid)
+        └── action: "auth.success"
+```
+
+**First Login / Identity Binding:**
+
+```
+Human authenticates via Entra for the first time:
+│
+├── 1. Entra oid "8a3f..." not found in binding table
+│
+├── 2. Options (configurable per tenant):
+│
+│   Option A: Auto-provision (recommended for managed tenants)
+│       ├── Generate new Ed25519 keypair
+│       ├── Derive did:key
+│       ├── Create Human record with Entra profile data
+│       ├── Bind oid ↔ did:key
+│       ├── Seed initial grants from Entra group claims
+│       │   ├── "governance-operators" → operator@tenant
+│       │   └── "bhr-team" → operator@project:bhr
+│       └── Log identity.create + auth.success to ledger
+│
+│   Option B: Pre-provisioned (for strict environments)
+│       ├── Admin has already created the Human + DID
+│       ├── Admin binds Entra oid to existing DID manually
+│       └── First login just activates the binding
+│
+│   Option C: Claim-and-link (self-sovereign)
+│       ├── Human already has a DID from auth-cli
+│       ├── Login with Entra, then prove DID ownership
+│       │   via challenge-response with their existing keypair
+│       └── Link Entra oid to their existing DID
+│
+└── 3. Subsequent logins skip this — binding is established
+```
+
+### Entra Verified ID — Credential Exchange
+
+Entra Verified ID and our governance system both implement W3C Verifiable Credentials. This enables bidirectional credential exchange:
+
+**Inbound (Entra → Six Fingered Man):**
+
+An organization can issue Entra Verified ID credentials to humans (e.g., "Employee of Colleen Energy" or "Certified Security Operator"). Our system can verify these credentials using standard W3C VC verification — resolve the issuer DID, check the proof, validate expiration.
+
+```
+Use case: Colleen Energy onboards a new operator.
+
+1. Colleen Energy issues Entra Verified ID credential:
+   "Sarah is a Senior Security Engineer at Colleen Energy"
+   Signed by: did:web:colleen-energy.com
+
+2. Sarah presents this VC to The Six Fingered Man during onboarding
+
+3. Our system:
+   ├── Resolves did:web:colleen-energy.com
+   ├── Verifies the credential signature
+   ├── Confirms Sarah's identity claim
+   └── Can auto-provision grants based on the credential claims
+```
+
+**Outbound (Six Fingered Man → Entra):**
+
+Our agents carry PermissionContracts (VCs with Ed25519Signature2020 proofs). Any Entra Verified ID-compatible verifier can validate these credentials.
+
+```
+Use case: Agent presents credentials to an external API.
+
+1. Research agent has a PermissionContract:
+   "Authorized to access BHR dataset"
+   Signed by: did:key:z6MkJay... (human operator)
+
+2. External API (Entra-integrated) requests proof of authorization
+
+3. Agent presents the VC
+
+4. External API:
+   ├── Resolves did:key:z6MkJay...
+   ├── Verifies the VC signature
+   ├── Confirms the agent is authorized
+   └── Grants access
+```
+
+### Other External IdPs
+
+The same pattern extends to any OIDC-compliant IdP. Configuration is per-tenant — each tenant chooses their own IdP(s).
+
+**Enterprise IdPs:**
+
+| IdP                     | Auth Protocol | VC Support                 | Notes                                                                       |
+| ----------------------- | ------------- | -------------------------- | --------------------------------------------------------------------------- |
+| **Entra ID** (Azure AD) | OIDC + SAML   | Entra Verified ID (W3C VC) | Best integration — native VC support, Conditional Access, device compliance |
+| **Okta**                | OIDC + SAML   | No native VC (yet)         | Widely deployed, rich group/role claims, adaptive MFA                       |
+| **Google Workspace**    | OIDC          | No native VC               | Google groups for grant seeding, BeyondCorp context-aware access            |
+| **Auth0**               | OIDC          | No native VC               | Flexible, custom claims via Actions/Rules, good for startups                |
+| **Keycloak**            | OIDC + SAML   | Plugin available           | Self-hosted/air-gapped option, VC via community extensions                  |
+| **Ping Identity**       | OIDC + SAML   | PingOne Credentials (VC)   | Enterprise MFA, some VC support                                             |
+| **JumpCloud**           | OIDC + SAML   | No native VC               | SMB-focused, device management integration                                  |
+
+**Consumer / Social IdPs:**
+
+| IdP                   | Auth Protocol             | MFA Strength                       | Notes                                                           |
+| --------------------- | ------------------------- | ---------------------------------- | --------------------------------------------------------------- |
+| **Microsoft Account** | OIDC                      | Passkey/FIDO (phish-resistant)     | Personal Microsoft identity, passkey support since 2024         |
+| **Google Account**    | OIDC                      | Passkey/FIDO (phish-resistant)     | Personal Google identity, strong passkey adoption               |
+| **Apple ID**          | OIDC (Sign in with Apple) | Face ID/Touch ID (phish-resistant) | Device-bound, privacy-preserving (private relay email)          |
+| **GitHub**            | OAuth 2.0                 | FIDO/passkey (phish-resistant)     | Developer identity, useful for open-source agent operators      |
+| **Passkey-only**      | WebAuthn                  | FIDO2 (phish-resistant)            | No IdP dependency — pure passkey auth, discoverable credentials |
+
+**Social IdPs carry weaker identity assurance** than enterprise IdPs (no org attestation, no device compliance). Tenants can restrict which IdP types are accepted:
+
+```
+Enterprise tenant (Colleen Energy): Entra ID only, requirePhishResistant: true
+Small team (indie project):         Google + GitHub, requirePhishResistant: false
+High-security tenant:               Entra ID + FIDO-only, no social IdPs
+Self-sovereign operator:            No external IdP, did:key + hardware key only
+```
+
+**Multi-IdP Support:**
+
+A tenant can configure multiple IdPs. A human could link both their work Entra identity and their personal GitHub identity to the same DID. The binding table supports multiple external IDs per DID:
+
+```
+did:key:z6MkJay... ←──► Entra OID: 8a3f...  (work)
+did:key:z6MkJay... ←──► GitHub ID: 12345    (personal)
+```
+
+The human authenticates with whichever IdP is available. Both resolve to the same DID, same grants, same ledger trail.
+
+**Configuration per tenant:**
+
+```json
+{
+  "tenantId": "colleen-energy",
+  "identity": {
+    "externalIdp": {
+      "provider": "entra",
+      "oidc": {
+        "issuer": "https://login.microsoftonline.com/{tenantId}/v2.0",
+        "clientId": "app-registration-id",
+        "scopes": ["openid", "profile", "email"]
+      },
+      "groupMapping": {
+        "governance-owners": { "role": "owner", "scope": { "type": "tenant" } },
+        "governance-operators": { "role": "operator", "scope": { "type": "tenant" } },
+        "bhr-team": { "role": "operator", "scope": { "type": "project", "projectId": "bhr" } }
+      },
+      "verifiedId": {
+        "enabled": true,
+        "acceptedIssuers": ["did:web:colleen-energy.com"]
+      },
+      "firstLoginPolicy": "auto-provision",
+      "requirePhishResistantFromIdp": true
+    }
+  }
+}
+```
+
+Each tenant configures their IdP independently. Some tenants may use Entra, others Okta, others may use no external IdP and rely purely on `did:key` + FIDO enrollment. The identity binding layer abstracts this — the rest of the system only sees DIDs.
+
+### What the External IdP Does NOT Control
+
+This is important: the external IdP provides _authentication_ but does not replace the governance system's _authorization_:
+
+| Concern                         | Handled By                      | Not By              |
+| ------------------------------- | ------------------------------- | ------------------- |
+| "Who is this human?"            | External IdP (Entra, Okta)      | —                   |
+| "Can they command this agent?"  | Permission grants (DID-scoped)  | External IdP groups |
+| "Is this action on the ledger?" | Ledger (DID-signed entries)     | External IdP logs   |
+| "Can Agent A talk to Agent B?"  | Permission contracts (VC)       | External IdP        |
+| "Was the auth phish-resistant?" | Our system (from IdP amr claim) | —                   |
+
+Entra group claims can _seed_ initial grants (faster onboarding), but the grants are stored and enforced in our governance system. Revoking an Entra group does not automatically revoke a governance grant — that requires a separate `grant.revoke` ledger entry. This is intentional: the audit trail must be self-contained and independently verifiable, not dependent on an external IdP's logs.
 
 ---
 
