@@ -339,7 +339,7 @@ export const registerTelegramNativeCommands = ({
   }
   const allCommandsFull: Array<{ command: string; description: string }> = [
     ...nativeCommands.map((command) => ({
-      command: command.name,
+      command: command.name.replace(/-/g, "_"),
       description: command.description,
     })),
     ...(nativeEnabled ? pluginCatalog.commands : []),
@@ -419,7 +419,8 @@ export const registerTelegramNativeCommands = ({
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
-        bot.command(command.name, async (ctx: TelegramNativeCommandContext) => {
+        const normalizedCommandName = command.name.replace(/-/g, "_");
+        bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) {
             return;
@@ -480,8 +481,8 @@ export const registerTelegramNativeCommands = ({
           const prompt = commandDefinition
             ? buildCommandTextFromArgs(commandDefinition, commandArgs)
             : rawText
-              ? `/${command.name} ${rawText}`
-              : `/${command.name}`;
+              ? `/${normalizedCommandName} ${rawText}`
+              : `/${normalizedCommandName}`;
           const menu = commandDefinition
             ? resolveCommandArgMenu({
                 command: commandDefinition,
