@@ -190,6 +190,12 @@ export async function agentCommand(
   if (!body) {
     throw new Error("Message (--message) is required");
   }
+  // Validate --session-id is not a session key format
+  if (opts.sessionId?.trim().toLowerCase().startsWith("agent:")) {
+    throw new Error(
+      "It looks like you passed a session key to --session-id. Please use --session-key instead.",
+    );
+  }
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }

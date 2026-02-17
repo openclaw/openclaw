@@ -84,6 +84,12 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it("rejects session key format passed to --session-id", async () => {
+    await expect(
+      agentCommand({ message: "hi", sessionId: "agent:mybot:main" }, runtime),
+    ).rejects.toThrow(/--session-key/);
+  });
+
   it("creates a session entry when deriving from --to", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
