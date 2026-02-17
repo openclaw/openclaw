@@ -194,6 +194,12 @@ export type TelegramGroupConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
+  /**
+   * Treat this group as a trusted main session.
+   * When true, the group uses the main session key (agent:main:main) instead of an isolated
+   * group key, allowing MEMORY.md to be loaded and context to be shared with DMs.
+   */
+  trusted?: boolean;
 };
 
 export type TelegramConfig = {

@@ -415,10 +415,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+  "channels.telegram.groups.*.trusted":
+    "When true, this group uses the main session key (agent:main:main) instead of an isolated group key, allowing MEMORY.md to be loaded and context to be shared with DMs.",
   "channels.telegram.streaming":
     'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streaming":
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.telegram.streamMode":
+    "Live stream preview mode for Telegram replies (off | partial | block). Legacy alias; prefer channels.telegram.streaming.",
+  "channels.telegram.draftChunk.minChars":
+    'Minimum chars before emitting a Telegram stream preview update (default: 200).',
+  "channels.telegram.draftChunk.maxChars":
+    'Target max size for a Telegram stream preview chunk (default: 800; clamped to channels.telegram.textChunkLimit).',
+  "channels.telegram.draftChunk.breakPreference":
+    "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.discord.streamMode":
     "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
   "channels.discord.draftChunk.minChars":

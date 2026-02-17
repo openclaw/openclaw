@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { TelegramGroupConfig } from "../config/types.telegram.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -91,6 +92,8 @@ export function buildAgentSessionKey(params: {
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   identityLinks?: Record<string, string[]>;
+  /** Group config for trusted group detection (Telegram only). */
+  groupConfig?: TelegramGroupConfig | null;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
@@ -103,6 +106,7 @@ export function buildAgentSessionKey(params: {
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
+    isTrustedGroup: params.groupConfig?.trusted ?? false,
   });
 }
 
@@ -288,6 +292,28 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
   return true;
 }
 
+function resolveTelegramGroupConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+  peerId: string | null,
+): TelegramGroupConfig | null {
+  if (!peerId) {
+    return null;
+  }
+  // Check account-specific groups first, then fall back to root-level groups
+  const telegramCfg = cfg.channels?.telegram;
+  const accountGroups = telegramCfg?.accounts?.[accountId]?.groups;
+  const rootGroups = telegramCfg?.groups;
+  const groups = accountGroups ?? rootGroups;
+  if (!groups) {
+    return null;
+  }
+  // Extract group ID from peerId (handles topics like "-100123:topic:1" → "-100123")
+  const groupId = peerId.split(":")[0];
+  // Try: exact peer match (for topic-specific config), group match, wildcard
+  return groups[peerId] ?? groups[groupId] ?? groups["*"] ?? null;
+}
+
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
@@ -302,6 +328,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
 
+  // Look up Telegram group config for trusted group detection
+  const telegramGroupConfig =
+    channel === "telegram" && peer?.kind === "group"
+      ? resolveTelegramGroupConfig(input.cfg, accountId, peer?.id ?? null)
+      : null;
+
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const sessionKey = buildAgentSessionKey({
@@ -311,6 +343,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       peer,
       dmScope,
       identityLinks,
+      groupConfig: telegramGroupConfig,
     }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
       agentId: resolvedAgentId,

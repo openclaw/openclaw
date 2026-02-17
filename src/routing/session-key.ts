@@ -135,8 +135,17 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  /** When true and peerKind is group, use main session key instead of isolated group key. */
+  isTrustedGroup?: boolean;
 }): string {
   const peerKind = params.peerKind ?? "direct";
+  // Trusted groups use the main session key for shared context with DMs
+  if (peerKind === "group" && params.isTrustedGroup) {
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: params.mainKey,
+    });
+  }
   if (peerKind === "direct") {
     const dmScope = params.dmScope ?? "main";
     let peerId = (params.peerId ?? "").trim();

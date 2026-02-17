@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentRoute } from "./resolve-route.js";
+import { resolveAgentRoute, buildAgentSessionKey } from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
   test("defaults to main/default when no bindings exist", () => {
@@ -677,5 +677,206 @@ describe("role-based agent routing", () => {
       expectedAgentId: "guild-roles",
       expectedMatchedBy: "binding.guild+roles",
     });
+  });
+});
+
+describe("trusted Telegram groups", () => {
+  test("trusted group uses main session key", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": { trusted: true },
+          },
+        },
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.mainSessionKey).toBe("agent:main:main");
+  });
+
+  test("non-trusted group uses isolated group key", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": { requireMention: true },
+          },
+        },
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(route.sessionKey).toBe("agent:main:telegram:group:-1001234567890");
+    expect(route.mainSessionKey).toBe("agent:main:main");
+  });
+
+  test("trusted group with specific agent uses agent-specific main key", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "assistant", workspace: "~/workspace" }],
+      },
+      bindings: [
+        {
+          agentId: "assistant",
+          match: { channel: "telegram", peer: { kind: "group", id: "-1001234567890" } },
+        },
+      ],
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": { trusted: true },
+          },
+        },
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(route.agentId).toBe("assistant");
+    expect(route.sessionKey).toBe("agent:assistant:main");
+    expect(route.mainSessionKey).toBe("agent:assistant:main");
+  });
+
+  test("wildcard group config applies trusted setting", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          groups: {
+            "*": { trusted: true },
+          },
+        },
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "group", id: "-1009999999999" },
+    });
+    expect(route.sessionKey).toBe("agent:main:main");
+  });
+
+  test("account-specific groups take precedence over root groups", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": { trusted: false },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "-1001234567890": { trusted: true },
+              },
+            },
+          },
+        },
+      },
+    };
+    // Using default account - should use root config (not trusted)
+    const defaultRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "default",
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(defaultRoute.sessionKey).toBe("agent:main:telegram:group:-1001234567890");
+
+    // Using work account - should use account config (trusted)
+    const workRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "work",
+      peer: { kind: "group", id: "-1001234567890" },
+    });
+    expect(workRoute.sessionKey).toBe("agent:main:main");
+  });
+
+  test("non-telegram groups are not affected by trusted setting", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "group", id: "some-discord-group" },
+    });
+    expect(route.sessionKey).toBe("agent:main:discord:group:some-discord-group");
+  });
+});
+
+describe("buildAgentSessionKey with groupConfig", () => {
+  test("passing trusted group config uses main session key", () => {
+    const sessionKey = buildAgentSessionKey({
+      agentId: "main",
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890" },
+      groupConfig: { trusted: true },
+    });
+    expect(sessionKey).toBe("agent:main:main");
+  });
+
+  test("trusted group config works for topics (inherits from parent group)", () => {
+    const sessionKey = buildAgentSessionKey({
+      agentId: "main",
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890:topic:1" },
+      groupConfig: { trusted: true },
+    });
+    expect(sessionKey).toBe("agent:main:main");
+  });
+
+  test("passing non-trusted group config uses group key", () => {
+    const sessionKey = buildAgentSessionKey({
+      agentId: "main",
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890" },
+      groupConfig: { trusted: false },
+    });
+    expect(sessionKey).toBe("agent:main:telegram:group:-1001234567890");
+  });
+
+  test("non-trusted group config uses topic-specific key for topics", () => {
+    const sessionKey = buildAgentSessionKey({
+      agentId: "main",
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890:topic:1" },
+      groupConfig: { trusted: false },
+    });
+    expect(sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:1");
+  });
+
+  test("passing null groupConfig uses group key for groups", () => {
+    const sessionKey = buildAgentSessionKey({
+      agentId: "main",
+      channel: "telegram",
+      peer: { kind: "group", id: "-1001234567890" },
+      groupConfig: null,
+    });
+    expect(sessionKey).toBe("agent:main:telegram:group:-1001234567890");
+  });
+
+  test("direct chats ignore groupConfig", () => {
+    const sessionKey = buildAgentSessionKey({
+      agentId: "main",
+      channel: "telegram",
+      peer: { kind: "direct", id: "123456789" },
+      groupConfig: { trusted: true },
+    });
+    // DM scope defaults to "main" so it uses main key anyway
+    expect(sessionKey).toBe("agent:main:main");
   });
 });
