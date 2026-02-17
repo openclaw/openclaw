@@ -31,7 +31,12 @@ Next priorities:
 - Ergonomics across CLI and web frontend
 - Companion apps on macOS, iOS, Android, Windows, and Linux
 
-Contribution rule: PRs must be single-focused and should not mix unrelated concerns in one change.
+Contribution rules:
+
+- One PR = one issue/topic. Do not bundle multiple unrelated fixes/features.
+- PRs over ~5,000 changed lines are reviewed only in exceptional circumstances.
+- Do not open large batches of tiny PRs at once; each PR has review cost.
+- For very small related fixes, grouping into one focused PR is encouraged.
 
 ## Security
 
@@ -94,6 +99,7 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 ## What We Will Not Merge (For Now)
 
 - New core skills when they can live on ClawHub
+- Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
 - First-class MCP runtime in core when `mcporter` already provides the integration path
