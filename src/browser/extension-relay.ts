@@ -473,9 +473,18 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }
 
     if (pathname === "/extension") {
-      if (extensionWs) {
+      if (extensionWs && extensionWs.readyState === WebSocket.OPEN) {
         rejectUpgrade(socket, 409, "Extension already connected");
         return;
+      }
+      // Stale socket in CLOSING/CLOSED state — clean it up so the new connection can proceed.
+      if (extensionWs && extensionWs.readyState !== WebSocket.OPEN) {
+        try {
+          extensionWs.terminate();
+        } catch {
+          // ignore
+        }
+        extensionWs = null;
       }
       wssExtension.handleUpgrade(req, socket, head, (ws) => {
         wssExtension.emit("connection", ws, req);
@@ -614,6 +623,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     ws.on("close", () => {
       clearInterval(ping);
+      // Guard: only clean up if this socket is still the active one. A new extension
+      // connection may have already replaced us, and we must not wipe its state.
+      if (extensionWs !== ws) {
+        return;
+      }
       extensionWs = null;
       for (const [, pending] of pendingExtension) {
         clearTimeout(pending.timer);
