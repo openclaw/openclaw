@@ -1,3 +1,4 @@
+export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 export {
   BLUEBUBBLES_ACTIONS,
@@ -275,7 +276,11 @@ export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
-export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
+export {
+  addWildcardAllowFrom,
+  mergeAllowFromEntries,
+  promptAccountId,
+} from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 
 export {

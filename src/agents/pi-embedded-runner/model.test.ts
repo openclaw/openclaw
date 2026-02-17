@@ -340,4 +340,29 @@ describe("resolveModel", () => {
       },
     });
   });
+
+  it("includes auth hint for unknown ollama models (#17328)", () => {
+    // resetMockDiscoverModels() in beforeEach already sets find → null
+    const result = resolveModel("ollama", "gemma3:4b", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("Unknown model: ollama/gemma3:4b");
+    expect(result.error).toContain("OLLAMA_API_KEY");
+    expect(result.error).toContain("docs.openclaw.ai/providers/ollama");
+  });
+
+  it("includes auth hint for unknown vllm models", () => {
+    const result = resolveModel("vllm", "llama-3-70b", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("Unknown model: vllm/llama-3-70b");
+    expect(result.error).toContain("VLLM_API_KEY");
+  });
+
+  it("does not add auth hint for non-local providers", () => {
+    const result = resolveModel("google-antigravity", "some-model", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: google-antigravity/some-model");
+  });
 });

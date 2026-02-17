@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { FollowupRun } from "./queue.js";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { FollowupRun } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -255,6 +255,47 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     await runner(baseQueuedRun("slack"));
 
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("drops media URL from payload when messaging tool already sent it", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrl: "/tmp/img.png" }],
+      messagingToolSentMediaUrls: ["/tmp/img.png"],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    // Media stripped → payload becomes non-renderable → not delivered.
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers media payload when not a duplicate", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrl: "/tmp/img.png" }],
+      messagingToolSentMediaUrls: ["/tmp/other.png"],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
 
   it("persists usage even when replies are suppressed", async () => {

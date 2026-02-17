@@ -2,8 +2,8 @@ import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import WebSocket from "ws";
 import type { DiscordAccountConfig } from "../../config/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { danger } from "../../globals.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("../../config/types.discord.js").DiscordIntentsConfig,

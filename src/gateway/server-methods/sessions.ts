@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
@@ -43,6 +42,7 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -471,7 +471,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const archived = archiveFileOnDisk(filePath, "bak");
     const keptLines = lines.slice(-maxLines);
-    fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
+    fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
 
     await updateSessionStore(storePath, (store) => {
       const entryKey = compactTarget.primaryKey;

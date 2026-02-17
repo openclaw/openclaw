@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
@@ -27,6 +28,76 @@ export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+const DEFAULT_LOOP_DETECTION_CONFIG = {
+  enabled: false,
+  historySize: TOOL_CALL_HISTORY_SIZE,
+  warningThreshold: WARNING_THRESHOLD,
+  criticalThreshold: CRITICAL_THRESHOLD,
+  globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  detectors: {
+    genericRepeat: true,
+    knownPollNoProgress: true,
+    pingPong: true,
+  },
+};
+
+type ResolvedLoopDetectionConfig = {
+  enabled: boolean;
+  historySize: number;
+  warningThreshold: number;
+  criticalThreshold: number;
+  globalCircuitBreakerThreshold: number;
+  detectors: {
+    genericRepeat: boolean;
+    knownPollNoProgress: boolean;
+    pingPong: boolean;
+  };
+};
+
+function asPositiveInt(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return fallback;
+  }
+  return value;
+}
+
+function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
+  let warningThreshold = asPositiveInt(
+    config?.warningThreshold,
+    DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
+  );
+  let criticalThreshold = asPositiveInt(
+    config?.criticalThreshold,
+    DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
+  );
+  let globalCircuitBreakerThreshold = asPositiveInt(
+    config?.globalCircuitBreakerThreshold,
+    DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
+  );
+
+  if (criticalThreshold <= warningThreshold) {
+    criticalThreshold = warningThreshold + 1;
+  }
+  if (globalCircuitBreakerThreshold <= criticalThreshold) {
+    globalCircuitBreakerThreshold = criticalThreshold + 1;
+  }
+
+  return {
+    enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
+    historySize: asPositiveInt(config?.historySize, DEFAULT_LOOP_DETECTION_CONFIG.historySize),
+    warningThreshold,
+    criticalThreshold,
+    globalCircuitBreakerThreshold,
+    detectors: {
+      genericRepeat:
+        config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
+      knownPollNoProgress:
+        config?.detectors?.knownPollNoProgress ??
+        DEFAULT_LOOP_DETECTION_CONFIG.detectors.knownPollNoProgress,
+      pingPong: config?.detectors?.pingPong ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
+    },
+  };
+}
 
 /**
  * Hash a tool call for pattern matching.
@@ -302,7 +373,12 @@ export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
   params: unknown,
+  config?: ToolLoopDetectionConfig,
 ): LoopDetectionResult {
+  const resolvedConfig = resolveLoopDetectionConfig(config);
+  if (!resolvedConfig.enabled) {
+    return { stuck: false };
+  }
   const history = state.toolCallHistory ?? [];
   const currentHash = hashToolCall(toolName, params);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
@@ -310,7 +386,7 @@ export function detectToolCallLoop(
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
 
-  if (noProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
+  if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
       `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
     );
@@ -324,7 +400,11 @@ export function detectToolCallLoop(
     };
   }
 
-  if (knownPollTool && noProgressStreak >= CRITICAL_THRESHOLD) {
+  if (
+    knownPollTool &&
+    resolvedConfig.detectors.knownPollNoProgress &&
+    noProgressStreak >= resolvedConfig.criticalThreshold
+  ) {
     log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,
@@ -336,7 +416,11 @@ export function detectToolCallLoop(
     };
   }
 
-  if (knownPollTool && noProgressStreak >= WARNING_THRESHOLD) {
+  if (
+    knownPollTool &&
+    resolvedConfig.detectors.knownPollNoProgress &&
+    noProgressStreak >= resolvedConfig.warningThreshold
+  ) {
     log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,
@@ -352,7 +436,11 @@ export function detectToolCallLoop(
     ? `pingpong:${canonicalPairKey(currentHash, pingPong.pairedSignature)}`
     : `pingpong:${toolName}:${currentHash}`;
 
-  if (pingPong.count >= CRITICAL_THRESHOLD && pingPong.noProgressEvidence) {
+  if (
+    resolvedConfig.detectors.pingPong &&
+    pingPong.count >= resolvedConfig.criticalThreshold &&
+    pingPong.noProgressEvidence
+  ) {
     log.error(
       `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
     );
@@ -367,7 +455,7 @@ export function detectToolCallLoop(
     };
   }
 
-  if (pingPong.count >= WARNING_THRESHOLD) {
+  if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
     log.warn(
       `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
     );
@@ -387,7 +475,11 @@ export function detectToolCallLoop(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
 
-  if (!knownPollTool && recentCount >= WARNING_THRESHOLD) {
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    recentCount >= resolvedConfig.warningThreshold
+  ) {
     log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
     return {
       stuck: true,
@@ -411,7 +503,9 @@ export function recordToolCall(
   toolName: string,
   params: unknown,
   toolCallId?: string,
+  config?: ToolLoopDetectionConfig,
 ): void {
+  const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!state.toolCallHistory) {
     state.toolCallHistory = [];
   }
@@ -423,7 +517,7 @@ export function recordToolCall(
     timestamp: Date.now(),
   });
 
-  if (state.toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {
+  if (state.toolCallHistory.length > resolvedConfig.historySize) {
     state.toolCallHistory.shift();
   }
 }
@@ -439,8 +533,10 @@ export function recordToolCallOutcome(
     toolCallId?: string;
     result?: unknown;
     error?: unknown;
+    config?: ToolLoopDetectionConfig;
   },
 ): void {
+  const resolvedConfig = resolveLoopDetectionConfig(params.config);
   const resultHash = hashToolOutcome(
     params.toolName,
     params.toolParams,
@@ -486,8 +582,8 @@ export function recordToolCallOutcome(
     });
   }
 
-  if (state.toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {
-    state.toolCallHistory.splice(0, state.toolCallHistory.length - TOOL_CALL_HISTORY_SIZE);
+  if (state.toolCallHistory.length > resolvedConfig.historySize) {
+    state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
 }
 

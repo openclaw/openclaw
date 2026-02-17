@@ -1,7 +1,7 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -57,6 +57,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   lastAssistant: undefined,
   didSendViaMessagingTool: false,
   messagingToolSentTexts: [],
+  messagingToolSentMediaUrls: [],
   messagingToolSentTargets: [],
   cloudCodeAssistFormatError: false,
   ...overrides,

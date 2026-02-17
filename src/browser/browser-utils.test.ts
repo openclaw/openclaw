@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserServerState } from "./server-context.js";
 import { appendCdpPath, getHeadersWithAuth } from "./cdp.helpers.js";
 import { __test } from "./client-fetch.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { shouldRejectBrowserMutation } from "./csrf.js";
 import { toBoolean } from "./routes/utils.js";
+import type { BrowserServerState } from "./server-context.js";
 import { listKnownProfileNames } from "./server-context.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 

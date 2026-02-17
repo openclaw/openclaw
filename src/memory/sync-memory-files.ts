@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SyncProgressState } from "./sync-progress.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
 import { indexFileEntryIfChanged } from "./sync-index.js";
+import type { SyncProgressState } from "./sync-progress.js";
 import { bumpSyncProgressTotal } from "./sync-progress.js";
 import { deleteStaleIndexedPaths } from "./sync-stale.js";
 

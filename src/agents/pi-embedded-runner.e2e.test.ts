@@ -73,6 +73,9 @@ vi.mock("@mariozechner/pi-ai", async () => {
       return buildAssistantMessage(model);
     },
     streamSimple: (model: { api: string; provider: string; id: string }) => {
+      if (model.id === "mock-throw") {
+        throw new Error("transport failed");
+      }
       const stream = new actual.AssistantMessageEventStream();
       queueMicrotask(() => {
         stream.push({
@@ -182,20 +185,21 @@ const textFromContent = (content: unknown) => {
   return undefined;
 };
 
-const readSessionMessages = async (sessionFile: string) => {
+const readSessionEntries = async (sessionFile: string) => {
   const raw = await fs.readFile(sessionFile, "utf-8");
   return raw
     .split(/\r?\n/)
     .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          type?: string;
-          message?: { role?: string; content?: unknown };
-        },
-    )
+    .map((line) => JSON.parse(line) as { type?: string; customType?: string; data?: unknown });
+};
+
+const readSessionMessages = async (sessionFile: string) => {
+  const entries = await readSessionEntries(sessionFile);
+  return entries
     .filter((entry) => entry.type === "message")
-    .map((entry) => entry.message as { role?: string; content?: unknown });
+    .map(
+      (entry) => (entry as { message?: { role?: string; content?: unknown } }).message,
+    ) as Array<{ role?: string; content?: unknown }>;
 };
 
 const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string) => {
@@ -371,6 +375,35 @@ describe("runEmbeddedPiAgent", () => {
       (message) => message?.role === "user" && textFromContent(message.content) === "boom",
     );
     expect(userIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  it("persists prompt transport errors as transcript entries", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = makeOpenAiConfig(["mock-throw"]);
+    await ensureModels(cfg);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey: testSessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "transport error",
+      provider: "openai",
+      model: "mock-throw",
+      timeoutMs: 5_000,
+      agentDir,
+      enqueue: immediateEnqueue,
+    });
+    expect(result.payloads[0]?.isError).toBe(true);
+
+    const entries = await readSessionEntries(sessionFile);
+    const promptErrorEntry = entries.find(
+      (entry) => entry.type === "custom" && entry.customType === "openclaw:prompt-error",
+    ) as { data?: { error?: string } } | undefined;
+
+    expect(promptErrorEntry).toBeTruthy();
+    expect(promptErrorEntry?.data?.error).toContain("transport failed");
   });
 
   it(

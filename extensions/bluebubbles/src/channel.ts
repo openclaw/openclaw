@@ -309,12 +309,13 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       return { ok: true, to: trimmed };
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
+      const trimmedText = (text ?? "").trimStart();
       const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
       // Resolve short ID (e.g., "5") to full UUID
       const replyToMessageGuid = rawReplyToId
         ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
         : "";
-      const result = await sendMessageBlueBubbles(to, text, {
+      const result = await sendMessageBlueBubbles(to, trimmedText, {
         cfg: cfg,
         accountId: accountId ?? undefined,
         replyToMessageGuid: replyToMessageGuid || undefined,

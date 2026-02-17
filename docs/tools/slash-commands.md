@@ -73,9 +73,11 @@ Text + native (when enabled):
 - `/commands`
 - `/skill <name> [input]` (run a skill by name)
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
+- `/mesh <goal>` (auto-plan + run a workflow; also `/mesh plan|run|status|retry`, with `/mesh run <mesh-plan-id>` for exact plan replay in the same chat)
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/subagents list|kill|log|info|send|steer` (inspect, kill, log, or steer sub-agent runs for the current session)
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)

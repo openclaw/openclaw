@@ -24,6 +24,29 @@ beforeEach(() => {
 });
 
 describe("monitorSlackProvider tool results", () => {
+  type SlackMessageEvent = {
+    type: "message";
+    user: string;
+    text: string;
+    ts: string;
+    channel: string;
+    channel_type: "im" | "channel";
+    thread_ts?: string;
+    parent_user_id?: string;
+  };
+
+  function makeSlackMessageEvent(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
+    return {
+      type: "message",
+      user: "U1",
+      text: "hello",
+      ts: "123",
+      channel: "C1",
+      channel_type: "im",
+      ...overrides,
+    };
+  }
+
   function setDirectMessageReplyMode(replyToMode: "off" | "all" | "first") {
     slackTestState.config = {
       messages: {
@@ -42,29 +65,18 @@ describe("monitorSlackProvider tool results", () => {
 
   async function runDirectMessageEvent(ts: string, extraEvent: Record<string, unknown> = {}) {
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts,
-        channel: "C1",
-        channel_type: "im",
-        ...extraEvent,
-      },
+      event: makeSlackMessageEvent({ ts, ...extraEvent }),
     });
   }
 
   async function runChannelThreadReplyEvent() {
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
+      event: makeSlackMessageEvent({
         text: "thread reply",
         ts: "123.456",
         thread_ts: "111.222",
-        channel: "C1",
         channel_type: "channel",
-      },
+      }),
     });
   }
 
@@ -72,14 +84,7 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "final reply" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts: "123",
-        channel: "C1",
-        channel_type: "im",
-      },
+      event: makeSlackMessageEvent(),
     });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -101,14 +106,7 @@ describe("monitorSlackProvider tool results", () => {
       monitorSlackProvider,
       {
         body: { api_app_id: "A2", team_id: "T1" },
-        event: {
-          type: "message",
-          user: "U1",
-          text: "hello",
-          ts: "123",
-          channel: "C1",
-          channel_type: "im",
-        },
+        event: makeSlackMessageEvent(),
       },
       { appToken: "xapp-1-A1-abc" },
     );
@@ -150,14 +148,7 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "final reply" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts: "123",
-        channel: "C1",
-        channel_type: "im",
-      },
+      event: makeSlackMessageEvent(),
     });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -289,14 +280,7 @@ describe("monitorSlackProvider tool results", () => {
     });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts: "123",
-        channel: "C1",
-        channel_type: "im",
-      },
+      event: makeSlackMessageEvent(),
     });
 
     const client = getSlackClient() as {
@@ -334,14 +318,10 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
+      event: makeSlackMessageEvent({
         text,
-        ts: "123",
-        channel: "C1",
         channel_type: "channel",
-      },
+      }),
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -368,16 +348,13 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
+      event: makeSlackMessageEvent({
         text: "following up",
         ts: "124",
         thread_ts: "123",
         parent_user_id: "bot-user",
-        channel: "C1",
         channel_type: "channel",
-      },
+      }),
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -397,14 +374,9 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts: "123",
-        channel: "C1",
+      event: makeSlackMessageEvent({
         channel_type: "channel",
-      },
+      }),
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -416,14 +388,10 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "ok" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
+      event: makeSlackMessageEvent({
         text: "/elevated off",
-        ts: "123",
-        channel: "C1",
         channel_type: "channel",
-      },
+      }),
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -472,14 +440,9 @@ describe("monitorSlackProvider tool results", () => {
     };
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
+      event: makeSlackMessageEvent({
         ts: "789",
-        channel: "C1",
-        channel_type: "im",
-      },
+      }),
     });
 
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -500,14 +463,11 @@ describe("monitorSlackProvider tool results", () => {
     });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
+      event: makeSlackMessageEvent({
         text: "<@bot-user> hello",
         ts: "456",
-        channel: "C1",
         channel_type: "channel",
-      },
+      }),
     });
 
     expect(reactMock).toHaveBeenCalledWith({
@@ -530,14 +490,7 @@ describe("monitorSlackProvider tool results", () => {
     };
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts: "123",
-        channel: "C1",
-        channel_type: "im",
-      },
+      event: makeSlackMessageEvent(),
     });
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -565,14 +518,7 @@ describe("monitorSlackProvider tool results", () => {
     const { controller, run } = startSlackMonitor(monitorSlackProvider);
     const handler = await getSlackHandlerOrThrow("message");
 
-    const baseEvent = {
-      type: "message",
-      user: "U1",
-      text: "hello",
-      ts: "123",
-      channel: "C1",
-      channel_type: "im",
-    };
+    const baseEvent = makeSlackMessageEvent();
 
     await handler({ event: baseEvent });
     await handler({ event: { ...baseEvent, ts: "124", text: "hello again" } });
@@ -595,16 +541,10 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "thread reply" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts: "123",
+      event: makeSlackMessageEvent({
         thread_ts: "123",
         parent_user_id: "U2",
-        channel: "C1",
-        channel_type: "im",
-      },
+      }),
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -631,15 +571,10 @@ describe("monitorSlackProvider tool results", () => {
     };
 
     await runSlackMessageOnce(monitorSlackProvider, {
-      event: {
-        type: "message",
-        user: "U1",
-        text: "hello",
-        ts: "123",
+      event: makeSlackMessageEvent({
         thread_ts: "111.222",
-        channel: "C1",
         channel_type: "channel",
-      },
+      }),
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);

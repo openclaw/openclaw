@@ -1,11 +1,11 @@
+import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
-import { listChannelDocks } from "../channels/dock.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import { listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
@@ -173,6 +173,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "mesh",
+      nativeName: "mesh",
+      description: "Plan and run multi-step workflows.",
+      textAlias: "/mesh",
+      category: "tools",
+      argsParsing: "none",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",
@@ -195,6 +204,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/context",
       acceptsArgs: true,
       category: "status",
+    }),
+    defineChatCommand({
+      key: "export-session",
+      nativeName: "export-session",
+      description: "Export current session to HTML file with full system prompt.",
+      textAliases: ["/export-session", "/export"],
+      acceptsArgs: true,
+      category: "status",
+      args: [
+        {
+          name: "path",
+          description: "Output path (default: workspace)",
+          type: "string",
+          required: false,
+        },
+      ],
     }),
     defineChatCommand({
       key: "tts",
@@ -249,15 +274,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
-      description: "List, kill, log, or steer subagent runs for this session.",
+      description: "List, kill, log, spawn, or steer subagent runs for this session.",
       textAlias: "/subagents",
       category: "management",
       args: [
         {
           name: "action",
-          description: "list | kill | log | info | send | steer",
+          description: "list | kill | log | info | send | steer | spawn",
           type: "string",
-          choices: ["list", "kill", "log", "info", "send", "steer"],
+          choices: ["list", "kill", "log", "info", "send", "steer", "spawn"],
         },
         {
           name: "target",

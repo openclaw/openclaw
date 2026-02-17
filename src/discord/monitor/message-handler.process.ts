@@ -1,6 +1,4 @@
 import { ChannelType } from "@buape/carbon";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -11,6 +9,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-reactions.js";
 import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
@@ -26,9 +25,11 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import {
   buildDiscordMediaPayload,
   resolveDiscordMessageText,
+  resolveForwardedMediaList,
   resolveMediaList,
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
@@ -315,6 +316,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   } = ctx;
 
   const mediaList = await resolveMediaList(message, mediaMaxBytes);
+  const forwardedMediaList = await resolveForwardedMediaList(message, mediaMaxBytes);
+  mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
     logVerbose(`discord: drop message ${message.id} (empty content)`);
@@ -480,6 +483,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     isGuildMessage,
     channelConfig,
     threadChannel,
+    channelType: channelInfo?.type,
     baseText: baseText ?? "",
     combinedBody,
     replyToMode,
@@ -554,14 +558,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: isDirectMessage
-      ? {
-          sessionKey: route.mainSessionKey,
-          channel: "discord",
-          to: `user:${author.id}`,
-          accountId: route.accountId,
-        }
-      : undefined,
+    updateLastRoute: {
+      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+      channel: "discord",
+      to: effectiveTo,
+      accountId: route.accountId,
+    },
     onRecordError: (err) => {
       logVerbose(`discord: failed updating session meta: ${String(err)}`);
     },
