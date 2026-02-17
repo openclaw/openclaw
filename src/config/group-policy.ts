@@ -66,24 +66,22 @@ export type GroupToolPolicySender = {
   senderE164?: string | null;
 };
 
-function normalizeSenderKey(value: string): string {
+function normalizePolicyLookupKey(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
-  }
-  // Don't strip @ for group references — handle those separately
-  if (trimmed.startsWith("@")) {
-    return trimmed.toLowerCase();
   }
   return trimmed.toLowerCase();
 }
 
+function normalizeSenderKey(value: string): string {
+  // Config keys can include @group references; callers branch on the prefix.
+  return normalizePolicyLookupKey(value);
+}
+
 function normalizePhoneKey(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.toLowerCase();
+  // Lookup candidates use the same normalization as configured sender keys.
+  return normalizePolicyLookupKey(value);
 }
 
 /**
