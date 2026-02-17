@@ -259,7 +259,7 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
           const dmPolicy = account.config.dmPolicy ?? "pairing";
           const configuredAllowFrom = normalizeAllowEntries(account.config.allowFrom ?? []);
           const storeAllowFrom = normalizeAllowEntries(
-            await runtime.channel.pairing.readAllowFromStore("xmtp").catch(() => []),
+            await runtime.channel.pairing.readAllowFromStore("xmtp", account.accountId).catch(() => []),
           );
           const effectiveAllowFrom = [...configuredAllowFrom, ...storeAllowFrom];
           const allowMatch = resolveAllowlistMatchSimple({
