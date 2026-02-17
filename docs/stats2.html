@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>OpenClaw — Unified Stats Panel</title>
+<style>
+body { font-family: Arial; padding: 40px; background: #111; color: #eee; }
+h1 { margin-bottom: 20px; color: #0f0; }
+h2 { color: #0f0; }
+.section { margin: 30px 0; padding: 20px; background: #000; border: 1px solid #0f0; }
+pre { background: #111; padding: 20px; border: 1px solid #333; color: #0f0; }
+#loading { font-size: 20px; color: #0f0; }
+</style>
+</head>
+<body>
+
+<h1>OPENCLAW — UNIFIED REPOSITORY STATS PANEL</h1>
+<div id="loading">Booting system…</div>
+
+<div class="section">
+<h2>📊 LIVE COUNTS</h2>
+<div class="stat">Total folders: <span id="folderCount">0</span></div>
+<div class="stat">Total files: <span id="fileCount">0</span></div>
+<div class="stat">Unique file types: <span id="typeCount">0</span></div>
+</div>
+
+<div class="section">
+<h2>🧭 DASHBOARD — FILE TYPES</h2>
+<pre id="types"></pre>
+</div>
+
+<div class="section">
+<h2>🗂️ DASHBOARD — FOLDER DEPTH</h2>
+<pre id="depth"></pre>
+</div>
+
+<div class="section">
+<h2>📦 DASHBOARD — LARGEST FOLDERS</h2>
+<pre id="largest"></pre>
+</div>
+
+<div class="section">
+<h2>🖥️ OPENCLAW OS — SYSTEM MONITOR</h2>
+<pre id="monitor"></pre>
+</div>
+
+<script>
+async function fetchRepoTree() {
+    const url = "https://api.github.com/repos/ram133/openclaw/git/trees/main?recursive=1";
+    const res = await fetch(url);
+    return res.json();
+}
+
+fetchRepoTree().then(data => {
+    const tree = data.tree;
+
+    let folders = new Set();
+    let files = 0;
+    let types = {};
+    let depth = {};
+    let folderSizes = {};
+    let typeSet = new Set();
+
+    tree.forEach(item => {
+        if (item.type === "tree") {
+            folders.add(item.path);
+            const d = item.path.split('/').length;
+            depth[d] = (depth[d] || 0) + 1;
+        } else if (item.type === "blob") {
+            files++;
+
+            const ext = item.path.includes('.') ? item.path.split('.').pop() : '';
+            typeSet.add(ext);
+            types[ext] = (types[ext] || 0) + 1;
+
+            const folder = item.path.includes('/') ? item.path.split('/')[0] : 'root';
+            folderSizes[folder] = (folderSizes[folder] || 0) + 1;
+        }
+    });
+
+    // LIVE COUNTS
+    document.getElementById("folderCount").textContent = folders.size;
+    document.getElementById("fileCount").textContent = files;
+    document.getElementById("typeCount").textContent = typeSet.size;
+
+    // DASHBOARD SECTIONS
+    document.getElementById("types").textContent = JSON.stringify(types, null, 2);
+    document.getElementById("depth").textContent = JSON.stringify(depth, null, 2);
+    document.getElementById("largest").textContent = JSON.stringify(folderSizes, null, 2);
+
+    // SYSTEM MONITOR
+    document.getElementById("monitor").textContent =
+        "=== OPENCLAW SYSTEM MONITOR ===\n" +
+        "Folders: " + folders.size + "\n" +
+        "Files: " + files + "\n" +
+        "File Types: " + typeSet.size + "\n" +
+        "System Status: ONLINE\n" +
+        "Last Sync: " + new Date().toLocaleString();
+
+    document.getElementById("loading").style.display = "none";
+});
+</script>
+
+</body>
+</html>
