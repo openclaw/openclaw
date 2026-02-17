@@ -25,6 +25,7 @@ import { logVerbose } from "../globals.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import {
   edgeTTS,
   elevenLabsTTS,
@@ -364,7 +365,11 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
     "Voice (TTS) is enabled.",
     autoHint,
     `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
-    "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    "Use [[tts:key=value ...]] to control voice. Available params (all optional):",
+    "  stability=0‑1 (lower → expressive, higher → steady), style=0‑1 (higher → dramatic),",
+    "  speed=0.5‑2, similarityBoost=0‑1. Example: [[tts:stability=0.4 style=0.7]]",
+    "Use [[tts:text]]alt text[[/tts:text]] to provide separate spoken text from visible text.",
+    "Do NOT use bare words like [[tts:soft]] — they are not supported.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -797,11 +802,10 @@ export async function maybeApplyTtsToPayload(params: {
     prefsPath,
     sessionAuto: params.ttsAuto,
   });
-  if (autoMode === "off") {
-    return params.payload;
-  }
-
-  const text = params.payload.text ?? "";
+  const rawText = params.payload.text ?? "";
+  // Strip inline directive tags (e.g. [[reply_to_current]], [[audio_as_voice]])
+  // before TTS processing so they don't get read aloud.
+  const text = parseInlineDirectives(rawText).text;
   const directives = parseTtsDirectives(text, config.modelOverrides);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
@@ -820,6 +824,9 @@ export async function maybeApplyTtsToPayload(params: {
           text: visibleText.length > 0 ? visibleText : undefined,
         };
 
+  if (autoMode === "off") {
+    return nextPayload;
+  }
   if (autoMode === "tagged" && !directives.hasDirective) {
     return nextPayload;
   }
