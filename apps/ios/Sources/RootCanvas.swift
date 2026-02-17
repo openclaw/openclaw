@@ -146,6 +146,9 @@ struct RootCanvas: View {
             }
             self.maybeAutoOpenSettings()
         }
+        .onChange(of: self.appModel.openChatRequestID) { _, _ in
+            self.presentedSheet = .chat
+        }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
