@@ -43,8 +43,8 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
 }));
 
 vi.mock("./bot-message-context.js", () => ({
-  buildLineMessageContext: (...args: unknown[]) => buildLineMessageContextMock(...args),
-  buildLinePostbackContext: (...args: unknown[]) => buildLinePostbackContextMock(...args),
+  buildLineMessageContext: buildLineMessageContextMock,
+  buildLinePostbackContext: buildLinePostbackContextMock,
   getLineSourceInfo: (source: {
     type?: string;
     userId?: string;
@@ -66,8 +66,8 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: readAllowFromStoreMock,
+  upsertChannelPairingRequest: upsertPairingRequestMock,
 }));
 
 describe("handleLineWebhookEvents", () => {
