@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -14,13 +14,14 @@ vi.mock("../agents/model-auth.js", () => ({
 }));
 
 const createFetchMock = () => {
-  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-    return new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  });
-  return withFetchPreconnect(fetchMock) as typeof fetch & typeof fetchMock;
+  const fetchMock = vi.fn<FetchMock>(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
+  return withFetchPreconnect(fetchMock);
 };
 
 describe("voyage embedding provider", () => {
@@ -95,17 +96,15 @@ describe("voyage embedding provider", () => {
 
   it("passes input_type=document for embedBatch", async () => {
     const fetchMock = withFetchPreconnect(
-      vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
-        return new Response(
-          JSON.stringify({
-            data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }),
+      vi.fn<FetchMock>(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(
+            JSON.stringify({
+              data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
