@@ -1,7 +1,8 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveEffectiveAllowAgents,
   resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
@@ -279,5 +280,47 @@ describe("resolveAgentConfig", () => {
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+  });
+});
+
+describe("resolveEffectiveAllowAgents", () => {
+  it("should return explicit allowAgents when configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: ["research", "writer"] } }],
+      },
+    };
+    const result = resolveEffectiveAllowAgents(cfg, "main");
+    expect(result.allowAgents).toEqual(["research", "writer"]);
+    expect(result.implicit).toBe(false);
+  });
+
+  it("should implicitly allow all agents from agents.list when allowAgents is unset", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }, { id: "research" }, { id: "writer" }],
+      },
+    };
+    const result = resolveEffectiveAllowAgents(cfg, "main");
+    expect(result.allowAgents).toEqual(["main", "research", "writer"]);
+    expect(result.implicit).toBe(true);
+  });
+
+  it("should return empty when no agents.list and no allowAgents", () => {
+    const cfg: OpenClawConfig = {};
+    const result = resolveEffectiveAllowAgents(cfg, "main");
+    expect(result.allowAgents).toEqual([]);
+    expect(result.implicit).toBe(false);
+  });
+
+  it("should respect explicit empty allowAgents as intentional deny-all", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: [] } }, { id: "research" }],
+      },
+    };
+    const result = resolveEffectiveAllowAgents(cfg, "main");
+    expect(result.allowAgents).toEqual([]);
+    expect(result.implicit).toBe(false);
   });
 });

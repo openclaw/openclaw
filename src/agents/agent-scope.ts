@@ -193,6 +193,25 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   return path.join(stateDir, `workspace-${id}`);
 }
 
+export function resolveEffectiveAllowAgents(
+  cfg: OpenClawConfig,
+  requesterAgentId: string,
+): { allowAgents: string[]; implicit: boolean } {
+  const agentCfg = resolveAgentConfig(cfg, requesterAgentId);
+  const explicit = agentCfg?.subagents?.allowAgents;
+  if (explicit !== undefined) {
+    return { allowAgents: explicit, implicit: false };
+  }
+  // Implicit: allow all agents from agents.list when allowAgents is unset.
+  const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  if (configuredAgents.length > 0) {
+    return {
+      allowAgents: configuredAgents.map((entry) => normalizeAgentId(entry.id)),
+      implicit: true,
+    };
+  }
+  return { allowAgents: [], implicit: false };
+}
 export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();

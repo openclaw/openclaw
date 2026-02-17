@@ -1,12 +1,12 @@
 import { Type } from "@sinclair/typebox";
+import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { resolveAgentConfig } from "../agent-scope.js";
-import type { AnyAgentTool } from "./common.js";
+import { resolveAgentConfig, resolveEffectiveAllowAgents } from "../agent-scope.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -45,7 +45,7 @@ export function createAgentsListTool(opts?: {
           DEFAULT_AGENT_ID,
       );
 
-      const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+      const { allowAgents } = resolveEffectiveAllowAgents(cfg, requesterAgentId);
       const allowAny = allowAgents.some((value) => value.trim() === "*");
       const allowSet = new Set(
         allowAgents
