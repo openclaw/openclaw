@@ -15,7 +15,7 @@ vi.mock("./gateway-rpc.js", async () => {
   return {
     ...actual,
     callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      callGatewayFromCli(method, opts, params, extra),
+      callGatewayFromCli(method, opts, params, extra as number | undefined),
   };
 });
 

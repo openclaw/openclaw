@@ -180,7 +180,7 @@ describe("browser extension install (fs-mocked)", () => {
       const { Command } = await import("commander");
 
       const program = new Command();
-      const browser = program.command("browser").option("--json", false);
+      const browser = program.command("browser").option("--json", "JSON output", false);
       registerBrowserExtensionCommands(
         browser,
         (cmd) => cmd.parent?.opts?.() as { json?: boolean },

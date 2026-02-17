@@ -39,7 +39,8 @@ describe("cli program (nodes basics)", () => {
 
   it("runs nodes list --connected and filters to connected nodes", async () => {
     const now = Date.now();
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
           pending: [],
@@ -81,7 +82,8 @@ describe("cli program (nodes basics)", () => {
 
   it("runs nodes status --last-connected and filters by age", async () => {
     const now = Date.now();
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return {
           ts: now,
@@ -188,7 +190,8 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes describe and calls node.describe", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return {
           ts: Date.now(),
@@ -254,7 +257,8 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return {
           ts: Date.now(),
