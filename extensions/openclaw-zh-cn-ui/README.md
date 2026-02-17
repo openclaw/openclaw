@@ -4,7 +4,7 @@
 
 ```javascript
 const translations = require("./translations/zh-CN.json");
-console.log(translations["Save"]); // 输出：保存
+console.log(transl["Save"]); // 输出：保存
 ```
 
 ## 继续翻译工作
