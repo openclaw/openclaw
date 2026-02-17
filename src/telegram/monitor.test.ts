@@ -3,6 +3,7 @@ import { monitorTelegramProvider } from "./monitor.js";
 
 type MockCtx = {
   message: {
+    message_id?: number;
     chat: { id: number; type: string; title?: string };
     text?: string;
     caption?: string;
