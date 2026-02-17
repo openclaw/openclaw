@@ -10,11 +10,13 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
+import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import {
   formatOutboundPayloadLog,
   type NormalizedOutboundPayload,
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
+  normalizeReplyPayloadsForDelivery,
 } from "../../infra/outbound/payloads.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -184,6 +186,33 @@ export async function deliverAgentCommandResult(params: {
         (opts.sessionKey
           ? resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg })
           : undefined);
+
+      const mirrorPayloads = normalizeReplyPayloadsForDelivery(deliveryPayloads);
+      const mirrorText = mirrorPayloads
+        .map((payload) => payload.text)
+        .filter(Boolean)
+        .join("\n");
+      const mirrorMediaUrls = mirrorPayloads.flatMap(
+        (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+      );
+
+      const requestedSessionKey =
+        typeof opts.sessionKey === "string" && opts.sessionKey.trim()
+          ? opts.sessionKey.trim().toLowerCase()
+          : undefined;
+
+      const route = await resolveOutboundSessionRoute({
+        cfg,
+        channel: deliveryChannel,
+        agentId: deliveryAgentId ?? resolveSessionAgentId({ config: cfg }),
+        accountId: resolvedAccountId,
+        target: deliveryTarget,
+        threadId: resolvedThreadTarget ?? undefined,
+      }).catch(() => null);
+      const mirrorSessionKey = route?.sessionKey?.trim().toLowerCase();
+      const shouldMirrorToTargetSession =
+        !!mirrorSessionKey && (!requestedSessionKey || mirrorSessionKey !== requestedSessionKey);
+
       await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
@@ -197,6 +226,14 @@ export async function deliverAgentCommandResult(params: {
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
+        mirror: shouldMirrorToTargetSession
+          ? {
+              sessionKey: mirrorSessionKey,
+              agentId: deliveryAgentId ?? resolveSessionAgentId({ config: cfg }),
+              text: mirrorText,
+              mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+            }
+          : undefined,
       });
     }
   }
