@@ -4,10 +4,10 @@
  * Validates that all Cedar policy files are syntactically correct.
  */
 
-import * as cedar from "@cedar-policy/cedar-wasm/nodejs";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import * as cedar from "@cedar-policy/cedar-wasm/nodejs";
 
 const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 
