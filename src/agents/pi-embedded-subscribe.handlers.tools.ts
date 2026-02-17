@@ -382,12 +382,11 @@ export async function handleToolExecutionEnd(
   // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
   // Also skip for messaging tool send actions (e.g., Discord "message send"), which
   // send messages (including media) directly, to prevent duplicate delivery.
-  const isMessagingSendAction = Boolean(pendingTarget);
   if (
     ctx.params.onToolResult &&
     !isToolError &&
     !ctx.shouldEmitToolOutput() &&
-    !isMessagingSendAction
+    !isMessagingSend
   ) {
     const mediaPaths = extractToolResultMediaPaths(result);
     if (mediaPaths.length > 0) {

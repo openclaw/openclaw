@@ -275,6 +275,32 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).not.toContain("file:///img-0.jpg");
   });
 
+  it("does not call onToolResult for messaging send (prevents duplicate media delivery)", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-dup",
+      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-dup",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    // onToolResult should NOT be called because the messaging tool already delivered media.
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
   it("discards pending media URL on tool error", async () => {
     const { ctx } = createTestContext();
 
