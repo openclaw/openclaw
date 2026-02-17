@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
@@ -270,26 +269,10 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  // Sanitize environment variables to prevent credential leakage (OC-09 fix)
-  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {}, {
-    strictMode: false, // Allow all non-blocked variables by default
-  });
-
-  // Log blocked variables for security audit
-  if (envSanitization.blocked.length > 0) {
-    console.warn(
-      "[Security] Blocked environment variables:",
-      envSanitization.blocked.map((b) => b.key).join(", "),
-    );
-  }
-
-  // Log warnings (e.g., suspicious base64 values)
-  if (envSanitization.warnings.length > 0) {
-    console.warn("[Security] Environment variable warnings:", envSanitization.warnings);
-  }
-
-  // Only pass sanitized (allowed) environment variables to Docker
-  for (const [key, value] of Object.entries(envSanitization.allowed)) {
+  for (const [key, value] of Object.entries(params.cfg.env ?? {})) {
+    if (!key.trim()) {
+      continue;
+    }
     args.push("--env", key + "=" + value);
   }
   for (const cap of params.cfg.capDrop) {

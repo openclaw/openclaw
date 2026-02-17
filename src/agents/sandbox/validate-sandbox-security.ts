@@ -7,7 +7,6 @@
 
 import { existsSync, realpathSync } from "node:fs";
 import { posix } from "node:path";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
 // Exported for reuse in security audit collectors.
@@ -183,35 +182,14 @@ export function validateApparmorProfile(profile: string | undefined): void {
   }
 }
 
-/**
- * Validate environment variables - throws if any sensitive credentials are detected
- */
-export function validateEnvVars(env: Record<string, string> | undefined): void {
-  if (!env || Object.keys(env).length === 0) {
-    return;
-  }
-
-  const result = sanitizeEnvVars(env, { strictMode: false });
-
-  if (result.blocked.length > 0) {
-    throw new Error(
-      `Sandbox security: blocked sensitive environment variables: ${result.blocked.map((b) => b.key).join(", ")}. ` +
-        "Passing credentials as environment variables to sandbox containers is not allowed. " +
-        "Use secure credential storage or remove these variables from sandbox configuration.",
-    );
-  }
-}
-
 export function validateSandboxSecurity(cfg: {
   binds?: string[];
   network?: string;
   seccompProfile?: string;
   apparmorProfile?: string;
-  env?: Record<string, string>;
 }): void {
   validateBindMounts(cfg.binds);
   validateNetworkMode(cfg.network);
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);
-  validateEnvVars(cfg.env);
 }
