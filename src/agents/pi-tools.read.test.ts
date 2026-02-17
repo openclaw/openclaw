@@ -3,7 +3,9 @@ import {
   assertRequiredParams,
   CLAUDE_PARAM_GROUPS,
   normalizeToolParams,
+  wrapToolParamNormalization,
 } from "./pi-tools.read.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 
 describe("assertRequiredParams", () => {
   describe("edit param groups", () => {
@@ -126,6 +128,60 @@ describe("assertRequiredParams", () => {
         assertRequiredParams({ path: "a.ts", content: "" }, groups, "write");
       }).toThrow(/Missing required parameter/);
     });
+  });
+});
+
+describe("wrapToolParamNormalization + createEditTool e2e (#19085)", () => {
+  it("empty newText deletes matched text through the full tool chain", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { createEditTool } = await import("@mariozechner/pi-coding-agent");
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-edit-e2e-"));
+    const testFile = path.join(tmpDir, "test.kt");
+    fs.writeFileSync(testFile, "import foo\nimport bar\n");
+
+    try {
+      const base = createEditTool(tmpDir) as unknown as AnyAgentTool;
+      const wrapped = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+
+      await wrapped.execute(
+        "tc-1",
+        { path: testFile, oldText: "import foo\n", newText: "" },
+        new AbortController().signal,
+      );
+
+      expect(fs.readFileSync(testFile, "utf-8")).toBe("import bar\n");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("empty new_string (Claude alias) deletes matched text through the full tool chain", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { createEditTool } = await import("@mariozechner/pi-coding-agent");
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-edit-e2e-"));
+    const testFile = path.join(tmpDir, "test.kt");
+    fs.writeFileSync(testFile, "import foo\nimport bar\n");
+
+    try {
+      const base = createEditTool(tmpDir) as unknown as AnyAgentTool;
+      const wrapped = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+
+      await wrapped.execute(
+        "tc-2",
+        { file_path: testFile, old_string: "import foo\n", new_string: "" },
+        new AbortController().signal,
+      );
+
+      expect(fs.readFileSync(testFile, "utf-8")).toBe("import bar\n");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
