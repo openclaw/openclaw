@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
@@ -37,6 +38,8 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
@@ -72,6 +75,7 @@ import ai.openclaw.android.MainViewModel
 @Composable
 fun RootScreen(viewModel: MainViewModel) {
   var sheet by remember { mutableStateOf<Sheet?>(null) }
+  var showDisconnectDialog by remember { mutableStateOf(false) }
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val safeOverlayInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
   val context = LocalContext.current
@@ -209,7 +213,13 @@ fun RootScreen(viewModel: MainViewModel) {
       gateway = gatewayState,
       voiceEnabled = voiceEnabled,
       activity = activity,
-      onClick = { sheet = Sheet.Settings },
+      onClick = {
+        if (gatewayState == GatewayState.Connected) {
+          showDisconnectDialog = true
+        } else {
+          sheet = Sheet.Settings
+        }
+      },
       modifier = Modifier.windowInsetsPadding(safeOverlayInsets).padding(start = 12.dp, top = 12.dp),
     )
   }
@@ -273,6 +283,30 @@ fun RootScreen(viewModel: MainViewModel) {
         isSpeaking = talkIsSpeaking,
       )
     }
+  }
+
+  if (showDisconnectDialog) {
+    AlertDialog(
+      onDismissRequest = { showDisconnectDialog = false },
+      title = { Text("Gateway") },
+      text = { Text("Disconnect from the gateway?") },
+      confirmButton = {
+        TextButton(onClick = {
+          showDisconnectDialog = false
+          viewModel.disconnect()
+        }) {
+          Text("Disconnect")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = {
+          showDisconnectDialog = false
+          sheet = Sheet.Settings
+        }) {
+          Text("Settings")
+        }
+      },
+    )
   }
 
   val currentSheet = sheet
