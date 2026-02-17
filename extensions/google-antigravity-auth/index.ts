@@ -377,7 +377,7 @@ const antigravityPlugin = {
     api.registerProvider({
       id: "google-antigravity",
       label: "Google Antigravity",
-      docsPath: "/providers/models",
+      docsPath: "/providers/google",
       aliases: ["antigravity"],
       auth: [
         {
