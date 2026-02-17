@@ -1200,18 +1200,19 @@ export async function setMyProfilePhotoTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "setMyProfilePhoto" }),
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
 
   const media = await loadWebMedia(opts.mediaUrl, {
     maxBytes: opts.maxBytes,
     localRoots: opts.mediaLocalRoots,
   });
-  const fileName = media.fileName ?? "avatar.png";
+  const fileName = media.fileName ?? "avatar.jpg";
   const file = new InputFile(media.buffer, fileName);
+  const photo = { type: "static" as const, photo: file };
 
   try {
-    await requestWithDiag(() => api.setMyProfilePhoto(file), "setMyProfilePhoto");
+    await requestWithDiag(() => api.setMyProfilePhoto(photo), "setMyProfilePhoto");
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,
