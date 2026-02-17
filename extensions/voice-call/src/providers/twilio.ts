@@ -62,17 +62,6 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
-  /** Pre-generated greeting audio for instant inbound playback */
-  private cachedGreetingAudio: Buffer | null = null;
-
-  setCachedGreetingAudio(audio: Buffer): void {
-    this.cachedGreetingAudio = audio;
-    console.log(`[voice-call] Cached greeting audio: ${audio.length} bytes`);
-  }
-
-  getCachedGreetingAudio(): Buffer | null {
-    return this.cachedGreetingAudio;
-  }
   /** Per-call tokens for media stream authentication */
   private streamAuthTokens = new Map<string, string>();
 

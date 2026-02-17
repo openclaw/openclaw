@@ -142,39 +142,13 @@ export class VoiceCallWebhookServer {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
-        // Try instant cached greeting for inbound calls (pre-generated at startup)
-        const cachedAudio =
-          this.provider.name === "twilio"
-            ? (this.provider as TwilioProvider).getCachedGreetingAudio()
-            : null;
-        const call = this.manager.getCallByProviderCallId(callId);
-        if (cachedAudio && call?.metadata?.initialMessage && call.direction === "inbound") {
-          console.log(`[voice-call] Playing cached greeting (${cachedAudio.length} bytes)`);
-          delete call.metadata.initialMessage; // prevent re-speaking via fallback
-          const handler = this.mediaStreamHandler!;
-          const CHUNK_SIZE = 160;
-          const CHUNK_DELAY_MS = 20;
-          void (async () => {
-            const { chunkAudio } = await import("./telephony-audio.js");
-            await handler.queueTts(streamSid, async (signal) => {
-              for (const chunk of chunkAudio(cachedAudio, CHUNK_SIZE)) {
-                if (signal.aborted) break;
-                handler.sendAudio(streamSid, chunk);
-                await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
-              }
-              if (!signal.aborted) {
-                handler.sendMark(streamSid, `greeting-${Date.now()}`);
-              }
-            });
-          })().catch((err) => console.warn("[voice-call] Cached greeting playback failed:", err));
-        } else {
-          // Fallback: original path with reduced delay
-          setTimeout(() => {
-            this.manager.speakInitialMessage(callId).catch((err) => {
-              console.warn(`[voice-call] Failed to speak initial message:`, err);
-            });
-          }, 100);
-        }
+        // Speak initial message if one was provided when call was initiated
+        // Use setTimeout to allow stream setup to complete
+        setTimeout(() => {
+          this.manager.speakInitialMessage(callId).catch((err) => {
+            console.warn(`[voice-call] Failed to speak initial message:`, err);
+          });
+        }, 500);
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
