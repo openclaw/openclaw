@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { parseInlineDirectives } from "./directive-handling.js";
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn(),
   compactEmbeddedPiSession: vi.fn(async () => ({
     ok: true,
     compacted: true,
-    result: { tokensBefore: 20, tokensAfter: 10 },
+    result: { summary: "Compacted", firstKeptEntryId: "entry-1", tokensBefore: 20, tokensAfter: 10 },
   })),
   isEmbeddedPiRunActive: vi.fn(() => false),
   waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
@@ -63,7 +64,6 @@ describe("handleCompactCommand", () => {
   const makeParams = (): HandleCommandsParams =>
     ({
       ctx: { CommandBody: "/compact" } as HandleCommandsParams["ctx"],
-      commandSource: "/compact",
       cfg: {} as OpenClawConfig,
       command: {
         commandBodyNormalized: "/compact",
@@ -79,15 +79,16 @@ describe("handleCompactCommand", () => {
         surface: "direct",
       },
       agentId: "agent",
-      directives: { hasStatusDirective: false },
+      directives: parseInlineDirectives("/compact"),
       elevated: { enabled: false, allowed: false, failures: [] },
       sessionEntry: {
         sessionId: "sess",
+        updatedAt: Date.now(),
         sessionFile: "/tmp/sess",
-        groupId: null,
-        groupChannel: null,
-        space: null,
-        spawnedBy: null,
+        groupId: undefined,
+        groupChannel: undefined,
+        space: undefined,
+        spawnedBy: undefined,
         totalTokens: 0,
         inputTokens: 0,
         outputTokens: 0,
@@ -97,7 +98,7 @@ describe("handleCompactCommand", () => {
       },
       sessionStore: {},
       sessionKey: "sessKey",
-      sessionScope: "session",
+      sessionScope: "per-sender",
       workspaceDir: "/tmp/ws",
       storePath: "/tmp/store",
       defaultGroupActivation: () => "always",
@@ -154,7 +155,7 @@ describe("handleCompactCommand", () => {
       .mockResolvedValueOnce({
         ok: true,
         compacted: true,
-        result: { tokensBefore: 20, tokensAfter: 10 },
+        result: { summary: "Compacted", firstKeptEntryId: "entry-1", tokensBefore: 20, tokensAfter: 10 },
       });
 
     await handleCompactCommand(makeParams(), true);
@@ -178,7 +179,7 @@ describe("handleCompactCommand", () => {
         result: {
           ok: true,
           compacted: true,
-          result: { tokensBefore: 20, tokensAfter: 10 },
+          result: { summary: "Compacted", firstKeptEntryId: "entry-1", tokensBefore: 20, tokensAfter: 10 },
         },
         provider: "fallback-provider",
         model: "fallback-model",

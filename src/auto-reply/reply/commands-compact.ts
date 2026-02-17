@@ -112,7 +112,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       defaultLevel: "off" as const,
     },
     customInstructions,
-    trigger: "manual",
+    trigger: "manual" as const,
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   };
