@@ -198,4 +198,64 @@ describe("browser config", () => {
     });
     expect(resolved.ssrfPolicy).toEqual({});
   });
+
+  // Tests for headless/noSandbox profile preference (issue #14895)
+  describe("headless/noSandbox profile preference", () => {
+    it("defaults to chrome profile when headless=false and noSandbox=false", () => {
+      const resolved = resolveBrowserConfig({
+        headless: false,
+        noSandbox: false,
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("prefers openclaw profile when headless=true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("prefers openclaw profile when noSandbox=true", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("prefers openclaw profile when both headless and noSandbox are true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("explicit defaultProfile config overrides headless preference", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("explicit defaultProfile config overrides noSandbox preference", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("allows custom profile as default even in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "custom",
+        profiles: {
+          custom: { cdpPort: 19999, color: "#00FF00" },
+        },
+      });
+      expect(resolved.defaultProfile).toBe("custom");
+    });
+  });
 });
