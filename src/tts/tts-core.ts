@@ -306,14 +306,9 @@ export function parseTtsDirectives(
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
             break;
-          case "instructions":
-          case "openai_instructions":
-          case "openaiinstructions":
-            if (!policy.allowInstructions) {
-              break;
-            }
-            overrides.openai = { ...overrides.openai, instructions: rawValue };
-            break;
+          // NOTE: instructions directive intentionally not supported here because
+          // the parser splits on whitespace, which would truncate multi-word instructions.
+          // Use config `tts.openai.instructions` instead for reliable behavior.
           default:
             break;
         }
@@ -617,8 +612,9 @@ export async function openaiTTS(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  // instructions parameter only supported by gpt-4o-mini-tts model
-  const supportsInstructions = model === "gpt-4o-mini-tts";
+  // instructions parameter supported by gpt-4o-mini-tts model
+  // Also allow for custom endpoints (they may support instruction-compatible models)
+  const supportsInstructions = model === "gpt-4o-mini-tts" || isCustomOpenAIEndpoint();
   const body: Record<string, unknown> = {
     model,
     input: text,
