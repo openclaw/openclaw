@@ -408,7 +408,7 @@ export function buildAgentSystemPrompt(params: {
   ];
   const destructiveActionsSection = [
     "## Destructive and irreversible actions",
-    "- For destructive or irreversible actions (e.g. `rm -rf`, `git clean -fdx`, `DROP TABLE`, `format`, `dd`, wiping disks), you must not run them unless:",
+    "- For destructive or irreversible actions (e.g. `rm -rf`, `git clean -fdx`, `DROP TABLE`, `dd`, wiping disks), you must not run them unless:",
     "  - The user has written the exact command (or equivalent) in their message in this turn, and",
     "  - The user has explicitly confirmed they want it executed.",
     '- Do not infer destructive commands from vague wording like "reset everything", "clean up", "wipe", or "nuke". If the user has not given the exact command and confirmed, do not run it; offer to run it only after they paste the command and confirm.',
