@@ -20,7 +20,7 @@ const { resolveDiscordMessageChannelId, resolveForwardedMediaList } =
   await import("./message-utils.js");
 
 function asMessage(payload: Record<string, unknown>): Message {
-  return payload as Message;
+  return payload as unknown as Message;
 }
 
 describe("resolveDiscordMessageChannelId", () => {

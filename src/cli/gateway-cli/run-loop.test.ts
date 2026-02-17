@@ -9,7 +9,7 @@ const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
-const waitForActiveTasks = vi.fn(async () => ({ drained: true }));
+const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
@@ -103,7 +103,7 @@ describe("runGatewayLoop", () => {
       start,
       runtime: {
         exit: vi.fn(),
-      } as { exit: (code: number) => never },
+      } as unknown as { exit: (code: number) => never },
     });
 
     try {
