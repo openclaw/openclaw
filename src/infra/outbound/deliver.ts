@@ -162,8 +162,6 @@ function createChannelOutboundContextBase(
   };
 }
 
-const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
-
 type DeliverOutboundPayloadsCoreParams = {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
@@ -243,13 +241,12 @@ export async function deliverOutboundPayloads(
     return results;
   } catch (err) {
     if (queueId) {
-      if (isAbortError(err)) {
-        await ackDelivery(queueId).catch(() => {});
-      } else {
-        await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
-          () => {},
-        );
-      }
+      // AbortErrors (e.g., network timeouts) should NOT ack the delivery.
+      // Treat them as failures so the message stays in the queue for retry.
+      // See: https://github.com/openclaw/openclaw/issues/18574
+      await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
+        () => {},
+      );
     }
     throw err;
   }

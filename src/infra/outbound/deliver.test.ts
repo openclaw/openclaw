@@ -452,7 +452,11 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("acks the queue entry when delivery is aborted", async () => {
+  it("fails the queue entry when delivery is aborted (for retry on restart)", async () => {
+    // AbortErrors can occur during network timeouts mid-send. We must NOT ack
+    // the delivery as successful — the message may never have reached the user.
+    // Instead, fail so it stays in the queue for retry on gateway restart.
+    // See: https://github.com/openclaw/openclaw/issues/18574
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const abortController = new AbortController();
     abortController.abort();
@@ -469,8 +473,8 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("Operation aborted");
 
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith("mock-queue-id", "Operation aborted");
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
