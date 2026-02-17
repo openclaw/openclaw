@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { toClientToolDefinitions } from "./pi-tool-definition-adapter.js";
+import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 
 vi.mock("../plugins/hook-runner-global.js");
@@ -14,6 +15,7 @@ describe("before_tool_call hook integration", () => {
   };
 
   beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
@@ -108,6 +110,45 @@ describe("before_tool_call hook integration", () => {
   });
 });
 
+describe("before_tool_call hook deduplication (#15502)", () => {
+  let hookRunner: {
+    hasHooks: ReturnType<typeof vi.fn>;
+    runBeforeToolCall: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
+    hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforeToolCall: vi.fn(async () => undefined),
+    };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+  });
+
+  it("fires hook exactly once when tool goes through wrap + toToolDefinitions", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const baseTool = { name: "web_fetch", execute, description: "fetch", parameters: {} } as any;
+
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const [def] = toToolDefinitions([wrapped]);
+
+    await def.execute(
+      "call-dedup",
+      { url: "https://example.com" },
+      undefined,
+      undefined,
+      undefined,
+    );
+
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("before_tool_call hook integration for client tools", () => {
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
@@ -115,6 +156,7 @@ describe("before_tool_call hook integration for client tools", () => {
   };
 
   beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
     hookRunner = {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),

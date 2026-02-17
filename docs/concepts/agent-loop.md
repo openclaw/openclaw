@@ -81,7 +81,9 @@ See [Hooks](/automation/hooks) for setup and examples.
 
 These run inside the agent loop or gateway pipeline:
 
-- **`before_agent_start`**: inject context or override system prompt before the run starts.
+- **`before_model_resolve`**: runs pre-session (no `messages`) to deterministically override provider/model before model resolution.
+- **`before_prompt_build`**: runs after session load (with `messages`) to inject `prependContext`/`systemPrompt` before prompt submission.
+- **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.

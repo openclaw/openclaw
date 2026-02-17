@@ -132,4 +132,132 @@ describe("nodes run", () => {
       invokeTimeoutMs: 45_000,
     });
   });
+
+  it("requests approval and retries with allow-once decision", async () => {
+    let invokeCalls = 0;
+    let approvalId: string | null = null;
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
+      }
+      if (method === "node.invoke") {
+        invokeCalls += 1;
+        if (invokeCalls === 1) {
+          throw new Error("SYSTEM_RUN_DENIED: approval required");
+        }
+        expect(params).toMatchObject({
+          nodeId: "mac-1",
+          command: "system.run",
+          params: {
+            command: ["echo", "hi"],
+            runId: approvalId,
+            approved: true,
+            approvalDecision: "allow-once",
+          },
+        });
+        return { payload: { stdout: "", stderr: "", exitCode: 0, success: true } };
+      }
+      if (method === "exec.approval.request") {
+        expect(params).toMatchObject({
+          id: expect.any(String),
+          command: "echo hi",
+          host: "node",
+          timeoutMs: 120_000,
+        });
+        approvalId =
+          typeof (params as { id?: unknown } | undefined)?.id === "string"
+            ? ((params as { id: string }).id ?? null)
+            : null;
+        return { decision: "allow-once" };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
+    if (!tool) {
+      throw new Error("missing nodes tool");
+    }
+
+    await tool.execute("call1", {
+      action: "run",
+      node: "mac-1",
+      command: ["echo", "hi"],
+    });
+    expect(invokeCalls).toBe(2);
+  });
+
+  it("fails with user denied when approval decision is deny", async () => {
+    callGateway.mockImplementation(async ({ method }) => {
+      if (method === "node.list") {
+        return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
+      }
+      if (method === "node.invoke") {
+        throw new Error("SYSTEM_RUN_DENIED: approval required");
+      }
+      if (method === "exec.approval.request") {
+        return { decision: "deny" };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
+    if (!tool) {
+      throw new Error("missing nodes tool");
+    }
+
+    await expect(
+      tool.execute("call1", {
+        action: "run",
+        node: "mac-1",
+        command: ["echo", "hi"],
+      }),
+    ).rejects.toThrow("exec denied: user denied");
+  });
+
+  it("fails closed for timeout and invalid approval decisions", async () => {
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
+    if (!tool) {
+      throw new Error("missing nodes tool");
+    }
+
+    callGateway.mockImplementation(async ({ method }) => {
+      if (method === "node.list") {
+        return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
+      }
+      if (method === "node.invoke") {
+        throw new Error("SYSTEM_RUN_DENIED: approval required");
+      }
+      if (method === "exec.approval.request") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+    await expect(
+      tool.execute("call1", {
+        action: "run",
+        node: "mac-1",
+        command: ["echo", "hi"],
+      }),
+    ).rejects.toThrow("exec denied: approval timed out");
+
+    callGateway.mockImplementation(async ({ method }) => {
+      if (method === "node.list") {
+        return { nodes: [{ nodeId: "mac-1", commands: ["system.run"] }] };
+      }
+      if (method === "node.invoke") {
+        throw new Error("SYSTEM_RUN_DENIED: approval required");
+      }
+      if (method === "exec.approval.request") {
+        return { decision: "allow-never" };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+    await expect(
+      tool.execute("call1", {
+        action: "run",
+        node: "mac-1",
+        command: ["echo", "hi"],
+      }),
+    ).rejects.toThrow("exec denied: invalid approval decision");
+  });
 });

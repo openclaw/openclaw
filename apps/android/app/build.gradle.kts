@@ -21,8 +21,8 @@ android {
     applicationId = "ai.openclaw.android"
     minSdk = 31
     targetSdk = 36
-    versionCode = 202602130
-    versionName = "2026.2.13"
+    versionCode = 202602160
+    versionName = "2026.2.16"
     ndk {
       // Support all major ABIs — native libs are tiny (~47 KB per ABI)
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -63,7 +63,11 @@ android {
   }
 
   lint {
-    disable += setOf("IconLauncherShape")
+    disable += setOf(
+      "GradleDependency",
+      "IconLauncherShape",
+      "NewerVersionAvailable",
+    )
     warningsAsErrors = true
   }
 
@@ -121,6 +125,7 @@ dependencies {
   implementation("androidx.security:security-crypto:1.1.0")
   implementation("androidx.exifinterface:exifinterface:1.4.2")
   implementation("com.squareup.okhttp3:okhttp:5.3.2")
+  implementation("org.bouncycastle:bcprov-jdk18on:1.83")
 
   // CameraX (for node.invoke camera.* parity)
   implementation("androidx.camera:camera-core:1.5.2")

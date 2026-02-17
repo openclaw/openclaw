@@ -1,29 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import { __testing } from "./web-search.js";
-
-function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
-  const prev: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(env)) {
-    prev[key] = process.env[key];
-    if (value === undefined) {
-      // Make tests hermetic even on machines with real keys set.
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    for (const [key, value] of Object.entries(prev)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
 
 const {
   inferPerplexityBaseUrlFromApiKey,
@@ -31,6 +8,7 @@ const {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   normalizeFreshness,
+  freshnessToPerplexityRecency,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
@@ -125,6 +103,24 @@ describe("web_search freshness normalization", () => {
     expect(normalizeFreshness("2024-13-01to2024-01-31")).toBeUndefined();
     expect(normalizeFreshness("2024-02-30to2024-03-01")).toBeUndefined();
     expect(normalizeFreshness("2024-03-10to2024-03-01")).toBeUndefined();
+  });
+});
+
+describe("freshnessToPerplexityRecency", () => {
+  it("maps Brave shortcuts to Perplexity recency values", () => {
+    expect(freshnessToPerplexityRecency("pd")).toBe("day");
+    expect(freshnessToPerplexityRecency("pw")).toBe("week");
+    expect(freshnessToPerplexityRecency("pm")).toBe("month");
+    expect(freshnessToPerplexityRecency("py")).toBe("year");
+  });
+
+  it("returns undefined for date ranges (not supported by Perplexity)", () => {
+    expect(freshnessToPerplexityRecency("2024-01-01to2024-01-31")).toBeUndefined();
+  });
+
+  it("returns undefined for undefined/empty input", () => {
+    expect(freshnessToPerplexityRecency(undefined)).toBeUndefined();
+    expect(freshnessToPerplexityRecency("")).toBeUndefined();
   });
 });
 

@@ -1,14 +1,14 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { DiscordConfig } from "../../config/types.js";
-import type {
-  GroupToolPolicyBySenderConfig,
-  GroupToolPolicyConfig,
-} from "../../config/types.tools.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
   resolveToolsBySender,
 } from "../../config/group-policy.js";
+import type { DiscordConfig } from "../../config/types.js";
+import type {
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+} from "../../config/types.tools.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 
 type GroupMentionParams = {
@@ -120,6 +120,24 @@ function resolveDiscordGuildEntry(guilds: DiscordConfig["guilds"], groupSpace?: 
   return guilds["*"] ?? null;
 }
 
+function resolveDiscordChannelEntry<TEntry>(
+  channelEntries: Record<string, TEntry> | undefined,
+  params: { groupId?: string | null; groupChannel?: string | null },
+): TEntry | undefined {
+  if (!channelEntries || Object.keys(channelEntries).length === 0) {
+    return undefined;
+  }
+  const groupChannel = params.groupChannel;
+  const channelSlug = normalizeDiscordSlug(groupChannel);
+  return (
+    (params.groupId ? channelEntries[params.groupId] : undefined) ??
+    (channelSlug
+      ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
+      : undefined) ??
+    (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined)
+  );
+}
+
 export function resolveTelegramGroupRequireMention(
   params: GroupMentionParams,
 ): boolean | undefined {
@@ -165,14 +183,7 @@ export function resolveDiscordGroupRequireMention(params: GroupMentionParams): b
   );
   const channelEntries = guildEntry?.channels;
   if (channelEntries && Object.keys(channelEntries).length > 0) {
-    const groupChannel = params.groupChannel;
-    const channelSlug = normalizeDiscordSlug(groupChannel);
-    const entry =
-      (params.groupId ? channelEntries[params.groupId] : undefined) ??
-      (channelSlug
-        ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
-        : undefined) ??
-      (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined);
+    const entry = resolveDiscordChannelEntry(channelEntries, params);
     if (entry && typeof entry.requireMention === "boolean") {
       return entry.requireMention;
     }
@@ -306,14 +317,7 @@ export function resolveDiscordGroupToolPolicy(
   );
   const channelEntries = guildEntry?.channels;
   if (channelEntries && Object.keys(channelEntries).length > 0) {
-    const groupChannel = params.groupChannel;
-    const channelSlug = normalizeDiscordSlug(groupChannel);
-    const entry =
-      (params.groupId ? channelEntries[params.groupId] : undefined) ??
-      (channelSlug
-        ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
-        : undefined) ??
-      (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined);
+    const entry = resolveDiscordChannelEntry(channelEntries, params);
     const senderPolicy = resolveToolsBySender({
       toolsBySender: entry?.toolsBySender,
       senderId: params.senderId,

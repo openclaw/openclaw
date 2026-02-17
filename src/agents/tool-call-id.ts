@@ -1,9 +1,15 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { createHash } from "node:crypto";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export type ToolCallIdMode = "strict" | "strict9";
 
 const STRICT9_LEN = 9;
+const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+export type ToolCallLike = {
+  id: string;
+  name?: string;
+};
 
 /**
  * Sanitize a tool call ID to be compatible with various providers.
@@ -33,6 +39,47 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"):
   // Some providers require strictly alphanumeric tool call IDs.
   const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
   return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
+}
+
+export function extractToolCallsFromAssistant(
+  msg: Extract<AgentMessage, { role: "assistant" }>,
+): ToolCallLike[] {
+  const content = msg.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const toolCalls: ToolCallLike[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (typeof rec.id !== "string" || !rec.id) {
+      continue;
+    }
+    if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
+      toolCalls.push({
+        id: rec.id,
+        name: typeof rec.name === "string" ? rec.name : undefined,
+      });
+    }
+  }
+  return toolCalls;
+}
+
+export function extractToolResultId(
+  msg: Extract<AgentMessage, { role: "toolResult" }>,
+): string | null {
+  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId === "string" && toolCallId) {
+    return toolCallId;
+  }
+  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
+  if (typeof toolUseId === "string" && toolUseId) {
+    return toolUseId;
+  }
+  return null;
 }
 
 export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {

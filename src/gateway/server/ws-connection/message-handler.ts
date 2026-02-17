@@ -1,10 +1,6 @@
 import type { IncomingMessage } from "node:http";
-import type { WebSocket } from "ws";
 import os from "node:os";
-import type { createSubsystemLogger } from "../../../logging/subsystem.js";
-import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
-import type { GatewayWsClient } from "../ws-types.js";
+import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -24,15 +20,18 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skil
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
+import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
 } from "../../auth-rate-limit.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
 import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
+import { resolveHostName } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
@@ -48,6 +47,7 @@ import {
 } from "../../protocol/index.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -58,86 +58,12 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
+import type { GatewayWsClient } from "../ws-types.js";
+import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
-
-function resolveHostName(hostHeader?: string): string {
-  const host = (hostHeader ?? "").trim().toLowerCase();
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
-}
-
-type AuthProvidedKind = "token" | "password" | "none";
-
-function formatGatewayAuthFailureMessage(params: {
-  authMode: ResolvedGatewayAuth["mode"];
-  authProvided: AuthProvidedKind;
-  reason?: string;
-  client?: { id?: string | null; mode?: string | null };
-}): string {
-  const { authMode, authProvided, reason, client } = params;
-  const isCli = isGatewayCliClient(client);
-  const isControlUi = client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
-  const isWebchat = isWebchatClient(client);
-  const uiHint = "open the dashboard URL and paste the token in Control UI settings";
-  const tokenHint = isCli
-    ? "set gateway.remote.token to match gateway.auth.token"
-    : isControlUi || isWebchat
-      ? uiHint
-      : "provide gateway auth token";
-  const passwordHint = isCli
-    ? "set gateway.remote.password to match gateway.auth.password"
-    : isControlUi || isWebchat
-      ? "enter the password in Control UI settings"
-      : "provide gateway auth password";
-  switch (reason) {
-    case "token_missing":
-      return `unauthorized: gateway token missing (${tokenHint})`;
-    case "token_mismatch":
-      return `unauthorized: gateway token mismatch (${tokenHint})`;
-    case "token_missing_config":
-      return "unauthorized: gateway token not configured on gateway (set gateway.auth.token)";
-    case "password_missing":
-      return `unauthorized: gateway password missing (${passwordHint})`;
-    case "password_mismatch":
-      return `unauthorized: gateway password mismatch (${passwordHint})`;
-    case "password_missing_config":
-      return "unauthorized: gateway password not configured on gateway (set gateway.auth.password)";
-    case "tailscale_user_missing":
-      return "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
-    case "tailscale_proxy_missing":
-      return "unauthorized: tailscale proxy headers missing (use Tailscale Serve or gateway token/password)";
-    case "tailscale_whois_failed":
-      return "unauthorized: tailscale identity check failed (use Tailscale Serve auth or gateway token/password)";
-    case "tailscale_user_mismatch":
-      return "unauthorized: tailscale identity mismatch (use Tailscale Serve auth or gateway token/password)";
-    case "rate_limited":
-      return "unauthorized: too many failed authentication attempts (retry later)";
-    case "device_token_mismatch":
-      return "unauthorized: device token mismatch (rotate/reissue device token)";
-    default:
-      break;
-  }
-
-  if (authMode === "token" && authProvided === "none") {
-    return `unauthorized: gateway token missing (${tokenHint})`;
-  }
-  if (authMode === "password" && authProvided === "none") {
-    return `unauthorized: gateway password missing (${passwordHint})`;
-  }
-  return "unauthorized";
-}
 
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
@@ -369,7 +295,9 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
         // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
-        const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
+        // Note: If the client does not present a device identity, we can't bind scopes to a paired
+        // device/token, so we will clear scopes after auth to avoid self-declared permissions.
+        let scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
         connectParams.role = role;
         connectParams.scopes = scopes;
 
@@ -499,6 +427,10 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         if (!device) {
+          if (scopes.length > 0 && !allowControlUiBypass) {
+            scopes = [];
+            connectParams.scopes = scopes;
+          }
           const canSkipDevice = sharedAuthOk;
 
           if (isControlUi && !allowControlUiBypass) {
@@ -626,6 +558,21 @@ export function attachGatewayWsMessageHandler(params: {
             nonce: providedNonce || undefined,
             version: providedNonce ? "v2" : "v1",
           });
+          const rejectDeviceSignatureInvalid = () => {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-signature",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
+            });
+            close(1008, "device signature invalid");
+          };
           const signatureOk = verifyDeviceSignature(device.publicKey, payload, device.signature);
           const allowLegacy = !nonceRequired && !providedNonce;
           if (!signatureOk && allowLegacy) {
@@ -642,35 +589,11 @@ export function attachGatewayWsMessageHandler(params: {
             if (verifyDeviceSignature(device.publicKey, legacyPayload, device.signature)) {
               // accepted legacy loopback signature
             } else {
-              setHandshakeState("failed");
-              setCloseCause("device-auth-invalid", {
-                reason: "device-signature",
-                client: connectParams.client.id,
-                deviceId: device.id,
-              });
-              send({
-                type: "res",
-                id: frame.id,
-                ok: false,
-                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-              });
-              close(1008, "device signature invalid");
+              rejectDeviceSignatureInvalid();
               return;
             }
           } else if (!signatureOk) {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-signature",
-              client: connectParams.client.id,
-              deviceId: device.id,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
-            });
-            close(1008, "device signature invalid");
+            rejectDeviceSignatureInvalid();
             return;
           }
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);

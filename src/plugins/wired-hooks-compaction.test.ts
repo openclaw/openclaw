@@ -33,7 +33,7 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionStart } =
-      await import("../agents/pi-embedded-subscribe.handlers.lifecycle.js");
+      await import("../agents/pi-embedded-subscribe.handlers.compaction.js");
 
     const ctx = {
       params: { runId: "r1", session: { messages: [1, 2, 3] } },
@@ -45,9 +45,7 @@ describe("compaction hook wiring", () => {
 
     handleAutoCompactionStart(ctx as never);
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
-    });
+    expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
 
     const [event] = hookMocks.runner.runBeforeCompaction.mock.calls[0];
     expect(event.messageCount).toBe(3);
@@ -57,7 +55,7 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionEnd } =
-      await import("../agents/pi-embedded-subscribe.handlers.lifecycle.js");
+      await import("../agents/pi-embedded-subscribe.handlers.compaction.js");
 
     const ctx = {
       params: { runId: "r2", session: { messages: [1, 2] } },
@@ -75,9 +73,7 @@ describe("compaction hook wiring", () => {
       } as never,
     );
 
-    await vi.waitFor(() => {
-      expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
-    });
+    expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
 
     const [event] = hookMocks.runner.runAfterCompaction.mock.calls[0];
     expect(event.messageCount).toBe(2);
@@ -88,7 +84,7 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const { handleAutoCompactionEnd } =
-      await import("../agents/pi-embedded-subscribe.handlers.lifecycle.js");
+      await import("../agents/pi-embedded-subscribe.handlers.compaction.js");
 
     const ctx = {
       params: { runId: "r3", session: { messages: [] } },
@@ -107,7 +103,6 @@ describe("compaction hook wiring", () => {
       } as never,
     );
 
-    await new Promise((r) => setTimeout(r, 50));
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
   });
 });

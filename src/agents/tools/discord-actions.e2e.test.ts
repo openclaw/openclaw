@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DiscordActionConfig } from "../../config/config.js";
+import type { DiscordActionConfig, OpenClawConfig } from "../../config/config.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
 import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
+import { handleDiscordAction } from "./discord-actions.js";
 
 const createChannelDiscord = vi.fn(async () => ({
   id: "new-channel",
@@ -32,6 +33,7 @@ const removeOwnReactionsDiscord = vi.fn(async () => ({ removed: ["👍"] }));
 const removeReactionDiscord = vi.fn(async () => ({}));
 const searchMessagesDiscord = vi.fn(async () => ({}));
 const sendMessageDiscord = vi.fn(async () => ({}));
+const sendVoiceMessageDiscord = vi.fn(async () => ({}));
 const sendPollDiscord = vi.fn(async () => ({}));
 const sendStickerDiscord = vi.fn(async () => ({}));
 const setChannelPermissionDiscord = vi.fn(async () => ({ ok: true }));
@@ -41,34 +43,35 @@ const kickMemberDiscord = vi.fn(async () => ({}));
 const banMemberDiscord = vi.fn(async () => ({}));
 
 vi.mock("../../discord/send.js", () => ({
-  banMemberDiscord: (...args: unknown[]) => banMemberDiscord(...args),
-  createChannelDiscord: (...args: unknown[]) => createChannelDiscord(...args),
-  createThreadDiscord: (...args: unknown[]) => createThreadDiscord(...args),
-  deleteChannelDiscord: (...args: unknown[]) => deleteChannelDiscord(...args),
-  deleteMessageDiscord: (...args: unknown[]) => deleteMessageDiscord(...args),
-  editChannelDiscord: (...args: unknown[]) => editChannelDiscord(...args),
-  editMessageDiscord: (...args: unknown[]) => editMessageDiscord(...args),
-  fetchMessageDiscord: (...args: unknown[]) => fetchMessageDiscord(...args),
-  fetchChannelPermissionsDiscord: (...args: unknown[]) => fetchChannelPermissionsDiscord(...args),
-  fetchReactionsDiscord: (...args: unknown[]) => fetchReactionsDiscord(...args),
-  kickMemberDiscord: (...args: unknown[]) => kickMemberDiscord(...args),
-  listGuildChannelsDiscord: (...args: unknown[]) => listGuildChannelsDiscord(...args),
-  listPinsDiscord: (...args: unknown[]) => listPinsDiscord(...args),
-  listThreadsDiscord: (...args: unknown[]) => listThreadsDiscord(...args),
-  moveChannelDiscord: (...args: unknown[]) => moveChannelDiscord(...args),
-  pinMessageDiscord: (...args: unknown[]) => pinMessageDiscord(...args),
-  reactMessageDiscord: (...args: unknown[]) => reactMessageDiscord(...args),
-  readMessagesDiscord: (...args: unknown[]) => readMessagesDiscord(...args),
-  removeChannelPermissionDiscord: (...args: unknown[]) => removeChannelPermissionDiscord(...args),
-  removeOwnReactionsDiscord: (...args: unknown[]) => removeOwnReactionsDiscord(...args),
-  removeReactionDiscord: (...args: unknown[]) => removeReactionDiscord(...args),
-  searchMessagesDiscord: (...args: unknown[]) => searchMessagesDiscord(...args),
-  sendMessageDiscord: (...args: unknown[]) => sendMessageDiscord(...args),
-  sendPollDiscord: (...args: unknown[]) => sendPollDiscord(...args),
-  sendStickerDiscord: (...args: unknown[]) => sendStickerDiscord(...args),
-  setChannelPermissionDiscord: (...args: unknown[]) => setChannelPermissionDiscord(...args),
-  timeoutMemberDiscord: (...args: unknown[]) => timeoutMemberDiscord(...args),
-  unpinMessageDiscord: (...args: unknown[]) => unpinMessageDiscord(...args),
+  banMemberDiscord,
+  createChannelDiscord,
+  createThreadDiscord,
+  deleteChannelDiscord,
+  deleteMessageDiscord,
+  editChannelDiscord,
+  editMessageDiscord,
+  fetchMessageDiscord,
+  fetchChannelPermissionsDiscord,
+  fetchReactionsDiscord,
+  kickMemberDiscord,
+  listGuildChannelsDiscord,
+  listPinsDiscord,
+  listThreadsDiscord,
+  moveChannelDiscord,
+  pinMessageDiscord,
+  reactMessageDiscord,
+  readMessagesDiscord,
+  removeChannelPermissionDiscord,
+  removeOwnReactionsDiscord,
+  removeReactionDiscord,
+  searchMessagesDiscord,
+  sendMessageDiscord,
+  sendVoiceMessageDiscord,
+  sendPollDiscord,
+  sendStickerDiscord,
+  setChannelPermissionDiscord,
+  timeoutMemberDiscord,
+  unpinMessageDiscord,
 }));
 
 const enableAllActions = () => true;
@@ -162,7 +165,9 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {
-    readMessagesDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T10:00:00.000Z" }]);
+    readMessagesDiscord.mockResolvedValueOnce([
+      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
+    ] as never);
 
     const result = await handleDiscordMessagingAction(
       "readMessages",
@@ -233,6 +238,43 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.results?.messages?.[0]?.[0]?.timestampUtc).toBe(
       new Date(expectedMs).toISOString(),
     );
+  });
+
+  it("sends voice messages from a local file path", async () => {
+    sendVoiceMessageDiscord.mockClear();
+    sendMessageDiscord.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        path: "/tmp/voice.mp3",
+        asVoice: true,
+        silent: true,
+      },
+      enableAllActions,
+    );
+
+    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
+      replyTo: undefined,
+      silent: true,
+    });
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("rejects voice messages that include content", async () => {
+    await expect(
+      handleDiscordMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          mediaUrl: "/tmp/voice.mp3",
+          asVoice: true,
+          content: "hello",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow(/Voice messages cannot include text content/);
   });
 
   it("forwards optional thread content", async () => {
@@ -553,6 +595,114 @@ describe("handleDiscordModerationAction", () => {
         userId: "U1",
         durationMinutes: 5,
       }),
+      { accountId: "ops" },
+    );
+  });
+});
+
+describe("handleDiscordAction per-account gating", () => {
+  it("allows moderation when account config enables it", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
+      cfg,
+    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", userId: "U1" }),
+      { accountId: "ops" },
+    );
+  });
+
+  it("blocks moderation when account omits it", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            chat: { token: "tok-chat" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleDiscordAction(
+        { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "chat" },
+        cfg,
+      ),
+    ).rejects.toThrow(/Discord moderation is disabled/);
+  });
+
+  it("uses account-merged config, not top-level config", async () => {
+    // Top-level has no moderation, but the account does
+    const cfg = {
+      channels: {
+        discord: {
+          token: "tok-base",
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "kick", guildId: "G1", userId: "U1", accountId: "ops" },
+      cfg,
+    );
+    expect(kickMemberDiscord).toHaveBeenCalled();
+  });
+
+  it("inherits top-level channel gate when account overrides moderation only", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: false },
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleDiscordAction(
+        { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+        cfg,
+      ),
+    ).rejects.toThrow(/channel management is disabled/i);
+  });
+
+  it("allows account to explicitly re-enable top-level disabled channel gate", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: false },
+          accounts: {
+            ops: {
+              token: "tok-ops",
+              actions: { moderation: true, channels: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+      cfg,
+    );
+
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", name: "alerts" }),
       { accountId: "ops" },
     );
   });

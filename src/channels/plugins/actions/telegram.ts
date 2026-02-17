@@ -1,14 +1,18 @@
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
-  createActionGate,
   readNumberParam,
   readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
-import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
+import type { TelegramActionConfig } from "../../../config/types.telegram.js";
+import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
+import {
+  createTelegramActionGate,
+  listEnabledTelegramAccounts,
+} from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
 
@@ -45,13 +49,24 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return [];
     }
-    const gate = createActionGate(cfg.channels?.telegram?.actions);
+    // Union of all accounts' action gates (any account enabling an action makes it available)
+    const gates = accounts.map((account) =>
+      createTelegramActionGate({ cfg, accountId: account.accountId }),
+    );
+    const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
+      gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
+    if (gate("poll")) {
+      actions.add("poll");
+    }
     if (gate("reactions")) {
       actions.add("react");
     }
     if (gate("deleteMessage")) {
       actions.add("delete");
+    }
+    if (gate("polls")) {
+      actions.add("poll");
     }
     if (gate("editMessage")) {
       actions.add("edit");
@@ -74,16 +89,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     );
   },
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
+    return extractToolSend(args, "sendMessage");
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
@@ -114,6 +120,40 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           messageId,
           emoji,
           remove,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
+        integer: true,
+      });
+      const durationHours = readNumberParam(params, "pollDurationHours", {
+        integer: true,
+      });
+      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
+      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
+      return await handleTelegramAction(
+        {
+          action: "poll",
+          to,
+          question,
+          options,
+          allowMultiselect,
+          durationSeconds: durationSeconds ?? undefined,
+          durationHours: durationHours ?? undefined,
+          replyToMessageId: replyToMessageId ?? undefined,
+          messageThreadId: messageThreadId ?? undefined,
+          silent,
+          isAnonymous,
           accountId: accountId ?? undefined,
         },
         cfg,

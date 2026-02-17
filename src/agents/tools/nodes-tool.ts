@@ -1,7 +1,6 @@
+import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -17,12 +16,13 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
@@ -109,11 +109,7 @@ export function createNodesTool(options?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const gatewayOpts: GatewayCallOptions = {
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
-      };
+      const gatewayOpts = readGatewayCallOptions(params);
 
       try {
         switch (action) {
@@ -436,17 +432,77 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+            const runParams = {
+              command,
+              cwd,
+              env,
+              timeoutMs: commandTimeoutMs,
+              needsScreenRecording,
+              agentId,
+              sessionKey,
+            };
+
+            // First attempt without approval flags.
+            try {
+              const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
+                nodeId,
+                command: "system.run",
+                params: runParams,
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
+              });
+              return jsonResult(raw?.payload ?? {});
+            } catch (firstErr) {
+              const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+              if (!msg.includes("SYSTEM_RUN_DENIED: approval required")) {
+                throw firstErr;
+              }
+            }
+
+            // Node requires approval – create a pending approval request on
+            // the gateway and wait for the user to approve/deny via the UI.
+            const APPROVAL_TIMEOUT_MS = 120_000;
+            const cmdText = command.join(" ");
+            const approvalId = crypto.randomUUID();
+            const approvalResult = await callGatewayTool(
+              "exec.approval.request",
+              { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
+              {
+                id: approvalId,
+                command: cmdText,
+                cwd,
+                host: "node",
+                agentId,
+                sessionKey,
+                timeoutMs: APPROVAL_TIMEOUT_MS,
+              },
+            );
+            const decisionRaw =
+              approvalResult && typeof approvalResult === "object"
+                ? (approvalResult as { decision?: unknown }).decision
+                : undefined;
+            const approvalDecision =
+              decisionRaw === "allow-once" || decisionRaw === "allow-always" ? decisionRaw : null;
+
+            if (!approvalDecision) {
+              if (decisionRaw === "deny") {
+                throw new Error("exec denied: user denied");
+              }
+              if (decisionRaw === undefined || decisionRaw === null) {
+                throw new Error("exec denied: approval timed out");
+              }
+              throw new Error("exec denied: invalid approval decision");
+            }
+
+            // Retry with the approval decision.
+            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
               nodeId,
               command: "system.run",
               params: {
-                command,
-                cwd,
-                env,
-                timeoutMs: commandTimeoutMs,
-                needsScreenRecording,
-                agentId,
-                sessionKey,
+                ...runParams,
+                runId: approvalId,
+                approved: true,
+                approvalDecision,
               },
               timeoutMs: invokeTimeoutMs,
               idempotencyKey: crypto.randomUUID(),
