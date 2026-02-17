@@ -93,6 +93,23 @@ We are currently prioritizing:
 
 Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
 
+## Maintainers
+
+We're looking for dedicated people that want to help maintain OpenClaw.
+If you are interested, send an email to contributing@openclaw.ai with the following info:
+
+- Link to existing PRs on OpenClaw
+- Link to your existing open source projects
+- X/Twitter, GitHub and Discord usernames
+- Explain your current situation, background, experience, areas of interst
+- What languages you speak, what's your current location
+- How much time are you willing to spend on this project
+
+We are not necessarily looking only for people that can program;
+folks that want to help with docs or even community management are also welcome.
+
+Given the massive popularity of this project, adding maintainers is a slow process.
+
 ## Report a Vulnerability
 
 We take security reports seriously. Report vulnerabilities directly to the repository where the issue lives:
