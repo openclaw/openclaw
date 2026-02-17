@@ -17,6 +17,7 @@ import os from "node:os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -399,6 +400,17 @@ export async function runSdkAttempt(
 
     // ── Call SDK query() ─────────────────────────────────────────────
     try {
+      // Emit lifecycle start so the gateway's agent event handler can
+      // track this run and deliver streaming chat events to WebChat clients.
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "start",
+          startedAt: Date.now(),
+        },
+      });
+
       const q = query({
         prompt: params.prompt,
         options: {
@@ -420,6 +432,7 @@ export async function runSdkAttempt(
       });
 
       const result = await consumeSdkStream({
+        runId: params.runId,
         queryIterator: q,
         reasoningMode: params.reasoningLevel ?? "off",
         onBlockReply: params.onBlockReply,
@@ -442,6 +455,33 @@ export async function runSdkAttempt(
       }
 
       clearTimeout(timeoutTimer);
+
+      // Emit lifecycle end/error so the gateway finalizes the webchat response.
+      if (result.error) {
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "lifecycle",
+          data: {
+            phase: "error",
+            error:
+              result.error instanceof Error
+                ? result.error.message
+                : typeof result.error === "string"
+                  ? result.error
+                  : "SDK run failed",
+            endedAt: Date.now(),
+          },
+        });
+      } else {
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            endedAt: Date.now(),
+          },
+        });
+      }
 
       return {
         aborted: result.aborted || aborted,
@@ -466,6 +506,17 @@ export async function runSdkAttempt(
       };
     } catch (err) {
       clearTimeout(timeoutTimer);
+
+      // Emit lifecycle error so the gateway finalizes the webchat response.
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: err instanceof Error ? err.message : String(err),
+          endedAt: Date.now(),
+        },
+      });
 
       return {
         aborted: aborted || params.abortSignal?.aborted === true,

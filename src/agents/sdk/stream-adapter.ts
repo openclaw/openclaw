@@ -16,6 +16,7 @@ import type {
   SDKSystemMessage,
   Query,
 } from "@anthropic-ai/claude-agent-sdk";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 /** Extracted from SDKPartialAssistantMessage.event to avoid direct @anthropic-ai/sdk import. */
 type StreamEvent = SDKPartialAssistantMessage["event"];
 import type { AssistantMessage } from "@mariozechner/pi-ai";
@@ -27,6 +28,7 @@ import type { NormalizedUsage } from "../usage.js";
 import type { SdkStreamResult } from "./types.js";
 
 export type ConsumeStreamParams = {
+  runId: string;
   queryIterator: Query;
   reasoningMode?: ReasoningLevel;
   onBlockReply?: (payload: {
@@ -254,6 +256,16 @@ export async function consumeSdkStream(params: ConsumeStreamParams): Promise<Sdk
             currentAssistantText += cleaned;
             emitBlockChunk(cleaned);
             void params.onPartialReply?.({ text: currentAssistantText });
+            // Emit assistant event so the gateway can relay streaming
+            // text deltas to WebChat clients via the agent event bus.
+            emitAgentEvent({
+              runId: params.runId,
+              stream: "assistant",
+              data: {
+                text: currentAssistantText,
+                delta: cleaned,
+              },
+            });
           }
         } else if (delta.type === "thinking_delta" && delta.thinking) {
           currentThinkingText += delta.thinking;
