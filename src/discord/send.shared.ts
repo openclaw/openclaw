@@ -347,7 +347,7 @@ async function sendDiscordText(
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode });
-  const sendChunk = async (chunk: string) => {
+  const sendChunk = async (chunk: string, isFirst: boolean) => {
     const chunkComponents = resolveDiscordSendComponents({
       components,
       text: chunk,
@@ -373,11 +373,11 @@ async function sendDiscordText(
     )) as { id: string; channel_id: string };
   };
   if (chunks.length === 1) {
-    return await sendChunk(chunks[0]);
+    return await sendChunk(chunks[0], true);
   }
   let last: { id: string; channel_id: string } | null = null;
-  for (const chunk of chunks) {
-    last = await sendChunk(chunk);
+  for (const [index, chunk] of chunks.entries()) {
+    last = await sendChunk(chunk, index === 0);
   }
   if (!last) {
     throw new Error("Discord send failed (empty chunk result)");

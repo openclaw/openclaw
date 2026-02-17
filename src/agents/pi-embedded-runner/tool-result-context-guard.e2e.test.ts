@@ -197,7 +197,7 @@ describe("installToolResultContextGuard", () => {
         (msg) =>
           ({
             ...(msg as unknown as Record<string, unknown>),
-          }) as AgentMessage,
+          }) as unknown as AgentMessage,
       );
     });
 

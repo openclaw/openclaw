@@ -56,6 +56,7 @@ export async function deliverMatrixReplies(params: {
     const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
 
     if (mediaList.length === 0) {
+      let sentTextChunk = false;
       for (const chunk of core.channel.text.chunkMarkdownTextWithMode(
         text,
         chunkLimit,
@@ -71,8 +72,9 @@ export async function deliverMatrixReplies(params: {
           threadId: params.threadId,
           accountId: params.accountId,
         });
+        sentTextChunk = true;
       }
-      if (replyToIdForReply && !hasReplied) {
+      if (replyToIdForReply && !hasReplied && sentTextChunk) {
         hasReplied = true;
       }
       continue;

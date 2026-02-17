@@ -88,7 +88,7 @@ function withToolResultText(
 ): AgentToolResult<unknown> {
   const content = Array.isArray(result.content) ? result.content : [];
   let replaced = false;
-  const nextContent = content.map((block) => {
+  const nextContent: ToolContentBlock[] = content.map((block) => {
     if (
       !replaced &&
       block &&
@@ -97,15 +97,23 @@ function withToolResultText(
     ) {
       replaced = true;
       return {
-        ...(block as Record<string, unknown>),
+        ...(block as TextContentBlock),
         text,
       };
     }
     return block;
   });
-  return replaced
-    ? { ...result, content: nextContent }
-    : { ...result, content: [{ type: "text", text }] };
+  if (replaced) {
+    return {
+      ...result,
+      content: nextContent as unknown as AgentToolResult<unknown>["content"],
+    };
+  }
+  const textBlock = { type: "text", text } as unknown as TextContentBlock;
+  return {
+    ...result,
+    content: [textBlock] as unknown as AgentToolResult<unknown>["content"],
+  };
 }
 
 function extractReadTruncationDetails(

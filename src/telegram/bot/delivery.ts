@@ -117,6 +117,7 @@ export async function deliverReplies(params: {
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {
       const chunks = chunkText(reply.text || "");
+      let sentTextChunk = false;
       for (let i = 0; i < chunks.length; i += 1) {
         const chunk = chunks[i];
         if (!chunk) {
@@ -133,9 +134,10 @@ export async function deliverReplies(params: {
           linkPreview,
           replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
+        sentTextChunk = true;
         markDelivered();
       }
-      if (replyToMessageIdForPayload && !hasReplied) {
+      if (replyToMessageIdForPayload && !hasReplied && sentTextChunk) {
         hasReplied = true;
       }
       continue;
