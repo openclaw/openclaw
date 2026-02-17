@@ -3,7 +3,10 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
-import { promoteCallTagsToBlocks, promoteHistoricalContextToBlocks } from "./custom-context-to-blocks.js";
+import {
+  promoteCallTagsToBlocks,
+  promoteHistoricalContextToBlocks,
+} from "./custom-context-to-blocks.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,

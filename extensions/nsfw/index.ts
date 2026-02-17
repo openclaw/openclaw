@@ -9,11 +9,11 @@
  *   • Part 2 — injected after conversation history (prependContext)
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 // ============================================================================
 // Random key generation (16-char alphanumeric, regenerated per startup)

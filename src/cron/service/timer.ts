@@ -172,9 +172,9 @@ export function armTimer(state: CronServiceState) {
     } else {
       const jobCount = state.store.jobs.length;
       const enabledCount = state.store.jobs.filter((j) => j.enabled).length;
-      const withNextRun =
-        state.store.jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number")
-          .length;
+      const withNextRun = state.store.jobs.filter(
+        (j) => j.enabled && typeof j.state.nextRunAtMs === "number",
+      ).length;
       state.deps.log.debug(
         { jobCount, enabledCount, withNextRun },
         "cron: armTimer skipped - no jobs with nextRunAtMs",

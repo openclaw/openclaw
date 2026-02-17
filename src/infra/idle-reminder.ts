@@ -16,11 +16,11 @@
  */
 
 import fs from "node:fs";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/io.js";
 import {
   loadSessionStore,
