@@ -218,6 +218,8 @@ export type ChannelAuthAdapter = {
     runtime: RuntimeEnv;
     verbose?: boolean;
     channelInput?: string | null;
+    /** If set, save WhatsApp QR as PNG file instead of ASCII (path or directory) */
+    qrPngPath?: string;
   }) => Promise<void>;
 };
 

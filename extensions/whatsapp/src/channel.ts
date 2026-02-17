@@ -316,13 +316,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       }),
   },
   auth: {
-    login: async ({ cfg, accountId, runtime, verbose }) => {
+    login: async ({ cfg, accountId, runtime, verbose, qrPngPath }) => {
       const resolvedAccountId = accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+
       await getWhatsAppRuntime().channel.whatsapp.loginWeb(
         Boolean(verbose),
         undefined,
         runtime,
         resolvedAccountId,
+        qrPngPath ? { qrPngPath } : undefined,
       );
     },
   },
