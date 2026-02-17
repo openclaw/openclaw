@@ -257,6 +257,9 @@ export async function sendMessageSlack(
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
     }
+    if (opts.attachments) {
+      throw new Error("Slack send does not support blocks with attachments");
+    }
     const fallbackText = trimmedMessage || buildSlackBlocksFallbackText(blocks);
     const response = await postSlackMessageBestEffort({
       client,
@@ -317,6 +320,7 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
+    let isFirst = true;
     for (const chunk of chunks.length ? chunks : [""]) {
       const response = await postSlackMessageBestEffort({
         client,
@@ -324,8 +328,9 @@ export async function sendMessageSlack(
         text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
-        attachments: opts.attachments,
+        attachments: isFirst ? opts.attachments : undefined,
       });
+      isFirst = false;
       lastMessageId = response.ts ?? lastMessageId;
     }
   }
