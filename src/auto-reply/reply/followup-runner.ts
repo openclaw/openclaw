@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -126,16 +126,25 @@ export function createFollowupRunner(params: {
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
       try {
+        const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
+          cfg: queued.run.config,
+          agentId: resolveAgentIdFromSessionKey(queued.run.sessionKey),
+          hasSessionModelOverride: Boolean(sessionEntry?.modelOverride?.trim()),
+        });
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
           provider: queued.run.provider,
           model: queued.run.model,
           agentDir: queued.run.agentDir,
-          fallbacksOverride: resolveAgentModelFallbacksOverride(
-            queued.run.config,
-            resolveAgentIdFromSessionKey(queued.run.sessionKey),
-          ),
-          run: (provider, model) => {
+          fallbacksOverride: effectiveFallbacksOverride,
+          probePrimaryDuringCooldown: "always",
+          onError: ({ provider: failedProvider, model: failedModel, error, attempt, total }) => {
+            const message = error instanceof Error ? error.message : String(error);
+            defaultRuntime.error?.(
+              `Followup fallback candidate failed (${attempt}/${total}): ${failedProvider}/${failedModel} — ${message}`,
+            );
+          },
+          run: (provider, model, context) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
@@ -162,6 +171,7 @@ export function createFollowupRunner(params: {
               enforceFinalTag: queued.run.enforceFinalTag,
               provider,
               model,
+              modelFallbackActive: context?.hasFallbackCandidates ?? false,
               ...authProfile,
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,

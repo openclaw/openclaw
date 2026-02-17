@@ -97,7 +97,7 @@ describe("runWithModelFallback – probe logic", () => {
     // Should skip primary and use fallback
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5", expect.any(Object));
     expect(result.attempts[0]?.reason).toBe("rate_limit");
   });
 
@@ -119,7 +119,7 @@ describe("runWithModelFallback – probe logic", () => {
     // Should probe primary and succeed
     expect(result.result).toBe("probed-ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", expect.any(Object));
   });
 
   it("probes primary model when cooldown already expired", async () => {
@@ -139,7 +139,7 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(result.result).toBe("recovered");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", expect.any(Object));
   });
 
   it("does NOT probe non-primary candidates during cooldown", async () => {
@@ -178,7 +178,7 @@ describe("runWithModelFallback – probe logic", () => {
     } catch {
       // Primary was probed (i === 0 + within margin), non-primary were skipped
       expect(run).toHaveBeenCalledTimes(1); // only primary was actually called
-      expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+      expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", expect.any(Object));
     }
   });
 
@@ -203,7 +203,7 @@ describe("runWithModelFallback – probe logic", () => {
     // Should be throttled → skip primary, use fallback
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5", expect.any(Object));
     expect(result.attempts[0]?.reason).toBe("rate_limit");
   });
 
@@ -226,7 +226,7 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(result.result).toBe("probed-ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", expect.any(Object));
   });
 
   it("handles non-finite soonest safely (treats as probe-worthy)", async () => {
@@ -245,7 +245,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
 
     expect(result.result).toBe("ok-infinity");
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", expect.any(Object));
   });
 
   it("handles NaN soonest safely (treats as probe-worthy)", async () => {
@@ -263,7 +263,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
 
     expect(result.result).toBe("ok-nan");
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", expect.any(Object));
   });
 
   it("handles null soonest safely (treats as probe-worthy)", async () => {
@@ -281,7 +281,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
 
     expect(result.result).toBe("ok-null");
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", expect.any(Object));
   });
 
   it("single candidate skips with rate_limit and exhausts candidates", async () => {
@@ -337,7 +337,7 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", expect.any(Object));
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini", expect.any(Object));
   });
 });

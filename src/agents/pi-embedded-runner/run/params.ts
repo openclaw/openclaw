@@ -68,6 +68,11 @@ export type RunEmbeddedPiAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /**
+   * True when this run is part of an active model fallback chain.
+   * Allows failover-shaped errors to bubble for upstream candidate retries.
+   */
+  modelFallbackActive?: boolean;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;

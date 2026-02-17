@@ -48,6 +48,7 @@ describe("isBillingErrorMessage", () => {
       "insufficient credits",
       "Payment Required",
       "HTTP 402 Payment Required",
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 2973.",
       "plans & billing",
     ];
     for (const sample of samples) {
@@ -280,6 +281,7 @@ describe("isFailoverErrorMessage", () => {
       "invalid api key",
       "429 rate limit exceeded",
       "Your credit balance is too low",
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 2973.",
       "request timed out",
       "invalid request format",
     ];
@@ -336,6 +338,11 @@ describe("classifyFailoverReason", () => {
     ).toBe("rate_limit");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    expect(
+      classifyFailoverReason(
+        "402 This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 2973.",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
     expect(

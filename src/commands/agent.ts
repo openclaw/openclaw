@@ -87,6 +87,7 @@ function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boo
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  modelFallbackActive: boolean;
   cfg: ReturnType<typeof loadConfig>;
   sessionEntry: SessionEntry | undefined;
   sessionId: string;
@@ -165,6 +166,7 @@ function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
+    modelFallbackActive: params.modelFallbackActive,
     authProfileId,
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
@@ -539,12 +541,20 @@ export async function agentCommand(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride) => {
+        probePrimaryDuringCooldown: "always",
+        onError: ({ provider: failedProvider, model: failedModel, error, attempt, total }) => {
+          const message = error instanceof Error ? error.message : String(error);
+          defaultRuntime.error(
+            `Model fallback candidate failed (${attempt}/${total}): ${failedProvider}/${failedModel} — ${message}`,
+          );
+        },
+        run: (providerOverride, modelOverride, context) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
             providerOverride,
             modelOverride,
+            modelFallbackActive: context?.hasFallbackCandidates ?? false,
             cfg,
             sessionEntry,
             sessionId,

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -43,12 +43,22 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+type FallbackAttemptSummary = {
+  provider: string;
+  model: string;
+  error: string;
+  reason?: string;
+  status?: number;
+  code?: string;
+};
+
 export type AgentRunLoopResult =
   | {
       kind: "success";
       runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
+      fallbackAttempts: FallbackAttemptSummary[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCompleted: boolean;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
@@ -102,6 +112,7 @@ export async function runAgentTurnWithFallback(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  let fallbackAttempts: FallbackAttemptSummary[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
 
@@ -156,16 +167,25 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+      const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
+        cfg: params.followupRun.run.config,
+        agentId: resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
+        hasSessionModelOverride: Boolean(params.getActiveSessionEntry()?.modelOverride?.trim()),
+      });
       const fallbackResult = await runWithModelFallback({
         cfg: params.followupRun.run.config,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
         agentDir: params.followupRun.run.agentDir,
-        fallbacksOverride: resolveAgentModelFallbacksOverride(
-          params.followupRun.run.config,
-          resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-        ),
-        run: (provider, model) => {
+        fallbacksOverride: effectiveFallbacksOverride,
+        probePrimaryDuringCooldown: "always",
+        onError: ({ provider: failedProvider, model: failedModel, error, attempt, total }) => {
+          const message = error instanceof Error ? error.message : String(error);
+          defaultRuntime.error(
+            `Model fallback candidate failed (${attempt}/${total}): ${failedProvider}/${failedModel} — ${message}`,
+          );
+        },
+        run: (provider, model, context) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -287,6 +307,7 @@ export async function runAgentTurnWithFallback(params: {
             enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
             provider,
             model,
+            modelFallbackActive: context?.hasFallbackCandidates ?? false,
             ...authProfile,
             thinkLevel: params.followupRun.run.thinkLevel,
             verboseLevel: params.followupRun.run.verboseLevel,
@@ -411,6 +432,7 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      fallbackAttempts = fallbackResult.attempts ?? [];
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
@@ -560,6 +582,7 @@ export async function runAgentTurnWithFallback(params: {
     runResult,
     fallbackProvider,
     fallbackModel,
+    fallbackAttempts,
     didLogHeartbeatStrip,
     autoCompactionCompleted,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,

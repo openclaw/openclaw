@@ -37,6 +37,15 @@ type FallbackAttempt = {
   code?: string;
 };
 
+type PrimaryCooldownProbeMode = "auto" | "always";
+
+type ModelFallbackRunContext = {
+  attempt: number;
+  total: number;
+  isPrimary: boolean;
+  hasFallbackCandidates: boolean;
+};
+
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
  * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
@@ -231,6 +240,7 @@ function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
 function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
   hasFallbackCandidates: boolean;
+  probeMode: PrimaryCooldownProbeMode;
   now: number;
   throttleKey: string;
   authStore: ReturnType<typeof ensureAuthProfileStore>;
@@ -238,6 +248,9 @@ function shouldProbePrimaryDuringCooldown(params: {
 }): boolean {
   if (!params.isPrimary || !params.hasFallbackCandidates) {
     return false;
+  }
+  if (params.probeMode === "always") {
+    return true;
   }
 
   const lastProbe = lastProbeAttempt.get(params.throttleKey) ?? 0;
@@ -269,7 +282,13 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
-  run: (provider: string, model: string) => Promise<T>;
+  /**
+   * Control probing behavior when the primary provider is in auth-profile cooldown.
+   * - "auto" (default): probe periodically near cooldown expiry.
+   * - "always": always attempt the primary first, then continue down fallbacks.
+   */
+  probePrimaryDuringCooldown?: PrimaryCooldownProbeMode;
+  run: (provider: string, model: string, context: ModelFallbackRunContext) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -306,6 +325,7 @@ export async function runWithModelFallback<T>(params: {
         const shouldProbe = shouldProbePrimaryDuringCooldown({
           isPrimary: i === 0,
           hasFallbackCandidates,
+          probeMode: params.probePrimaryDuringCooldown ?? "auto",
           now,
           throttleKey: probeThrottleKey,
           authStore,
@@ -328,7 +348,12 @@ export async function runWithModelFallback<T>(params: {
       }
     }
     try {
-      const result = await params.run(candidate.provider, candidate.model);
+      const result = await params.run(candidate.provider, candidate.model, {
+        attempt: i + 1,
+        total: candidates.length,
+        isPrimary: i === 0,
+        hasFallbackCandidates,
+      });
       return {
         result,
         provider: candidate.provider,

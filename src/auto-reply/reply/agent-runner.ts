@@ -373,7 +373,8 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
+    const { runResult, fallbackProvider, fallbackModel, fallbackAttempts, directlySentBlockKeys } =
+      runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -414,6 +415,22 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const fallbackLimitNotice = (() => {
+      const firstAttempt = fallbackAttempts[0];
+      if (!firstAttempt) {
+        return undefined;
+      }
+      const switchedModel =
+        firstAttempt.provider !== providerUsed || firstAttempt.model !== modelUsed;
+      if (!switchedModel) {
+        return undefined;
+      }
+      if (firstAttempt.reason !== "billing" && firstAttempt.reason !== "rate_limit") {
+        return undefined;
+      }
+      const reasonLabel = firstAttempt.reason === "billing" ? "billing/credit limit" : "rate limit";
+      return `⚠️ ${firstAttempt.provider}/${firstAttempt.model} hit a ${reasonLabel}. Continuing with ${providerUsed}/${modelUsed}.`;
+    })();
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
@@ -583,6 +600,9 @@ export async function runReplyAgent(params: {
     }
     if (verboseEnabled && activeIsNewSession) {
       finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
+    }
+    if (fallbackLimitNotice) {
+      finalPayloads = appendUsageLine(finalPayloads, fallbackLimitNotice);
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);

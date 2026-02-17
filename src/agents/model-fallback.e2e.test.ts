@@ -58,7 +58,14 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
+    expect(run).toHaveBeenCalledWith(
+      "openai-codex",
+      "gpt-5.3-codex",
+      expect.objectContaining({
+        attempt: 1,
+        isPrimary: true,
+      }),
+    );
   });
 
   it("does not fall back on non-auth errors", async () => {
@@ -136,7 +143,7 @@ describe("runWithModelFallback", () => {
       },
       usageStats: {
         [profileId]: {
-          cooldownUntil: Date.now() + 60_000,
+          cooldownUntil: Date.now() + 10 * 60_000,
         },
       },
     };
@@ -170,8 +177,76 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+      expect(run.mock.calls.map((call) => call.slice(0, 2))).toEqual([["fallback", "ok-model"]]);
       expect(result.attempts[0]?.reason).toBe("rate_limit");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("always probes primary first when probePrimaryDuringCooldown is set to always", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const provider = `cooldown-probe-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: Date.now() + 60_000,
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/m1`,
+            fallbacks: ["fallback/ok-model"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (providerId) => {
+      if (providerId === provider) {
+        throw Object.assign(new Error("primary still cooling down"), { status: 429 });
+      }
+      if (providerId === "fallback") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}`);
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider,
+        model: "m1",
+        agentDir: tempDir,
+        probePrimaryDuringCooldown: "always",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run.mock.calls).toEqual([
+        [provider, "m1", { attempt: 1, total: 2, isPrimary: true, hasFallbackCandidates: true }],
+        [
+          "fallback",
+          "ok-model",
+          { attempt: 2, total: 2, isPrimary: false, hasFallbackCandidates: true },
+        ],
+      ]);
+      expect(result.attempts[0]?.provider).toBe(provider);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -233,7 +308,7 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      expect(run.mock.calls).toEqual([[provider, "m1"]]);
+      expect(run.mock.calls.map((call) => call.slice(0, 2))).toEqual([[provider, "m1"]]);
       expect(result.attempts).toEqual([]);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -264,7 +339,7 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("All models failed");
 
-    expect(run.mock.calls).toEqual([
+    expect(run.mock.calls.map((call) => call.slice(0, 2))).toEqual([
       ["anthropic", "claude-opus-4-5"],
       ["anthropic", "claude-haiku-3-5"],
     ]);

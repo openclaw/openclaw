@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -102,16 +102,19 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   try {
+    const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
+      cfg: params.followupRun.run.config,
+      agentId: resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
+      hasSessionModelOverride: Boolean(params.sessionEntry?.modelOverride?.trim()),
+    });
     await runWithModelFallback({
       cfg: params.followupRun.run.config,
       provider: params.followupRun.run.provider,
       model: params.followupRun.run.model,
       agentDir: params.followupRun.run.agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(
-        params.followupRun.run.config,
-        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-      ),
-      run: (provider, model) => {
+      fallbacksOverride: effectiveFallbacksOverride,
+      probePrimaryDuringCooldown: "always",
+      run: (provider, model, context) => {
         const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
         const embeddedContext = buildEmbeddedContextFromTemplate({
           run: params.followupRun.run,
@@ -136,6 +139,7 @@ export async function runMemoryFlushIfNeeded(params: {
           enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
           provider,
           model,
+          modelFallbackActive: context?.hasFallbackCandidates ?? false,
           ...authProfile,
           thinkLevel: params.followupRun.run.thinkLevel,
           verboseLevel: params.followupRun.run.verboseLevel,
