@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { whatsappPlugin } from "./channel.js";
 
@@ -25,7 +26,8 @@ describe("whatsappPlugin.outbound.sendText", () => {
   });
 
   it("passes linkPreview option to sendMessageWhatsApp", async () => {
-    await whatsappPlugin.outbound.sendText({
+    await whatsappPlugin.outbound!.sendText!({
+      cfg: {} as OpenClawConfig,
       to: "1234567890",
       text: "http://example.com",
       // @ts-expect-error - injecting extra param as per runtime behavior
@@ -42,7 +44,8 @@ describe("whatsappPlugin.outbound.sendText", () => {
   });
 
   it("passes linkPreview=undefined when omitted", async () => {
-    await whatsappPlugin.outbound.sendText({
+    await whatsappPlugin.outbound!.sendText!({
+      cfg: {} as OpenClawConfig,
       to: "1234567890",
       text: "hello",
     });
