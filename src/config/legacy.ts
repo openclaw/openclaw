@@ -1,6 +1,6 @@
+import type { LegacyConfigIssue } from "./types.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy.migrations.js";
 import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
-import type { LegacyConfigIssue } from "./types.js";
 
 export function findLegacyConfigIssues(raw: unknown): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {

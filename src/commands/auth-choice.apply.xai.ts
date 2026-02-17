@@ -1,3 +1,4 @@
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
   formatApiKeyPreview,
@@ -5,7 +6,6 @@ import {
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
 import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyAuthProfileConfig,

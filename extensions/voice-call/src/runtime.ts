@@ -1,13 +1,13 @@
 import type { VoiceCallConfig } from "./config.js";
-import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
-import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import type { TelephonyTtsRuntime } from "./telephony-tts.js";
+import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
+import { CallManager } from "./manager.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
 import { TwilioProvider } from "./providers/twilio.js";
-import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
 import {
@@ -186,35 +186,6 @@ export async function createVoiceCallRuntime(params: {
     if (mediaHandler) {
       twilioProvider.setMediaStreamHandler(mediaHandler);
       log.info("[voice-call] Media stream handler wired to provider");
-    }
-
-    // Pre-cache inbound greeting TTS for instant playback on connect
-    if (config.inboundGreeting && ttsRuntime?.textToSpeechTelephony) {
-      try {
-        const greetingTts = createTelephonyTtsProvider({
-          coreConfig,
-          ttsOverride: config.tts,
-          runtime: ttsRuntime,
-        });
-        greetingTts
-          .synthesizeForTelephony(config.inboundGreeting)
-          .then((audio) => {
-            twilioProvider.setCachedGreetingAudio(audio);
-          })
-          .catch((err) => {
-            log.warn(
-              `[voice-call] Failed to pre-cache greeting: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-          });
-      } catch (err) {
-        log.warn(
-          `[voice-call] Failed to init greeting TTS: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
     }
   }
 

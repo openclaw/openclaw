@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
+import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {

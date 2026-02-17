@@ -1,16 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import {
-  matchesHostnameAllowlist,
-  normalizeHostnameAllowlist,
-  SsrFBlockedError,
-} from "../../infra/net/ssrf.js";
+import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   extractReadableContent,
@@ -26,7 +22,6 @@ import {
   normalizeCacheKey,
   readCache,
   readResponseText,
-  resolveWebUrlAllowlist,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
   withTimeout,
@@ -72,22 +67,6 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     ? Fetch
     : undefined
   : undefined;
-
-type WebConfig = NonNullable<OpenClawConfig["tools"]>["web"];
-
-export function resolveFetchUrlAllowlist(web?: WebConfig): string[] | undefined {
-  return resolveWebUrlAllowlist(web);
-}
-
-export function isUrlAllowedByAllowlist(url: string, allowlist: string[]): boolean {
-  try {
-    const hostname = new URL(url).hostname;
-    const normalizedAllowlist = normalizeHostnameAllowlist(allowlist);
-    return matchesHostnameAllowlist(hostname, normalizedAllowlist);
-  } catch {
-    return false;
-  }
-}
 
 type FirecrawlFetchConfig =
   | {
@@ -753,7 +732,6 @@ export function createWebFetchTool(options?: {
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
-  const urlAllowlist = resolveFetchUrlAllowlist(options?.config?.tools?.web);
   return {
     label: "Web Fetch",
     name: "web_fetch",
@@ -763,25 +741,6 @@ export function createWebFetchTool(options?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
-
-      // Check URL against allowlist if configured
-      if (urlAllowlist && urlAllowlist.length > 0) {
-        if (!isUrlAllowedByAllowlist(url, urlAllowlist)) {
-          let hostname: string;
-          try {
-            hostname = new URL(url).hostname;
-          } catch {
-            hostname = url;
-          }
-          return jsonResult({
-            error: "url_not_allowed",
-            message: `URL not in allowlist. Allowed domains: ${urlAllowlist.join(", ")}`,
-            blockedUrl: url,
-            blockedHostname: hostname,
-          });
-        }
-      }
-
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);

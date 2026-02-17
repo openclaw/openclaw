@@ -315,6 +315,36 @@ describe("exec tool backgrounding", () => {
   });
 });
 
+describe("exec exit codes", () => {
+  const originalShell = process.env.SHELL;
+
+  beforeEach(() => {
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
+  });
+
+  afterEach(() => {
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
+  });
+
+  it("treats non-zero exits as completed and appends exit code", async () => {
+    const command = isWin
+      ? joinCommands(["Write-Output nope", "exit 1"])
+      : joinCommands(["echo nope", "exit 1"]);
+    const result = await execTool.execute("call1", { command });
+
+    expect(result.details.status).toBe("completed");
+    expect(result.details.exitCode).toBe(1);
+
+    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    expect(text).toContain("nope");
+    expect(text).toContain("Command exited with code 1");
+  });
+});
+
 describe("exec notifyOnExit", () => {
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createExecTool({

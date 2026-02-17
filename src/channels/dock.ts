@@ -1,11 +1,23 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  ChannelCapabilities,
+  ChannelCommandAdapter,
+  ChannelElevatedAdapter,
+  ChannelGroupAdapter,
+  ChannelId,
+  ChannelAgentPromptAdapter,
+  ChannelMentionAdapter,
+  ChannelPlugin,
+  ChannelThreadingContext,
+  ChannelThreadingAdapter,
+  ChannelThreadingToolContext,
+} from "./plugins/types.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
-import { resolveLinqAccount } from "../linq/accounts.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
@@ -29,19 +41,6 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
-import type {
-  ChannelCapabilities,
-  ChannelCommandAdapter,
-  ChannelElevatedAdapter,
-  ChannelGroupAdapter,
-  ChannelId,
-  ChannelAgentPromptAdapter,
-  ChannelMentionAdapter,
-  ChannelPlugin,
-  ChannelThreadingContext,
-  ChannelThreadingAdapter,
-  ChannelThreadingToolContext,
-} from "./plugins/types.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
 export type ChannelDock = {
@@ -459,23 +458,6 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
-    },
-  },
-  linq: {
-    id: "linq",
-    capabilities: {
-      chatTypes: ["direct", "group"],
-      reactions: true,
-      media: true,
-    },
-    outbound: { textChunkLimit: 4000 },
-    config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveLinqAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-          String(entry),
-        ),
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
     },
   },
 };

@@ -1,7 +1,7 @@
+import type { CommandHandler } from "./commands-types.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
-import type { CommandHandler } from "./commands-types.js";
 
 type MeshPlanShape = {
   planId: string;
@@ -21,10 +21,6 @@ type ParsedMeshCommand =
 
 const meshPlanCache = new Map<string, CachedMeshPlan>();
 const MAX_CACHED_MESH_PLANS = 200;
-const MESH_PLAN_CALL_TIMEOUT_MS = 120_000;
-const MESH_RUN_CALL_TIMEOUT_MS = 15 * 60_000;
-const MESH_STATUS_CALL_TIMEOUT_MS = 15_000;
-const MESH_RETRY_CALL_TIMEOUT_MS = 15 * 60_000;
 
 function trimMeshPlanCache() {
   if (meshPlanCache.size <= MAX_CACHED_MESH_PLANS) {
@@ -225,7 +221,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
           agentId: params.agentId ?? "main",
         },
         ...commonGateway,
-        timeoutMs: MESH_PLAN_CALL_TIMEOUT_MS,
       });
       putCachedPlan(params, planResp.plan);
       const sourceLine = planResp.source ? `\nPlanner source: ${planResp.source}` : "";
@@ -262,7 +257,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
             agentId: params.agentId ?? "main",
           },
           ...commonGateway,
-          timeoutMs: MESH_PLAN_CALL_TIMEOUT_MS,
         });
         putCachedPlan(params, planResp.plan);
         runPlan = planResp.plan;
@@ -285,7 +279,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
           plan: runPlan,
         },
         ...commonGateway,
-        timeoutMs: MESH_RUN_CALL_TIMEOUT_MS,
       });
 
       return {
@@ -312,7 +305,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
         method: "mesh.status",
         params: { runId: parsed.runId },
         ...commonGateway,
-        timeoutMs: MESH_STATUS_CALL_TIMEOUT_MS,
       });
       return {
         shouldContinue: false,
@@ -339,7 +331,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.stepIds && parsed.stepIds.length > 0 ? { stepIds: parsed.stepIds } : {}),
         },
         ...commonGateway,
-        timeoutMs: MESH_RETRY_CALL_TIMEOUT_MS,
       });
       return {
         shouldContinue: false,

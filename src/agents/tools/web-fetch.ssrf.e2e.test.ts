@@ -62,7 +62,6 @@ describe("web_fetch SSRF protection", () => {
   });
 
   afterEach(() => {
-    // @ts-expect-error restore
     global.fetch = priorFetch;
     lookupMock.mockReset();
     vi.restoreAllMocks();

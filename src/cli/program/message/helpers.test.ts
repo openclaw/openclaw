@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
 vi.mock("../../../commands/message.js", () => ({
-  messageCommand: (...args: unknown[]) => messageCommandMock(...args),
+  messageCommand: messageCommandMock,
 }));
 
 vi.mock("../../../globals.js", () => ({
@@ -33,7 +33,7 @@ const runGlobalGatewayStopSafelyMock = vi.fn(
   },
 );
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
-  runGlobalGatewayStopSafely: (...args: unknown[]) => runGlobalGatewayStopSafelyMock(...args),
+  runGlobalGatewayStopSafely: runGlobalGatewayStopSafelyMock,
 }));
 
 const exitMock = vi.fn((): never => {
