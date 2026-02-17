@@ -284,10 +284,15 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+
+      // Default to a higher gateway timeout for cron.run/runs because the run may
+      // legitimately take >60s (agentTurn + synthesis + delivery), and we don't
+      // want spurious "Cron: run failed: gateway timeout" alerts.
+      const defaultTimeoutMs = action === "run" || action === "runs" ? 180_000 : 60_000;
       const gatewayOpts: GatewayCallOptions = {
         gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
         gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : 60_000,
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : defaultTimeoutMs,
       };
 
       switch (action) {
