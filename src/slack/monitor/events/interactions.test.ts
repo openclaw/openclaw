@@ -717,9 +717,17 @@ describe("registerSlackInteractionEvents", () => {
               },
             },
           },
+        } as unknown as {
+          id?: string;
+          callback_id?: string;
+          root_view_id?: string;
+          previous_view_id?: string;
+          external_id?: string;
+          hash?: string;
+          state?: { values: Record<string, unknown> };
         },
       },
-    });
+    } as never);
 
     expect(ack).toHaveBeenCalled();
     expect(resolveSessionKey).toHaveBeenCalledWith({
