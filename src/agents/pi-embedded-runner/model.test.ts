@@ -62,7 +62,7 @@ function expectUnknownModelError(provider: string, id: string) {
 
 describe("buildInlineProviderModels", () => {
   it("attaches provider ids to inline models", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       " alpha ": { baseUrl: "http://alpha.local", models: [makeModel("alpha-model")] },
       beta: { baseUrl: "http://beta.local", models: [makeModel("beta-model")] },
     };
@@ -86,7 +86,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("inherits baseUrl from provider when model does not specify it", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:8000",
         models: [makeModel("custom-model")],
@@ -100,7 +100,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("inherits api from provider when model does not specify it", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:8000",
         api: "anthropic-messages",
@@ -115,7 +115,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("model-level api takes precedence over provider-level api", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:8000",
         api: "openai-responses",
@@ -130,7 +130,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("inherits both baseUrl and api from provider config", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:10000",
         api: "anthropic-messages",
@@ -327,7 +327,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expectResolvedForwardCompatFallback({
       provider: "openai-codex",
@@ -339,5 +339,30 @@ describe("resolveModel", () => {
         provider: "openai-codex",
       },
     });
+  });
+
+  it("includes auth hint for unknown ollama models (#17328)", () => {
+    // resetMockDiscoverModels() in beforeEach already sets find → null
+    const result = resolveModel("ollama", "gemma3:4b", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("Unknown model: ollama/gemma3:4b");
+    expect(result.error).toContain("OLLAMA_API_KEY");
+    expect(result.error).toContain("docs.openclaw.ai/providers/ollama");
+  });
+
+  it("includes auth hint for unknown vllm models", () => {
+    const result = resolveModel("vllm", "llama-3-70b", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("Unknown model: vllm/llama-3-70b");
+    expect(result.error).toContain("VLLM_API_KEY");
+  });
+
+  it("does not add auth hint for non-local providers", () => {
+    const result = resolveModel("google-antigravity", "some-model", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: google-antigravity/some-model");
   });
 });

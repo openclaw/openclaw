@@ -16,6 +16,14 @@ beforeAll(async () => {
 
 installTriggerHandlingE2eTestHooks();
 
+function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
+
 describe("trigger handling", () => {
   it("allows elevated off in groups without mention", async () => {
     await withTempHome(async (home) => {
@@ -38,7 +46,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode disabled.");
 
-      const store = loadSessionStore(cfg.session.store);
+      const store = loadSessionStore(requireSessionStorePath(cfg));
       expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("off");
     });
   });
@@ -64,7 +72,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode set to ask");
 
-      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
       const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
       expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("on");
     });

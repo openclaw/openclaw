@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
-import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
@@ -299,6 +299,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "description",
               "deleteAfterRun",
               "agentId",
+              "sessionKey",
               "message",
               "text",
               "model",
@@ -332,13 +333,22 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             throw new Error("job required");
           }
           const job = normalizeCronJobCreate(params.job) ?? params.job;
-          if (job && typeof job === "object" && !("agentId" in job)) {
+          if (job && typeof job === "object") {
             const cfg = loadConfig();
-            const agentId = opts?.agentSessionKey
-              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+            const { mainKey, alias } = resolveMainSessionAlias(cfg);
+            const resolvedSessionKey = opts?.agentSessionKey
+              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
               : undefined;
-            if (agentId) {
-              (job as { agentId?: string }).agentId = agentId;
+            if (!("agentId" in job)) {
+              const agentId = opts?.agentSessionKey
+                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+                : undefined;
+              if (agentId) {
+                (job as { agentId?: string }).agentId = agentId;
+              }
+            }
+            if (!("sessionKey" in job) && resolvedSessionKey) {
+              (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
             }
           }
 

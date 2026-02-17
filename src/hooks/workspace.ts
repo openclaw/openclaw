@@ -1,15 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type {
-  Hook,
-  HookEligibilityContext,
-  HookEntry,
-  HookSnapshot,
-  HookSource,
-  ParsedHookFrontmatter,
-} from "./types.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { shouldIncludeHook } from "./config.js";
@@ -18,6 +10,14 @@ import {
   resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
+import type {
+  Hook,
+  HookEligibilityContext,
+  HookEntry,
+  HookSnapshot,
+  HookSource,
+  ParsedHookFrontmatter,
+} from "./types.js";
 
 type HookPackageManifest = {
   name?: string;

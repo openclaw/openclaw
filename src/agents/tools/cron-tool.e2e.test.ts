@@ -144,6 +144,46 @@ describe("cron tool", () => {
     expect(call?.params?.agentId).toBeNull();
   });
 
+  it("stamps cron.add with caller sessionKey when missing", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const callerSessionKey = "agent:main:discord:channel:ops";
+    const tool = createCronTool({ agentSessionKey: callerSessionKey });
+    await tool.execute("call-session-key", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { sessionKey?: string };
+    };
+    expect(call?.params?.sessionKey).toBe(callerSessionKey);
+  });
+
+  it("preserves explicit job.sessionKey on add", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    await tool.execute("call-explicit-session-key", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { at: new Date(123).toISOString() },
+        sessionKey: "agent:main:telegram:group:-100123:topic:99",
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { sessionKey?: string };
+    };
+    expect(call?.params?.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+  });
+
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
     callGatewayMock
       .mockResolvedValueOnce({

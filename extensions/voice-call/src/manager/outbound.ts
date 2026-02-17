@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { CallMode } from "../config.js";
-import type { CallManagerContext } from "./context.js";
 import {
   TerminalStates,
   type CallId,
@@ -8,6 +7,7 @@ import {
   type OutboundCallOptions,
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
+import type { CallManagerContext } from "./context.js";
 import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
@@ -36,6 +36,7 @@ type ConversationContext = Pick<
   | "provider"
   | "config"
   | "storePath"
+  | "activeTurnCalls"
   | "transcriptWaiters"
   | "maxDurationTimers"
 >;
@@ -158,7 +159,6 @@ export async function speak(
   if (TerminalStates.has(call.state)) {
     return { success: false, error: "Call has ended" };
   }
-
   try {
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
@@ -242,6 +242,12 @@ export async function continueCall(
   if (TerminalStates.has(call.state)) {
     return { success: false, error: "Call has ended" };
   }
+  if (ctx.activeTurnCalls.has(callId) || ctx.transcriptWaiters.has(callId)) {
+    return { success: false, error: "Already waiting for transcript" };
+  }
+  ctx.activeTurnCalls.add(callId);
+
+  const turnStartedAt = Date.now();
 
   try {
     await speak(ctx, callId, prompt);
@@ -249,17 +255,45 @@ export async function continueCall(
     transitionState(call, "listening");
     persistCallRecord(ctx.storePath, call);
 
+    const listenStartedAt = Date.now();
     await ctx.provider.startListening({ callId, providerCallId: call.providerCallId });
 
     const transcript = await waitForFinalTranscript(ctx, callId);
+    const transcriptReceivedAt = Date.now();
 
     // Best-effort: stop listening after final transcript.
     await ctx.provider.stopListening({ callId, providerCallId: call.providerCallId });
+
+    const lastTurnLatencyMs = transcriptReceivedAt - turnStartedAt;
+    const lastTurnListenWaitMs = transcriptReceivedAt - listenStartedAt;
+    const turnCount =
+      call.metadata && typeof call.metadata.turnCount === "number"
+        ? call.metadata.turnCount + 1
+        : 1;
+
+    call.metadata = {
+      ...(call.metadata ?? {}),
+      turnCount,
+      lastTurnLatencyMs,
+      lastTurnListenWaitMs,
+      lastTurnCompletedAt: transcriptReceivedAt,
+    };
+    persistCallRecord(ctx.storePath, call);
+
+    console.log(
+      "[voice-call] continueCall latency call=" +
+        call.callId +
+        " totalMs=" +
+        String(lastTurnLatencyMs) +
+        " listenWaitMs=" +
+        String(lastTurnListenWaitMs),
+    );
 
     return { success: true, transcript };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
+    ctx.activeTurnCalls.delete(callId);
     clearTranscriptWaiter(ctx, callId);
   }
 }

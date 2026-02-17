@@ -1,8 +1,7 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   type ExecAsk,
   type ExecHost,
@@ -51,6 +50,7 @@ import {
   type ExecProcessHandle,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
