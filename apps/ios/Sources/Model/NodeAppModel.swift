@@ -480,8 +480,8 @@ final class NodeAppModel {
                     token: relay.token,
                     password: relay.password,
                     sessionKey: self.mainSessionKey,
-                    deliveryChannel: relay.deliveryChannel ?? self.shareDeliveryChannel,
-                    deliveryTo: relay.deliveryTo ?? self.shareDeliveryTo))
+                    deliveryChannel: self.shareDeliveryChannel,
+                    deliveryTo: self.shareDeliveryTo))
         }
     }
 
@@ -1982,10 +1982,7 @@ extension NodeAppModel {
             let exactMatch = sorted.first { row in
                 row.key == currentKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
             }
-            let fallback = sorted.first { row in
-                normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
-            }
-            let selected = exactMatch ?? fallback
+            let selected = exactMatch
             let channel = normalize(selected?.lastChannel)
             let to = normalize(selected?.lastTo)
 
