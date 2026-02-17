@@ -86,6 +86,12 @@ export type MessagesConfig = {
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
+  /**
+   * Additional local directories allowed for media file attachments.
+   * Paths are resolved to absolute. Merged with the built-in roots
+   * (tmpdir, state-dir subdirs, agent workspace).
+   */
+  mediaLocalRoots?: string[];
 };
 
 export type NativeCommandsSetting = boolean | "auto";
