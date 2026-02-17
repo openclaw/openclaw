@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
-import { onTimer } from "./service/timer.js";
+import { armTimer, onTimer } from "./service/timer.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -86,6 +86,35 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     expect(state.running).toBe(true);
 
     timeoutSpy.mockRestore();
+    await store.cleanup();
+  });
+
+  it("armTimer skips without clearing timer when state.running is true (#18121)", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    // Set up a pre-existing timer (simulating normal scheduler operation).
+    const existingTimer = setTimeout(() => {}, 60_000);
+    state.timer = existingTimer;
+    state.running = true;
+
+    // armTimer should bail out without touching the existing timer.
+    armTimer(state);
+
+    expect(state.timer).toBe(existingTimer);
+    expect(noopLogger.debug).toHaveBeenCalledWith({}, "cron: armTimer skipped - tick in progress");
+
+    clearTimeout(existingTimer);
     await store.cleanup();
   });
 });
