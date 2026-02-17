@@ -858,6 +858,10 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                lastError: state.lastError,
+                settings: state.settings,
+                onSettingsChange: (next) => state.applySettings(next),
+                onConnect: () => state.connect(),
               })
             : nothing
         }
