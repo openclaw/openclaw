@@ -56,6 +56,7 @@ import {
 } from "../../config/sessions.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
@@ -120,8 +121,48 @@ export function createPluginRuntime(): PluginRuntime {
     },
     system: {
       enqueueSystemEvent,
+      requestHeartbeatNow,
       runCommandWithTimeout,
       formatNativeDependencyHint,
+      chunkMarkdownText,
+      chunkMarkdownTextWithMode,
+      chunkText,
+      chunkTextWithMode,
+      resolveChunkMode,
+      resolveTextChunkLimit,
+      hasControlCommand,
+      resolveMarkdownTableMode,
+      convertMarkdownTables,
+    },
+    reply: {
+      dispatchReplyWithBufferedBlockDispatcher,
+      createReplyDispatcherWithTyping,
+      resolveEffectiveMessagesConfig,
+      resolveHumanDelayConfig,
+      dispatchReplyFromConfig,
+      withReplyDispatcher,
+      finalizeInboundContext,
+      formatAgentEnvelope,
+      /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
+      formatInboundEnvelope,
+      resolveEnvelopeFormatOptions,
+    },
+    routing: {
+      resolveAgentRoute,
+    },
+    pairing: {
+      buildPairingReply,
+      readAllowFromStore: ({ channel, accountId, env }) =>
+        readChannelAllowFromStore(channel, env, accountId),
+      upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
+        upsertChannelPairingRequest({
+          channel,
+          id,
+          accountId,
+          meta,
+          env,
+          pairingAdapter,
+        }),
     },
     media: {
       loadWebMedia,

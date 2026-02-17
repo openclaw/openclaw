@@ -73,6 +73,7 @@ type WriteConfigFile = typeof import("../../config/config.js").writeConfigFile;
 type RecordChannelActivity = typeof import("../../infra/channel-activity.js").recordChannelActivity;
 type GetChannelActivity = typeof import("../../infra/channel-activity.js").getChannelActivity;
 type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEvent;
+type RequestHeartbeatNow = typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
 type RunCommandWithTimeout = typeof import("../../process/exec.js").runCommandWithTimeout;
 type FormatNativeDependencyHint = typeof import("./native-deps.js").formatNativeDependencyHint;
 type LoadWebMedia = typeof import("../../media/load-web-media.js").loadWebMedia;
@@ -123,6 +124,7 @@ export type PluginRuntime = {
   };
   system: {
     enqueueSystemEvent: EnqueueSystemEvent;
+    requestHeartbeatNow: RequestHeartbeatNow;
     runCommandWithTimeout: RunCommandWithTimeout;
     formatNativeDependencyHint: FormatNativeDependencyHint;
   };
