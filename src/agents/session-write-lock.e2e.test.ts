@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { __testing, acquireSessionWriteLock, cleanStaleLockFiles } from "./session-write-lock.js";
+import {
+  __testing,
+  acquireSessionWriteLock,
+  cleanStaleLockFiles,
+  resolveSessionLockMaxHoldFromTimeout,
+} from "./session-write-lock.js";
 
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
@@ -101,6 +106,19 @@ describe("acquireSessionWriteLock", () => {
       warnSpy.mockRestore();
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("derives max hold from timeout plus grace", () => {
+    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
+    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(123_000);
+  });
+
+  it("clamps max hold for effectively no-timeout runs", () => {
+    expect(
+      resolveSessionLockMaxHoldFromTimeout({
+        timeoutMs: 2_147_000_000,
+      }),
+    ).toBe(2_147_000_000);
   });
 
   it("cleans stale .jsonl lock files in sessions directories", async () => {
