@@ -1,6 +1,6 @@
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { PluginHookMessageContext, PluginHookMessageReceivedEvent } from "../plugins/types.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { sanitizeUserText } from "../utils/sanitize.js";
 
 type InflightKey = string;
