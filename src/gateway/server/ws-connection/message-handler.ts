@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
+import { createWsConnectionRateLimiter } from "../../ws-rate-limit.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
@@ -136,6 +137,8 @@ export function attachGatewayWsMessageHandler(params: {
     logWsControl,
   } = params;
 
+  const wsRateLimiter = createWsConnectionRateLimiter();
+
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const clientIp = resolveGatewayClientIp({ remoteAddr, forwardedFor, realIp, trustedProxies });
@@ -180,6 +183,34 @@ export function attachGatewayWsMessageHandler(params: {
     if (isClosed()) {
       return;
     }
+
+    // Per-connection message rate limiting
+    const rateResult = wsRateLimiter.hit();
+    if (!rateResult.allowed) {
+      if (rateResult.shouldClose) {
+        logWsControl.warn(
+          `rate limit exceeded conn=${connId} remote=${remoteAddr ?? "?"} warnings=${rateResult.warnings} – closing`,
+        );
+        setCloseCause("rate-limit-exceeded", { warnings: rateResult.warnings });
+        send({
+          type: "event",
+          event: "error",
+          payload: { code: "RATE_LIMITED", message: "message rate limit exceeded – disconnecting" },
+        });
+        close(1008, "rate limit exceeded");
+        return;
+      }
+      send({
+        type: "event",
+        event: "warning",
+        payload: {
+          code: "RATE_LIMITED",
+          message: `message rate limit exceeded (${rateResult.warnings} warning${rateResult.warnings > 1 ? "s" : ""})`,
+        },
+      });
+      return;
+    }
+
     const text = rawDataToString(data);
     try {
       const parsed = JSON.parse(text);
