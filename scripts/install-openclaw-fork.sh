@@ -18,7 +18,7 @@ set -euo pipefail
 #
 # Overrides:
 #   OPENCLAW_SPEC=<npm-install-spec>       # optional direct spec (e.g. file:/path, git+https://...)
-#   OPENCLAW_RELEASE_REPO=<github-url>     # repo URL for release tarballs (default: RedBeardEth/clawdbot)
+#   OPENCLAW_RELEASE_REPO=<github-url>     # repo URL for release tarballs (default: daydreamsai/openclaw-x402-router)
 #   OPENCLAW_REPO=https://github.com/<org>/<repo>.git  # for git+https:// fallback
 #   OPENCLAW_REF=<tag-or-commit>         # preferred (immutable)
 #   OPENCLAW_BRANCH=<branch>             # fallback for development
@@ -45,7 +45,7 @@ set -euo pipefail
 # ── OpenClaw variables ──────────────────────────────────────────────────────
 
 OPENCLAW_SPEC="${OPENCLAW_SPEC:-}"
-OPENCLAW_REPO="${OPENCLAW_REPO:-https://github.com/RedBeardEth/clawdbot.git}"
+OPENCLAW_REPO="${OPENCLAW_REPO:-https://github.com/daydreamsai/openclaw-x402-router.git}"
 OPENCLAW_REF="${OPENCLAW_REF:-}"
 OPENCLAW_BRANCH="${OPENCLAW_BRANCH:-}"
 OPENCLAW_INSTALLER="${OPENCLAW_INSTALLER:-npm}"
@@ -55,7 +55,7 @@ OPENCLAW_ONBOARD_ARGS="${OPENCLAW_ONBOARD_ARGS:-}"  # resolved after TTY detecti
 OPENCLAW_NPM_SCRIPT_SHELL="${OPENCLAW_NPM_SCRIPT_SHELL:-}"
 
 if [[ -z "$OPENCLAW_SPEC" && -z "$OPENCLAW_REF" && -z "$OPENCLAW_BRANCH" ]]; then
-  OPENCLAW_REF="v2026.2.9-dreamclaw.14"
+  OPENCLAW_REF="v2026.2.16.daydreams.2"
 fi
 
 if [[ -n "$OPENCLAW_SPEC" && ( -n "$OPENCLAW_REF" || -n "$OPENCLAW_BRANCH" ) ]]; then
@@ -551,7 +551,7 @@ echo "  Phase 2: OpenClaw Gateway Install"
 echo "============================================"
 echo ""
 
-OPENCLAW_RELEASE_REPO="${OPENCLAW_RELEASE_REPO:-https://github.com/RedBeardEth/clawdbot}"
+OPENCLAW_RELEASE_REPO="${OPENCLAW_RELEASE_REPO:-https://github.com/daydreamsai/openclaw-x402-router}"
 
 resolve_release_tarball_url() {
   local tag="$1"
