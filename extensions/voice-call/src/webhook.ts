@@ -10,11 +10,11 @@ import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
-import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
+import { MediaStreamHandler } from "./media-stream.js";
+import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -150,10 +150,7 @@ export class VoiceCallWebhookServer {
         const call = this.manager.getCallByProviderCallId(callId);
         if (cachedAudio && call?.metadata?.initialMessage && call.direction === "inbound") {
           console.log(`[voice-call] Playing cached greeting (${cachedAudio.length} bytes)`);
-          // Clear initialMessage to prevent re-speaking via the fallback path.
-          // Note: this in-memory mutation is not persisted to disk, which is acceptable
-          // because a gateway restart would also sever the media stream, making replay moot.
-          delete call.metadata.initialMessage;
+          delete call.metadata.initialMessage; // prevent re-speaking via fallback
           const handler = this.mediaStreamHandler!;
           const CHUNK_SIZE = 160;
           const CHUNK_DELAY_MS = 20;
