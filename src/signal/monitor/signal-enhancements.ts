@@ -7,17 +7,17 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  SignalAttachment,
-  SignalDataMessage,
-  SignalEventHandlerDeps,
-} from "./event-handler.types.js";
 import { logVerbose } from "../../globals.js";
 import { logWarn } from "../../logger.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import { signalRpcRequest } from "../client.js";
+import type {
+  SignalAttachment,
+  SignalDataMessage,
+  SignalEventHandlerDeps,
+} from "./event-handler.types.js";
 
 // ── Extended types (not modifying upstream types) ────────────────────────────
 
@@ -87,7 +87,7 @@ export type SignalEnhancementDeps = Pick<
   | "ignoreAttachments"
   | "fetchAttachment"
 > & {
-  requireMention: boolean;
+  groups?: Record<string, { requireMention?: boolean; tools?: unknown; toolsBySender?: unknown }>;
 };
 
 // ── Pre-cache: per-group persistent media index + LRU ────────────────────────
@@ -428,10 +428,14 @@ async function fetchQuotedAttachment(params: {
 export function checkRequireMention(params: {
   dataMessage: SignalDataMessage;
   isGroup: boolean;
+  groupId?: string;
   deps: SignalEnhancementDeps;
 }): boolean {
-  const { isGroup, deps } = params;
-  if (!isGroup || !deps.requireMention) {
+  const { isGroup, groupId, deps } = params;
+  // Look up per-group requireMention; fall back to wildcard "*" entry.
+  const groupCfg = (groupId && deps.groups?.[groupId]) || deps.groups?.["*"];
+  const requireMention = groupCfg?.requireMention ?? false;
+  if (!isGroup || !requireMention) {
     return false;
   }
 
