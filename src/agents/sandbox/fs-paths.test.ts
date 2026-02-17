@@ -1,12 +1,12 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SandboxContext } from "./types.js";
 import {
   buildSandboxFsMounts,
   parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
+import type { SandboxContext } from "./types.js";
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({ overrides });

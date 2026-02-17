@@ -1,5 +1,5 @@
-import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
 import { promptAccountId as promptAccountIdSdk } from "../../../plugin-sdk/onboarding.js";
+import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   return await promptAccountIdSdk(params);
