@@ -73,22 +73,22 @@ echo "→ Patched: $(du -sh "$INSTALL_TARGET" | cut -f1)"
 echo ""
 echo "→ Restarting live gateway..."
 # Try to find and restart gateway using portable approach
+PID=""
 if command -v lsof >/dev/null 2>&1; then
   PID=$(lsof -i :18789 -P -t 2>/dev/null | head -1 || true)
-elif command -v openclaw >/dev/null 2>&1; then
-  # Use openclaw gateway restart if lsof not available
-  openclaw gateway restart 2>/dev/null || echo "  Gateway restart command failed"
-  PID=""
-else
-  echo "  Cannot restart gateway (no lsof or openclaw command found)"
-  PID=""
 fi
+
 if [ -n "$PID" ]; then
   kill "$PID" 2>/dev/null || true
   sleep 2
   echo "  Killed PID $PID"
 else
-  echo "  No gateway running on :18789"
+  # No PID found, try openclaw gateway restart
+  if command -v openclaw >/dev/null 2>&1; then
+    openclaw gateway restart 2>/dev/null || echo "  Gateway restart command failed"
+  else
+    echo "  No gateway running on :18789 and no openclaw command available"
+  fi
 fi
 
 echo ""
