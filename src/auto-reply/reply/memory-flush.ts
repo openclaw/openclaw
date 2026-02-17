@@ -1,3 +1,4 @@
+import { resolveAgentCompaction } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -71,18 +72,25 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
   return int >= 0 ? int : null;
 };
 
-export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSettings | null {
-  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
-  const enabled = defaults?.enabled ?? true;
+export function resolveMemoryFlushSettings(
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): MemoryFlushSettings | null {
+  const compaction = cfg ? resolveAgentCompaction(cfg, agentId) : undefined;
+  if (compaction?.mode === "off") {
+    return null;
+  }
+  const flushCfg = compaction?.memoryFlush;
+  const enabled = flushCfg?.enabled ?? true;
   if (!enabled) {
     return null;
   }
   const softThresholdTokens =
-    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
-  const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
-  const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
+    normalizeNonNegativeInt(flushCfg?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+  const prompt = flushCfg?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
+  const systemPrompt = flushCfg?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
   const reserveTokensFloor =
-    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
+    normalizeNonNegativeInt(compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   return {
