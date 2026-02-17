@@ -25,8 +25,8 @@ function makePrompter(): WizardPrompter {
     intro: async () => {},
     outro: async () => {},
     note: async () => {},
-    select: async () => "",
-    multiselect: async () => [],
+    select: (async <T>() => "" as T) as WizardPrompter["select"],
+    multiselect: (async <T>() => [] as T[]) as WizardPrompter["multiselect"],
     text: async () => "",
     confirm: async () => false,
     progress: () => ({ update: () => {}, stop: () => {} }),
@@ -161,9 +161,9 @@ describe("applyOpenAIConfig", () => {
 
   it("overrides model.primary when model object already exists", () => {
     const next = applyOpenAIConfig({
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6", fallback: [] } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } } },
     });
-    expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL, fallback: [] });
+    expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL, fallbacks: [] });
   });
 });
 

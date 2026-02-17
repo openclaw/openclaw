@@ -171,7 +171,7 @@ describe("resolveSessionKeyForRequest", () => {
 
     // loadSessionStore should be called twice: once for main, once for mybot
     // (not twice for main)
-    const storePaths = mocks.loadSessionStore.mock.calls.map((call: [string]) => call[0]);
+    const storePaths = mocks.loadSessionStore.mock.calls.map((call) => String(call[0]));
     expect(storePaths).toHaveLength(2);
     expect(storePaths).toContain(MAIN_STORE_PATH);
     expect(storePaths).toContain(MYBOT_STORE_PATH);
