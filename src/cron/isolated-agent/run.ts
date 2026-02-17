@@ -1,3 +1,7 @@
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
+import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -20,7 +24,6 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
@@ -34,13 +37,11 @@ import {
 } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
   updateSessionStore,
 } from "../../config/sessions.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
@@ -53,7 +54,6 @@ import {
   isExternalHookSession,
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
-import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,

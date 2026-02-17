@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {
   DEFAULT_SAFE_BINS,
   analyzeShellCommand,
@@ -11,7 +12,6 @@ import {
   type CommandResolution,
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.js";
 
 function isPathLikeToken(value: string): boolean {
   const trimmed = value.trim();
