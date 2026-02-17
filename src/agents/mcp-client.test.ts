@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initMcpRuntime } from "./mcp-client.js";
 
 const MOCK_MCP_SERVER_SCRIPT = [
@@ -6,32 +6,32 @@ const MOCK_MCP_SERVER_SCRIPT = [
   'let buffer = "";',
   'const send = (payload) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...payload }) + "\\n");',
   'process.stdin.on("data", (chunk) => {',
-  '  buffer += String(chunk);',
+  "  buffer += String(chunk);",
   '  let newline = buffer.indexOf("\\n");',
-  '  while (newline >= 0) {',
-  '    const raw = buffer.slice(0, newline).trim();',
-  '    buffer = buffer.slice(newline + 1);',
+  "  while (newline >= 0) {",
+  "    const raw = buffer.slice(0, newline).trim();",
+  "    buffer = buffer.slice(newline + 1);",
   '    newline = buffer.indexOf("\\n");',
-  '    if (!raw) continue;',
-  '    const msg = JSON.parse(raw);',
+  "    if (!raw) continue;",
+  "    const msg = JSON.parse(raw);",
   '    if (msg.method === "initialize") {',
   '      send({ id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "mock", version: "1.0.0" } } });',
-  '      continue;',
-  '    }',
+  "      continue;",
+  "    }",
   '    if (msg.method === "tools/list") {',
   '      send({ id: msg.id, result: { tools: [{ name: "ping", description: "Ping tool", inputSchema: { type: "object", properties: { text: { type: "string" } } } }] } });',
-  '      continue;',
-  '    }',
+  "      continue;",
+  "    }",
   '    if (msg.method === "tools/call") {',
-  '      send({ id: msg.id, result: { ok: true, tool: msg.params?.name, args: msg.params?.arguments ?? {} } });',
-  '      continue;',
-  '    }',
+  "      send({ id: msg.id, result: { ok: true, tool: msg.params?.name, args: msg.params?.arguments ?? {} } });",
+  "      continue;",
+  "    }",
   '    if (msg.method === "notifications/initialized") {',
-  '      continue;',
-  '    }',
+  "      continue;",
+  "    }",
   '    send({ id: msg.id, error: { code: -32601, message: "method not found" } });',
-  '  }',
-  '});',
+  "  }",
+  "});",
 ].join("\n");
 
 function mockServerConfig(name: string) {
@@ -85,37 +85,39 @@ const MOCK_ARRAY_SCHEMA_SCRIPT = [
   'let buffer = "";',
   'const send = (payload) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...payload }) + "\\n");',
   'process.stdin.on("data", (chunk) => {',
-  '  buffer += String(chunk);',
+  "  buffer += String(chunk);",
   '  let newline = buffer.indexOf("\\n");',
-  '  while (newline >= 0) {',
-  '    const raw = buffer.slice(0, newline).trim();',
-  '    buffer = buffer.slice(newline + 1);',
+  "  while (newline >= 0) {",
+  "    const raw = buffer.slice(0, newline).trim();",
+  "    buffer = buffer.slice(newline + 1);",
   '    newline = buffer.indexOf("\\n");',
-  '    if (!raw) continue;',
-  '    const msg = JSON.parse(raw);',
+  "    if (!raw) continue;",
+  "    const msg = JSON.parse(raw);",
   '    if (msg.method === "initialize") {',
   '      send({ id: msg.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "mock", version: "1.0.0" } } });',
-  '      continue;',
-  '    }',
+  "      continue;",
+  "    }",
   '    if (msg.method === "tools/list") {',
   '      send({ id: msg.id, result: { tools: [{ name: "bad_schema", description: "Tool with array inputSchema", inputSchema: ["not", "a", "record"] }] } });',
-  '      continue;',
-  '    }',
+  "      continue;",
+  "    }",
   '    if (msg.method === "notifications/initialized") continue;',
   '    send({ id: msg.id, error: { code: -32601, message: "method not found" } });',
-  '  }',
-  '});',
+  "  }",
+  "});",
 ].join("\n");
 
 describe("mcp client array rejection", () => {
   it("drops inputSchema when it is an array instead of a record", async () => {
     const runtime = await initMcpRuntime({
-      mcpServers: [{
-        name: "array-schema",
-        type: "stdio",
-        command: process.execPath,
-        args: ["-e", MOCK_ARRAY_SCHEMA_SCRIPT],
-      } as const],
+      mcpServers: [
+        {
+          name: "array-schema",
+          type: "stdio",
+          command: process.execPath,
+          args: ["-e", MOCK_ARRAY_SCHEMA_SCRIPT],
+        } as const,
+      ],
     });
 
     try {
@@ -124,6 +126,92 @@ describe("mcp client array rejection", () => {
       expect(runtime.tools[0].inputSchema).toBeUndefined();
     } finally {
       await runtime.cleanup();
+    }
+  });
+});
+
+describe("mcp client http transport", () => {
+  it("drains HTTP notify response bodies to release sockets", async () => {
+    const originalFetch = globalThis.fetch;
+    const cancel = vi.fn(async () => {});
+
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const rawBody = typeof init?.body === "string" ? init.body : "{}";
+      const payload = JSON.parse(rawBody) as {
+        id?: number | string;
+        method?: string;
+      };
+
+      if (payload.method === "initialize") {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () =>
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: payload.id,
+              result: {
+                protocolVersion: "2024-11-05",
+                capabilities: { tools: {} },
+                serverInfo: { name: "mock-http", version: "1.0.0" },
+              },
+            }),
+          body: { cancel },
+        } as unknown as Response;
+      }
+
+      if (payload.method === "tools/list") {
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          text: async () =>
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: payload.id,
+              result: { tools: [] },
+            }),
+          body: { cancel },
+        } as unknown as Response;
+      }
+
+      if (payload.method === "notifications/initialized") {
+        return {
+          ok: true,
+          status: 204,
+          statusText: "No Content",
+          text: async () => "",
+          body: { cancel },
+        } as unknown as Response;
+      }
+
+      throw new Error(`Unexpected MCP method: ${String(payload.method)}`);
+    });
+
+    (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const runtime = await initMcpRuntime({
+        mcpServers: [
+          {
+            name: "mock-http",
+            type: "http",
+            url: "https://example.com/mcp",
+          },
+        ],
+      });
+
+      try {
+        expect(runtime.tools).toEqual([]);
+      } finally {
+        await runtime.cleanup();
+      }
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalled();
+    } finally {
+      (globalThis as { fetch: typeof fetch }).fetch = originalFetch;
     }
   });
 });

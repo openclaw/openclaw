@@ -52,7 +52,11 @@ type McpClient = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
   listTools: (opts?: McpRequestOptions) => Promise<McpToolDescriptor[]>;
-  callTool: (name: string, args: Record<string, unknown>, opts?: McpRequestOptions) => Promise<unknown>;
+  callTool: (
+    name: string,
+    args: Record<string, unknown>,
+    opts?: McpRequestOptions,
+  ) => Promise<unknown>;
 };
 
 export type McpRuntime = {
@@ -220,7 +224,7 @@ class StdioMcpClient implements McpClient {
 
     const env = {
       ...process.env,
-      ...(this.config.env ?? {}),
+      ...this.config.env,
     };
 
     const proc = spawn(this.config.command, this.config.args ?? [], {
@@ -389,7 +393,9 @@ class StdioMcpClient implements McpClient {
         }
         this.pending.delete(id);
         pending.cleanupAbort?.();
-        reject(new Error(`MCP request timed out after ${timeoutMs}ms: ${this.serverName}.${method}`));
+        reject(
+          new Error(`MCP request timed out after ${timeoutMs}ms: ${this.serverName}.${method}`),
+        );
       }, timeoutMs);
 
       const pending: PendingRequest = {
@@ -555,10 +561,10 @@ class HttpMcpClient implements McpClient {
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
-      ...(this.config.headers ?? {}),
+      ...this.config.headers,
     };
 
-    await fetch(this.config.url, {
+    const response = await fetch(this.config.url, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -567,6 +573,7 @@ class HttpMcpClient implements McpClient {
         params,
       }),
     });
+    await response.body?.cancel();
   }
 
   private async request(
@@ -596,7 +603,7 @@ class HttpMcpClient implements McpClient {
       const headers: Record<string, string> = {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
-        ...(this.config.headers ?? {}),
+        ...this.config.headers,
       };
 
       const response = await fetch(this.config.url, {
@@ -623,16 +630,34 @@ class HttpMcpClient implements McpClient {
         throw new Error(formatJsonRpcError(envelope.error));
       }
 
-      if (envelope.id !== undefined && envelope.id !== id && String(envelope.id) !== String(id)) {
+      const expectedId = String(id);
+      const envelopeId = envelope.id;
+      const envelopeIdString =
+        typeof envelopeId === "string" || typeof envelopeId === "number"
+          ? String(envelopeId)
+          : undefined;
+
+      if (envelopeId !== undefined && envelopeIdString !== expectedId) {
+        const gotId = envelopeIdString ?? "[non-scalar id]";
         throw new Error(
-          `MCP response id mismatch for ${this.serverName}.${method}: expected ${id}, got ${String(envelope.id)}`,
+          "MCP response id mismatch for " +
+            this.serverName +
+            "." +
+            method +
+            ": expected " +
+            expectedId +
+            ", got " +
+            gotId,
         );
       }
 
       return envelope.result;
     } catch (error) {
       if (controller.signal.aborted && !opts?.signal?.aborted) {
-        throw new Error(`MCP request timed out after ${timeoutMs}ms: ${this.serverName}.${method}`);
+        throw new Error(
+          `MCP request timed out after ${timeoutMs}ms: ${this.serverName}.${method}`,
+          { cause: error },
+        );
       }
       throw error;
     } finally {
