@@ -1,4 +1,5 @@
 import {
+  autocompleteMultiselect,
   cancel,
   confirm,
   intro,
@@ -47,9 +48,10 @@ export function createClackPrompter(): WizardPrompter {
           initialValue: params.initialValue,
         }),
       ),
-    multiselect: async (params) =>
-      guardCancel(
-        await multiselect({
+    multiselect: async (params) => {
+      const prompt = params.searchable ? autocompleteMultiselect : multiselect;
+      return guardCancel(
+        await prompt({
           message: stylePromptMessage(params.message),
           options: params.options.map((opt) => {
             const base = { value: opt.value, label: opt.label };
@@ -57,7 +59,8 @@ export function createClackPrompter(): WizardPrompter {
           }) as Option<(typeof params.options)[number]["value"]>[],
           initialValues: params.initialValues,
         }),
-      ),
+      );
+    },
     text: async (params) => {
       const validate = params.validate;
       return guardCancel(
