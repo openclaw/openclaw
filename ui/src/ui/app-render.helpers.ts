@@ -51,6 +51,17 @@ export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
   const isActive = state.tab === tab;
   const collapsed = state.settings.navCollapsed;
+  const inConfigureMode = state.settings.mode === "configure";
+  const tabVisibility = state.settings.tabVisibility ?? {};
+  const isVisible = tabVisibility[tab];
+
+  const handleToggleVisibility = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.setTabVisibility(tab, !isVisible);
+  };
+
+
   return html`
     <a
       href=${href}

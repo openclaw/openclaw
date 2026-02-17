@@ -451,6 +451,11 @@ export class OpenClawApp extends LitElement {
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
   }
 
+  setTabVisibility(tab: string, visible: boolean) {
+    const next = { ...this.settings.tabVisibility, [tab]: visible };
+    this.applySettings({ ...this.settings, tabVisibility: next });
+  }
+
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
   }
