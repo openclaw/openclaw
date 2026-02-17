@@ -9,7 +9,7 @@ type AuthMethod = {
   value: string;
   label: string;
   hint?: string;
-  type: "api-key" | "oauth" | "token";
+  type: "api-key" | "oauth" | "token" | "device-flow" | "unsupported";
   defaultModel?: string;
 };
 
@@ -100,26 +100,55 @@ function ArrowLeftIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+function ExternalLinkIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" />
+      <line x1="10" x2="21" y1="14" y2="3" />
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // SettingsView Component
 // ---------------------------------------------------------------------------
+type AuthProfileSummary = {
+  profileId: string;
+  provider: string;
+  type: string;
+  hasKey: boolean;
+};
+
 export function SettingsView() {
   // State
   const [providers, setProviders] = useState<ProviderGroup[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [currentConfig, setCurrentConfig] = useState<Record<string, unknown> | null>(null);
+  const [authProfiles, setAuthProfiles] = useState<AuthProfileSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Wizard state
   const [selectedProvider, setSelectedProvider] = useState<ProviderGroup | null>(null);
   const [selectedMethod, setSelectedMethod] = useState<AuthMethod | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
+  const [tokenName, setTokenName] = useState("");
   const [modelInput, setModelInput] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<{ ok: boolean; message: string } | null>(null);
 
-  // Fetch data on mount
+  // OAuth state
+  const [oauthPending, setOauthPending] = useState(false);
+  const [oauthWindow, setOauthWindow] = useState<Window | null>(null);
+
+  // Device Flow state (GitHub Copilot)
+  const [deviceCode, setDeviceCode] = useState<string | null>(null);
+  const [userCode, setUserCode] = useState<string | null>(null);
+  const [verificationUri, setVerificationUri] = useState<string | null>(null);
+  const [devicePollInterval, setDevicePollInterval] = useState<NodeJS.Timeout | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -135,6 +164,7 @@ export function SettingsView() {
       setProviders(providersData.providers ?? []);
       setCurrentModel(modelData.model ?? null);
       setCurrentConfig(configData.config ?? null);
+      setAuthProfiles(configData.authProfiles ?? []);
     } catch (err) {
       console.error("Failed to load settings:", err);
     } finally {
@@ -146,22 +176,58 @@ export function SettingsView() {
     fetchData();
   }, [fetchData]);
 
-  // Save handler
+  // Cleanup timers
+  useEffect(() => {
+    return () => {
+      if (devicePollInterval) {clearInterval(devicePollInterval);}
+    };
+  }, [devicePollInterval]);
+
+  // OAuth postMessage listener
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === "oauth_complete") {
+        setOauthPending(false);
+        setSaveResult({ ok: true, message: `Successfully connected ${event.data.provider}!` });
+        fetchData();
+        // Auto-advance or reset after delay
+        setTimeout(() => {
+          setSelectedProvider(null);
+          setSelectedMethod(null);
+          setSaveResult(null);
+        }, 2000);
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [fetchData]);
+
+  // Auth/Save handler
   const handleSave = async () => {
     if (!selectedMethod) {return;}
     setSaving(true);
     setSaveResult(null);
 
     try {
-      // 1) Save auth/API key
-      const authRes = await fetch("/api/settings/auth", {
+      // 1) Save auth (API Key or Token)
+      const endpoint = selectedMethod.type === "token" ? "/api/settings/token" : "/api/settings/auth";
+      const payload = selectedMethod.type === "token" 
+        ? {
+            provider: selectedProvider?.value,
+            authMethod: selectedMethod.value,
+            token: tokenInput,
+            name: tokenName,
+          }
+        : {
+            provider: selectedProvider?.value,
+            authMethod: selectedMethod.value,
+            apiKey: apiKeyInput,
+          };
+
+      const authRes = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: selectedProvider?.value,
-          authMethod: selectedMethod.value,
-          apiKey: apiKeyInput,
-        }),
+        body: JSON.stringify(payload),
       });
       const authData = await authRes.json();
       if (!authRes.ok) {throw new Error(authData.error);}
@@ -180,20 +246,109 @@ export function SettingsView() {
       }
 
       setSaveResult({ ok: true, message: "Configuration saved successfully!" });
-      // Reset wizard after a short delay
       setTimeout(() => {
-        setSelectedProvider(null);
-        setSelectedMethod(null);
-        setApiKeyInput("");
-        setModelInput("");
-        setShowKey(false);
-        setSaveResult(null);
-        fetchData(); // Refresh current config
+        resetWizard();
+        fetchData();
       }, 2000);
     } catch (err) {
       setSaveResult({ ok: false, message: String(err) });
     } finally {
       setSaving(false);
+    }
+  };
+
+  // OAuth Connect
+  const handleConnectOAuth = async () => {
+    if (!selectedProvider) {return;}
+    setOauthPending(true);
+    try {
+      const res = await fetch("/api/settings/oauth/url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: selectedProvider.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) {throw new Error(data.error);}
+
+      const width = 600;
+      const height = 700;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+      const win = window.open(
+        data.url,
+        "OpenClaw OAuth",
+        `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no`
+      );
+      setOauthWindow(win);
+    } catch (err) {
+      setSaveResult({ ok: false, message: String(err) });
+      setOauthPending(false);
+    }
+  };
+
+  // Copilot Device Flow
+  const handleStartCopilotFlow = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings/copilot/start", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {throw new Error(data.error);}
+
+      setUserCode(data.user_code);
+      setVerificationUri(data.verification_uri);
+      setDeviceCode(data.device_code);
+
+      // Start polling
+      const interval = setInterval(async () => {
+        try {
+          const pollRes = await fetch("/api/settings/copilot/poll", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device_code: data.device_code }),
+          });
+          const pollData = await pollRes.json();
+          if (pollData.status === "complete") {
+            clearInterval(interval);
+            setDevicePollInterval(null);
+            setSaveResult({ ok: true, message: "GitHub Copilot connected!" });
+            setTimeout(() => {
+              resetWizard();
+              fetchData();
+            }, 2000);
+          } else if (pollData.status === "error") {
+            clearInterval(interval);
+            setDevicePollInterval(null);
+            setSaveResult({ ok: false, message: pollData.error });
+          }
+        } catch (err) {
+          console.error("Poll error:", err);
+        }
+      }, (data.interval || 5) * 1000);
+
+      setDevicePollInterval(interval);
+    } catch (err) {
+      setSaveResult({ ok: false, message: String(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetWizard = () => {
+    setSelectedProvider(null);
+    setSelectedMethod(null);
+    setApiKeyInput("");
+    setTokenInput("");
+    setTokenName("");
+    setModelInput("");
+    setShowKey(false);
+    setSaveResult(null);
+    setOauthPending(false);
+    setDeviceCode(null);
+    setUserCode(null);
+    setVerificationUri(null);
+    if (devicePollInterval) {
+      clearInterval(devicePollInterval);
+      setDevicePollInterval(null);
     }
   };
 
@@ -268,46 +423,36 @@ export function SettingsView() {
             </div>
           ) : (
             <>
-              {/* Current Configuration Summary */}
-              {step === "provider" && currentModel && (
+              {/* Current Configuration */}
+              {step === "provider" && (currentModel || authProfiles.length > 0) && (
                 <section
                   style={{
                     background: "var(--color-surface)",
                     border: "1px solid var(--color-border)",
-                    borderRadius: "0.75rem",
-                    padding: "1rem 1.25rem",
+                    borderRadius: "0.625rem",
+                    padding: "0.75rem 1rem",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
-                    <SparklesIcon size={16} />
-                    <span style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--color-text)" }}>
-                      Current Configuration
-                    </span>
+                  <div style={{ fontWeight: 500, fontSize: "0.875rem", color: "var(--color-text)", marginBottom: "0.375rem" }}>
+                    Current Configuration
                   </div>
-                  <div style={{ fontSize: "0.8125rem", color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
-                    <span style={{ color: "var(--color-text-muted)" }}>Model:</span>{" "}
-                    <code
-                      style={{
-                        background: "var(--color-surface-hover)",
-                        padding: "0.15em 0.4em",
-                        borderRadius: "0.25rem",
-                        fontSize: "0.8em",
-                      }}
-                    >
-                      {typeof currentModel === "string" ? currentModel : String((currentModel as any)?.primary ?? "none")}
-                    </code>
-                    {(() => {
-                      const cfg = currentConfig as any;
-                      const providers = cfg?.models?.providers;
-                      if (!providers) {return null;}
-                      return (
-                        <>
-                          <br />
-                          <span style={{ color: "var(--color-text-muted)" }}>Providers configured:</span>{" "}
-                          {Object.keys(providers).join(", ") || "none"}
-                        </>
-                      );
-                    })()}
+                  <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", lineHeight: 1.6 }}>
+                    {currentModel && (
+                      <div>
+                        Model:{" "}
+                        <span style={{ color: "var(--color-text)", fontWeight: 500 }}>
+                          {typeof currentModel === "string" ? currentModel : String((currentModel as Record<string, unknown>)?.primary ?? "none")}
+                        </span>
+                      </div>
+                    )}
+                    {authProfiles.length > 0 && (
+                      <div>
+                        Auth:{" "}
+                        <span style={{ color: "var(--color-text)", fontWeight: 500 }}>
+                          {authProfiles.map((p) => p.provider).join(", ")}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </section>
               )}
@@ -333,11 +478,12 @@ export function SettingsView() {
                         key={provider.value}
                         onClick={() => {
                           setSelectedProvider(provider);
-                          // Auto-select if only one method
-                          if (provider.methods.length === 1) {
-                            setSelectedMethod(provider.methods[0]);
-                            if (provider.methods[0].defaultModel) {
-                              setModelInput(provider.methods[0].defaultModel);
+                          // Auto-select if only one supported method
+                          const supported = provider.methods.filter((m) => m.type !== "unsupported");
+                          if (supported.length === 1) {
+                            setSelectedMethod(supported[0]);
+                            if (supported[0].defaultModel) {
+                              setModelInput(supported[0].defaultModel);
                             }
                           }
                         }}
@@ -395,243 +541,335 @@ export function SettingsView() {
                     Choose Authentication Method
                   </h2>
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
-                    {selectedProvider.methods.map((method) => (
-                      <button
-                        key={method.value}
-                        onClick={() => {
-                          setSelectedMethod(method);
-                          if (method.defaultModel) {
-                            setModelInput(method.defaultModel);
-                          }
-                        }}
-                        disabled={method.type === "oauth"}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "0.75rem 1rem",
-                          background: method.type === "oauth" ? "var(--color-surface-hover)" : "var(--color-surface)",
-                          border: "1px solid var(--color-border)",
-                          borderRadius: "0.625rem",
-                          cursor: method.type === "oauth" ? "not-allowed" : "pointer",
-                          textAlign: "left",
-                          opacity: method.type === "oauth" ? 0.5 : 1,
-                          transition: "all 0.15s ease",
-                        }}
-                        onMouseEnter={(e) => {
-                          if (method.type !== "oauth") {
-                            e.currentTarget.style.background = "var(--color-surface-hover)";
-                            e.currentTarget.style.borderColor = "var(--color-border-strong)";
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (method.type !== "oauth") {
+                    {selectedProvider.methods.map((method) => {
+                      const isUnsupported = method.type === "unsupported";
+                      return (
+                        <button
+                          key={method.value}
+                          disabled={isUnsupported}
+                          onClick={() => {
+                            if (isUnsupported) {return;}
+                            setSelectedMethod(method);
+                            if (method.defaultModel) {
+                              setModelInput(method.defaultModel);
+                            }
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            padding: "0.75rem 1rem",
+                            background: "var(--color-surface)",
+                            border: "1px solid var(--color-border)",
+                            borderRadius: "0.625rem",
+                            cursor: isUnsupported ? "not-allowed" : "pointer",
+                            textAlign: "left",
+                            transition: "all 0.15s ease",
+                            opacity: isUnsupported ? 0.5 : 1,
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isUnsupported) {
+                              e.currentTarget.style.background = "var(--color-surface-hover)";
+                              e.currentTarget.style.borderColor = "var(--color-border-strong)";
+                            }
+                          }}
+                          onMouseLeave={(e) => {
                             e.currentTarget.style.background = "var(--color-surface)";
                             e.currentTarget.style.borderColor = "var(--color-border)";
-                          }
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-                          <div style={{ color: "var(--color-text-muted)" }}>
-                            {method.type === "api-key" ? <KeyIcon size={16} /> : <ServerIcon size={16} />}
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 500, fontSize: "0.875rem", color: "var(--color-text)" }}>
-                              {method.label}
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
+                            <div style={{ color: "var(--color-text-muted)" }}>
+                              {method.type === "api-key" ? <KeyIcon size={16} /> : <ServerIcon size={16} />}
                             </div>
-                            {method.hint && (
-                              <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "0.125rem" }}>
-                                {method.hint}
+                            <div>
+                              <div style={{ fontWeight: 500, fontSize: "0.875rem", color: "var(--color-text)" }}>
+                                {method.label}
+                                {isUnsupported && <span style={{ fontSize: "0.7rem", marginLeft: "0.5rem", color: "var(--color-text-muted)" }}>(CLI only)</span>}
                               </div>
-                            )}
-                            {method.type === "oauth" && (
-                              <div style={{ fontSize: "0.7rem", color: "var(--color-warning)", marginTop: "0.25rem" }}>
-                                OAuth — use CLI for now
-                              </div>
-                            )}
+                              {method.hint && (
+                                <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "0.125rem" }}>
+                                  {method.hint}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        {method.type !== "oauth" && <ChevronRight size={16} />}
-                      </button>
-                    ))}
+                          {!isUnsupported && <ChevronRight size={16} />}
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
               )}
 
-              {/* Step 3: Configure (API Key + Model) */}
+              {/* Step 3: Configure */}
               {step === "configure" && selectedMethod && (
                 <section>
-                  {/* API Key Input */}
-                  <div style={{ marginBottom: "1.5rem" }}>
-                    <h2
-                      style={{
-                        fontSize: "0.8125rem",
-                        fontWeight: 600,
-                        color: "var(--color-text-muted)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                        marginBottom: "0.75rem",
-                      }}
-                    >
-                      {selectedMethod.type === "token" ? "Setup Token" : "API Key"}
-                    </h2>
-                    <div style={{ position: "relative" }}>
-                      <input
-                        type={showKey ? "text" : "password"}
-                        value={apiKeyInput}
-                        onChange={(e) => setApiKeyInput(e.target.value)}
-                        placeholder={
-                          selectedMethod.type === "token"
-                            ? "Paste your setup-token here…"
-                            : "sk-..."
-                        }
-                        autoFocus
-                        style={{
-                          width: "100%",
-                          padding: "0.625rem 2.5rem 0.625rem 0.75rem",
-                          fontSize: "0.875rem",
-                          fontFamily: "'SF Mono', 'Fira Code', monospace",
-                          background: "var(--color-surface)",
-                          border: "1px solid var(--color-border)",
-                          borderRadius: "0.5rem",
-                          color: "var(--color-text)",
-                          outline: "none",
-                          boxSizing: "border-box",
-                        }}
-                        onFocus={(e) => {
-                          e.currentTarget.style.borderColor = "var(--color-accent)";
-                          e.currentTarget.style.boxShadow = "0 0 0 3px var(--color-accent-light)";
-                        }}
-                        onBlur={(e) => {
-                          e.currentTarget.style.borderColor = "var(--color-border)";
-                          e.currentTarget.style.boxShadow = "none";
-                        }}
-                      />
-                      <button
-                        onClick={() => setShowKey(!showKey)}
-                        style={{
-                          position: "absolute",
-                          right: "0.5rem",
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                          color: "var(--color-text-muted)",
-                          padding: "4px",
+                  {/* OAuth Flow */}
+                  {selectedMethod.type === "oauth" && (
+                    <div style={{ textAlign: "center", padding: "1.5rem 0" }}>
+                      <div style={{ marginBottom: "1.5rem" }}>
+                        <div style={{ 
+                          width: "48px", 
+                          height: "48px", 
+                          borderRadius: "12px", 
+                          background: "var(--color-accent-light)", 
+                          color: "var(--color-accent)",
                           display: "flex",
                           alignItems: "center",
-                        }}
-                      >
-                        {showKey ? <EyeOffIcon /> : <EyeIcon />}
-                      </button>
-                    </div>
-                    {selectedMethod.hint && (
-                      <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "0.5rem" }}>
-                        {selectedMethod.hint}
-                      </p>
-                    )}
-                  </div>
+                          justifyContent: "center",
+                          margin: "0 auto 1rem"
+                        }}>
+                          <ServerIcon size={24} />
+                        </div>
+                        <h3 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.5rem" }}>
+                          Connect {selectedProvider?.label}
+                        </h3>
+                        <p style={{ fontSize: "0.875rem", color: "var(--color-text-muted)" }}>
+                          {selectedMethod.hint || "Authorize OpenClaw to access your account."}
+                        </p>
+                      </div>
 
-                  {/* Model Selection */}
-                  <div style={{ marginBottom: "1.5rem" }}>
-                    <h2
-                      style={{
-                        fontSize: "0.8125rem",
-                        fontWeight: 600,
-                        color: "var(--color-text-muted)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                        marginBottom: "0.75rem",
-                      }}
-                    >
-                      Default Model
-                    </h2>
-                    <input
-                      type="text"
-                      value={modelInput}
-                      onChange={(e) => setModelInput(e.target.value)}
-                      placeholder={selectedMethod.defaultModel ?? "provider/model-name"}
-                      style={{
-                        width: "100%",
-                        padding: "0.625rem 0.75rem",
-                        fontSize: "0.875rem",
-                        fontFamily: "'SF Mono', 'Fira Code', monospace",
-                        background: "var(--color-surface)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: "0.5rem",
-                        color: "var(--color-text)",
-                        outline: "none",
-                        boxSizing: "border-box",
-                      }}
-                      onFocus={(e) => {
-                        e.currentTarget.style.borderColor = "var(--color-accent)";
-                        e.currentTarget.style.boxShadow = "0 0 0 3px var(--color-accent-light)";
-                      }}
-                      onBlur={(e) => {
-                        e.currentTarget.style.borderColor = "var(--color-border)";
-                        e.currentTarget.style.boxShadow = "none";
-                      }}
-                    />
-                    {selectedMethod.defaultModel && (
-                      <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "0.5rem" }}>
-                        Default: <code style={{
-                          background: "var(--color-surface-hover)",
-                          padding: "0.1em 0.3em",
-                          borderRadius: "0.2rem",
-                          fontSize: "0.85em",
-                        }}>{selectedMethod.defaultModel}</code>
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Save Button */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                    <button
-                      onClick={handleSave}
-                      disabled={saving || !apiKeyInput.trim()}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "0.5rem",
-                        padding: "0.625rem 1.5rem",
-                        fontSize: "0.875rem",
-                        fontWeight: 500,
-                        borderRadius: "0.5rem",
-                        border: "none",
-                        background: "var(--color-accent)",
-                        color: "#fff",
-                        cursor: saving || !apiKeyInput.trim() ? "not-allowed" : "pointer",
-                        opacity: saving || !apiKeyInput.trim() ? 0.5 : 1,
-                        transition: "all 0.15s ease",
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!saving && apiKeyInput.trim()) {
-                          e.currentTarget.style.background = "var(--color-accent-hover)";
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "var(--color-accent)";
-                      }}
-                    >
-                      {saving ? "Saving…" : "Save Configuration"}
-                    </button>
-
-                    {saveResult && (
-                      <span
+                      <button
+                        onClick={handleConnectOAuth}
+                        disabled={oauthPending}
                         style={{
                           display: "inline-flex",
                           alignItems: "center",
-                          gap: "0.375rem",
-                          fontSize: "0.8125rem",
-                          color: saveResult.ok ? "var(--color-success)" : "var(--color-error)",
+                          gap: "0.625rem",
+                          padding: "0.75rem 2rem",
+                          background: "var(--color-accent)",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "0.625rem",
+                          fontSize: "0.875rem",
+                          fontWeight: 600,
+                          cursor: oauthPending ? "not-allowed" : "pointer",
+                          opacity: oauthPending ? 0.7 : 1,
+                          transition: "all 0.15s ease",
                         }}
                       >
-                        {saveResult.ok && <CheckCircle size={16} />}
-                        {saveResult.message}
-                      </span>
-                    )}
-                  </div>
+                        {oauthPending ? "Connecting..." : `Connect ${selectedProvider?.label}`}
+                        {!oauthPending && <ChevronRight size={16} />}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Device Flow (GitHub Copilot) */}
+                  {selectedMethod.type === "device-flow" && (
+                    <div style={{ textAlign: "center", padding: "1rem 0" }}>
+                      {!userCode ? (
+                        <button
+                          onClick={handleStartCopilotFlow}
+                          disabled={saving}
+                          style={{
+                            padding: "0.75rem 2rem",
+                            background: "var(--color-accent)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "0.625rem",
+                            fontSize: "0.875rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {saving ? "Starting..." : "Start GitHub Authorization"}
+                        </button>
+                      ) : (
+                        <div>
+                          <p style={{ fontSize: "0.875rem", marginBottom: "1rem" }}>
+                            Enter this code on GitHub to authorize Copilot:
+                          </p>
+                          <div style={{ 
+                            fontSize: "2rem", 
+                            fontWeight: 700, 
+                            letterSpacing: "0.2em",
+                            padding: "1rem",
+                            background: "var(--color-surface-hover)",
+                            borderRadius: "0.75rem",
+                            border: "2px solid var(--color-border-strong)",
+                            marginBottom: "1.5rem",
+                            fontFamily: "monospace"
+                          }}>
+                            {userCode}
+                          </div>
+                          <a 
+                            href={verificationUri || "#"} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.5rem",
+                              color: "var(--color-accent)",
+                              textDecoration: "none",
+                              fontSize: "0.875rem",
+                              fontWeight: 600
+                            }}
+                          >
+                            Open GitHub Activation <ExternalLinkIcon size={16} />
+                          </a>
+                          <p style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "1.5rem" }}>
+                            Waiting for you to authorize in the browser...
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Token Flow (Anthropic, etc.) */}
+                  {selectedMethod.type === "token" && (
+                    <>
+                      <div style={{ marginBottom: "1.25rem" }}>
+                        <h2 style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", marginBottom: "0.75rem" }}>
+                          Setup Token
+                        </h2>
+                        <textarea
+                          value={tokenInput}
+                          onChange={(e) => setTokenInput(e.target.value)}
+                          placeholder="Paste your setup-token from the terminal..."
+                          autoFocus
+                          style={{
+                            width: "100%",
+                            height: "100px",
+                            padding: "0.75rem",
+                            fontSize: "0.875rem",
+                            fontFamily: "monospace",
+                            background: "var(--color-surface)",
+                            border: "1px solid var(--color-border)",
+                            borderRadius: "0.5rem",
+                            color: "var(--color-text)",
+                            resize: "none"
+                          }}
+                        />
+                      </div>
+                      <div style={{ marginBottom: "1.5rem" }}>
+                        <h2 style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", marginBottom: "0.75rem" }}>
+                          Profile Name (optional)
+                        </h2>
+                        <input
+                          type="text"
+                          value={tokenName}
+                          onChange={(e) => setTokenName(e.target.value)}
+                          placeholder="default"
+                          style={{
+                            width: "100%",
+                            padding: "0.625rem 0.75rem",
+                            fontSize: "0.875rem",
+                            background: "var(--color-surface)",
+                            border: "1px solid var(--color-border)",
+                            borderRadius: "0.5rem",
+                            color: "var(--color-text)"
+                          }}
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {/* API Key Flow */}
+                  {selectedMethod.type === "api-key" && (
+                    <div style={{ marginBottom: "1.5rem" }}>
+                      <h2 style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", marginBottom: "0.75rem" }}>
+                        API Key
+                      </h2>
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={showKey ? "text" : "password"}
+                          value={apiKeyInput}
+                          onChange={(e) => setApiKeyInput(e.target.value)}
+                          placeholder="sk-..."
+                          autoFocus
+                          style={{
+                            width: "100%",
+                            padding: "0.625rem 2.5rem 0.625rem 0.75rem",
+                            fontSize: "0.875rem",
+                            fontFamily: "monospace",
+                            background: "var(--color-surface)",
+                            border: "1px solid var(--color-border)",
+                            borderRadius: "0.5rem",
+                            color: "var(--color-text)",
+                          }}
+                        />
+                        <button
+                          onClick={() => setShowKey(!showKey)}
+                          style={{
+                            position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)",
+                            background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)"
+                          }}
+                        >
+                          {showKey ? <EyeOffIcon /> : <EyeIcon />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Common Model & Save for non-OAuth/non-Copilot */}
+                  {(selectedMethod.type === "api-key" || selectedMethod.type === "token") && (
+                    <>
+                      <div style={{ marginBottom: "1.5rem" }}>
+                        <h2 style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--color-text-muted)", textTransform: "uppercase", marginBottom: "0.75rem" }}>
+                          Default Model
+                        </h2>
+                        <input
+                          type="text"
+                          value={modelInput}
+                          onChange={(e) => setModelInput(e.target.value)}
+                          placeholder={selectedMethod.defaultModel ?? "provider/model-name"}
+                          style={{
+                            width: "100%",
+                            padding: "0.625rem 0.75rem",
+                            fontSize: "0.875rem",
+                            fontFamily: "monospace",
+                            background: "var(--color-surface)",
+                            border: "1px solid var(--color-border)",
+                            borderRadius: "0.5rem",
+                            color: "var(--color-text)",
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                        <button
+                          onClick={handleSave}
+                          disabled={saving || (selectedMethod.type === "api-key" ? !apiKeyInput.trim() : !tokenInput.trim())}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.625rem",
+                            padding: "0.625rem 1.25rem",
+                            background: "var(--color-accent)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "0.5rem",
+                            fontSize: "0.875rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            transition: "opacity 0.15s ease",
+                          }}
+                        >
+                          {saving ? "Saving..." : "Save Configuration"}
+                          {!saving && <ChevronRight size={16} />}
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Status Messages */}
+                  {saveResult && (
+                    <div
+                      style={{
+                        marginTop: "1.25rem",
+                        padding: "0.875rem 1rem",
+                        borderRadius: "0.625rem",
+                        fontSize: "0.875rem",
+                        background: saveResult.ok ? "var(--color-accent-light)" : "#fee2e2",
+                        color: saveResult.ok ? "var(--color-accent)" : "#991b1b",
+                        border: `1px solid ${saveResult.ok ? "var(--color-accent)" : "#fecaca"}`,
+                      }}
+                    >
+                      {saveResult.message}
+                    </div>
+                  )}
                 </section>
               )}
             </>

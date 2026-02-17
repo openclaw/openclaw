@@ -9,15 +9,20 @@ export const runtime = "nodejs";
  *
  * We duplicate the data here instead of importing because the web app
  * is a separate Next.js build that cannot import from the root `src/`.
+ *
+ * Auth type guide (must match CLI behaviour):
+ *   "api-key"      – simple API key text input
+ *   "token"        – paste a setup-token (e.g. Anthropic)
+ *   "oauth"        – standard web OAuth (redirect flow) – only Chutes today
+ *   "device-flow"  – GitHub device-flow (display code, poll for auth)
+ *   "unsupported"  – requires CLI-only infra (plugin auth, custom OAuth)
  */
 
 export type AuthMethod = {
   value: string;
   label: string;
   hint?: string;
-  /** "api-key" = text input, "oauth" = open link, "token" = paste setup-token */
-  type: "api-key" | "oauth" | "token";
-  /** Default model ref for this auth method, if applicable */
+  type: "api-key" | "oauth" | "token" | "device-flow" | "unsupported";
   defaultModel?: string;
 };
 
@@ -34,7 +39,9 @@ const PROVIDERS: ProviderGroup[] = [
     label: "OpenAI",
     hint: "Codex OAuth + API key",
     methods: [
-      { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", type: "oauth" },
+      // OpenAI Codex uses a custom OAuth flow (loginOpenAICodexOAuth) that
+      // requires a local HTTP server callback – not doable in web UI.
+      { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)", hint: "Requires CLI (custom OAuth flow)", type: "unsupported" },
       { value: "openai-api-key", label: "OpenAI API key", type: "api-key", defaultModel: "openai/gpt-4.1" },
     ],
   },
@@ -48,13 +55,23 @@ const PROVIDERS: ProviderGroup[] = [
     ],
   },
   {
+    value: "chutes",
+    label: "Chutes",
+    hint: "OAuth",
+    methods: [
+      { value: "chutes", label: "Chutes (OAuth)", type: "oauth" },
+    ],
+  },
+  {
     value: "google",
     label: "Google",
     hint: "Gemini API key + OAuth",
     methods: [
       { value: "gemini-api-key", label: "Google Gemini API key", type: "api-key", defaultModel: "google/gemini-2.5-pro" },
-      { value: "google-antigravity", label: "Google Antigravity OAuth", hint: "Uses the bundled Antigravity auth plugin", type: "oauth" },
-      { value: "google-gemini-cli", label: "Google Gemini CLI OAuth", hint: "Uses the bundled Gemini CLI auth plugin", type: "oauth" },
+      // These use plugin-based auth (applyAuthChoicePluginProvider) which
+      // requires the full plugin runtime – not available in the web UI.
+      { value: "google-antigravity", label: "Google Antigravity OAuth", hint: "Requires CLI (plugin auth)", type: "unsupported" },
+      { value: "google-gemini-cli", label: "Google Gemini CLI OAuth", hint: "Requires CLI (plugin auth)", type: "unsupported" },
     ],
   },
   {
@@ -78,8 +95,11 @@ const PROVIDERS: ProviderGroup[] = [
     label: "Copilot",
     hint: "GitHub + local proxy",
     methods: [
-      { value: "github-copilot", label: "GitHub Copilot (GitHub device login)", hint: "Uses GitHub device flow", type: "oauth" },
-      { value: "copilot-proxy", label: "Copilot Proxy (local)", hint: "Local proxy for VS Code Copilot models", type: "api-key" },
+      // GitHub Copilot in CLI uses githubCopilotLoginCommand (device flow).
+      // We replicate this with our /api/settings/copilot/start+poll endpoints.
+      { value: "github-copilot", label: "GitHub Copilot (GitHub device login)", hint: "Uses GitHub device flow", type: "device-flow", defaultModel: "github-copilot/gpt-4o" },
+      // Copilot Proxy uses plugin-based auth – not available in web UI.
+      { value: "copilot-proxy", label: "Copilot Proxy (local)", hint: "Requires CLI (plugin auth)", type: "unsupported" },
     ],
   },
   {

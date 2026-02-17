@@ -1,54 +1,72 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { homedir } from "node:os";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  upsertAuthProfile,
+  readConfig,
+  writeConfig,
+  applyAuthProfileConfig,
+} from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function resolveConfigPath(): string {
-  const envPath = process.env.OPENCLAW_CONFIG;
-  if (envPath) {return envPath;}
-  return join(homedir(), ".openclaw", "openclaw.json");
-}
-
-function readConfig(configPath: string): Record<string, unknown> {
-  if (!existsSync(configPath)) {return {};}
-  try {
-    return JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    return {};
-  }
-}
-
-function writeConfig(configPath: string, config: Record<string, unknown>): void {
-  const dir = dirname(configPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-}
+/**
+ * Mapping from auth-method value (frontend) → { profileId, credentialProvider }
+ * Must exactly match what the CLI's onboard-auth.credentials.ts does for each
+ * provider. The gateway looks up credentials by profileId, so if they don't
+ * match, the key won't be found.
+ */
+const AUTH_METHOD_MAP: Record<string, { profileId: string; provider: string }> = {
+  // OpenAI
+  "openai-api-key":              { profileId: "openai:default",              provider: "openai" },
+  // Anthropic
+  "apiKey":                      { profileId: "anthropic:default",           provider: "anthropic" },
+  // Google
+  "gemini-api-key":              { profileId: "google:default",              provider: "google" },
+  // xAI
+  "xai-api-key":                 { profileId: "xai:default",                provider: "xai" },
+  // OpenRouter
+  "openrouter-api-key":          { profileId: "openrouter:default",         provider: "openrouter" },
+  // Vercel AI Gateway
+  "ai-gateway-api-key":          { profileId: "vercel-ai-gateway:default",  provider: "vercel-ai-gateway" },
+  // Moonshot
+  "moonshot-api-key":            { profileId: "moonshot:default",           provider: "moonshot" },
+  "moonshot-api-key-cn":         { profileId: "moonshot:default",           provider: "moonshot" },
+  // Kimi Coding
+  "kimi-code-api-key":           { profileId: "kimi-coding:default",        provider: "kimi-coding" },
+  // Together
+  "together-api-key":            { profileId: "together:default",           provider: "together" },
+  // Hugging Face
+  "huggingface-api-key":         { profileId: "huggingface:default",        provider: "huggingface" },
+  // Venice
+  "venice-api-key":              { profileId: "venice:default",             provider: "venice" },
+  // LiteLLM
+  "litellm-api-key":             { profileId: "litellm:default",            provider: "litellm" },
+  // Synthetic
+  "synthetic-api-key":           { profileId: "synthetic:default",          provider: "synthetic" },
+  // Custom
+  "custom-api-key":              { profileId: "custom:default",             provider: "custom" },
+};
 
 /**
  * POST /api/settings/auth
  *
- * Body: { provider: string, authMethod: string, apiKey?: string }
+ * Body: { provider: string, authMethod: string, apiKey: string }
  *
- * Writes the API key into the correct location in openclaw.json's
- * models.providers section, mirroring how the CLI stores credentials.
+ * 1. Writes the API key to credentials.json (AuthProfileStore) – same as CLI.
+ * 2. Links the auth profile in openclaw.json – same as CLI.
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { provider, authMethod, apiKey } = body as {
+    const { authMethod, apiKey } = body as {
       provider?: string;
       authMethod?: string;
       apiKey?: string;
     };
 
-    if (!provider || !authMethod) {
+    if (!authMethod) {
       return NextResponse.json(
-        { error: "provider and authMethod are required" },
+        { error: "authMethod is required" },
         { status: 400 },
       );
     }
@@ -60,71 +78,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const configPath = resolveConfigPath();
-    const config = readConfig(configPath);
-
-    // Resolve the provider key used in models.providers.
-    // This mirrors the CLI's onboard-auth.ts provider mapping.
-    const providerKeyMap: Record<string, string> = {
-      "openai-api-key": "openai",
-      "apiKey": "anthropic",
-      "gemini-api-key": "google-generative-ai",
-      "xai-api-key": "xai",
-      "openrouter-api-key": "openrouter",
-      "ai-gateway-api-key": "ai-gateway",
-      "moonshot-api-key": "moonshot",
-      "moonshot-api-key-cn": "moonshot",
-      "kimi-code-api-key": "kimi-coding",
-      "together-api-key": "together",
-      "huggingface-api-key": "huggingface",
-      "venice-api-key": "venice",
-      "litellm-api-key": "litellm",
-      "synthetic-api-key": "synthetic",
-      "xiaomi-api-key": "xiaomi",
-      "cloudflare-ai-gateway-api-key": "cloudflare-ai-gateway",
-      "opencode-zen": "opencode-zen",
-      "qianfan-api-key": "qianfan",
-      "custom-api-key": "custom",
-    };
-
-    const providerKey = providerKeyMap[authMethod] ?? provider;
-
-    // Ensure models.providers exists
-    if (!config.models || typeof config.models !== "object") {
-      config.models = {};
+    const mapping = AUTH_METHOD_MAP[authMethod];
+    if (!mapping) {
+      return NextResponse.json(
+        { error: `Unknown auth method: ${authMethod}` },
+        { status: 400 },
+      );
     }
-    const models = config.models as Record<string, unknown>;
-    if (!models.providers || typeof models.providers !== "object") {
-      models.providers = {};
-    }
-    const providers = models.providers as Record<string, Record<string, unknown>>;
 
-    // Create or update provider entry
-    if (!providers[providerKey] || typeof providers[providerKey] !== "object") {
-      providers[providerKey] = {};
-    }
-    providers[providerKey].apiKey = apiKey.trim();
+    const trimmedKey = apiKey.trim();
 
-    // Also update auth profile (mirrors CLI behavior)
-    if (!config.auth || typeof config.auth !== "object") {
-      config.auth = {};
-    }
-    const auth = config.auth as Record<string, unknown>;
-    if (!auth.profiles || typeof auth.profiles !== "object") {
-      auth.profiles = {};
-    }
-    const profiles = auth.profiles as Record<string, unknown>;
-    profiles[`${providerKey}:default`] = {
-      provider: providerKey,
+    // Step 1: Write credential to credentials.json (AuthProfileStore)
+    upsertAuthProfile({
+      profileId: mapping.profileId,
+      credential: {
+        type: "api_key",
+        provider: mapping.provider,
+        key: trimmedKey,
+      },
+    });
+
+    // Step 2: Link the auth profile in openclaw.json
+    const config = readConfig();
+    const updatedConfig = applyAuthProfileConfig(config, {
+      profileId: mapping.profileId,
+      provider: mapping.provider,
       mode: "api_key",
-    };
-
-    writeConfig(configPath, config);
+    });
+    writeConfig(updatedConfig);
 
     return NextResponse.json({
       ok: true,
-      provider: providerKey,
-      configPath,
+      profileId: mapping.profileId,
+      provider: mapping.provider,
     });
   } catch (err) {
     return NextResponse.json(
