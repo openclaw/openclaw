@@ -609,7 +609,12 @@ async function runWebSearch(params: {
         cached.value.results as Array<{ url?: string; siteName?: string }>,
         params.urlAllowlist,
       );
-      return { ...cached.value, results: filteredResults, cached: true };
+      return {
+        ...cached.value,
+        results: filteredResults,
+        count: filteredResults.length,
+        cached: true,
+      };
     }
     return { ...cached.value, cached: true };
   }
@@ -728,10 +733,11 @@ async function runWebSearch(params: {
     ? filterResultsByAllowlist(mapped, params.urlAllowlist)
     : mapped;
 
-  const payload = {
+  // Store unfiltered results in cache to avoid issues when allowlist changes
+  const unfilteredPayload = {
     query: params.query,
     provider: params.provider,
-    count: filteredResults.length,
+    count: mapped.length,
     tookMs: Date.now() - start,
     externalContent: {
       untrusted: true,
@@ -739,10 +745,16 @@ async function runWebSearch(params: {
       provider: params.provider,
       wrapped: true,
     },
+    results: mapped,
+  };
+  writeCache(SEARCH_CACHE, cacheKey, unfilteredPayload, params.cacheTtlMs);
+
+  // Return filtered results
+  return {
+    ...unfilteredPayload,
+    count: filteredResults.length,
     results: filteredResults,
   };
-  writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-  return payload;
 }
 
 export function createWebSearchTool(options?: {
