@@ -480,7 +480,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           const emoji = r.emoji;
           const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
           enqueueSystemEvent(text, {
-            sessionKey: sessionKey,
+            sessionKey,
             contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
           });
           logVerbose(`telegram: reaction event enqueued: ${text}`);

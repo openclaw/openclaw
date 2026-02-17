@@ -58,7 +58,12 @@ export function createReactionDebouncer(params: {
     drainAllForSession: async (sessionKey: string) => {
       const prefix = `${sessionKey}:`;
       const keysToFlush = Array.from(activeKeys).filter((k) => k.startsWith(prefix));
-      await Promise.all(keysToFlush.map((k) => inner.flushKey(k)));
+      const results = await Promise.allSettled(keysToFlush.map((k) => inner.flushKey(k)));
+      for (const r of results) {
+        if (r.status === "rejected") {
+          console.error("[reaction-debouncer] drainAllForSession flush error:", r.reason);
+        }
+      }
       for (const k of keysToFlush) {
         activeKeys.delete(k);
       }
