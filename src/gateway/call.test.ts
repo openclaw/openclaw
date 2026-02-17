@@ -113,7 +113,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("ws://100.64.0.1:18800");
   });
 
-  it("uses LAN IP when bind is lan and LAN IP is available", async () => {
+  it("uses loopback when bind is lan (server on 0.0.0.0 accepts loopback)", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
@@ -121,7 +121,7 @@ describe("callGateway url resolution", () => {
 
     await callGateway({ method: "health" });
 
-    expect(lastClientOptions?.url).toBe("ws://192.168.1.42:18800");
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
   });
 
   it("falls back to loopback when bind is lan but no LAN IP found", async () => {
@@ -198,7 +198,7 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.message).toContain("Gateway target: ws://127.0.0.1:18789");
   });
 
-  it("uses LAN IP and reports lan source when bind is lan", () => {
+  it("uses loopback URL but reports lan source when bind is lan", () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "local", bind: "lan" },
     });
@@ -208,7 +208,7 @@ describe("buildGatewayConnectionDetails", () => {
 
     const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://10.0.0.5:18800");
+    expect(details.url).toBe("ws://127.0.0.1:18800");
     expect(details.urlSource).toBe("local lan 10.0.0.5");
     expect(details.bindDetail).toBe("Bind: lan");
   });

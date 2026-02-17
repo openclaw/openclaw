@@ -105,12 +105,14 @@ export function buildGatewayConnectionDetails(
   const preferLan = bindMode === "lan";
   const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;
   const scheme = tlsEnabled ? "wss" : "ws";
+  // Always use loopback for local CLI connections. When bind=lan the server
+  // listens on 0.0.0.0 which accepts loopback traffic, and using a LAN IP
+  // would cause the gateway to treat same-host CLI calls as remote (requiring
+  // device pairing). Tailnet genuinely needs its own IP for cross-host routing.
   const localUrl =
     preferTailnet && tailnetIPv4
       ? `${scheme}://${tailnetIPv4}:${localPort}`
-      : preferLan && lanIPv4
-        ? `${scheme}://${lanIPv4}:${localPort}`
-        : `${scheme}://127.0.0.1:${localPort}`;
+      : `${scheme}://127.0.0.1:${localPort}`;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
