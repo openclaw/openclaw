@@ -154,13 +154,9 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     const extensionContext = {} as Parameters<typeof def.execute>[2];
     // oxlint-disable-next-line typescript/no-explicit-any
     const signal = undefined as any;
-    await def.execute(
-      "call-dedup",
-      { url: "https://example.com" },
-      extensionContext,
-      undefined,
-      signal,
-    );
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const arg4 = undefined as any;
+    await def.execute("call-dedup", { url: "https://example.com" }, extensionContext, arg4, signal);
 
     expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(1);
   });
