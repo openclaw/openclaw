@@ -28,7 +28,7 @@ vi.mock("../config/config.js", () => ({
   })),
 }));
 
-const announceSpy = vi.fn(async () => true);
+const announceSpy = vi.fn(async (_params: unknown) => true);
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -101,7 +101,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
     expect(announceSpy).toHaveBeenCalledTimes(1);
 
-    const announce = announceSpy.mock.calls[0]?.[0] as { childRunId?: string };
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
     expect(announce.childRunId).toBe("run-new");
   });
 
@@ -161,7 +161,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = announceSpy.mock.calls[0]?.[0] as { childRunId?: string };
+    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
     expect(announce.childRunId).toBe("run-failed-restart");
   });
 
@@ -234,7 +234,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     const childRunIds = announceSpy.mock.calls.map(
-      (call) => (call[0] as { childRunId?: string }).childRunId,
+      (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
     );
     expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(2);
     expect(childRunIds.filter((id) => id === "run-child")).toHaveLength(1);

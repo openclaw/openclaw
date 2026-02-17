@@ -1,14 +1,15 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn(() => false),
+    hasHooks: vi.fn((_: string) => false),
     runAfterToolCall: vi.fn(async () => {}),
   },
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
-  consumeAdjustedParamsForToolCall: vi.fn(() => undefined),
+  consumeAdjustedParamsForToolCall: vi.fn((_: string) => undefined as unknown),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
@@ -30,10 +31,13 @@ function createReadTool() {
     name: "read",
     label: "Read",
     description: "reads",
-    parameters: {},
+    parameters: Type.Object({}),
     execute: vi.fn(async () => ({ content: [], details: { ok: true } })),
-  } satisfies AgentTool<unknown, unknown>;
+  } satisfies AgentTool;
 }
+
+type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
+const extensionContext = {} as Parameters<ToolExecute>[3];
 
 function enableAfterToolCallHook() {
   hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
@@ -41,7 +45,14 @@ function enableAfterToolCallHook() {
 
 async function executeReadTool(callId: string) {
   const defs = toToolDefinitions([createReadTool()]);
-  return await defs[0].execute(callId, { path: "/tmp/file" }, undefined, undefined);
+  const args: Parameters<(typeof defs)[number]["execute"]> = [
+    callId,
+    { path: "/tmp/file" },
+    undefined,
+    extensionContext,
+    undefined,
+  ];
+  return await defs[0].execute(...args);
 }
 
 function expectReadAfterToolCallPayload(result: Awaited<ReturnType<typeof executeReadTool>>) {
@@ -87,7 +98,7 @@ describe("pi tool definition adapter after_tool_call", () => {
   it("uses wrapped-tool adjusted params for after_tool_call payload", async () => {
     enableAfterToolCallHook();
     hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
-    hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue({ mode: "safe" });
+    hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue({ mode: "safe" } as unknown);
     const result = await executeReadTool("call-ok-wrapped");
 
     expect(result.details).toMatchObject({ ok: true });
@@ -101,14 +112,21 @@ describe("pi tool definition adapter after_tool_call", () => {
       name: "bash",
       label: "Bash",
       description: "throws",
-      parameters: {},
+      parameters: Type.Object({}),
       execute: vi.fn(async () => {
         throw new Error("boom");
       }),
-    } satisfies AgentTool<unknown, unknown>;
+    } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const result = await defs[0].execute("call-err", { cmd: "ls" }, undefined, undefined);
+    const args: Parameters<(typeof defs)[number]["execute"]> = [
+      "call-err",
+      { cmd: "ls" },
+      undefined,
+      extensionContext,
+      undefined,
+    ];
+    const result = await defs[0].execute(...args);
 
     expect(result.details).toMatchObject({
       status: "error",
