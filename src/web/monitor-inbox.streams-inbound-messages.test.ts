@@ -281,7 +281,9 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).toHaveBeenCalledTimes(2);
 
-    resolveFirst?.();
+    if (typeof resolveFirst === "function") {
+      resolveFirst();
+    }
     await listener.close();
   });
 
