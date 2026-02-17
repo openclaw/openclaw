@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
 import {
   OPENAI_TTS_MODELS,
@@ -16,7 +17,6 @@ import {
 } from "../../tts/tts.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export const ttsHandlers: GatewayRequestHandlers = {
   "tts.status": async ({ respond }) => {
@@ -139,7 +139,12 @@ export const ttsHandlers: GatewayRequestHandlers = {
             id: "elevenlabs",
             name: "ElevenLabs",
             configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-            models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+            models: [
+              "eleven_flash_v2_5",
+              "eleven_flash_v2",
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+            ],
           },
           {
             id: "edge",
