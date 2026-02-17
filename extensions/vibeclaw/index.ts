@@ -1,31 +1,36 @@
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 import { createVibeclawTools } from "./src/tools.js";
-import { initWorkspace, resolveWorkspace, readConfig, getMetrics, listCampaigns } from "./src/workspace.js";
+import {
+  initWorkspace,
+  resolveWorkspace,
+  readConfig,
+  getMetrics,
+  listCampaigns,
+} from "./src/workspace.js";
 
 export default function register(api: OpenClawPluginApi) {
   const config = api.pluginConfig ?? {};
   const workspace = (config.workspace as string) ?? process.env.VIBECLAW_WORKSPACE ?? "";
 
   // Register all Vibeclaw agent tools
-  api.registerTool(
-    (ctx) => createVibeclawTools(api, workspace, ctx),
-    {
-      names: [
-        "vibeclaw_campaign",
-        "vibeclaw_status",
-        "vibeclaw_learn",
-        "vibeclaw_log",
-        "vibeclaw_draft",
-        "vibeclaw_config",
-      ],
-    },
-  );
+  api.registerTool((ctx) => createVibeclawTools(api, workspace, ctx), {
+    names: [
+      "vibeclaw_campaign",
+      "vibeclaw_status",
+      "vibeclaw_learn",
+      "vibeclaw_log",
+      "vibeclaw_draft",
+      "vibeclaw_config",
+    ],
+  });
 
   // ── CLI Commands ───────────────────────────────────────────────────────
 
   api.registerCli(
     ({ program }) => {
-      const cmd = program.command("vibeclaw").description("Vibeclaw autonomous marketing agent suite");
+      const cmd = program
+        .command("vibeclaw")
+        .description("Vibeclaw autonomous marketing agent suite");
 
       // Init: Create workspace with all directories and files
       cmd
@@ -56,7 +61,9 @@ export default function register(api: OpenClawPluginApi) {
           api.logger.info(`  1. Set env: export VIBECLAW_WORKSPACE="${resolved}"`);
           api.logger.info(`  2. Edit config: ${resolved}/config.json`);
           api.logger.info(`  3. Run: openclaw vibeclaw status`);
-          api.logger.info(`  4. Start a campaign: openclaw agent -m "Plan a product launch campaign"`);
+          api.logger.info(
+            `  4. Start a campaign: openclaw agent -m "Plan a product launch campaign"`,
+          );
         });
 
       // Status: Show workspace health and agent metrics
@@ -67,7 +74,9 @@ export default function register(api: OpenClawPluginApi) {
           const ws = resolveWorkspace(workspace);
 
           if (!ws) {
-            api.logger.error("VIBECLAW_WORKSPACE not set. Run 'openclaw vibeclaw init <path>' first.");
+            api.logger.error(
+              "VIBECLAW_WORKSPACE not set. Run 'openclaw vibeclaw init <path>' first.",
+            );
             return;
           }
 
@@ -102,10 +111,17 @@ export default function register(api: OpenClawPluginApi) {
 
           api.logger.info("\nAvailable Skills:");
           const skills = [
-            "vibeclaw-orchestrator", "intent-sniper", "content-syndication",
-            "directory-submitter", "social-content-factory", "x-reply-agent",
-            "job-sniper", "seo-gap-exploiter", "community-engagement",
-            "skill-learner", "youtube-automation",
+            "vibeclaw-orchestrator",
+            "intent-sniper",
+            "content-syndication",
+            "directory-submitter",
+            "social-content-factory",
+            "x-reply-agent",
+            "job-sniper",
+            "seo-gap-exploiter",
+            "community-engagement",
+            "skill-learner",
+            "youtube-automation",
           ];
           api.logger.info(`  ${skills.join(", ")}`);
         });
@@ -166,9 +182,7 @@ export default function register(api: OpenClawPluginApi) {
         `URL: ${product.url}`,
         product.description ? `Description: ${product.description}` : "",
         product.category ? `Category: ${product.category}` : "",
-        product.competitors
-          ? `Competitors: ${(product.competitors as string[]).join(", ")}`
-          : "",
+        product.competitors ? `Competitors: ${(product.competitors as string[]).join(", ")}` : "",
         `Workspace: ${ws}`,
         "Vibeclaw tools available: vibeclaw_campaign, vibeclaw_status, vibeclaw_learn, vibeclaw_log, vibeclaw_draft, vibeclaw_config",
         "</vibeclaw-context>",
@@ -178,5 +192,7 @@ export default function register(api: OpenClawPluginApi) {
     };
   });
 
-  api.logger.info(`Vibeclaw marketing suite registered${workspace ? ` (workspace: ${resolveWorkspace(workspace)})` : ""}`);
+  api.logger.info(
+    `Vibeclaw marketing suite registered${workspace ? ` (workspace: ${resolveWorkspace(workspace)})` : ""}`,
+  );
 }

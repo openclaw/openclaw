@@ -24,14 +24,7 @@
       "skills/*/SKILL.md",
       "ui/**"
     ],
-    "low": [
-      "docs/**",
-      "test/**",
-      "scripts/**",
-      "**/*.test.ts",
-      "**/*.md",
-      "**"
-    ]
+    "low": ["docs/**", "test/**", "scripts/**", "**/*.test.ts", "**/*.md", "**"]
   },
   "mergePolicy": {
     "high": {
@@ -48,34 +41,20 @@
       "requireHumanApproval": true
     },
     "medium": {
-      "requiredChecks": [
-        "risk-policy-gate",
-        "typecheck",
-        "lint",
-        "unit-tests",
-        "ci-pipeline"
-      ],
+      "requiredChecks": ["risk-policy-gate", "typecheck", "lint", "unit-tests", "ci-pipeline"],
       "requireBrowserEvidence": false,
       "minTestCoverage": 50,
       "requireHumanApproval": false
     },
     "low": {
-      "requiredChecks": [
-        "risk-policy-gate",
-        "lint",
-        "ci-pipeline"
-      ],
+      "requiredChecks": ["risk-policy-gate", "lint", "ci-pipeline"],
       "requireBrowserEvidence": false,
       "minTestCoverage": 0,
       "requireHumanApproval": false
     }
   },
   "docsDriftRules": {
-    "trackedPaths": [
-      ".harness/**",
-      ".github/workflows/**",
-      "skills/code-factory/**"
-    ],
+    "trackedPaths": [".harness/**", ".github/workflows/**", "skills/code-factory/**"],
     "requireChangelogEntry": true
   },
   "remediationAgent": {

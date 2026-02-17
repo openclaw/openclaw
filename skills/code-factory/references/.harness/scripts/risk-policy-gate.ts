@@ -88,9 +88,7 @@ function checkDocsDrift(changedFiles: string[], policy: RiskPolicy): string | nu
   );
 
   if (hasControlPlaneChanges && policy.docsDriftRules?.requireChangelogEntry) {
-    const hasChangelog = changedFiles.some(
-      (f) => f.toLowerCase().includes("changelog"),
-    );
+    const hasChangelog = changedFiles.some((f) => f.toLowerCase().includes("changelog"));
     if (!hasChangelog) {
       return "Control-plane changes detected but no CHANGELOG entry found";
     }

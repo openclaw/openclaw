@@ -758,6 +758,18 @@ export type SkillStatusReport = {
   skills: SkillStatusEntry[];
 };
 
+export type ProvidersStatusSnapshot = {
+  whatsapp: WhatsAppStatus;
+  telegram: TelegramStatus;
+  discord: DiscordStatus;
+  googleChat?: GoogleChatStatus;
+  slack?: SlackStatus;
+  signal?: SignalStatus;
+  imessage?: IMessageStatus;
+  nostr?: NostrStatus;
+  msTeams?: MSTeamsStatus;
+};
+
 export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;

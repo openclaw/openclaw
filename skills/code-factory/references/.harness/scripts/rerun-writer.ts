@@ -34,10 +34,9 @@ function listPRComments(prNumber: number): PRComment[] {
 }
 
 function postComment(prNumber: number, body: string): void {
-  execSync(
-    `gh pr comment ${prNumber} --body '${body.replace(/'/g, "'\\''")}'`,
-    { encoding: "utf-8" },
-  );
+  execSync(`gh pr comment ${prNumber} --body '${body.replace(/'/g, "'\\''")}'`, {
+    encoding: "utf-8",
+  });
 }
 
 export function requestReviewRerun(
@@ -68,8 +67,7 @@ export function requestReviewRerun(
 
 function main() {
   const headSha =
-    process.env.HEAD_SHA ??
-    execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+    process.env.HEAD_SHA ?? execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
   const prNumber = parseInt(process.env.PR_NUMBER ?? "0", 10);
   const reviewAgent = process.env.REVIEW_AGENT_USERNAME ?? "greptile[bot]";
 

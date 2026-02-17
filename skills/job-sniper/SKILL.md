@@ -1,7 +1,7 @@
 ---
 name: job-sniper
 description: "Monitor job boards for hiring signals that indicate sales opportunities. When a company posts 'Hiring Marketing Manager', they need help NOW and will spend $120K/yr. Pitch your AI agent/tool as a faster, cheaper alternative."
-metadata: {"openclaw":{"emoji":"🎯","requires":{"bins":["curl"]}}}
+metadata: { "openclaw": { "emoji": "🎯", "requires": { "bins": ["curl"] } } }
 ---
 
 # Job Sniper
@@ -39,6 +39,7 @@ Growth Hacker              → AI growth automation
 ## Job Board Monitoring
 
 ### Platforms to Monitor
+
 ```
 LinkedIn Jobs      — linkedin.com/jobs
 Indeed              — indeed.com
@@ -52,6 +53,7 @@ Lever (boards)      — jobs.lever.co
 ```
 
 ### Search Queries
+
 ```
 "hiring [target role]" site:linkedin.com
 "[target role]" site:wellfound.com
@@ -62,13 +64,13 @@ Lever (boards)      — jobs.lever.co
 
 Score each lead 1-5:
 
-| Score | Criteria |
-|-------|----------|
-| 5 | Startup/SMB, exactly your product's domain, budget evident |
-| 4 | Mid-size company, strong overlap, likely decision-maker reachable |
-| 3 | Good fit but large company (slower sales cycle) |
-| 2 | Tangential fit, worth a cold email |
-| 1 | Weak fit, skip |
+| Score | Criteria                                                          |
+| ----- | ----------------------------------------------------------------- |
+| 5     | Startup/SMB, exactly your product's domain, budget evident        |
+| 4     | Mid-size company, strong overlap, likely decision-maker reachable |
+| 3     | Good fit but large company (slower sales cycle)                   |
+| 2     | Tangential fit, worth a cold email                                |
+| 1     | Weak fit, skip                                                    |
 
 Only pursue score 3+.
 
@@ -84,6 +86,7 @@ For each qualified lead:
 ## Outreach Templates
 
 ### Template 1: Direct Pitch
+
 ```
 Subject: Re: Your [Role] opening — AI alternative that starts today
 
@@ -103,6 +106,7 @@ Happy to show you a 15-min demo this week?
 ```
 
 ### Template 2: Consultative Approach
+
 ```
 Subject: Quick thought on your [Role] search
 
@@ -121,6 +125,7 @@ Not sure if it's a fit — but happy to share what's working for
 ```
 
 ### Template 3: Social Proof
+
 ```
 Subject: How [Similar Company] replaced their [Role] opening with AI
 

@@ -1,7 +1,7 @@
 ---
 name: directory-submitter
 description: "Submit your product to 100+ startup directories, review sites, and aggregators. Adapts descriptions per platform. Staggers submissions over weeks for natural discovery. Tracks approval status."
-metadata: {"openclaw":{"emoji":"📋","requires":{"bins":["curl"]}}}
+metadata: { "openclaw": { "emoji": "📋", "requires": { "bins": ["curl"] } } }
 ---
 
 # Directory Submitter
@@ -20,6 +20,7 @@ Automatically submit your product to 100+ directories, review sites, and aggrega
 ## Directory Registry
 
 ### Tier 1 — High Impact (submit first)
+
 ```
 Product Hunt        — producthunt.com
 BetaList           — betalist.com
@@ -34,6 +35,7 @@ Software Advice    — softwareadvice.com
 ```
 
 ### Tier 2 — Startup Directories
+
 ```
 DevHunt            — devhunt.org
 Uneed              — uneed.best
@@ -51,6 +53,7 @@ Startup Lift       — startuplift.com
 ```
 
 ### Tier 3 — AI/Tech Specific
+
 ```
 Futurepedia        — futurepedia.io
 There's An AI      — theresanaiforthat.com
@@ -63,6 +66,7 @@ AI Scout           — aiscout.net
 ```
 
 ### Tier 4 — SEO and Link Building
+
 ```
 Crunchbase         — crunchbase.com
 AngelList          — angel.co
@@ -75,6 +79,7 @@ StackShare         — stackshare.io
 ```
 
 ### Tier 5 — Review Sites
+
 ```
 Trustpilot         — trustpilot.com
 G2                 — g2.com
@@ -135,6 +140,7 @@ Status values: `pending`, `submitted`, `approved`, `rejected`, `follow_up_needed
 ## Follow-Up Strategy
 
 For directories that require manual review:
+
 - Wait 5-7 days after submission
 - Check if listing is live
 - If not, send polite follow-up email

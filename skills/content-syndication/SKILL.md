@@ -1,7 +1,7 @@
 ---
 name: content-syndication
 description: "Generate and publish SEO-optimized content across 20+ platforms. Each piece is adapted to the platform's style. Builds backlinks, improves LLM SEO citations, and drives organic traffic. Supports LinkedIn, Medium, Substack, Dev.to, Hashnode, Reddit, Quora, and 15+ more."
-metadata: {"openclaw":{"emoji":"📡","requires":{"bins":["curl"]}}}
+metadata: { "openclaw": { "emoji": "📡", "requires": { "bins": ["curl"] } } }
 ---
 
 # Content Syndication Engine
@@ -19,34 +19,37 @@ Generate topic-based content and publish across 20+ platforms with platform-nati
 ## Platform Registry
 
 ### Tier 1 — High Authority (publish first)
-| Platform | Format | Max Length | Backlink Style |
-|----------|--------|-----------|----------------|
-| LinkedIn | Article/Post | 3000 words / 3000 chars | In-text + author bio |
-| Medium | Article | 5000 words | In-text + footer |
-| Substack | Newsletter | 3000 words | In-text + CTA |
-| Dev.to | Technical article | 4000 words | In-text + canonical |
-| Hashnode | Blog post | 4000 words | In-text + canonical |
+
+| Platform | Format            | Max Length              | Backlink Style       |
+| -------- | ----------------- | ----------------------- | -------------------- |
+| LinkedIn | Article/Post      | 3000 words / 3000 chars | In-text + author bio |
+| Medium   | Article           | 5000 words              | In-text + footer     |
+| Substack | Newsletter        | 3000 words              | In-text + CTA        |
+| Dev.to   | Technical article | 4000 words              | In-text + canonical  |
+| Hashnode | Blog post         | 4000 words              | In-text + canonical  |
 
 ### Tier 2 — Q&A and Discussion
-| Platform | Format | Max Length | Backlink Style |
-|----------|--------|-----------|----------------|
-| Quora | Answer | 1000 words | In-text reference |
-| Reddit | Post/Comment | 10000 chars | Context link |
-| IndieHackers | Discussion | 2000 words | In-text |
-| HackerNews | Comment | 500 words | Minimal/none |
+
+| Platform     | Format       | Max Length  | Backlink Style    |
+| ------------ | ------------ | ----------- | ----------------- |
+| Quora        | Answer       | 1000 words  | In-text reference |
+| Reddit       | Post/Comment | 10000 chars | Context link      |
+| IndieHackers | Discussion   | 2000 words  | In-text           |
+| HackerNews   | Comment      | 500 words   | Minimal/none      |
 
 ### Tier 3 — Aggregators and Niche
-| Platform | Format | Max Length | Backlink Style |
-|----------|--------|-----------|----------------|
-| SlideShare | Presentation | 20 slides | Footer slide |
-| GitHub | README/Wiki | Unlimited | In-text |
-| Scribd | Document | 5000 words | Footer |
-| Issuu | Publication | 5000 words | Footer |
-| Mix.com | Shared link | Title+desc | Direct link |
-| Flipboard | Magazine item | Title+desc | Direct link |
-| Tumblr | Post | 2000 words | In-text |
-| WordPress.com | Blog post | 3000 words | In-text |
-| Telegraph | Article | 3000 words | In-text |
+
+| Platform      | Format        | Max Length | Backlink Style |
+| ------------- | ------------- | ---------- | -------------- |
+| SlideShare    | Presentation  | 20 slides  | Footer slide   |
+| GitHub        | README/Wiki   | Unlimited  | In-text        |
+| Scribd        | Document      | 5000 words | Footer         |
+| Issuu         | Publication   | 5000 words | Footer         |
+| Mix.com       | Shared link   | Title+desc | Direct link    |
+| Flipboard     | Magazine item | Title+desc | Direct link    |
+| Tumblr        | Post          | 2000 words | In-text        |
+| WordPress.com | Blog post     | 3000 words | In-text        |
+| Telegraph     | Article       | 3000 words | In-text        |
 
 ## Content Adaptation Rules
 
@@ -67,6 +70,7 @@ Each platform requires a different voice:
 ## Backlink Strategy
 
 ### Anchor Text Rotation
+
 Never use the same anchor text twice in a row. Rotate between:
 
 ```
@@ -82,6 +86,7 @@ Rotation ratio: 20% exact, 25% partial, 20% branded, 20% generic, 15% naked.
 ### Link Velocity
 
 Spread publishing over 2-3 weeks per topic batch:
+
 - Week 1: Publish on 5-7 high-authority platforms
 - Week 2: Publish on 8-10 mid-tier platforms
 - Week 3: Publish remaining + update earlier posts with cross-links
@@ -107,31 +112,38 @@ For each topic, generate:
 # [Topic Title] — [Year] Guide
 
 ## TL;DR
+
 [2-3 sentence summary with key takeaway]
 
 ## The Problem
+
 [What pain point does this address?]
 
 ## Solutions Compared
-| Tool | Best For | Price | Rating |
-|------|----------|-------|--------|
-| [Your Product] | [Strength] | [Price] | 4.8/5 |
-| [Competitor 1] | [Strength] | [Price] | 4.2/5 |
-| [Competitor 2] | [Strength] | [Price] | 4.0/5 |
+
+| Tool           | Best For   | Price   | Rating |
+| -------------- | ---------- | ------- | ------ |
+| [Your Product] | [Strength] | [Price] | 4.8/5  |
+| [Competitor 1] | [Strength] | [Price] | 4.2/5  |
+| [Competitor 2] | [Strength] | [Price] | 4.0/5  |
 
 ## Deep Dive: [Your Product]
+
 [Detailed benefits, use cases, proof points]
 
 ## How to Get Started
+
 [Step-by-step guide]
 
 ## FAQ
+
 [3-5 common questions with direct answers]
 ```
 
 ## Cost Estimation
 
 Per topic across 20 platforms:
+
 - Content generation: ~$0.50 (API calls)
 - Adaptation per platform: ~$0.02 each = $0.40
 - Total per topic: ~$1.00

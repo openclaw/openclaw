@@ -1,7 +1,15 @@
 ---
 name: vibeclaw-orchestrator
 description: "Master coordinator for Vibeclaw autonomous marketing agents. Orchestrates intent sniping, content syndication, directory submissions, social content, SEO exploitation, community engagement, and YouTube automation. Use this to plan, dispatch, and monitor all Vibeclaw workflows."
-metadata: {"openclaw":{"emoji":"🎯","requires":{"env":["VIBECLAW_WORKSPACE"]},"primaryEnv":"VIBECLAW_WORKSPACE"}}
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🎯",
+        "requires": { "env": ["VIBECLAW_WORKSPACE"] },
+        "primaryEnv": "VIBECLAW_WORKSPACE",
+      },
+  }
 ---
 
 # Vibeclaw Orchestrator
@@ -12,18 +20,18 @@ You are the master coordinator for autonomous marketing and monetization agents.
 
 Vibeclaw is a suite of autonomous agents, each handling one marketing channel:
 
-| Agent | Purpose | Skill |
-|-------|---------|-------|
-| Intent Sniper | Monitor X/Reddit/Quora for buying intent | `intent-sniper` |
-| Content Syndication | Publish across 20+ platforms | `content-syndication` |
-| Directory Submitter | Submit to 100+ product directories | `directory-submitter` |
-| Social Content Factory | Generate TikTok/Shorts/carousels | `social-content-factory` |
-| X Reply Agent | Autonomous reply guy on X | `x-reply-agent` |
-| Job Sniper | Monitor job postings for sales leads | `job-sniper` |
-| SEO Gap Exploiter | Find and fill keyword gaps | `seo-gap-exploiter` |
-| Community Engagement | Engage in Telegram/Discord communities | `community-engagement` |
-| YouTube Automation | Run faceless YouTube channels | `youtube-automation` |
-| Skill Learner | Self-improving skill system | `skill-learner` |
+| Agent                  | Purpose                                  | Skill                    |
+| ---------------------- | ---------------------------------------- | ------------------------ |
+| Intent Sniper          | Monitor X/Reddit/Quora for buying intent | `intent-sniper`          |
+| Content Syndication    | Publish across 20+ platforms             | `content-syndication`    |
+| Directory Submitter    | Submit to 100+ product directories       | `directory-submitter`    |
+| Social Content Factory | Generate TikTok/Shorts/carousels         | `social-content-factory` |
+| X Reply Agent          | Autonomous reply guy on X                | `x-reply-agent`          |
+| Job Sniper             | Monitor job postings for sales leads     | `job-sniper`             |
+| SEO Gap Exploiter      | Find and fill keyword gaps               | `seo-gap-exploiter`      |
+| Community Engagement   | Engage in Telegram/Discord communities   | `community-engagement`   |
+| YouTube Automation     | Run faceless YouTube channels            | `youtube-automation`     |
+| Skill Learner          | Self-improving skill system              | `skill-learner`          |
 
 ## Workflow Dispatch
 
@@ -73,6 +81,7 @@ Use `sessions_spawn` to launch individual agents:
 ## Cost Tracking
 
 Track API costs per agent per day:
+
 - Content generation: ~$0.01-0.05 per piece
 - Web searches: ~$0.01 per query
 - Platform API calls: varies by platform
@@ -81,6 +90,7 @@ Track API costs per agent per day:
 ## Error Recovery
 
 When an agent fails:
+
 1. Check error type (rate limit, auth failure, content rejection)
 2. If rate limit: back off, reschedule
 3. If auth failure: alert user to refresh credentials
@@ -106,8 +116,8 @@ The orchestrator reads from `$VIBECLAW_WORKSPACE/config.json`:
     "youtube": { "enabled": true, "niche": "tech tutorials" }
   },
   "budget": {
-    "dailyMaxUsd": 5.00,
-    "alertThresholdUsd": 4.00
+    "dailyMaxUsd": 5.0,
+    "alertThresholdUsd": 4.0
   }
 }
 ```

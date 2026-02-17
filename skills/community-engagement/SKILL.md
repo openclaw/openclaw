@@ -1,7 +1,7 @@
 ---
 name: community-engagement
 description: "Find and engage in relevant Telegram groups, Discord servers, and Slack communities. When someone asks a question your product solves, reply with a genuine answer that naturally mentions your tool. Build authority and drive signups."
-metadata: {"openclaw":{"emoji":"🏘️","requires":{"bins":["curl"]}}}
+metadata: { "openclaw": { "emoji": "🏘️", "requires": { "bins": ["curl"] } } }
 ---
 
 # Community Engagement Agent
@@ -15,21 +15,25 @@ Engage authentically in online communities where your target audience lives. Ans
 Search for communities with 2K+ members in your niche:
 
 **Telegram:**
+
 - Search via t.me or community directories
 - Target: 20-30 groups with active discussions
 - Look for: SaaS, marketing, startups, your specific niche
 
 **Discord:**
+
 - Search via Disboard, Discord.me, top.gg
 - Target: 15-20 active servers
 - Look for: Professional communities, not meme servers
 
 **Slack:**
+
 - Search via slofile.com, standuply.com/slack-communities
 - Target: 10-15 relevant workspaces
 - Note: Slack communities tend to be higher quality leads
 
 **Reddit (subreddits):**
+
 - Identify 10-20 subreddits where your audience asks questions
 - Sort by "new" to find fresh questions
 
@@ -37,30 +41,33 @@ Search for communities with 2K+ members in your niche:
 
 Rate each community before investing time:
 
-| Score | Criteria |
-|-------|----------|
-| 5 | Active daily, 5K+ members, questions directly about your domain |
-| 4 | Active daily, 2K+ members, adjacent topics |
-| 3 | Weekly activity, 1K+ members, occasionally relevant |
-| 2 | Low activity or tangential relevance |
-| 1 | Dead or irrelevant, skip |
+| Score | Criteria                                                        |
+| ----- | --------------------------------------------------------------- |
+| 5     | Active daily, 5K+ members, questions directly about your domain |
+| 4     | Active daily, 2K+ members, adjacent topics                      |
+| 3     | Weekly activity, 1K+ members, occasionally relevant             |
+| 2     | Low activity or tangential relevance                            |
+| 1     | Dead or irrelevant, skip                                        |
 
 Only join score 3+.
 
 ## Engagement Rules
 
 ### The 10:1 Rule
+
 For every 1 product mention, provide 10 purely helpful answers with zero self-promotion.
 
 ### Message Types
 
 **Type 1: Pure Value (80% of posts)**
+
 ```
 "Great question. The key thing with [topic] is [specific insight].
 Here's what works: [actionable advice]. [Optional: link to free resource]"
 ```
 
 **Type 2: Soft Mention (15% of posts)**
+
 ```
 "We deal with this a lot at [company]. What we found is [insight].
 We actually built [feature] to solve this specific problem.
@@ -69,6 +76,7 @@ But generally, the approach is [general advice that works with or without your t
 
 **Type 3: Direct Recommendation (5% of posts)**
 Only when someone explicitly asks for tool recommendations:
+
 ```
 "I'd recommend checking out [your product] — it does [specific thing they asked about].
 Also worth looking at [competitor 1] and [competitor 2] depending on your use case.
@@ -88,6 +96,7 @@ Also worth looking at [competitor 1] and [competitor 2] depending on your use ca
 ## Do's and Don'ts
 
 ### Do
+
 - Read the room first — lurk for 2-3 days before posting
 - Answer questions thoroughly, even when not mentioning your product
 - Share relevant articles, tutorials, and resources (not just yours)
@@ -96,6 +105,7 @@ Also worth looking at [competitor 1] and [competitor 2] depending on your use ca
 - Build a reputation as a helpful expert over weeks
 
 ### Don't
+
 - Drop links without context
 - Reply to every question — be selective
 - Use marketing language ("revolutionary", "game-changing", "best-in-class")
@@ -136,6 +146,7 @@ Log to `$VIBECLAW_WORKSPACE/logs/community-engagement.jsonl`:
 ## Escalation
 
 When a community member shows strong buying intent:
+
 1. Reply publicly with a helpful answer
 2. Note the lead in `$VIBECLAW_WORKSPACE/data/leads.json`
 3. If platform allows, send a non-spammy DM offering a demo

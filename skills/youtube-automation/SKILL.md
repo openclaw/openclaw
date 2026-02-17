@@ -1,7 +1,7 @@
 ---
 name: youtube-automation
 description: "Run a faceless YouTube channel on autopilot. Generate scripts, titles, descriptions, thumbnails text, and SEO tags. Supports long-form (8-15 min), Shorts, and compilation videos. Targets $30K/yr with consistent daily uploads."
-metadata: {"openclaw":{"emoji":"📺","requires":{"bins":["curl"]}}}
+metadata: { "openclaw": { "emoji": "📺", "requires": { "bins": ["curl"] } } }
 ---
 
 # YouTube Automation — Faceless Channel Engine
@@ -14,15 +14,16 @@ Build and grow faceless YouTube channels that generate passive income through Ad
 
 Choose a niche that scores high on:
 
-| Factor | Weight | How to Evaluate |
-|--------|--------|-----------------|
-| Search volume | 30% | YouTube search suggestions, Google Trends |
-| CPM (ad rates) | 25% | Finance > Tech > Lifestyle > Gaming |
-| Competition | 20% | Fewer channels with 10K+ subs = better |
-| AI-friendly | 15% | Can content be generated without a human face? |
-| Evergreen | 10% | Will this topic be relevant in 2 years? |
+| Factor         | Weight | How to Evaluate                                |
+| -------------- | ------ | ---------------------------------------------- |
+| Search volume  | 30%    | YouTube search suggestions, Google Trends      |
+| CPM (ad rates) | 25%    | Finance > Tech > Lifestyle > Gaming            |
+| Competition    | 20%    | Fewer channels with 10K+ subs = better         |
+| AI-friendly    | 15%    | Can content be generated without a human face? |
+| Evergreen      | 10%    | Will this topic be relevant in 2 years?        |
 
 ### High-CPM Niches for Faceless Channels
+
 ```
 Finance / investing / crypto          CPM: $15-35
 Software / SaaS reviews              CPM: $12-25
@@ -44,6 +45,7 @@ Top 10 / compilation / facts         CPM: $3-6
 These are the revenue drivers. Minimum 8 minutes to enable mid-roll ads.
 
 **Script Structure:**
+
 ```
 [0:00-0:30]  HOOK — Provocative question or shocking stat
 [0:30-1:30]  INTRO — What this video covers, why it matters
@@ -57,6 +59,7 @@ These are the revenue drivers. Minimum 8 minutes to enable mid-roll ads.
 ```
 
 **Script generation rules:**
+
 - Write for spoken word (contractions, short sentences)
 - Include "visual:" notes for stock footage selection
 - Add timestamp markers for editing
@@ -70,6 +73,7 @@ These are the revenue drivers. Minimum 8 minutes to enable mid-roll ads.
 Shorts drive subscriber growth. Optimized for discovery.
 
 **Script Structure:**
+
 ```
 [0-3s]  HOOK — "Did you know..." / "Stop scrolling if..."
 [3-20s] SETUP — Quick context
@@ -88,6 +92,7 @@ Higher watch time = algorithm boost.
 ## SEO Optimization
 
 ### Title Formula
+
 ```
 [Number] + [Keyword] + [Year] + [Benefit/Hook]
 
@@ -98,6 +103,7 @@ Examples:
 ```
 
 **Title rules:**
+
 - 50-65 characters max
 - Primary keyword in first 5 words
 - Include current year for evergreen topics
@@ -105,6 +111,7 @@ Examples:
 - Questions outperform statements for Shorts
 
 ### Description Template
+
 ```
 [First 2 lines: Most important — visible before "Show More"]
 [Keyword] - In this video, I'll show you [value proposition].
@@ -128,13 +135,16 @@ Free resource: [lead magnet link]
 ```
 
 ### Tags
+
 - 10-15 tags per video
 - Mix of broad (1-2 words) and long-tail (3-5 words)
 - Include competitor channel names as tags
 - Include misspellings of popular keywords
 
 ### Thumbnail Text
+
 Generate thumbnail text suggestions:
+
 - Max 4-5 words
 - High contrast colors
 - Include numbers or dollar amounts
@@ -143,23 +153,27 @@ Generate thumbnail text suggestions:
 ## Monetization Roadmap
 
 ### Phase 1: Growth (0-1000 subs)
+
 - Upload 1 long-form + 2 Shorts daily
 - Focus on searchable topics (tutorial/how-to)
 - Engage with every comment
 - Cross-promote on other platforms via content-syndication skill
 
 ### Phase 2: Monetization (1000 subs + 4000 watch hours)
+
 - Apply for YouTube Partner Program
 - Expected: $3-8 CPM depending on niche
 - At 100K views/month = $300-800/month
 
 ### Phase 3: Scale ($1K-3K/month)
+
 - Add affiliate links in descriptions
 - Reach out for sponsorships at 10K+ subs
 - Create premium content/courses
 - Expected: $1K-3K/month combined
 
 ### Phase 4: Optimize ($3K-5K+/month)
+
 - Analyze top-performing videos, double down on those topics
 - A/B test thumbnails and titles
 - Build email list from YouTube traffic
@@ -184,18 +198,18 @@ Generate weekly content calendar:
 {
   "week": "2026-W08",
   "longForm": [
-    {"day": "Mon", "topic": "...", "keyword": "...", "type": "tutorial"},
-    {"day": "Tue", "topic": "...", "keyword": "...", "type": "listicle"},
-    {"day": "Wed", "topic": "...", "keyword": "...", "type": "comparison"},
-    {"day": "Thu", "topic": "...", "keyword": "...", "type": "tutorial"},
-    {"day": "Fri", "topic": "...", "keyword": "...", "type": "deep_dive"}
+    { "day": "Mon", "topic": "...", "keyword": "...", "type": "tutorial" },
+    { "day": "Tue", "topic": "...", "keyword": "...", "type": "listicle" },
+    { "day": "Wed", "topic": "...", "keyword": "...", "type": "comparison" },
+    { "day": "Thu", "topic": "...", "keyword": "...", "type": "tutorial" },
+    { "day": "Fri", "topic": "...", "keyword": "...", "type": "deep_dive" }
   ],
   "shorts": [
-    {"day": "Mon", "topics": ["...", "..."]},
-    {"day": "Tue", "topics": ["...", "..."]},
-    {"day": "Wed", "topics": ["...", "..."]}
+    { "day": "Mon", "topics": ["...", "..."] },
+    { "day": "Tue", "topics": ["...", "..."] },
+    { "day": "Wed", "topics": ["...", "..."] }
   ],
-  "compilation": {"day": "Sat", "topic": "Weekly best of [niche]"}
+  "compilation": { "day": "Sat", "topic": "Weekly best of [niche]" }
 }
 ```
 
@@ -204,6 +218,7 @@ Generate weekly content calendar:
 Save all generated content to `$VIBECLAW_WORKSPACE/drafts/youtube/`:
 
 ### Script File Format
+
 ```json
 {
   "id": "yt-2026-02-16-001",
