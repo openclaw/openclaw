@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { googleVertexProvider } from "./index.js";
 import * as piAi from "@mariozechner/pi-ai";
 
@@ -13,6 +13,14 @@ describe("googleVertexProvider", () => {
     buffer: mockBuffer,
     timeoutMs: 5000,
   };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("transcribes audio successfully", async () => {
     vi.mocked(piAi.completeSimple).mockResolvedValueOnce({
@@ -56,6 +64,32 @@ describe("googleVertexProvider", () => {
             content: expect.arrayContaining([
               { type: "text", text: "Describe the image." },
               { type: "image", data: mockBuffer.toString("base64"), mimeType: "image/jpeg" },
+            ]),
+          }),
+        ],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("describes videos successfully", async () => {
+    vi.mocked(piAi.completeSimple).mockResolvedValueOnce({
+      content: [{ type: "text", text: "Video description" }],
+      model: "gemini-3-flash-preview",
+    } as any);
+
+    const result = await googleVertexProvider.describeVideo(mockParams);
+
+    expect(result.text).toBe("Video description");
+    expect(piAi.completeSimple).toHaveBeenCalledTimes(1);
+    expect(piAi.completeSimple).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({
+            content: expect.arrayContaining([
+              { type: "text", text: "Describe the video." },
+              { type: "image", data: mockBuffer.toString("base64"), mimeType: "video/mp4" },
             ]),
           }),
         ],

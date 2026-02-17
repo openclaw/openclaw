@@ -53,6 +53,7 @@ export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
   openai: "gpt-5-mini",
   anthropic: "claude-opus-4-6",
   google: "gemini-3-flash-preview",
+  "google-vertex": "gemini-3-flash-preview",
   minimax: "MiniMax-VL-01",
   zai: "glm-4.6v",
 };

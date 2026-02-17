@@ -19,7 +19,8 @@ async function completeVertexMedia(params: {
   timeoutMs: number;
   errorLabel: string;
 }): Promise<{ text: string; model: string }> {
-  const model = getModel("google-vertex", params.model as "gemini-3-flash-preview");
+  // getModel expects a narrow literal type; cast to satisfy the SDK while keeping runtime flexibility.
+  const model = getModel("google-vertex", params.model as never);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), params.timeoutMs);
