@@ -58,6 +58,14 @@ describe("scheduled task runtime derivation", () => {
     ).toEqual({ status: "running" });
   });
 
+  it("treats Running without last result as running", () => {
+    expect(
+      deriveScheduledTaskRuntimeStatus({
+        status: "Running",
+      }),
+    ).toEqual({ status: "running" });
+  });
+
   it("downgrades stale Running status when last result is not a running code", () => {
     expect(
       deriveScheduledTaskRuntimeStatus({
