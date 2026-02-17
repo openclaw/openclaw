@@ -6,6 +6,10 @@ import {
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 
+function asMessages(messages: unknown[]): AgentMessage[] {
+  return messages as AgentMessage[];
+}
+
 describe("validateGeminiTurns", () => {
   it("should return empty array unchanged", () => {
     const result = validateGeminiTurns([]);
@@ -13,30 +17,30 @@ describe("validateGeminiTurns", () => {
   });
 
   it("should return single message unchanged", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       {
         role: "user",
         content: "Hello",
       },
-    ];
+    ]);
     const result = validateGeminiTurns(msgs);
     expect(result).toEqual(msgs);
   });
 
   it("should leave alternating user/assistant unchanged", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       { role: "user", content: "Hello" },
       { role: "assistant", content: [{ type: "text", text: "Hi" }] },
       { role: "user", content: "How are you?" },
       { role: "assistant", content: [{ type: "text", text: "Good!" }] },
-    ];
+    ]);
     const result = validateGeminiTurns(msgs);
     expect(result).toHaveLength(4);
     expect(result).toEqual(msgs);
   });
 
   it("should merge consecutive assistant messages", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       { role: "user", content: "Hello" },
       {
         role: "assistant",
@@ -49,19 +53,19 @@ describe("validateGeminiTurns", () => {
         stopReason: "end_turn",
       },
       { role: "user", content: "How are you?" },
-    ];
+    ]);
 
     const result = validateGeminiTurns(msgs);
 
     expect(result).toHaveLength(3);
     expect(result[0]).toEqual({ role: "user", content: "Hello" });
     expect(result[1].role).toBe("assistant");
-    expect(result[1].content).toHaveLength(2);
+    expect((result[1] as { content?: unknown[] }).content).toHaveLength(2);
     expect(result[2]).toEqual({ role: "user", content: "How are you?" });
   });
 
   it("should preserve metadata from later message when merging", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       {
         role: "assistant",
         content: [{ type: "text", text: "Part 1" }],
@@ -73,7 +77,7 @@ describe("validateGeminiTurns", () => {
         usage: { input: 10, output: 10 },
         stopReason: "end_turn",
       },
-    ];
+    ]);
 
     const result = validateGeminiTurns(msgs);
 
@@ -85,7 +89,7 @@ describe("validateGeminiTurns", () => {
   });
 
   it("should handle toolResult messages without merging", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       { role: "user", content: "Use tool" },
       {
         role: "assistant",
@@ -105,7 +109,7 @@ describe("validateGeminiTurns", () => {
         content: [{ type: "text", text: "Extra thoughts" }],
       },
       { role: "user", content: "Request 2" },
-    ];
+    ]);
 
     const result = validateGeminiTurns(msgs);
 
@@ -125,31 +129,31 @@ describe("validateAnthropicTurns", () => {
   });
 
   it("should return single message unchanged", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       {
         role: "user",
         content: [{ type: "text", text: "Hello" }],
       },
-    ];
+    ]);
     const result = validateAnthropicTurns(msgs);
     expect(result).toEqual(msgs);
   });
 
   it("should return alternating user/assistant unchanged", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Question" }] },
       {
         role: "assistant",
         content: [{ type: "text", text: "Answer" }],
       },
       { role: "user", content: [{ type: "text", text: "Follow-up" }] },
-    ];
+    ]);
     const result = validateAnthropicTurns(msgs);
     expect(result).toEqual(msgs);
   });
 
   it("should merge consecutive user messages", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       {
         role: "user",
         content: [{ type: "text", text: "First message" }],
@@ -160,7 +164,7 @@ describe("validateAnthropicTurns", () => {
         content: [{ type: "text", text: "Second message" }],
         timestamp: 2000,
       },
-    ];
+    ]);
 
     const result = validateAnthropicTurns(msgs);
 
@@ -175,11 +179,11 @@ describe("validateAnthropicTurns", () => {
   });
 
   it("should merge three consecutive user messages", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "One" }] },
       { role: "user", content: [{ type: "text", text: "Two" }] },
       { role: "user", content: [{ type: "text", text: "Three" }] },
-    ];
+    ]);
 
     const result = validateAnthropicTurns(msgs);
 
@@ -189,7 +193,7 @@ describe("validateAnthropicTurns", () => {
   });
 
   it("keeps newest metadata when merging consecutive users", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       {
         role: "user",
         content: [{ type: "text", text: "Old" }],
@@ -203,7 +207,7 @@ describe("validateAnthropicTurns", () => {
         attachments: [{ type: "image", url: "new.png" }],
         someCustomField: "keep-me",
       } as AgentMessage,
-    ];
+    ]);
 
     const result = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
 
@@ -221,7 +225,7 @@ describe("validateAnthropicTurns", () => {
   });
 
   it("merges consecutive users with images and preserves order", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       {
         role: "user",
         content: [
@@ -236,7 +240,7 @@ describe("validateAnthropicTurns", () => {
           { type: "text", text: "second" },
         ],
       },
-    ];
+    ]);
 
     const [merged] = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
     expect(merged.content).toEqual([
@@ -248,7 +252,7 @@ describe("validateAnthropicTurns", () => {
   });
 
   it("should not merge consecutive assistant messages", () => {
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Question" }] },
       {
         role: "assistant",
@@ -258,7 +262,7 @@ describe("validateAnthropicTurns", () => {
         role: "assistant",
         content: [{ type: "text", text: "Answer 2" }],
       },
-    ];
+    ]);
 
     const result = validateAnthropicTurns(msgs);
 
@@ -268,7 +272,7 @@ describe("validateAnthropicTurns", () => {
 
   it("should handle mixed scenario with steering messages", () => {
     // Simulates: user asks -> assistant errors -> steering user message injected
-    const msgs: AgentMessage[] = [
+    const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Original question" }] },
       {
         role: "assistant",
@@ -281,7 +285,7 @@ describe("validateAnthropicTurns", () => {
         content: [{ type: "text", text: "Steering: try again" }],
       },
       { role: "user", content: [{ type: "text", text: "Another follow-up" }] },
-    ];
+    ]);
 
     const result = validateAnthropicTurns(msgs);
 
@@ -297,19 +301,19 @@ describe("validateAnthropicTurns", () => {
 
 describe("mergeConsecutiveUserTurns", () => {
   it("keeps newest metadata while merging content", () => {
-    const previous: Extract<AgentMessage, { role: "user" }> = {
+    const previous = {
       role: "user",
       content: [{ type: "text", text: "before" }],
       timestamp: 1000,
       attachments: [{ type: "image", url: "old.png" }],
-    };
-    const current: Extract<AgentMessage, { role: "user" }> = {
+    } as Extract<AgentMessage, { role: "user" }>;
+    const current = {
       role: "user",
       content: [{ type: "text", text: "after" }],
       timestamp: 2000,
       attachments: [{ type: "image", url: "new.png" }],
       someCustomField: "keep-me",
-    } as AgentMessage;
+    } as Extract<AgentMessage, { role: "user" }>;
 
     const merged = mergeConsecutiveUserTurns(previous, current);
 
@@ -325,15 +329,15 @@ describe("mergeConsecutiveUserTurns", () => {
   });
 
   it("backfills timestamp from earlier message when missing", () => {
-    const previous: Extract<AgentMessage, { role: "user" }> = {
+    const previous = {
       role: "user",
       content: [{ type: "text", text: "before" }],
       timestamp: 1000,
-    };
-    const current: Extract<AgentMessage, { role: "user" }> = {
+    } as Extract<AgentMessage, { role: "user" }>;
+    const current = {
       role: "user",
       content: [{ type: "text", text: "after" }],
-    };
+    } as Extract<AgentMessage, { role: "user" }>;
 
     const merged = mergeConsecutiveUserTurns(previous, current);
 

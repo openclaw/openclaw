@@ -83,7 +83,7 @@ describe("sanitizeSessionMessagesImages", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
     const assistant = out[0] as { content?: Array<Record<string, unknown>> };
@@ -102,7 +102,7 @@ describe("sanitizeSessionMessagesImages", () => {
           { type: "toolCall", id: "call_1", name: "read", arguments: {} },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -130,7 +130,7 @@ describe("sanitizeSessionMessagesImages", () => {
         toolUseId: "call_abc|item:123",
         content: [{ type: "text", text: "ok" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test", {
       sanitizeToolCallIds: true,
@@ -159,7 +159,7 @@ describe("sanitizeSessionMessagesImages", () => {
         content: [{ type: "text", text: "ok" }],
         isError: false,
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test", {
       sanitizeMode: "images-only",
@@ -183,7 +183,7 @@ describe("sanitizeSessionMessagesImages", () => {
           { type: "text", text: "ok" },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -195,7 +195,7 @@ describe("sanitizeSessionMessagesImages", () => {
     const input = [
       { role: "user", content: "hello" },
       { role: "assistant", content: [{ type: "text", text: "" }] },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -207,7 +207,7 @@ describe("sanitizeSessionMessagesImages", () => {
       { role: "user", content: "hello" },
       { role: "assistant", stopReason: "error", content: [] },
       { role: "assistant", stopReason: "error" },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -224,7 +224,7 @@ describe("sanitizeSessionMessagesImages", () => {
         toolCallId: "tool-1",
         content: [{ type: "text", text: "result" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -247,7 +247,7 @@ describe("sanitizeSessionMessagesImages", () => {
             },
           ],
         },
-      ] satisfies AgentMessage[];
+      ] as unknown as AgentMessage[];
 
       const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -267,14 +267,14 @@ describe("sanitizeGoogleTurnOrdering", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out[0]?.role).toBe("user");
     expect(out[1]?.role).toBe("assistant");
   });
   it("is a no-op when history starts with user", () => {
-    const input = [{ role: "user", content: "hi" }] satisfies AgentMessage[];
+    const input = [{ role: "user", content: "hi" }] as unknown as AgentMessage[];
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out).toBe(input);
   });
