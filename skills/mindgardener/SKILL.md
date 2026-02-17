@@ -24,9 +24,22 @@ metadata:
 
 # MindGardener
 
-Your AI agent's personal Wikipedia — automatically built and updated from daily conversations. Every chat adds to a growing wiki of people, projects, and events. No database needed, just text files.
+**Your AI agent's personal Wikipedia — automatically built and updated from daily conversations.**
 
-"Your agent forgets everything between sessions. MindGardener fixes that."
+Every time you chat with your agent, it mentions people, projects, tools, and events. MindGardener turns those conversations into a personal wiki — one markdown file per entity — that grows over time. Your agent remembers what happened last week, who you talked about, and what matters.
+
+No database needed. Just text files.
+
+## How It Stays Manageable
+
+You might wonder: won't this create thousands of files? No. MindGardener is opinionated about what it remembers:
+
+- **One file per entity.** A person, a company, a project each gets one `.md` file. Mentions across different days get merged into the same file — not duplicated.
+- **Surprise scoring decides what's worth keeping.** Not everything is interesting. MindGardener predicts what _should_ have happened based on what it already knows, then compares with what _actually_ happened. Only surprising things get promoted to long-term memory. Routine stuff fades.
+- **Automatic pruning.** Entities that haven't been mentioned in 30+ days get archived. Your wiki stays focused on what's active and relevant.
+- **You can edit it.** It's just markdown files in a folder. Open them in VS Code, Obsidian, or `vim`. Add facts, fix mistakes, delete things. Run `garden reindex` and the system catches up.
+
+A typical agent running for a month has 30-80 entity files. That's it — a small, browsable wiki, not a data dump.
 
 ## Setup
 
@@ -69,27 +82,32 @@ garden consolidate
 
 ## How It Works
 
-1. **Extract**: LLM reads daily log → entities + relationships (JSON)
-2. **Store**: Wiki pages per entity with `[[wikilinks]]` in Markdown
-3. **Graph**: Triplets in JSONL (`subject → predicate → object`)
-4. **Surprise**: Two-stage prediction error (predict THEN compare)
-5. **Consolidate**: High-surprise → MEMORY.md
-6. **Prune**: Archive unreferenced entities
+1. **Extract**: LLM reads your daily log → finds people, projects, events
+2. **Store**: Creates one wiki page per entity with `[[wikilinks]]` between them
+3. **Surprise**: Predicts what should happen, compares with reality, scores the difference
+4. **Consolidate**: High-surprise items get promoted to long-term memory (MEMORY.md)
+5. **Prune**: Inactive entities get archived automatically
 
-All storage is Markdown + JSONL. No database. `cat`, `grep`, `git` compatible.
+All storage is Markdown + JSONL. Readable with `cat`, searchable with `grep`, versionable with `git`.
 
 ## Integration
 
-### Nightly cron
+### Nightly cron (set it and forget it)
 
 ```bash
 garden extract && garden surprise && garden consolidate
 ```
 
-### Context retrieval
+### Before responding to a user (context retrieval)
 
 ```bash
 garden recall "topic from user message"
+```
+
+### After manually editing wiki pages
+
+```bash
+garden reindex
 ```
 
 ## Config
@@ -103,3 +121,5 @@ consolidation:
   surprise_threshold: 0.5
   decay_days: 30
 ```
+
+Supports 5 LLM providers: Google Gemini, OpenAI, Anthropic, Ollama (local/free), and any OpenAI-compatible API.
