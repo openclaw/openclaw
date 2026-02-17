@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("suppresses duplicate warning when different-precedence plugins override (e.g., global overrides bundled)", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -47,6 +47,39 @@ describe("loadPluginManifestRegistry", () => {
         source: path.join(dirA, "index.ts"),
         rootDir: dirA,
         origin: "bundled",
+      },
+      {
+        idHint: "test-plugin",
+        source: path.join(dirB, "index.ts"),
+        rootDir: dirB,
+        origin: "global",
+      },
+    ];
+
+    const registry = loadPluginManifestRegistry({
+      candidates,
+      cache: false,
+    });
+
+    const duplicateWarnings = registry.diagnostics.filter(
+      (d) => d.level === "warn" && d.message?.includes("duplicate plugin id"),
+    );
+    expect(duplicateWarnings.length).toBe(0);
+  });
+
+  it("emits duplicate warning for same-precedence plugins with same id", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      {
+        idHint: "test-plugin",
+        source: path.join(dirA, "index.ts"),
+        rootDir: dirA,
+        origin: "global",
       },
       {
         idHint: "test-plugin",
