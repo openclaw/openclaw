@@ -16,7 +16,7 @@ function createCfg(): OpenClawConfig {
 
 describe("mattermost reactions", () => {
   it("adds reactions by calling /users/me then POST /reactions", async () => {
-    const fetchImpl = vi.fn(async (url: any, init?: any) => {
+    const fetchMock = vi.fn(async (url: any, init?: any) => {
       if (String(url).endsWith("/api/v4/users/me")) {
         return new Response(JSON.stringify({ id: "BOT123" }), {
           status: 200,
@@ -42,15 +42,15 @@ describe("mattermost reactions", () => {
       cfg: createCfg(),
       postId: "POST1",
       emojiName: "thumbsup",
-      fetchImpl,
+      fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
     expect(result).toEqual({ ok: true });
-    expect(fetchImpl).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it("returns a Result error when add reaction API call fails", async () => {
-    const fetchImpl = vi.fn(async (url: any) => {
+    const fetchMock = vi.fn(async (url: any) => {
       if (String(url).endsWith("/api/v4/users/me")) {
         return new Response(JSON.stringify({ id: "BOT123" }), {
           status: 200,
@@ -70,7 +70,7 @@ describe("mattermost reactions", () => {
       cfg: createCfg(),
       postId: "POST1",
       emojiName: "thumbsup",
-      fetchImpl,
+      fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
     expect(result.ok).toBe(false);
@@ -80,7 +80,7 @@ describe("mattermost reactions", () => {
   });
 
   it("removes reactions by calling /users/me then DELETE /users/:id/posts/:postId/reactions/:emoji", async () => {
-    const fetchImpl = vi.fn(async (url: any, init?: any) => {
+    const fetchMock = vi.fn(async (url: any, init?: any) => {
       if (String(url).endsWith("/api/v4/users/me")) {
         return new Response(JSON.stringify({ id: "BOT123" }), {
           status: 200,
@@ -101,10 +101,10 @@ describe("mattermost reactions", () => {
       cfg: createCfg(),
       postId: "POST1",
       emojiName: "thumbsup",
-      fetchImpl,
+      fetchImpl: fetchMock as unknown as typeof fetch,
     });
 
     expect(result).toEqual({ ok: true });
-    expect(fetchImpl).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
   });
 });
