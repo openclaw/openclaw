@@ -503,3 +503,311 @@ describe("setupAiFabricNonInteractive", () => {
     expect(result.config.aiFabric?.agents).toHaveLength(2);
   });
 });
+
+describe("setupAiFabric — manual entry (no IAM auth)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "setup-ai-fabric-manual-"));
+  });
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("full manual flow: MCP servers + agents without IAM", async () => {
+    // Simulates the exact wizard interaction from the verification plan:
+    // - User confirms AI Fabric → Yes
+    // - Enters project ID "test-project-123"
+    // - No IAM → manual entry path
+    // - Confirms manual MCP → Yes
+    // - Enters MCP server "web-search" at given URL
+    // - Declines adding more MCP servers
+    // - Confirms manual agents → Yes
+    // - Enters agent "code-assistant" at given URL
+    // - Declines adding more agents
+    const confirmCalls: boolean[] = [
+      true, // "Connect Cloud.ru AI Fabric MCP servers?" → Yes
+      true, // "Enter MCP server URLs manually?" → Yes
+      false, // "Add another MCP server?" → No
+      true, // "Enter AI Agent endpoints manually?" → Yes
+      false, // "Add another agent?" → No
+    ];
+    let confirmIdx = 0;
+
+    const textCalls: string[] = [
+      "test-project-123", // Project ID
+      "web-search", // MCP server name
+      "https://ai-agents.api.cloud.ru/mcp/mcp-test-1", // MCP server URL
+      "code-assistant", // Agent name
+      "https://ai-agents.api.cloud.ru/a2a/agent-test-1", // Agent URL
+    ];
+    let textIdx = 0;
+
+    const noteMock = vi.fn();
+    const prompter = createMockPrompter({
+      confirm: vi.fn().mockImplementation(() => Promise.resolve(confirmCalls[confirmIdx++])),
+      text: vi.fn().mockImplementation(() => Promise.resolve(textCalls[textIdx++])),
+      note: noteMock,
+    });
+
+    const result = await setupAiFabric({
+      config: BASE_CONFIG,
+      prompter,
+      // auth omitted — triggers manual entry
+      workspaceDir: tmpDir,
+    });
+
+    // --- Verify result ---
+    expect(result.configured).toBe(true);
+    expect(result.config.aiFabric).toBeDefined();
+
+    const aiFabric = result.config.aiFabric!;
+    expect(aiFabric.enabled).toBe(true);
+    expect(aiFabric.projectId).toBe("test-project-123");
+
+    // keyId must be absent (IAM was skipped)
+    expect(aiFabric.keyId).toBeUndefined();
+
+    // Agent with manual- prefix
+    expect(aiFabric.agents).toHaveLength(1);
+    expect(aiFabric.agents![0]).toEqual({
+      id: "manual-code-assistant",
+      name: "code-assistant",
+      endpoint: "https://ai-agents.api.cloud.ru/a2a/agent-test-1",
+    });
+
+    // mcpConfigPath points to the file
+    expect(aiFabric.mcpConfigPath).toBe(path.join(tmpDir, CLOUDRU_MCP_CONFIG_FILENAME));
+
+    // --- Verify MCP config file ---
+    const mcpConfigPath = path.join(tmpDir, CLOUDRU_MCP_CONFIG_FILENAME);
+    const mcpContent = JSON.parse(await fs.readFile(mcpConfigPath, "utf-8"));
+    expect(mcpContent).toEqual({
+      mcpServers: {
+        "web-search": {
+          url: "https://ai-agents.api.cloud.ru/mcp/mcp-test-1",
+          transport: "sse",
+        },
+      },
+    });
+
+    // URL must be exactly as entered (not constructed from base + id)
+    expect(mcpContent.mcpServers["web-search"].url).toBe(
+      "https://ai-agents.api.cloud.ru/mcp/mcp-test-1",
+    );
+
+    // --- Verify CLI backend args ---
+    const cliBackend = result.config.agents?.defaults?.cliBackends?.["claude-cli"] as Record<
+      string,
+      unknown
+    >;
+    const args = cliBackend.args as string[];
+    expect(args).toContain("--strict-mcp-config");
+    expect(args).toContain("--mcp-config");
+    expect(args).toContain(mcpConfigPath);
+
+    // --- Verify note messages ---
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Configured 1 MCP server"),
+      "AI Fabric — MCP",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Configured 1 agent"),
+      "AI Fabric — Agents",
+    );
+  });
+
+  it("manual MCP only — user declines manual agents", async () => {
+    const confirmCalls: boolean[] = [
+      true, // Connect AI Fabric → Yes
+      true, // Enter MCP URLs manually → Yes
+      false, // Add another MCP → No
+      false, // Enter agents manually → No
+    ];
+    let confirmIdx = 0;
+
+    const textCalls: string[] = [
+      "proj-mcp-only",
+      "search-server",
+      "https://example.com/mcp/search",
+    ];
+    let textIdx = 0;
+
+    const prompter = createMockPrompter({
+      confirm: vi.fn().mockImplementation(() => Promise.resolve(confirmCalls[confirmIdx++])),
+      text: vi.fn().mockImplementation(() => Promise.resolve(textCalls[textIdx++])),
+    });
+
+    const result = await setupAiFabric({
+      config: BASE_CONFIG,
+      prompter,
+      workspaceDir: tmpDir,
+    });
+
+    expect(result.configured).toBe(true);
+    expect(result.config.aiFabric?.agents).toBeUndefined();
+    expect(result.config.aiFabric?.mcpConfigPath).toBeDefined();
+    expect(result.config.aiFabric?.keyId).toBeUndefined();
+  });
+
+  it("manual agents only — user declines manual MCP", async () => {
+    const confirmCalls: boolean[] = [
+      true, // Connect AI Fabric → Yes
+      false, // Enter MCP URLs manually → No
+      true, // Enter agents manually → Yes
+      false, // Add another agent → No
+    ];
+    let confirmIdx = 0;
+
+    const textCalls: string[] = [
+      "proj-agents-only",
+      "my-agent",
+      "https://example.com/a2a/my-agent",
+    ];
+    let textIdx = 0;
+
+    const prompter = createMockPrompter({
+      confirm: vi.fn().mockImplementation(() => Promise.resolve(confirmCalls[confirmIdx++])),
+      text: vi.fn().mockImplementation(() => Promise.resolve(textCalls[textIdx++])),
+    });
+
+    const result = await setupAiFabric({
+      config: BASE_CONFIG,
+      prompter,
+      workspaceDir: tmpDir,
+    });
+
+    expect(result.configured).toBe(true);
+    expect(result.config.aiFabric?.agents).toHaveLength(1);
+    expect(result.config.aiFabric?.agents![0].id).toBe("manual-my-agent");
+    expect(result.config.aiFabric?.mcpConfigPath).toBeUndefined();
+    // No --mcp-config args when no MCP servers
+    const cliBackend = result.config.agents?.defaults?.cliBackends?.["claude-cli"] as Record<
+      string,
+      unknown
+    >;
+    expect(cliBackend.args).toBeUndefined();
+  });
+
+  it("user declines both manual MCP and agents → configured=false", async () => {
+    const confirmCalls: boolean[] = [
+      true, // Connect AI Fabric → Yes
+      false, // Enter MCP URLs manually → No
+      false, // Enter agents manually → No
+    ];
+    let confirmIdx = 0;
+
+    const prompter = createMockPrompter({
+      confirm: vi.fn().mockImplementation(() => Promise.resolve(confirmCalls[confirmIdx++])),
+      text: vi.fn().mockResolvedValue("proj-nothing"),
+    });
+
+    const result = await setupAiFabric({
+      config: BASE_CONFIG,
+      prompter,
+      workspaceDir: tmpDir,
+    });
+
+    expect(result.configured).toBe(false);
+    expect(result.config.aiFabric?.projectId).toBe("proj-nothing");
+    expect(result.config.aiFabric?.keyId).toBeUndefined();
+  });
+
+  it("multiple manual MCP servers and agents", async () => {
+    const confirmCalls: boolean[] = [
+      true, // Connect AI Fabric → Yes
+      true, // Enter MCP URLs manually → Yes
+      true, // Add another MCP → Yes
+      false, // Add another MCP → No
+      true, // Enter agents manually → Yes
+      true, // Add another agent → Yes
+      false, // Add another agent → No
+    ];
+    let confirmIdx = 0;
+
+    const textCalls: string[] = [
+      "proj-multi",
+      "web-search",
+      "https://example.com/mcp/1",
+      "code-runner",
+      "https://example.com/mcp/2",
+      "assistant-1",
+      "https://example.com/a2a/1",
+      "assistant-2",
+      "https://example.com/a2a/2",
+    ];
+    let textIdx = 0;
+
+    const noteMock = vi.fn();
+    const prompter = createMockPrompter({
+      confirm: vi.fn().mockImplementation(() => Promise.resolve(confirmCalls[confirmIdx++])),
+      text: vi.fn().mockImplementation(() => Promise.resolve(textCalls[textIdx++])),
+      note: noteMock,
+    });
+
+    const result = await setupAiFabric({
+      config: BASE_CONFIG,
+      prompter,
+      workspaceDir: tmpDir,
+    });
+
+    expect(result.configured).toBe(true);
+
+    // 2 MCP servers
+    const mcpConfigPath = path.join(tmpDir, CLOUDRU_MCP_CONFIG_FILENAME);
+    const mcpContent = JSON.parse(await fs.readFile(mcpConfigPath, "utf-8"));
+    expect(Object.keys(mcpContent.mcpServers)).toHaveLength(2);
+    expect(mcpContent.mcpServers["web-search"].url).toBe("https://example.com/mcp/1");
+    expect(mcpContent.mcpServers["code-runner"].url).toBe("https://example.com/mcp/2");
+
+    // 2 agents
+    expect(result.config.aiFabric?.agents).toHaveLength(2);
+    expect(result.config.aiFabric?.agents![0].id).toBe("manual-assistant-1");
+    expect(result.config.aiFabric?.agents![1].id).toBe("manual-assistant-2");
+
+    // Note messages
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Configured 2 MCP servers"),
+      "AI Fabric — MCP",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Configured 2 agents"),
+      "AI Fabric — Agents",
+    );
+  });
+
+  it("agent id slug handles special characters", async () => {
+    const confirmCalls: boolean[] = [
+      true, // Connect AI Fabric → Yes
+      false, // Enter MCP URLs manually → No
+      true, // Enter agents manually → Yes
+      false, // Add another agent → No
+    ];
+    let confirmIdx = 0;
+
+    const textCalls: string[] = [
+      "proj-slug",
+      "My Cool Agent!!! (v2)",
+      "https://example.com/a2a/cool",
+    ];
+    let textIdx = 0;
+
+    const prompter = createMockPrompter({
+      confirm: vi.fn().mockImplementation(() => Promise.resolve(confirmCalls[confirmIdx++])),
+      text: vi.fn().mockImplementation(() => Promise.resolve(textCalls[textIdx++])),
+    });
+
+    const result = await setupAiFabric({
+      config: BASE_CONFIG,
+      prompter,
+      workspaceDir: tmpDir,
+    });
+
+    expect(result.config.aiFabric?.agents![0].id).toBe("manual-my-cool-agent-v2");
+    expect(result.config.aiFabric?.agents![0].name).toBe("My Cool Agent!!! (v2)");
+  });
+});
