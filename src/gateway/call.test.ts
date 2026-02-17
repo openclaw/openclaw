@@ -5,7 +5,6 @@ const loadConfig = vi.fn();
 const resolveGatewayPort = vi.fn();
 const pickPrimaryTailnetIPv4 = vi.fn();
 const pickPrimaryLanIPv4 = vi.fn();
-const isCustomBindHostAvailableLocally = vi.fn();
 
 let lastClientOptions: {
   url?: string;
@@ -34,7 +33,6 @@ vi.mock("../infra/tailnet.js", () => ({
 
 vi.mock("./net.js", () => ({
   pickPrimaryLanIPv4,
-  isCustomBindHostAvailableLocally,
 }));
 
 vi.mock("./client.js", () => ({
@@ -79,8 +77,6 @@ describe("callGateway url resolution", () => {
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
     pickPrimaryLanIPv4.mockReset();
-    isCustomBindHostAvailableLocally.mockReset();
-    isCustomBindHostAvailableLocally.mockReturnValue(true);
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
@@ -152,20 +148,6 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("ws://172.18.0.4:18800");
   });
 
-  it("falls back to loopback when custom bind host is unavailable locally", async () => {
-    loadConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "custom", customBindHost: "172.18.0.4" },
-    });
-    resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    pickPrimaryLanIPv4.mockReturnValue(undefined);
-    isCustomBindHostAvailableLocally.mockReturnValue(false);
-
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
-  });
-
   it("uses url override in remote mode even when remote url is missing", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
@@ -190,8 +172,6 @@ describe("buildGatewayConnectionDetails", () => {
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
     pickPrimaryLanIPv4.mockReset();
-    isCustomBindHostAvailableLocally.mockReset();
-    isCustomBindHostAvailableLocally.mockReturnValue(true);
   });
 
   it("uses explicit url overrides and omits bind details", () => {
@@ -261,22 +241,6 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.bindDetail).toBe("Bind: custom");
   });
 
-  it("falls back to loopback source when custom bind host is unavailable locally", () => {
-    loadConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "custom", customBindHost: "172.18.0.4" },
-    });
-    resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    pickPrimaryLanIPv4.mockReturnValue(undefined);
-    isCustomBindHostAvailableLocally.mockReturnValue(false);
-
-    const details = buildGatewayConnectionDetails();
-
-    expect(details.url).toBe("ws://127.0.0.1:18800");
-    expect(details.urlSource).toBe("local loopback");
-    expect(details.bindDetail).toBe("Bind: custom");
-  });
-
   it("prefers remote url when configured", () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -303,8 +267,6 @@ describe("callGateway error details", () => {
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
     pickPrimaryLanIPv4.mockReset();
-    isCustomBindHostAvailableLocally.mockReset();
-    isCustomBindHostAvailableLocally.mockReturnValue(true);
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
@@ -406,8 +368,6 @@ describe("callGateway url override auth requirements", () => {
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
     pickPrimaryLanIPv4.mockReset();
-    isCustomBindHostAvailableLocally.mockReset();
-    isCustomBindHostAvailableLocally.mockReturnValue(true);
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;
@@ -445,8 +405,6 @@ describe("callGateway password resolution", () => {
     resolveGatewayPort.mockReset();
     pickPrimaryTailnetIPv4.mockReset();
     pickPrimaryLanIPv4.mockReset();
-    isCustomBindHostAvailableLocally.mockReset();
-    isCustomBindHostAvailableLocally.mockReturnValue(true);
     lastClientOptions = null;
     startMode = "hello";
     closeCode = 1006;

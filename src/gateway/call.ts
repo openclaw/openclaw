@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isIPv4 } from "node:net";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
@@ -16,7 +17,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
-import { isCustomBindHostAvailableLocally, pickPrimaryLanIPv4 } from "./net.js";
+import { pickPrimaryLanIPv4 } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 export type CallGatewayOptions = {
@@ -103,7 +104,7 @@ export function buildGatewayConnectionDetails(
   const bindMode = config.gateway?.bind ?? "loopback";
   const customBindHostRaw = config.gateway?.customBindHost?.trim();
   const customBindHost =
-    typeof customBindHostRaw === "string" && isCustomBindHostAvailableLocally(customBindHostRaw)
+    typeof customBindHostRaw === "string" && isIPv4(customBindHostRaw)
       ? customBindHostRaw
       : undefined;
   const preferTailnet = bindMode === "tailnet" && !!tailnetIPv4;
