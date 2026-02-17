@@ -210,14 +210,14 @@ export async function onTimer(state: CronServiceState) {
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      const due = findDueJobs(state);
+      const { due, clearedStaleMarkers } = findDueJobs(state);
 
       if (due.length === 0) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
         const changed = recomputeNextRunsForMaintenance(state);
-        if (changed) {
+        if (changed || clearedStaleMarkers) {
           await persist(state);
         }
         return [];
@@ -347,12 +347,19 @@ export async function onTimer(state: CronServiceState) {
   }
 }
 
-function findDueJobs(state: CronServiceState): CronJob[] {
+function findDueJobs(state: CronServiceState): { due: CronJob[]; clearedStaleMarkers: boolean } {
   if (!state.store) {
-    return [];
+    return { due: [], clearedStaleMarkers: false };
   }
   const now = state.deps.nowMs();
-  return collectRunnableJobs(state, now);
+  const markersBefore = state.store.jobs.filter(
+    (j) => typeof j.state?.runningAtMs === "number",
+  ).length;
+  const due = collectRunnableJobs(state, now);
+  const markersAfter = state.store.jobs.filter(
+    (j) => typeof j.state?.runningAtMs === "number",
+  ).length;
+  return { due, clearedStaleMarkers: markersAfter < markersBefore };
 }
 
 function isRunnableJob(params: {
@@ -360,6 +367,7 @@ function isRunnableJob(params: {
   nowMs: number;
   skipJobIds?: ReadonlySet<string>;
   skipAtIfAlreadyRan?: boolean;
+  state?: CronServiceState;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
@@ -371,8 +379,32 @@ function isRunnableJob(params: {
   if (params.skipJobIds?.has(job.id)) {
     return false;
   }
+  // Auto-clear stale runningAtMs markers to recover from crashes/timeouts.
+  // Use 2x timeout as buffer to avoid false positives on slow-but-valid runs.
+  // See: https://github.com/openclaw/openclaw/issues/18120
   if (typeof job.state.runningAtMs === "number") {
-    return false;
+    const jobTimeoutMs =
+      job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+        ? job.payload.timeoutSeconds * 1_000
+        : DEFAULT_JOB_TIMEOUT_MS;
+    const staleThresholdMs = jobTimeoutMs * 2;
+    const runningDurationMs = nowMs - job.state.runningAtMs;
+    if (runningDurationMs > staleThresholdMs) {
+      params.state?.deps.log.warn(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          runningAtMs: job.state.runningAtMs,
+          runningDurationMs,
+          staleThresholdMs,
+        },
+        "cron: auto-clearing stale runningAtMs marker",
+      );
+      job.state.runningAtMs = undefined;
+      // Continue to check if job is actually runnable
+    } else {
+      return false;
+    }
   }
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
     // Any terminal status (ok, error, skipped) means the job already ran at least once.
@@ -398,6 +430,7 @@ function collectRunnableJobs(
       nowMs,
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
+      state,
     }),
   );
 }
