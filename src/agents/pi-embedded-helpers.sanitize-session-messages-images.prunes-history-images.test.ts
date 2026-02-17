@@ -44,7 +44,7 @@ function countImageBlocks(messages: AgentMessage[]): number {
   let count = 0;
   for (const msg of messages) {
     const content = (msg as { content?: unknown }).content;
-    if (!Array.isArray(content)) continue;
+    if (!Array.isArray(content)) { continue; }
     for (const block of content) {
       if (block && typeof block === "object" && (block as { type?: string }).type === "image") {
         count++;
@@ -58,7 +58,7 @@ function collectPlaceholders(messages: AgentMessage[]): string[] {
   const placeholders: string[] = [];
   for (const msg of messages) {
     const content = (msg as { content?: unknown }).content;
-    if (!Array.isArray(content)) continue;
+    if (!Array.isArray(content)) { continue; }
     for (const block of content) {
       if (block && typeof block === "object") {
         const rec = block as { type?: string; text?: string };
