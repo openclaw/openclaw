@@ -36,40 +36,17 @@ function getToolResultText(msg: AgentMessage): string {
   return typeof block?.text === "string" ? block.text : "";
 }
 
-function makeGuardableAgent(initialMessages: AgentMessage[] = []) {
-  const state = { messages: [...initialMessages] };
-  return {
-    state,
-    appendMessage(message: AgentMessage) {
-      state.messages = [...state.messages, message];
-    },
-  };
+function makeGuardableAgent(
+  transformContext?: (
+    messages: AgentMessage[],
+    signal: AbortSignal,
+  ) => AgentMessage[] | Promise<AgentMessage[]>,
+) {
+  return { transformContext };
 }
 
 describe("installToolResultContextGuard", () => {
-  it("preemptively compacts older tool results before appending a new large result", () => {
-    const agent = makeGuardableAgent([
-      makeUser("u".repeat(2_500)),
-      makeToolResult("call_old", "x".repeat(700)),
-    ]);
-
-    installToolResultContextGuard({
-      agent,
-      contextWindowTokens: 1_000,
-    });
-
-    const incoming = makeToolResult("call_new", "y".repeat(1_000));
-    agent.appendMessage(incoming);
-
-    const oldResultText = getToolResultText(agent.state.messages[1] as AgentMessage);
-    const newResultText = getToolResultText(agent.state.messages[2] as AgentMessage);
-
-    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(newResultText.length).toBe(1_000);
-    expect(newResultText).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-  });
-
-  it("truncates an individually oversized tool result with a context-limit notice", () => {
+  it("compacts older tool results when total context overflows, even if each result fits individually", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -77,45 +54,142 @@ describe("installToolResultContextGuard", () => {
       contextWindowTokens: 1_000,
     });
 
-    const incoming = makeToolResult("call_big", "z".repeat(5_000));
-    agent.appendMessage(incoming);
+    const contextForNextCall = [
+      makeUser("u".repeat(2_000)),
+      makeToolResult("call_old", "x".repeat(1_000)),
+      makeToolResult("call_new", "y".repeat(1_000)),
+    ];
 
-    const newResultText = getToolResultText(agent.state.messages[0] as AgentMessage);
+    const transformed = await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    );
+
+    expect(transformed).toBe(contextForNextCall);
+    const oldResultText = getToolResultText(contextForNextCall[1] as AgentMessage);
+    const newResultText = getToolResultText(contextForNextCall[2] as AgentMessage);
+
+    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(newResultText.length).toBe(1_000);
+    expect(newResultText).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  });
+
+  it("keeps compacting oldest-first until context is back under budget", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(2_200)),
+      makeToolResult("call_1", "a".repeat(800)),
+      makeToolResult("call_2", "b".repeat(800)),
+      makeToolResult("call_3", "c".repeat(800)),
+    ];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    const first = getToolResultText(contextForNextCall[1] as AgentMessage);
+    const second = getToolResultText(contextForNextCall[2] as AgentMessage);
+    const third = getToolResultText(contextForNextCall[3] as AgentMessage);
+
+    expect(first).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(second).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(third).toBe("c".repeat(800));
+  });
+
+  it("survives repeated large tool results by compacting older outputs before later turns", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 100_000,
+    });
+
+    const contextForNextCall: AgentMessage[] = [makeUser("stress")];
+    for (let i = 1; i <= 4; i++) {
+      contextForNextCall.push(makeToolResult(`call_${i}`, String(i).repeat(95_000)));
+      await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    }
+
+    const toolResultTexts = contextForNextCall
+      .filter((msg) => msg.role === "toolResult")
+      .map((msg) => getToolResultText(msg as AgentMessage));
+
+    expect(toolResultTexts[0]).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(toolResultTexts[3]?.length).toBe(95_000);
+    expect(toolResultTexts.join("\n")).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  });
+
+  it("truncates an individually oversized tool result with a context-limit notice", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [makeToolResult("call_big", "z".repeat(5_000))];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    const newResultText = getToolResultText(contextForNextCall[0] as AgentMessage);
     expect(newResultText.length).toBeLessThan(5_000);
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
-  it("truncates tool results when adding them would overflow remaining context budget", () => {
-    const agent = makeGuardableAgent([makeUser("u".repeat(3_350))]);
+  it("compacts older tool results and then truncates the newest one when overflow remains", async () => {
+    const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
       agent,
       contextWindowTokens: 1_000,
     });
 
-    const incoming = makeToolResult("call_fit", "w".repeat(1_000));
-    agent.appendMessage(incoming);
+    const contextForNextCall = [
+      makeUser("u".repeat(2_600)),
+      makeToolResult("call_old", "x".repeat(700)),
+      makeToolResult("call_new", "y".repeat(1_000)),
+    ];
 
-    const newResultText = getToolResultText(agent.state.messages[1] as AgentMessage);
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    const oldResultText = getToolResultText(contextForNextCall[1] as AgentMessage);
+    const newResultText = getToolResultText(contextForNextCall[2] as AgentMessage);
+
+    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(newResultText.length).toBeLessThan(1_000);
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
-  it("guards in-flight context via transformContext before the next model call", async () => {
-    const oldResult = makeToolResult("call_old", "x".repeat(1_100));
-    const pendingResult = makeToolResult("call_pending", "y".repeat(1_800));
-    const agent = makeGuardableAgent([makeUser("u".repeat(1_600)), oldResult]);
+  it("wraps an existing transformContext and guards the transformed output", async () => {
+    const agent = makeGuardableAgent((messages) => {
+      return messages.map((msg) => ({
+        ...(msg as unknown as Record<string, unknown>),
+      })) as AgentMessage[];
+    });
 
     installToolResultContextGuard({
       agent,
       contextWindowTokens: 1_000,
     });
 
-    const contextForNextCall = [...agent.state.messages, pendingResult];
-    const transformed = await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    const contextForNextCall = [
+      makeUser("u".repeat(2_000)),
+      makeToolResult("call_old", "x".repeat(1_000)),
+      makeToolResult("call_new", "y".repeat(1_000)),
+    ];
 
-    expect(transformed).toBe(contextForNextCall);
-    const oldResultText = getToolResultText(contextForNextCall[1] as AgentMessage);
+    const transformed = await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    );
+
+    expect(transformed).not.toBe(contextForNextCall);
+    const transformedMessages = transformed as AgentMessage[];
+    const oldResultText = getToolResultText(transformedMessages[1] as AgentMessage);
     expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 });
