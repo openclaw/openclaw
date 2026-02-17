@@ -1,5 +1,5 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
 
 export async function getFreePort(): Promise<number> {
   while (true) {
