@@ -74,6 +74,8 @@ export type GatewayControlUiConfig = {
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
+  /** Restrict Control UI access to loopback addresses (127.0.0.1/::1) only (default: false). */
+  strictLoopback?: boolean;
 };
 
 export type GatewayAuthMode = "token" | "password" | "trusted-proxy";
