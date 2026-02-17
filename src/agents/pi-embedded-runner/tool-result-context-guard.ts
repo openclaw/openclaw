@@ -13,9 +13,15 @@ export const PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER =
 
 type ToolResultLike = Extract<AgentMessage, { role: "toolResult" }>;
 
+type GuardableTransformContext = (
+  messages: AgentMessage[],
+  signal: AbortSignal,
+) => AgentMessage[] | Promise<AgentMessage[]>;
+
 type GuardableAgent = {
   state: { messages: AgentMessage[] };
   appendMessage: (message: AgentMessage) => unknown;
+  transformContext?: GuardableTransformContext;
 };
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
@@ -224,6 +230,59 @@ function applyMessageMutationInPlace(target: AgentMessage, source: AgentMessage)
   Object.assign(targetRecord, sourceRecord);
 }
 
+function enforceToolResultContextBudgetInPlace(params: {
+  messages: AgentMessage[];
+  contextBudgetChars: number;
+  maxSingleToolResultChars: number;
+}): void {
+  const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+
+  // Ensure each tool result has an upper bound before considering total context usage.
+  for (const message of messages) {
+    if ((message as { role?: unknown }).role !== "toolResult") {
+      continue;
+    }
+    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars);
+    applyMessageMutationInPlace(message, truncated);
+  }
+
+  let currentChars = estimateContextChars(messages);
+  if (currentChars <= contextBudgetChars) {
+    return;
+  }
+
+  // Prefer compacting older tool outputs first.
+  compactExistingToolResultsInPlace(messages, currentChars - contextBudgetChars);
+
+  currentChars = estimateContextChars(messages);
+  if (currentChars <= contextBudgetChars) {
+    return;
+  }
+
+  // Last-resort: trim the newest text-only tool result to the remaining budget.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const candidate = messages[i];
+    if (!candidate || (candidate as { role?: unknown }).role !== "toolResult") {
+      continue;
+    }
+    if (toolResultHasImages(candidate)) {
+      continue;
+    }
+
+    const candidateChars = estimateMessageChars(candidate);
+    const nonCandidateChars = currentChars - candidateChars;
+    const availableForCandidate = Math.max(0, contextBudgetChars - nonCandidateChars);
+    const truncated = truncateToolResultToChars(candidate, availableForCandidate);
+    applyMessageMutationInPlace(candidate, truncated);
+    break;
+  }
+
+  currentChars = estimateContextChars(messages);
+  if (currentChars > contextBudgetChars) {
+    compactExistingToolResultsInPlace(messages, currentChars - contextBudgetChars);
+  }
+}
+
 export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
@@ -238,7 +297,15 @@ export function installToolResultContextGuard(params: {
     contextBudgetChars,
   );
 
-  const originalAppend = params.agent.appendMessage.bind(params.agent);
+  const originalAppend = params.agent.appendMessage;
+  const originalTransformContext = params.agent.transformContext;
+
+  // Sanitize existing history immediately so the next model call starts from a safe baseline.
+  enforceToolResultContextBudgetInPlace({
+    messages: params.agent.state.messages,
+    contextBudgetChars,
+    maxSingleToolResultChars,
+  });
 
   params.agent.appendMessage = ((message: AgentMessage) => {
     if ((message as { role?: unknown }).role === "toolResult") {
@@ -262,10 +329,26 @@ export function installToolResultContextGuard(params: {
       applyMessageMutationInPlace(message, nextMessage);
     }
 
-    return originalAppend(message);
+    return originalAppend.call(params.agent, message);
   }) as GuardableAgent["appendMessage"];
+
+  params.agent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+    const transformed = originalTransformContext
+      ? await originalTransformContext.call(params.agent, messages, signal)
+      : messages;
+
+    const contextMessages = Array.isArray(transformed) ? transformed : messages;
+    enforceToolResultContextBudgetInPlace({
+      messages: contextMessages,
+      contextBudgetChars,
+      maxSingleToolResultChars,
+    });
+
+    return contextMessages;
+  }) as GuardableTransformContext;
 
   return () => {
     params.agent.appendMessage = originalAppend;
+    params.agent.transformContext = originalTransformContext;
   };
 }

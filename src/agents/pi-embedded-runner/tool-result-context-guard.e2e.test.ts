@@ -100,4 +100,22 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText.length).toBeLessThan(1_000);
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
+
+  it("guards in-flight context via transformContext before the next model call", async () => {
+    const oldResult = makeToolResult("call_old", "x".repeat(1_100));
+    const pendingResult = makeToolResult("call_pending", "y".repeat(1_800));
+    const agent = makeGuardableAgent([makeUser("u".repeat(1_600)), oldResult]);
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [...agent.state.messages, pendingResult];
+    const transformed = await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    expect(transformed).toBe(contextForNextCall);
+    const oldResultText = getToolResultText(contextForNextCall[1] as AgentMessage);
+    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  });
 });
