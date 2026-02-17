@@ -1,9 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,
@@ -437,11 +437,15 @@ function normalizeBraveUiLang(value: string | undefined): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  // Already a full locale (contains a hyphen) — pass through.
-  if (trimmed.includes("-")) {
-    return trimmed;
+  // Normalize underscore-separated locales (e.g. "en_US") to hyphenated form.
+  const normalized = trimmed.replace(/_/g, "-");
+  // Already a full locale (contains a hyphen) — normalize case to
+  // language-REGION (e.g. "en-us" → "en-US") to satisfy Brave's enum.
+  if (normalized.includes("-")) {
+    const [lang, region, ...rest] = normalized.split("-");
+    return [lang.toLowerCase(), region.toUpperCase(), ...rest].join("-");
   }
-  return BRAVE_UI_LANG_DEFAULTS[trimmed.toLowerCase()] ?? undefined;
+  return BRAVE_UI_LANG_DEFAULTS[normalized.toLowerCase()] ?? undefined;
 }
 
 /**
@@ -840,6 +844,7 @@ export const __testing = {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   normalizeFreshness,
+  normalizeBraveUiLang,
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
   resolveGrokModel,
