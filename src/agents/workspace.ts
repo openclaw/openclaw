@@ -343,19 +343,25 @@ export async function ensureAgentWorkspace(params?: {
   if (!state.bootstrapSeededAt && !state.onboardingCompletedAt && !bootstrapExists) {
     // Legacy migration path: if USER/IDENTITY diverged from templates, treat onboarding as complete
     // and avoid recreating BOOTSTRAP for already-onboarded workspaces.
-    // Only load templates if not already cached and files exist (need comparison)
-    const identityTemplate =
-      templateCache.get(DEFAULT_IDENTITY_FILENAME) ??
-      (await loadTemplate(DEFAULT_IDENTITY_FILENAME));
-    const userTemplate =
-      templateCache.get(DEFAULT_USER_FILENAME) ?? (await loadTemplate(DEFAULT_USER_FILENAME));
+    const identityFresh = filesToCreate.some((f) => f.template === DEFAULT_IDENTITY_FILENAME);
+    const userFresh = filesToCreate.some((f) => f.template === DEFAULT_USER_FILENAME);
+    const bothFresh = identityFresh && userFresh;
 
-    const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
-    ]);
-    const legacyOnboardingCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate;
+    // Fresh files = first-time onboarding, will need bootstrap; only compare if files pre-existed
+    let legacyOnboardingCompleted = false;
+    if (!bothFresh) {
+      const [identityTemplate, userTemplate] = await Promise.all([
+        templateCache.get(DEFAULT_IDENTITY_FILENAME) ?? loadTemplate(DEFAULT_IDENTITY_FILENAME),
+        templateCache.get(DEFAULT_USER_FILENAME) ?? loadTemplate(DEFAULT_USER_FILENAME),
+      ]);
+      const [identityContent, userContent] = await Promise.all([
+        fs.readFile(identityPath, "utf-8"),
+        fs.readFile(userPath, "utf-8"),
+      ]);
+      legacyOnboardingCompleted =
+        identityContent !== identityTemplate || userContent !== userTemplate;
+    }
+
     if (legacyOnboardingCompleted) {
       markState({ onboardingCompletedAt: nowIso() });
     } else {
