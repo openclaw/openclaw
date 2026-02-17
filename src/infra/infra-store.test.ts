@@ -105,6 +105,27 @@ describe("infra store", () => {
 
       expect(types).toEqual(["webhook.received", "message.queued", "session.state"]);
     });
+
+    it("shares event bus across duplicate module instances", async () => {
+      const modAPath = "./diagnostic-events.js?instance=a";
+      const modBPath = "./diagnostic-events.js?instance=b";
+      const modA = (await import(modAPath)) as typeof import("./diagnostic-events.js");
+      const modB = (await import(modBPath)) as typeof import("./diagnostic-events.js");
+      modA.resetDiagnosticEventsForTest();
+
+      const seen: Array<{ type: string; seq: number }> = [];
+      const stop = modA.onDiagnosticEvent((evt) => seen.push({ type: evt.type, seq: evt.seq }));
+
+      modB.emitDiagnosticEvent({
+        type: "model.usage",
+        usage: { total: 7 },
+      });
+
+      stop();
+      modA.resetDiagnosticEventsForTest();
+
+      expect(seen).toEqual([{ type: "model.usage", seq: 1 }]);
+    });
   });
 
   describe("channel activity", () => {
