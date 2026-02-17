@@ -3,11 +3,68 @@ import { describe, expect, it } from "vitest";
 import { limitHistoryTurns } from "./pi-embedded-runner.js";
 
 describe("limitHistoryTurns", () => {
+  const mockUsage = {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  } as const;
+
+  const userMessage = (text: string): AgentMessage =>
+    ({
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    }) as AgentMessage;
+
+  const assistantTextMessage = (text: string): AgentMessage =>
+    ({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "mock-1",
+      usage: mockUsage,
+      timestamp: Date.now(),
+    }) as AgentMessage;
+
+  const assistantToolCallMessage = (id: string): AgentMessage =>
+    ({
+      role: "assistant",
+      content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "mock-1",
+      usage: mockUsage,
+      timestamp: Date.now(),
+    }) as AgentMessage;
+
+  const firstText = (message: AgentMessage): string | undefined => {
+    if (!("content" in message)) {
+      return undefined;
+    }
+    const content = message.content;
+    if (typeof content === "string") {
+      return content;
+    }
+    const first = content[0];
+    return first?.type === "text" ? first.text : undefined;
+  };
+
   const makeMessages = (roles: ("user" | "assistant")[]): AgentMessage[] =>
-    roles.map((role, i) => ({
-      role,
-      content: [{ type: "text", text: `message ${i}` }],
-    }));
+    roles.map((role, i) =>
+      role === "user" ? userMessage(`message ${i}`) : assistantTextMessage(`message ${i}`),
+    );
 
   it("returns all messages when limit is undefined", () => {
     const messages = makeMessages(["user", "assistant", "user", "assistant"]);
@@ -37,15 +94,15 @@ describe("limitHistoryTurns", () => {
     const messages = makeMessages(["user", "assistant", "user", "assistant", "user", "assistant"]);
     const limited = limitHistoryTurns(messages, 2);
     expect(limited.length).toBe(4);
-    expect(limited[0].content).toEqual([{ type: "text", text: "message 2" }]);
+    expect(firstText(limited[0])).toBe("message 2");
   });
 
   it("handles single user turn limit", () => {
     const messages = makeMessages(["user", "assistant", "user", "assistant", "user", "assistant"]);
     const limited = limitHistoryTurns(messages, 1);
     expect(limited.length).toBe(2);
-    expect(limited[0].content).toEqual([{ type: "text", text: "message 4" }]);
-    expect(limited[1].content).toEqual([{ type: "text", text: "message 5" }]);
+    expect(firstText(limited[0])).toBe("message 4");
+    expect(firstText(limited[1])).toBe("message 5");
   });
 
   it("handles messages with multiple assistant responses per user turn", () => {
@@ -58,16 +115,13 @@ describe("limitHistoryTurns", () => {
 
   it("preserves message content integrity", () => {
     const messages: AgentMessage[] = [
-      { role: "user", content: [{ type: "text", text: "first" }] },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "1", name: "exec", arguments: {} }],
-      },
-      { role: "user", content: [{ type: "text", text: "second" }] },
-      { role: "assistant", content: [{ type: "text", text: "response" }] },
+      userMessage("first"),
+      assistantToolCallMessage("1"),
+      userMessage("second"),
+      assistantTextMessage("response"),
     ];
     const limited = limitHistoryTurns(messages, 1);
-    expect(limited[0].content).toEqual([{ type: "text", text: "second" }]);
-    expect(limited[1].content).toEqual([{ type: "text", text: "response" }]);
+    expect(firstText(limited[0])).toBe("second");
+    expect(firstText(limited[1])).toBe("response");
   });
 });
