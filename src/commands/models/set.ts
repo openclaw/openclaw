@@ -1,8 +1,8 @@
+import type { RuntimeEnv } from "../../runtime.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { applyDefaultModelPrimaryUpdate, resolveModelTarget, updateConfig } from "./shared.js";
 
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
