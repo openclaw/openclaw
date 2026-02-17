@@ -225,8 +225,12 @@ export function buildBootstrapContextFiles(
       continue;
     }
     if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
+      const limitDetail =
+        fileMaxChars < maxChars
+          ? `budget ${fileMaxChars} of ${totalMaxChars} total remaining; per-file limit ${maxChars}`
+          : `per-file limit ${trimmed.maxChars}`;
       opts?.warn?.(
-        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (${limitDetail}); truncating in injected context`,
       );
     }
     remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
