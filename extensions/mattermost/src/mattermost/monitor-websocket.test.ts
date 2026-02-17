@@ -91,7 +91,7 @@ describe("mattermost websocket monitor", () => {
       botToken: "token",
       runtime: testRuntime(),
       nextSeq: () => 1,
-      onPosted: async () => {},
+      onPosted: async () => { },
       webSocketFactory: () => socket,
     });
 
@@ -122,7 +122,7 @@ describe("mattermost websocket monitor", () => {
         let seq = 1;
         return () => seq++;
       })(),
-      onPosted: async () => {},
+      onPosted: async () => { },
       abortSignal: abort.signal,
       statusSink: (patch) => {
         patches.push(patch as Record<string, unknown>);
@@ -173,7 +173,7 @@ describe("mattermost websocket monitor", () => {
 
   it("dispatches reaction events to the reaction handler", async () => {
     const socket = new FakeWebSocket();
-    const onPosted = vi.fn(async () => {});
+    const onPosted = vi.fn(async () => { });
     const onReaction = vi.fn(async (payload) => payload);
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",
@@ -185,22 +185,24 @@ describe("mattermost websocket monitor", () => {
       webSocketFactory: () => socket,
     });
 
-    socket.emitOpen();
-    socket.emitMessage(
-      Buffer.from(
-        JSON.stringify({
-          event: "reaction_added",
-          data: {
-            reaction: JSON.stringify({
-              user_id: "user-1",
-              post_id: "post-1",
-              emoji_name: "thumbsup",
-            }),
-          },
-        }),
-      ),
-    );
-    socket.emitClose(1000);
+    setTimeout(() => {
+      socket.emitOpen();
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "reaction_added",
+            data: {
+              reaction: JSON.stringify({
+                user_id: "user-1",
+                post_id: "post-1",
+                emoji_name: "thumbsup",
+              }),
+            },
+          }),
+        ),
+      );
+      socket.emitClose(1000);
+    }, 0);
 
     await connectOnce();
 
