@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { CronRunStatus, CronRunTelemetry } from "./types.js";
 
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
   action: "finished";
-  status?: "ok" | "error" | "skipped";
+  status?: CronRunStatus;
   error?: string;
   summary?: string;
   sessionId?: string;
@@ -13,18 +14,7 @@ export type CronRunLogEntry = {
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
-
-  // Telemetry (best-effort)
-  model?: string;
-  provider?: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    cache_read_tokens?: number;
-    cache_write_tokens?: number;
-  };
-};
+} & CronRunTelemetry;
 
 export function resolveCronRunLogPath(params: { storePath: string; jobId: string }) {
   const storePath = path.resolve(params.storePath);
