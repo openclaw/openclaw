@@ -107,13 +107,11 @@ describe("discord message actions", () => {
     expect(actions).not.toContain("ban");
   });
 
-  it("shallow merge: account actions object replaces base entirely", () => {
-    // Base has reactions: false, account has actions: { moderation: true }
-    // Shallow merge replaces the whole actions object, so reactions defaults to true
+  it("inherits top-level channel gate when account overrides moderation only", () => {
     const cfg = {
       channels: {
         discord: {
-          actions: { reactions: false },
+          actions: { channels: false },
           accounts: {
             vime: { token: "d1", actions: { moderation: true } },
           },
@@ -122,9 +120,25 @@ describe("discord message actions", () => {
     } as OpenClawConfig;
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
-    // vime's actions override replaces entire actions object; reactions defaults to true
-    expect(actions).toContain("react");
     expect(actions).toContain("timeout");
+    expect(actions).not.toContain("channel-create");
+  });
+
+  it("allows account to explicitly re-enable top-level disabled channels", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: false },
+          accounts: {
+            vime: { token: "d1", actions: { moderation: true, channels: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).toContain("timeout");
+    expect(actions).toContain("channel-create");
   });
 });
 
@@ -471,6 +485,24 @@ describe("telegramMessageActions", () => {
 
     expect(actions).not.toContain("sticker");
     expect(actions).not.toContain("sticker-search");
+  });
+
+  it("inherits top-level reaction gate when account overrides sticker only", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          actions: { reactions: false },
+          accounts: {
+            media: { botToken: "tok", actions: { sticker: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+
+    expect(actions).toContain("sticker");
+    expect(actions).toContain("sticker-search");
+    expect(actions).not.toContain("react");
   });
 
   it("accepts numeric messageId and channelId for reactions", async () => {

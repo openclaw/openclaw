@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveDiscordAccount } from "../../discord/accounts.js";
-import { createActionGate, readStringParam } from "./common.js";
+import { createDiscordActionGate } from "../../discord/accounts.js";
+import { readStringParam } from "./common.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
 import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
@@ -61,8 +61,7 @@ export async function handleDiscordAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const account = resolveDiscordAccount({ cfg, accountId });
-  const isActionEnabled = createActionGate(account.config.actions);
+  const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
     return await handleDiscordMessagingAction(action, params, isActionEnabled);

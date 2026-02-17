@@ -135,6 +135,13 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
   return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
 }
 
+function readInteractionAction(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw as Record<string, unknown>;
+}
+
 function summarizeAction(
   action: Record<string, unknown>,
 ): Omit<InteractionSummary, "actionId" | "blockId"> {
@@ -394,14 +401,26 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       await ack();
 
       // Extract action details using proper Bolt types
-      const typedAction = action as unknown as Record<string, unknown> & {
+      const typedAction = readInteractionAction(action);
+      if (!typedAction) {
+        ctx.runtime.log?.(
+          `slack:interaction malformed action payload channel=${typedBody.channel?.id ?? typedBody.container?.channel_id ?? "unknown"} user=${
+            typedBody.user?.id ?? "unknown"
+          }`,
+        );
+        return;
+      }
+      const typedActionWithText = typedAction as {
         action_id?: string;
         block_id?: string;
         type?: string;
         text?: { text?: string };
       };
-      const actionId = typedAction.action_id ?? "unknown";
-      const blockId = typedAction.block_id;
+      const actionId =
+        typeof typedActionWithText.action_id === "string"
+          ? typedActionWithText.action_id
+          : "unknown";
+      const blockId = typedActionWithText.block_id;
       const userId = typedBody.user?.id ?? "unknown";
       const channelId = typedBody.channel?.id ?? typedBody.container?.channel_id;
       const messageTs = typedBody.message?.ts ?? typedBody.container?.message_ts;
@@ -454,7 +473,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const selectedLabel = formatInteractionSelectionLabel({
         actionId,
         summary: actionSummary,
-        buttonText: typedAction.text?.text,
+        buttonText: typedActionWithText.text?.text,
       });
       let updatedBlocks = originalBlocks.map((block) => {
         const typedBlock = block as InteractionMessageBlock;
