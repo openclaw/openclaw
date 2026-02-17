@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { createHash } from "node:crypto";
 
 export type ToolCallIdMode = "strict" | "strict9";
 
@@ -50,20 +50,32 @@ export function extractToolCallsFromAssistant(
   }
 
   const toolCalls: ToolCallLike[] = [];
+  let emptyIdCounter = 0;
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
+    const hasValidType = typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type);
+    if (!hasValidType) {
       continue;
     }
-    if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
-      toolCalls.push({
-        id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
-      });
+
+    // Generate a valid ID for tool calls with empty/missing IDs to prevent
+    // "400 invalid params, tool result's tool id() not found" errors from providers
+    // like MiniMax that may return malformed responses with empty id fields.
+    let toolCallId: string;
+    if (typeof rec.id === "string" && rec.id) {
+      toolCallId = rec.id;
+    } else {
+      // Generate a unique fallback ID for tool calls without valid IDs
+      toolCallId = `minimax_fallback_${emptyIdCounter++}`;
     }
+
+    toolCalls.push({
+      id: toolCallId,
+      name: typeof rec.name === "string" ? rec.name : undefined,
+    });
   }
   return toolCalls;
 }

@@ -47,12 +47,12 @@ vi.mock("../pi-embedded-helpers.js", async () => {
   };
 });
 
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { log } from "./logger.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,

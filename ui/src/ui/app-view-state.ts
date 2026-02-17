@@ -274,6 +274,7 @@ export type AppViewState = {
   setSessionKey: (next: string) => void;
   setChatMessage: (next: string) => void;
   handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+  handleNewSession: () => Promise<void>;
   handleAbortChat: () => Promise<void>;
   removeQueuedMessage: (id: string) => void;
   handleChatScroll: (event: Event) => void;

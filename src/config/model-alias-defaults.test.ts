@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
-import type { OpenClawConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
   it("adds default aliases when models are present", () => {
