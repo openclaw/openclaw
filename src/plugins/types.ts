@@ -490,6 +490,10 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+  /** True if the tool call was blocked by before_tool_call hook veto */
+  blocked?: boolean;
+  /** Reason provided when tool call was blocked */
+  blockReason?: string;
 };
 
 // tool_result_persist hook

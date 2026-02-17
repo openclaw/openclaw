@@ -86,3 +86,11 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+# Planning artifacts (local working files)
+tasks-hooks/
+PR_DESCRIPTION.md
+PR_PLAN.md
+PR_READY.md
+PR_URL.txt
+todo.md

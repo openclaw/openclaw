@@ -86,7 +86,10 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  hookContext?: { agentId?: string; sessionKey?: string },
+): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -99,14 +102,39 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
+        const toolCtx = {
+          toolName: normalizedName,
+          agentId: hookContext?.agentId,
+          sessionKey: hookContext?.sessionKey,
+        };
         try {
           if (!beforeHookWrapped) {
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
               params,
               toolCallId,
+              ctx: hookContext,
             });
             if (hookOutcome.blocked) {
+              // Fire after_tool_call with blocked=true for veto
+              const hookRunner = getGlobalHookRunner();
+              if (hookRunner?.hasHooks("after_tool_call")) {
+                try {
+                  await hookRunner.runAfterToolCall(
+                    {
+                      toolName: normalizedName,
+                      params: isPlainObject(params) ? params : {},
+                      blocked: true,
+                      blockReason: hookOutcome.reason,
+                    },
+                    toolCtx,
+                  );
+                } catch (hookErr) {
+                  logDebug(
+                    `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+                  );
+                }
+              }
               throw new Error(hookOutcome.reason);
             }
             executeParams = hookOutcome.params;
@@ -116,22 +144,24 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             ? (consumeAdjustedParamsForToolCall(toolCallId) ?? executeParams)
             : executeParams;
 
-          // Call after_tool_call hook
-          const hookRunner = getGlobalHookRunner();
-          if (hookRunner?.hasHooks("after_tool_call")) {
-            try {
-              await hookRunner.runAfterToolCall(
-                {
-                  toolName: name,
-                  params: isPlainObject(afterParams) ? afterParams : {},
-                  result,
-                },
-                { toolName: name },
-              );
-            } catch (hookErr) {
-              logDebug(
-                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
-              );
+          // Call after_tool_call hook - skip if tool is wrapped (it fires its own)
+          if (!beforeHookWrapped) {
+            const hookRunner = getGlobalHookRunner();
+            if (hookRunner?.hasHooks("after_tool_call")) {
+              try {
+                await hookRunner.runAfterToolCall(
+                  {
+                    toolName: normalizedName,
+                    params: isPlainObject(afterParams) ? afterParams : {},
+                    result,
+                  },
+                  toolCtx,
+                );
+              } catch (hookErr) {
+                logDebug(
+                  `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+                );
+              }
             }
           }
 
@@ -162,22 +192,24 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             error: described.message,
           });
 
-          // Call after_tool_call hook for errors too
-          const hookRunner = getGlobalHookRunner();
-          if (hookRunner?.hasHooks("after_tool_call")) {
-            try {
-              await hookRunner.runAfterToolCall(
-                {
-                  toolName: normalizedName,
-                  params: isPlainObject(params) ? params : {},
-                  error: described.message,
-                },
-                { toolName: normalizedName },
-              );
-            } catch (hookErr) {
-              logDebug(
-                `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
-              );
+          // Call after_tool_call hook for errors too - skip if tool is wrapped (it fires its own)
+          if (!beforeHookWrapped) {
+            const hookRunner = getGlobalHookRunner();
+            if (hookRunner?.hasHooks("after_tool_call")) {
+              try {
+                await hookRunner.runAfterToolCall(
+                  {
+                    toolName: normalizedName,
+                    params: isPlainObject(params) ? params : {},
+                    error: described.message,
+                  },
+                  toolCtx,
+                );
+              } catch (hookErr) {
+                logDebug(
+                  `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+                );
+              }
             }
           }
 
