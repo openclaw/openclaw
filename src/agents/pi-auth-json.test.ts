@@ -157,6 +157,54 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
     expect(result.wrote).toBe(false);
   });
 
+  it("skips expired token credentials", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: "sk-ant-expired",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+
+    const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
+    expect(result.wrote).toBe(false);
+  });
+
+  it("normalizes provider ids when writing auth.json keys", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "z.ai:default": {
+            type: "api_key",
+            provider: "z.ai",
+            key: "sk-zai",
+          },
+        },
+      },
+      agentDir,
+    );
+
+    const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
+    expect(result.wrote).toBe(true);
+
+    const authPath = path.join(agentDir, "auth.json");
+    const auth = JSON.parse(await fs.readFile(authPath, "utf8")) as Record<string, unknown>;
+    expect(auth["zai"]).toMatchObject({ type: "api_key", key: "sk-zai" });
+    expect(auth["z.ai"]).toBeUndefined();
+  });
+
   it("preserves existing auth.json entries not in auth-profiles", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const authPath = path.join(agentDir, "auth.json");
