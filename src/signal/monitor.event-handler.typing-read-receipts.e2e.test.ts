@@ -12,15 +12,14 @@ const dispatchInboundMessageMock = vi.fn(
 
 vi.mock("./send.js", () => ({
   sendMessageSignal: vi.fn(),
-  sendTypingSignal: (...args: unknown[]) => sendTypingMock(...args),
-  sendReadReceiptSignal: (...args: unknown[]) => sendReadReceiptMock(...args),
+  sendTypingSignal: sendTypingMock,
+  sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
 vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessage: (...args: unknown[]) => dispatchInboundMessageMock(...args),
-  dispatchInboundMessageWithDispatcher: (...args: unknown[]) => dispatchInboundMessageMock(...args),
-  dispatchInboundMessageWithBufferedDispatcher: (...args: unknown[]) =>
-    dispatchInboundMessageMock(...args),
+  dispatchInboundMessage: dispatchInboundMessageMock,
+  dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
+  dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
