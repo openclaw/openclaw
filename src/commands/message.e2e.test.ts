@@ -117,6 +117,10 @@ const createStubPlugin = (params: {
   outbound: params.outbound,
 });
 
+type ChannelActionParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>
+>[0];
+
 const createDiscordPollPluginRegistration = () => ({
   pluginId: "discord",
   source: "test",
@@ -125,11 +129,12 @@ const createDiscordPollPluginRegistration = () => ({
     label: "Discord",
     actions: {
       listActions: () => ["poll"],
-      handleAction: async ({ action, params, cfg, accountId }) =>
-        await handleDiscordAction(
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleDiscordAction(
           { action, to: params.to, accountId: accountId ?? undefined },
           cfg,
-        ),
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
     },
   }),
 });
@@ -142,11 +147,12 @@ const createTelegramSendPluginRegistration = () => ({
     label: "Telegram",
     actions: {
       listActions: () => ["send"],
-      handleAction: async ({ action, params, cfg, accountId }) =>
-        await handleTelegramAction(
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleTelegramAction(
           { action, to: params.to, accountId: accountId ?? undefined },
           cfg,
-        ),
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
     },
   }),
 });

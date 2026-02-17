@@ -24,7 +24,7 @@ const modelRegistryState = {
   getAllError: undefined as unknown,
   getAvailableError: undefined as unknown,
 };
-let previousExitCode: number | undefined;
+let previousExitCode: typeof process.exitCode;
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/openclaw.json",
@@ -480,7 +480,10 @@ describe("models list/status", () => {
     const { toModelRow } = await import("./models/list.registry.js");
 
     const row = toModelRow({
-      model: makeGoogleAntigravityTemplate("claude-opus-4-6-thinking", "Claude Opus 4.6 Thinking"),
+      model: makeGoogleAntigravityTemplate(
+        "claude-opus-4-6-thinking",
+        "Claude Opus 4.6 Thinking",
+      ) as never,
       key: "google-antigravity/claude-opus-4-6-thinking",
       tags: [],
       availableKeys: undefined,

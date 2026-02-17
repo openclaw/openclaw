@@ -17,6 +17,7 @@ function makeMattermostPlugin(): ChannelPlugin {
       docsPath: "/channels/mattermost",
       blurb: "test",
     },
+    capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["echo"],
       defaultAccountId: () => "echo",
@@ -45,6 +46,7 @@ function makeSlackPlugin(params?: { botToken?: string; appToken?: string }): Cha
       docsPath: "/channels/slack",
       blurb: "test",
     },
+    capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -73,6 +75,7 @@ function makeTokenPlugin(): ChannelPlugin {
       docsPath: "/channels/token-only",
       blurb: "test",
     },
+    capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
