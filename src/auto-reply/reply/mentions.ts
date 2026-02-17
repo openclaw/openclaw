@@ -4,6 +4,7 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { escapeRegExp } from "../../utils.js";
+import { wrapWordBoundary } from "../unicode-boundaries.js";
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
@@ -11,7 +12,7 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   if (name) {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
     const re = parts.length ? parts.join(String.raw`\s+`) : escapeRegExp(name);
-    patterns.push(String.raw`\b@?${re}\b`);
+    patterns.push(wrapWordBoundary(`@?${re}`));
   }
   const emoji = identity?.emoji?.trim();
   if (emoji) {
@@ -57,7 +58,13 @@ export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: s
   return patterns
     .map((pattern) => {
       try {
-        return new RegExp(pattern, "i");
+        // Try Unicode-aware first, fall back to non-Unicode for user-supplied patterns
+        // that may not be compatible with the `u` flag.
+        try {
+          return new RegExp(pattern, "iu");
+        } catch {
+          return new RegExp(pattern, "i");
+        }
       } catch {
         return null;
       }
@@ -119,7 +126,7 @@ export function stripStructuralPrefixes(text: string): string {
 
   return afterMarker
     .replace(/\[[^\]]+\]\s*/g, "")
-    .replace(/^[ \t]*[A-Za-z0-9+()\-_. ]+:\s*/gm, "")
+    .replace(/^[ \t]*[\p{L}\p{N}+()\-_. ]+:\s*/gmu, "")
     .replace(/\\n/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -140,8 +147,14 @@ export function stripMentions(
   ]);
   for (const p of patterns) {
     try {
-      const re = new RegExp(p, "gi");
-      result = result.replace(re, " ");
+      // Try Unicode-aware first, fall back for user-supplied patterns
+      try {
+        const re = new RegExp(p, "giu");
+        result = result.replace(re, " ");
+      } catch {
+        const re = new RegExp(p, "gi");
+        result = result.replace(re, " ");
+      }
     } catch {
       // ignore invalid regex
     }
