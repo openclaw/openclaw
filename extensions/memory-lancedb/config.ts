@@ -2,12 +2,23 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export type OpenAIEmbeddingConfig = {
+  provider?: "openai";
+  model?: string;
+  apiKey: string;
+  baseUrl?: string;
+  dims?: number;
+};
+
+export type OllamaEmbeddingConfig = {
+  provider: "ollama";
+  model: string;
+  baseUrl?: string;
+  dims?: number;
+};
+
 export type MemoryConfig = {
-  embedding: {
-    provider: "openai";
-    model?: string;
-    apiKey: string;
-  };
+  embedding: OpenAIEmbeddingConfig | OllamaEmbeddingConfig;
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
@@ -17,7 +28,8 @@ export type MemoryConfig = {
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
-const DEFAULT_MODEL = "text-embedding-3-small";
+const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
+const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 const LEGACY_STATE_DIRS: string[] = [];
 
@@ -69,6 +81,13 @@ export function vectorDimsForModel(model: string): number {
   return dims;
 }
 
+export function tryVectorDimsForModel(model?: string): number | undefined {
+  if (!model) {
+    return undefined;
+  }
+  return EMBEDDING_DIMENSIONS[model];
+}
+
 function resolveEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
     const envValue = process.env[envVar];
@@ -79,10 +98,76 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
-  const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  vectorDimsForModel(model);
-  return model;
+function parseDims(value: unknown): number | undefined {
+  if (typeof value === "undefined") {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("embedding.dims must be a positive integer");
+  }
+  const dims = Math.floor(value);
+  if (dims <= 0) {
+    throw new Error("embedding.dims must be a positive integer");
+  }
+  return dims;
+}
+
+function parseOpenAIEmbeddingConfig(raw: Record<string, unknown>): OpenAIEmbeddingConfig {
+  assertAllowedKeys(raw, ["provider", "apiKey", "model", "baseUrl", "dims"], "embedding config");
+
+  if (typeof raw.apiKey !== "string") {
+    throw new Error("embedding.apiKey is required");
+  }
+
+  const model = typeof raw.model === "string" ? raw.model : DEFAULT_OPENAI_MODEL;
+  const dims = parseDims(raw.dims) ?? tryVectorDimsForModel(model);
+
+  return {
+    provider: "openai",
+    model,
+    apiKey: resolveEnvVars(raw.apiKey),
+    baseUrl: typeof raw.baseUrl === "string" ? resolveEnvVars(raw.baseUrl) : undefined,
+    dims,
+  };
+}
+
+function parseOllamaEmbeddingConfig(raw: Record<string, unknown>): OllamaEmbeddingConfig {
+  assertAllowedKeys(raw, ["provider", "model", "baseUrl", "dims"], "embedding config");
+
+  if (typeof raw.model !== "string" || raw.model.trim().length === 0) {
+    throw new Error("embedding.model is required when embedding.provider is 'ollama'");
+  }
+
+  return {
+    provider: "ollama",
+    model: raw.model,
+    baseUrl:
+      typeof raw.baseUrl === "string" ? resolveEnvVars(raw.baseUrl) : DEFAULT_OLLAMA_BASE_URL,
+    dims: parseDims(raw.dims),
+  };
+}
+
+function parseEmbeddingConfig(
+  embedding: Record<string, unknown> | undefined,
+): MemoryConfig["embedding"] {
+  if (!embedding || typeof embedding !== "object") {
+    throw new Error("embedding config is required");
+  }
+
+  const provider =
+    typeof embedding.provider === "string" && embedding.provider.length > 0
+      ? embedding.provider
+      : "openai";
+
+  if (provider === "ollama") {
+    return parseOllamaEmbeddingConfig(embedding);
+  }
+
+  if (provider === "openai") {
+    return parseOpenAIEmbeddingConfig(embedding);
+  }
+
+  throw new Error(`Unsupported embedding.provider: ${provider}`);
 }
 
 export const memoryConfigSchema = {
@@ -97,13 +182,9 @@ export const memoryConfigSchema = {
       "memory config",
     );
 
-    const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding.apiKey !== "string") {
-      throw new Error("embedding.apiKey is required");
-    }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
-
-    const model = resolveEmbeddingModel(embedding);
+    const parsedEmbedding = parseEmbeddingConfig(
+      cfg.embedding as Record<string, unknown> | undefined,
+    );
 
     const captureMaxChars =
       typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
@@ -115,11 +196,7 @@ export const memoryConfigSchema = {
     }
 
     return {
-      embedding: {
-        provider: "openai",
-        model,
-        apiKey: resolveEnvVars(embedding.apiKey),
-      },
+      embedding: parsedEmbedding,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
@@ -127,16 +204,33 @@ export const memoryConfigSchema = {
     };
   },
   uiHints: {
+    "embedding.provider": {
+      label: "Embedding Provider",
+      help: "Use 'openai' for OpenAI-compatible APIs, or 'ollama' for local models",
+      placeholder: "openai",
+    },
     "embedding.apiKey": {
       label: "OpenAI API Key",
       sensitive: true,
       placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      help: "API key for OpenAI-compatible embeddings (or use ${OPENAI_API_KEY})",
     },
     "embedding.model": {
       label: "Embedding Model",
-      placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
+      placeholder: DEFAULT_OPENAI_MODEL,
+      help: "Embedding model name for the selected provider",
+    },
+    "embedding.baseUrl": {
+      label: "Embedding Base URL",
+      placeholder: "https://api.openai.com/v1 or http://127.0.0.1:11434",
+      help: "Optional OpenAI-compatible endpoint or Ollama server URL",
+      advanced: true,
+    },
+    "embedding.dims": {
+      label: "Embedding Dimensions",
+      placeholder: "1536",
+      help: "Optional vector dimensions override (auto-detected when omitted for unknown models)",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",
