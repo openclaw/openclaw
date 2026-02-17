@@ -7,8 +7,8 @@
 
 import type { Driver } from "neo4j-driver";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { StoreMemoryInput } from "./schema.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
+import type { StoreMemoryInput } from "./schema.js";
 
 // ============================================================================
 // Test Helpers

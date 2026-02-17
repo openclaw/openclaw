@@ -11,11 +11,11 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { passesAttentionGate } from "./attention-gate.js";
 import type { ExtractionConfig, MemoryNeo4jConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
-import type { Neo4jMemoryClient } from "./neo4j-client.js";
-import { passesAttentionGate } from "./attention-gate.js";
 import { stripMessageWrappers } from "./message-utils.js";
+import type { Neo4jMemoryClient } from "./neo4j-client.js";
 import { hybridSearch } from "./search.js";
 import { runSleepCycle } from "./sleep-cycle.js";
 

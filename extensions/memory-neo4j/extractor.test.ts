@@ -7,8 +7,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { ExtractionConfig } from "./config.js";
 import { passesAttentionGate, passesAssistantAttentionGate } from "./attention-gate.js";
+import type { ExtractionConfig } from "./config.js";
 import {
   extractEntities,
   runBackgroundExtraction,

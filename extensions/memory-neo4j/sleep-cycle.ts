@@ -24,8 +24,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
-import type { Neo4jMemoryClient } from "./neo4j-client.js";
-import type { Logger } from "./schema.js";
 import {
   extractTagsOnly,
   isSemanticDuplicate,
@@ -33,6 +31,8 @@ import {
   runBackgroundExtraction,
 } from "./extractor.js";
 import { callOpenRouter } from "./llm-client.js";
+import type { Neo4jMemoryClient } from "./neo4j-client.js";
+import type { Logger } from "./schema.js";
 import { makePairKey } from "./schema.js";
 import {
   parseTaskLedger,

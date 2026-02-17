@@ -12,8 +12,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
-import type { Neo4jMemoryClient } from "./neo4j-client.js";
 import { _captureMessage as captureMessage, _runAutoCapture as runAutoCapture } from "./index.js";
+import type { Neo4jMemoryClient } from "./neo4j-client.js";
 
 // ============================================================================
 // Mocks

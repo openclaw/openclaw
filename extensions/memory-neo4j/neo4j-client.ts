@@ -8,8 +8,8 @@
  * with retry-on-transient and MERGE idempotency.
  */
 
-import neo4j, { type Driver } from "neo4j-driver";
 import { randomUUID } from "node:crypto";
+import neo4j, { type Driver } from "neo4j-driver";
 import type { ExtractionStatus, Logger, SearchSignalResult, StoreMemoryInput } from "./schema.js";
 import {
   ALLOWED_RELATIONSHIP_TYPES,

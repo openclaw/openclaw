@@ -12,11 +12,10 @@
  * Architecture decisions: see docs/memory-neo4j/ARCHITECTURE.md
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
+import { Type } from "@sinclair/typebox";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { stringEnum } from "openclaw/plugin-sdk";
-import type { Logger, MemoryCategory, MemorySource } from "./schema.js";
 import { passesAttentionGate, passesAssistantAttentionGate } from "./attention-gate.js";
 import { registerCli } from "./cli.js";
 import {
@@ -31,6 +30,7 @@ import { Embeddings } from "./embeddings.js";
 import { isSemanticDuplicate, rateImportance } from "./extractor.js";
 import { extractUserMessages, extractAssistantMessages } from "./message-utils.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
+import type { Logger, MemoryCategory, MemorySource } from "./schema.js";
 import { hybridSearch } from "./search.js";
 import { isRelatedToCompletedTask, loadCompletedTaskKeywords } from "./task-filter.js";
 import { parseTaskLedger } from "./task-ledger.js";
