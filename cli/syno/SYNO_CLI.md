@@ -149,10 +149,17 @@ syno note get <笔记ID> --password <笔记密码>
 # 创建笔记
 syno note create <笔记本ID> --title "标题" --content "<p>内容</p>"
 
+# 创建笔记（长内容通过 stdin 传递，避免 shell 参数截断）
+echo '<p>长HTML内容...</p>' | syno note create <笔记本ID> --title "标题" --content-stdin
+cat /tmp/note.html | syno note create <笔记本ID> --title "标题" --content-stdin
+
 # 编辑笔记（可只改标题、只改内容、或同时修改）
 syno note update <笔记ID> --title "新标题"
 syno note update <笔记ID> --content "<p>新内容</p>"
 syno note update <笔记ID> --title "新标题" --content "<p>新内容</p>"
+
+# 编辑笔记（长内容通过 stdin 传递）
+cat /tmp/note.html | syno note update <笔记ID> --content-stdin
 
 # 删除笔记
 syno note delete <笔记ID>

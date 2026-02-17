@@ -75,6 +75,8 @@ pub struct Tag {
 pub struct TodoList {
     pub todos: Option<Vec<Todo>>,
     pub total: Option<u64>,
+    pub count: Option<u64>,
+    pub offset: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,8 +84,17 @@ pub struct TodoList {
 pub struct Todo {
     pub object_id: Option<String>,
     pub title: Option<String>,
-    pub completed: Option<bool>,
-    pub due: Option<Value>,
+    pub comment: Option<String>,
+    pub done: Option<bool>,
+    pub due_date: Option<i64>,
+    pub items: Option<Vec<Value>>,
+    pub note_id: Option<String>,
+    pub note_parent_id: Option<String>,
+    pub note_title: Option<String>,
+    pub parent_id: Option<String>,
+    pub priority: Option<i64>,
+    pub reminder_offset: Option<i64>,
+    pub star: Option<bool>,
 }
 
 // ── API Functions ──
@@ -343,7 +354,17 @@ pub async fn list_todo(
     client: &SynoClient,
     sid: &str,
     synotoken: Option<&str>,
+    done: Option<bool>,
+    offset: u64,
+    limit: u64,
 ) -> Result<Value> {
+    let offset_str = offset.to_string();
+    let limit_str = limit.to_string();
+    let filter = match done {
+        Some(d) => format!(r#"{{"done":{}}}"#, d),
+        None => "{}".to_string(),
+    };
+
     let val = client
         .post_with_sid(
             "entry.cgi",
@@ -353,6 +374,12 @@ pub async fn list_todo(
                 ("api", "SYNO.NoteStation.Todo"),
                 ("version", "2"),
                 ("method", "list"),
+                ("field", r#"{"items":true}"#),
+                ("filter", &filter),
+                ("offset", &offset_str),
+                ("limit", &limit_str),
+                ("sort_by", "\"due_date\""),
+                ("sort_direction", "\"asc\""),
             ],
         )
         .await?;
@@ -361,6 +388,117 @@ pub async fn list_todo(
         anyhow::bail!("NoteStation.Todo.list failed: {val}");
     }
     Ok(val["data"].clone())
+}
+
+/// Create a todo.
+pub async fn create_todo(
+    client: &SynoClient,
+    sid: &str,
+    synotoken: Option<&str>,
+    title: &str,
+) -> Result<Value> {
+    let title_param = format!("\"{}\"", title);
+    let val = client
+        .post_with_sid(
+            "entry.cgi",
+            sid,
+            synotoken,
+            &[
+                ("api", "SYNO.NoteStation.Todo"),
+                ("version", "2"),
+                ("method", "create"),
+                ("title", &title_param),
+            ],
+        )
+        .await?;
+    let success = val["success"].as_bool().unwrap_or(false);
+    if !success {
+        anyhow::bail!("NoteStation.Todo.create failed: {val}");
+    }
+    Ok(val["data"].clone())
+}
+
+/// Update a todo (title, done, star, due_date, comment, priority).
+pub async fn update_todo(
+    client: &SynoClient,
+    sid: &str,
+    synotoken: Option<&str>,
+    todo_id: &str,
+    title: Option<&str>,
+    done: Option<bool>,
+    star: Option<bool>,
+    due_date: Option<i64>,
+    comment: Option<&str>,
+    priority: Option<i64>,
+) -> Result<Value> {
+    let id_param = format!("[\"{}\"]", todo_id);
+    let title_param = title.map(|t| format!("\"{}\"", t));
+    let done_str = done.map(|d| d.to_string());
+    let star_str = star.map(|s| s.to_string());
+    let due_str = due_date.map(|d| d.to_string());
+    let comment_param = comment.map(|c| format!("\"{}\"", c));
+    let priority_str = priority.map(|p| p.to_string());
+
+    let mut params: Vec<(&str, &str)> = vec![
+        ("api", "SYNO.NoteStation.Todo"),
+        ("version", "2"),
+        ("method", "set"),
+        ("object_id", &id_param),
+    ];
+    if let Some(ref t) = title_param {
+        params.push(("title", t));
+    }
+    if let Some(ref d) = done_str {
+        params.push(("done", d));
+    }
+    if let Some(ref s) = star_str {
+        params.push(("star", s));
+    }
+    if let Some(ref d) = due_str {
+        params.push(("due_date", d));
+    }
+    if let Some(ref c) = comment_param {
+        params.push(("comment", c));
+    }
+    if let Some(ref p) = priority_str {
+        params.push(("priority", p));
+    }
+    let val = client
+        .post_with_sid("entry.cgi", sid, synotoken, &params)
+        .await?;
+    let success = val["success"].as_bool().unwrap_or(false);
+    if !success {
+        anyhow::bail!("NoteStation.Todo.set failed: {val}");
+    }
+    Ok(val["data"].clone())
+}
+
+/// Delete a todo.
+pub async fn delete_todo(
+    client: &SynoClient,
+    sid: &str,
+    synotoken: Option<&str>,
+    todo_id: &str,
+) -> Result<()> {
+    let id_param = format!("[\"{}\"]", todo_id);
+    let val = client
+        .post_with_sid(
+            "entry.cgi",
+            sid,
+            synotoken,
+            &[
+                ("api", "SYNO.NoteStation.Todo"),
+                ("version", "1"),
+                ("method", "delete"),
+                ("object_id", &id_param),
+            ],
+        )
+        .await?;
+    let success = val["success"].as_bool().unwrap_or(false);
+    if !success {
+        anyhow::bail!("NoteStation.Todo.delete failed: {val}");
+    }
+    Ok(())
 }
 
 /// Update a note (title and/or content).

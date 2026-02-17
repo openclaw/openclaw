@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use anyhow::Result;
 use clap::Args;
 
@@ -40,6 +42,9 @@ pub struct NoteCreateArgs {
     /// Note content (HTML)
     #[arg(short, long, default_value = "")]
     pub content: String,
+    /// Read content from stdin instead of --content (for long/complex HTML)
+    #[arg(long)]
+    pub content_stdin: bool,
 }
 
 #[derive(Args)]
@@ -58,6 +63,9 @@ pub struct NoteUpdateArgs {
     /// New content (HTML, optional)
     #[arg(short, long)]
     pub content: Option<String>,
+    /// Read content from stdin instead of --content (for long/complex HTML)
+    #[arg(long)]
+    pub content_stdin: bool,
 }
 
 #[derive(Args)]
@@ -116,6 +124,73 @@ pub struct SearchArgs {
     /// Limit for pagination
     #[arg(long, default_value = "50")]
     pub limit: u64,
+}
+
+#[derive(Args)]
+pub struct TodoListArgs {
+    /// Filter: show only done (true) or undone (false) todos
+    #[arg(long)]
+    pub done: Option<bool>,
+
+    /// Offset for pagination
+    #[arg(long, default_value = "0")]
+    pub offset: u64,
+
+    /// Limit for pagination
+    #[arg(long, default_value = "100")]
+    pub limit: u64,
+}
+
+#[derive(Args)]
+pub struct TodoCreateArgs {
+    /// Todo title
+    pub title: String,
+}
+
+#[derive(Args)]
+pub struct TodoUpdateArgs {
+    /// Todo object ID
+    pub id: String,
+
+    /// New title
+    #[arg(short, long)]
+    pub title: Option<String>,
+
+    /// Mark as done or undone
+    #[arg(long)]
+    pub done: Option<bool>,
+
+    /// Star or unstar
+    #[arg(long)]
+    pub star: Option<bool>,
+
+    /// Due date as unix timestamp (-1 to clear)
+    #[arg(long)]
+    pub due_date: Option<i64>,
+
+    /// Comment text
+    #[arg(long)]
+    pub comment: Option<String>,
+
+    /// Priority: none, low, medium, high
+    #[arg(long)]
+    pub priority: Option<String>,
+}
+
+#[derive(Args)]
+pub struct TodoDeleteArgs {
+    /// Todo object ID
+    pub id: String,
+}
+
+#[derive(Args)]
+pub struct TodoDoneArgs {
+    /// Todo object ID
+    pub id: String,
+
+    /// Mark as undone instead of done
+    #[arg(long)]
+    pub undo: bool,
 }
 
 /// Show NoteStation info.
@@ -242,13 +317,21 @@ pub async fn create(args: &NoteCreateArgs) -> Result<()> {
     let token = session.synotoken();
     let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
 
+    let content = if args.content_stdin {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        args.content.clone()
+    };
+
     let data = note_station::create_note(
         &client,
         sid,
         token,
         &args.notebook_id,
         &args.title,
-        &args.content,
+        &content,
     )
     .await?;
     println!("Note created: {}", serde_json::to_string_pretty(&data)?);
@@ -291,32 +374,200 @@ pub async fn tags() -> Result<()> {
 }
 
 /// List todos.
-pub async fn todos() -> Result<()> {
+pub async fn todos(args: &TodoListArgs) -> Result<()> {
     let cfg = Config::load()?;
     let session = Session::ensure(&cfg).await?;
     let sid = session.require_sid()?;
     let token = session.synotoken();
     let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
 
-    let data = note_station::list_todo(&client, sid, token).await?;
+    let data = note_station::list_todo(&client, sid, token, args.done, args.offset, args.limit).await?;
     if let Some(todos) = data["todos"].as_array() {
         for t in todos {
             let id = t["object_id"].as_str().unwrap_or("?");
             let title = t["title"].as_str().unwrap_or("<untitled>");
-            let done = t["completed"].as_bool().unwrap_or(false);
+            let done = t["done"].as_bool().unwrap_or(false);
+            let star = t["star"].as_bool().unwrap_or(false);
             let mark = if done { "[x]" } else { "[ ]" };
-            println!("{mark} {:<40} {title}", id);
+            let star_mark = if star { "*" } else { " " };
+            let priority = match t["priority"].as_i64().unwrap_or(-1) {
+                300 => " !!!",
+                200 => " !! ",
+                100 => " !  ",
+                _ => "    ",
+            };
+            let due = t["due_date"].as_i64().unwrap_or(-1);
+            let due_str = if due > 0 {
+                let d = chrono_lite(due);
+                format!(" (due: {})", d)
+            } else {
+                String::new()
+            };
+            println!("{mark}{star_mark}{priority} {:<50} {title}{due_str}", id);
         }
+        let total = data["total"].as_u64().unwrap_or(todos.len() as u64);
+        println!("\nTotal: {total}");
     } else {
         println!("No todos found.");
     }
     Ok(())
 }
 
+/// Simple unix-timestamp to YYYY-MM-DD string (no chrono dep needed).
+fn chrono_lite(ts: i64) -> String {
+    // days since epoch
+    let secs_per_day: i64 = 86400;
+    let mut days = ts / secs_per_day;
+    let mut year = 1970i64;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+    let leap = is_leap(year);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut month = 0usize;
+    for (i, &md) in month_days.iter().enumerate() {
+        if days < md {
+            month = i + 1;
+            break;
+        }
+        days -= md;
+    }
+    let day = days + 1;
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+/// Create a todo.
+pub async fn create_todo(args: &TodoCreateArgs) -> Result<()> {
+    let cfg = Config::load()?;
+    let session = Session::ensure(&cfg).await?;
+    let sid = session.require_sid()?;
+    let token = session.synotoken();
+    let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
+
+    let data = note_station::create_todo(&client, sid, token, &args.title).await?;
+    let id = data["object_id"].as_str().unwrap_or("?");
+    let title = data["title"].as_str().unwrap_or(&args.title);
+    println!("Todo created: {id}  {title}");
+    Ok(())
+}
+
+/// Update a todo (title, done, star, due_date, comment, priority).
+pub async fn update_todo(args: &TodoUpdateArgs) -> Result<()> {
+    if args.title.is_none()
+        && args.done.is_none()
+        && args.star.is_none()
+        && args.due_date.is_none()
+        && args.comment.is_none()
+        && args.priority.is_none()
+    {
+        anyhow::bail!(
+            "At least one of --title, --done, --star, --due-date, --comment, or --priority must be provided"
+        );
+    }
+
+    let priority_val = match args.priority.as_deref() {
+        Some("none") => Some(-1i64),
+        Some("low") => Some(100),
+        Some("medium") | Some("med") => Some(200),
+        Some("high") => Some(300),
+        Some(other) => anyhow::bail!(
+            "Invalid priority '{}'. Use: none, low, medium (med), high",
+            other
+        ),
+        None => None,
+    };
+
+    let cfg = Config::load()?;
+    let session = Session::ensure(&cfg).await?;
+    let sid = session.require_sid()?;
+    let token = session.synotoken();
+    let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
+
+    let data = note_station::update_todo(
+        &client,
+        sid,
+        token,
+        &args.id,
+        args.title.as_deref(),
+        args.done,
+        args.star,
+        args.due_date,
+        args.comment.as_deref(),
+        priority_val,
+    )
+    .await?;
+    println!("Todo updated: {}", serde_json::to_string_pretty(&data)?);
+    Ok(())
+}
+
+/// Delete a todo.
+pub async fn delete_todo(args: &TodoDeleteArgs) -> Result<()> {
+    let cfg = Config::load()?;
+    let session = Session::ensure(&cfg).await?;
+    let sid = session.require_sid()?;
+    let token = session.synotoken();
+    let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
+
+    note_station::delete_todo(&client, sid, token, &args.id).await?;
+    println!("Todo deleted.");
+    Ok(())
+}
+
+/// Mark a todo as done (or undone with --undo).
+pub async fn done_todo(args: &TodoDoneArgs) -> Result<()> {
+    let cfg = Config::load()?;
+    let session = Session::ensure(&cfg).await?;
+    let sid = session.require_sid()?;
+    let token = session.synotoken();
+    let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
+
+    let done_val = !args.undo;
+    note_station::update_todo(
+        &client,
+        sid,
+        token,
+        &args.id,
+        None,
+        Some(done_val),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    if done_val {
+        println!("Todo marked as done.");
+    } else {
+        println!("Todo marked as undone.");
+    }
+    Ok(())
+}
+
 /// Update a note (title and/or content).
 pub async fn update(args: &NoteUpdateArgs) -> Result<()> {
-    if args.title.is_none() && args.content.is_none() {
-        anyhow::bail!("At least one of --title or --content must be provided");
+    let content = if args.content_stdin {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        Some(buf)
+    } else {
+        args.content.clone()
+    };
+
+    if args.title.is_none() && content.is_none() {
+        anyhow::bail!("At least one of --title, --content, or --content-stdin must be provided");
     }
     let cfg = Config::load()?;
     let session = Session::ensure(&cfg).await?;
@@ -330,7 +581,7 @@ pub async fn update(args: &NoteUpdateArgs) -> Result<()> {
         token,
         &args.id,
         args.title.as_deref(),
-        args.content.as_deref(),
+        content.as_deref(),
     )
     .await?;
     println!("Note updated: {}", serde_json::to_string_pretty(&data)?);

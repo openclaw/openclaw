@@ -77,7 +77,9 @@ syno note search "关键词"
 
 # 创建/编辑/删除笔记
 syno note create <笔记本ID> --title "标题" --content "<p>内容</p>"
+echo '<p>长内容</p>' | syno note create <笔记本ID> --title "标题" --content-stdin
 syno note update <笔记ID> --title "新标题" --content "<p>新内容</p>"
+cat file.html | syno note update <笔记ID> --content-stdin
 syno note delete <笔记ID>
 syno note move <笔记ID> --notebook <目标笔记本ID>
 

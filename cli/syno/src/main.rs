@@ -111,7 +111,15 @@ enum NoteCmd {
     /// List tags
     Tags,
     /// List todos
-    Todos,
+    Todos(cli::note_station::TodoListArgs),
+    /// Create a todo
+    CreateTodo(cli::note_station::TodoCreateArgs),
+    /// Update a todo (title, done, star, due_date, comment)
+    UpdateTodo(cli::note_station::TodoUpdateArgs),
+    /// Delete a todo
+    DeleteTodo(cli::note_station::TodoDeleteArgs),
+    /// Mark a todo as done (or --undo to mark undone)
+    Done(cli::note_station::TodoDoneArgs),
     /// Full-text search notes
     Search(cli::note_station::SearchArgs),
 }
@@ -159,7 +167,11 @@ async fn main() -> anyhow::Result<()> {
             NoteCmd::Tag(args) => cli::note_station::tag(&args).await?,
             NoteCmd::Untag(args) => cli::note_station::untag(&args).await?,
             NoteCmd::Tags => cli::note_station::tags().await?,
-            NoteCmd::Todos => cli::note_station::todos().await?,
+            NoteCmd::Todos(args) => cli::note_station::todos(&args).await?,
+            NoteCmd::CreateTodo(args) => cli::note_station::create_todo(&args).await?,
+            NoteCmd::UpdateTodo(args) => cli::note_station::update_todo(&args).await?,
+            NoteCmd::DeleteTodo(args) => cli::note_station::delete_todo(&args).await?,
+            NoteCmd::Done(args) => cli::note_station::done_todo(&args).await?,
             NoteCmd::Search(args) => cli::note_station::search(&args).await?,
         },
     }
