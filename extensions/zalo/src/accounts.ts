@@ -1,13 +1,25 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createAccountListHelpers } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveZaloToken } from "./token.js";
 import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
 
 export type { ResolvedZaloAccount };
 
-const { listAccountIds } = createAccountListHelpers("zalo");
-export const listZaloAccountIds = listAccountIds;
+function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
+  const accounts = (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
+  return Object.keys(accounts).filter(Boolean);
+}
+
+export function listZaloAccountIds(cfg: OpenClawConfig): string[] {
+  const ids = listConfiguredAccountIds(cfg);
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
+}
 
 export function resolveDefaultZaloAccountId(cfg: OpenClawConfig): string {
   const zaloConfig = cfg.channels?.zalo as ZaloConfig | undefined;

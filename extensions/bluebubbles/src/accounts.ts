@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { createAccountListHelpers } from "openclaw/plugin-sdk";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
 export type ResolvedBlueBubblesAccount = {
@@ -12,9 +11,29 @@ export type ResolvedBlueBubblesAccount = {
   baseUrl?: string;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("bluebubbles");
-export const listBlueBubblesAccountIds = listAccountIds;
-export const resolveDefaultBlueBubblesAccountId = resolveDefaultAccountId;
+function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
+  const accounts = cfg.channels?.bluebubbles?.accounts;
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
+  return Object.keys(accounts).filter(Boolean);
+}
+
+export function listBlueBubblesAccountIds(cfg: OpenClawConfig): string[] {
+  const ids = listConfiguredAccountIds(cfg);
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
+}
+
+export function resolveDefaultBlueBubblesAccountId(cfg: OpenClawConfig): string {
+  const ids = listBlueBubblesAccountIds(cfg);
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+}
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
