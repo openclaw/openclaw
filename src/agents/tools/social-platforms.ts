@@ -207,103 +207,6 @@ function resolveMaxResults(config?: SocialConfig): number {
 }
 
 // ---------------------------------------------------------------------------
-// Per-platform input builders
-// ---------------------------------------------------------------------------
-
-function buildInstagramInput(params: {
-  mode: string;
-  type: string;
-  urls?: string[];
-  queries?: string[];
-  maxResults: number;
-}): Record<string, unknown> {
-  if (params.mode === "url") {
-    if (!params.urls?.length) {
-      throw new ToolInputError("Instagram URL mode requires 'urls' parameter.");
-    }
-    return {
-      directUrls: params.urls,
-      resultsType: params.type === "urls" ? "posts" : params.type,
-      resultsLimit: params.maxResults,
-    };
-  }
-  // search mode
-  if (!params.queries?.length) {
-    throw new ToolInputError("Instagram search mode requires 'queries' parameter.");
-  }
-  return {
-    search: params.queries[0],
-    searchType: params.type,
-    searchLimit: params.maxResults,
-    resultsType: "posts",
-    resultsLimit: params.maxResults,
-  };
-}
-
-function buildTiktokInput(params: {
-  type: string;
-  queries?: string[];
-  hashtags?: string[];
-  urls?: string[];
-  profiles?: string[];
-  maxResults: number;
-}): Record<string, unknown> {
-  const base = {
-    resultsPerPage: params.maxResults,
-    shouldDownloadVideos: false,
-    shouldDownloadSubtitles: false,
-    shouldDownloadCovers: false,
-    shouldDownloadAvatars: false,
-    shouldDownloadSlideshowImages: false,
-    shouldDownloadMusicCovers: false,
-  };
-  switch (params.type) {
-    case "search":
-      if (!params.queries?.length) {
-        throw new ToolInputError("TikTok search requires 'queries' parameter.");
-      }
-      return { ...base, searchQueries: params.queries };
-    case "hashtags":
-      if (!params.hashtags?.length) {
-        throw new ToolInputError("TikTok hashtags requires 'hashtags' parameter.");
-      }
-      return { ...base, hashtags: params.hashtags };
-    case "videos":
-      if (!params.urls?.length) {
-        throw new ToolInputError("TikTok videos requires 'urls' parameter.");
-      }
-      return { ...base, videoUrls: params.urls };
-    case "profiles":
-      if (!params.profiles?.length) {
-        throw new ToolInputError("TikTok profiles requires 'profiles' parameter.");
-      }
-      return { ...base, profiles: params.profiles, profileScrapeSections: ["videos"] };
-    default:
-      throw new ToolInputError(`Unknown TikTok type: ${params.type}`);
-  }
-}
-
-function buildYoutubeInput(params: {
-  urls?: string[];
-  queries?: string[];
-  maxResults: number;
-}): Record<string, unknown> {
-  if (params.urls?.length) {
-    return {
-      startUrls: params.urls.map((url) => ({ url })),
-      maxResults: params.maxResults,
-    };
-  }
-  if (params.queries?.length) {
-    return {
-      searchKeywords: params.queries.join(", "),
-      maxResults: params.maxResults,
-    };
-  }
-  throw new ToolInputError("YouTube requires 'urls' or 'queries' parameter.");
-}
-
-// ---------------------------------------------------------------------------
 // Unified platform handler interface
 // ---------------------------------------------------------------------------
 
@@ -319,7 +222,6 @@ interface CommonParams {
   hashtags?: string[];
   profiles?: string[];
   maxResults: number;
-  actorInput: Record<string, unknown>;
 }
 
 interface PlatformHandler {
@@ -327,147 +229,184 @@ interface PlatformHandler {
   format(item: Record<string, unknown>, runType?: string): string;
 }
 
-function prepareInstagram(req: Record<string, unknown>, common: CommonParams): PreparedRun[] {
-  const mode = readStringParam(req, "instagramMode", { required: true });
-  const type = readStringParam(req, "instagramType", { required: true });
-  return [
-    {
-      actorId: ACTOR_IDS.instagram,
-      input: {
-        ...buildInstagramInput({
-          mode,
-          type,
-          urls: common.urls,
-          queries: common.queries,
-          maxResults: common.maxResults,
-        }),
-        ...common.actorInput,
-      },
-    },
-  ];
-}
-
-function prepareTiktok(req: Record<string, unknown>, common: CommonParams): PreparedRun[] {
-  const type = readStringParam(req, "tiktokType", { required: true });
-  return [
-    {
-      actorId: ACTOR_IDS.tiktok,
-      input: {
-        ...buildTiktokInput({
-          type,
-          queries: common.queries,
-          hashtags: common.hashtags,
-          urls: common.urls,
-          profiles: common.profiles,
-          maxResults: common.maxResults,
-        }),
-        ...common.actorInput,
-      },
-    },
-  ];
-}
-
-function prepareYoutube(_req: Record<string, unknown>, common: CommonParams): PreparedRun[] {
-  return [
-    {
-      actorId: ACTOR_IDS.youtube,
-      input: {
-        ...buildYoutubeInput({
-          urls: common.urls,
-          queries: common.queries,
-          maxResults: common.maxResults,
-        }),
-        ...common.actorInput,
-      },
-    },
-  ];
-}
-
-function prepareLinkedIn(req: Record<string, unknown>, common: CommonParams): PreparedRun[] {
-  const action = readStringParam(req, "linkedinAction", { required: true }) as LinkedinAction;
-  const includePosts = req.includePosts !== false;
-
-  switch (action) {
-    case "profiles": {
-      const usernames = [...(common.urls ?? []), ...(common.profiles ?? [])];
-      if (!usernames.length) {
-        throw new ToolInputError(
-          "LinkedIn profiles action requires 'urls' (profile URLs) or 'profiles' (usernames).",
-        );
-      }
-      return [
-        {
-          actorId: ACTOR_IDS.linkedin_profiles,
-          input: { usernames, ...common.actorInput },
-          runType: "profiles",
-        },
-      ];
-    }
-    case "company": {
-      if (!common.urls?.length) {
-        throw new ToolInputError(
-          "LinkedIn company action requires 'urls' (LinkedIn company profile URLs).",
-        );
-      }
-      const runs: PreparedRun[] = [
-        {
-          actorId: ACTOR_IDS.linkedin_company_details,
-          input: { profileUrls: common.urls, ...common.actorInput },
-          runType: "company_details",
-        },
-      ];
-      if (includePosts) {
-        runs.push({
-          actorId: ACTOR_IDS.linkedin_company_posts,
-          input: {
-            company_names: common.urls,
-            limit: Math.min(common.maxResults, 100),
-            ...common.actorInput,
-          },
-          runType: "company_posts",
-        });
-      }
-      return runs;
-    }
-    case "jobs": {
-      if (!common.urls?.length) {
-        throw new ToolInputError(
-          "LinkedIn jobs action requires 'urls' (LinkedIn jobs search URLs).",
-        );
-      }
-      return [
-        {
-          actorId: ACTOR_IDS.linkedin_jobs,
-          input: { urls: common.urls, ...common.actorInput },
-          runType: "jobs",
-        },
-      ];
-    }
-    default:
-      throw new ToolInputError(`Unknown LinkedIn action: ${String(action)}`);
-  }
-}
-
-function formatLinkedInItem(item: Record<string, unknown>, runType?: string): string {
-  switch (runType) {
-    case "profiles":
-      return formatLinkedInProfileItem(item);
-    case "company_details":
-      return formatLinkedInCompanyItem(item);
-    case "company_posts":
-      return formatLinkedInPostItem(item);
-    case "jobs":
-      return formatLinkedInJobItem(item);
-    default:
-      return `\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\``;
-  }
-}
-
 const HANDLERS: Record<SocialPlatform, PlatformHandler> = {
-  instagram: { prepare: prepareInstagram, format: formatInstagramItem },
-  tiktok: { prepare: prepareTiktok, format: formatTiktokItem },
-  youtube: { prepare: prepareYoutube, format: formatYoutubeItem },
-  linkedin: { prepare: prepareLinkedIn, format: formatLinkedInItem },
+  instagram: {
+    prepare(req, common) {
+      const mode = readStringParam(req, "instagramMode", { required: true });
+      const type = readStringParam(req, "instagramType", { required: true });
+      if (mode === "url") {
+        if (!common.urls?.length) {
+          throw new ToolInputError("Instagram URL mode requires 'urls' parameter.");
+        }
+        return [
+          {
+            actorId: ACTOR_IDS.instagram,
+            input: {
+              directUrls: common.urls,
+              resultsType: type === "urls" ? "posts" : type,
+              resultsLimit: common.maxResults,
+            },
+          },
+        ];
+      }
+      if (!common.queries?.length) {
+        throw new ToolInputError("Instagram search mode requires 'queries' parameter.");
+      }
+      return [
+        {
+          actorId: ACTOR_IDS.instagram,
+          input: {
+            search: common.queries[0],
+            searchType: type,
+            searchLimit: common.maxResults,
+            resultsType: "posts",
+            resultsLimit: common.maxResults,
+          },
+        },
+      ];
+    },
+    format: formatInstagramItem,
+  },
+
+  tiktok: {
+    prepare(req, common) {
+      const type = readStringParam(req, "tiktokType", { required: true });
+      const base = {
+        resultsPerPage: common.maxResults,
+        shouldDownloadVideos: false,
+        shouldDownloadSubtitles: false,
+        shouldDownloadCovers: false,
+        shouldDownloadAvatars: false,
+        shouldDownloadSlideshowImages: false,
+        shouldDownloadMusicCovers: false,
+      };
+      switch (type) {
+        case "search":
+          if (!common.queries?.length) {
+            throw new ToolInputError("TikTok search requires 'queries' parameter.");
+          }
+          return [{ actorId: ACTOR_IDS.tiktok, input: { ...base, searchQueries: common.queries } }];
+        case "hashtags":
+          if (!common.hashtags?.length) {
+            throw new ToolInputError("TikTok hashtags requires 'hashtags' parameter.");
+          }
+          return [{ actorId: ACTOR_IDS.tiktok, input: { ...base, hashtags: common.hashtags } }];
+        case "videos":
+          if (!common.urls?.length) {
+            throw new ToolInputError("TikTok videos requires 'urls' parameter.");
+          }
+          return [{ actorId: ACTOR_IDS.tiktok, input: { ...base, videoUrls: common.urls } }];
+        case "profiles":
+          if (!common.profiles?.length) {
+            throw new ToolInputError("TikTok profiles requires 'profiles' parameter.");
+          }
+          return [
+            {
+              actorId: ACTOR_IDS.tiktok,
+              input: { ...base, profiles: common.profiles, profileScrapeSections: ["videos"] },
+            },
+          ];
+        default:
+          throw new ToolInputError(`Unknown TikTok type: ${type}`);
+      }
+    },
+    format: formatTiktokItem,
+  },
+
+  youtube: {
+    prepare(_req, common) {
+      if (common.urls?.length) {
+        return [
+          {
+            actorId: ACTOR_IDS.youtube,
+            input: {
+              startUrls: common.urls.map((url) => ({ url })),
+              maxResults: common.maxResults,
+            },
+          },
+        ];
+      }
+      if (common.queries?.length) {
+        return [
+          {
+            actorId: ACTOR_IDS.youtube,
+            input: { searchKeywords: common.queries.join(", "), maxResults: common.maxResults },
+          },
+        ];
+      }
+      throw new ToolInputError("YouTube requires 'urls' or 'queries' parameter.");
+    },
+    format: formatYoutubeItem,
+  },
+
+  linkedin: {
+    prepare(req, common) {
+      const action = readStringParam(req, "linkedinAction", { required: true }) as LinkedinAction;
+      const includePosts = req.includePosts !== false;
+
+      switch (action) {
+        case "profiles": {
+          const usernames = [...(common.urls ?? []), ...(common.profiles ?? [])];
+          if (!usernames.length) {
+            throw new ToolInputError(
+              "LinkedIn profiles action requires 'urls' (profile URLs) or 'profiles' (usernames).",
+            );
+          }
+          return [
+            { actorId: ACTOR_IDS.linkedin_profiles, input: { usernames }, runType: "profiles" },
+          ];
+        }
+        case "company": {
+          if (!common.urls?.length) {
+            throw new ToolInputError(
+              "LinkedIn company action requires 'urls' (LinkedIn company profile URLs).",
+            );
+          }
+          const runs: PreparedRun[] = [
+            {
+              actorId: ACTOR_IDS.linkedin_company_details,
+              input: { profileUrls: common.urls },
+              runType: "company_details",
+            },
+          ];
+          if (includePosts) {
+            runs.push({
+              actorId: ACTOR_IDS.linkedin_company_posts,
+              input: { company_names: common.urls, limit: Math.min(common.maxResults, 100) },
+              runType: "company_posts",
+            });
+          }
+          return runs;
+        }
+        case "jobs": {
+          if (!common.urls?.length) {
+            throw new ToolInputError(
+              "LinkedIn jobs action requires 'urls' (LinkedIn jobs search URLs).",
+            );
+          }
+          return [
+            { actorId: ACTOR_IDS.linkedin_jobs, input: { urls: common.urls }, runType: "jobs" },
+          ];
+        }
+        default:
+          throw new ToolInputError(`Unknown LinkedIn action: ${String(action)}`);
+      }
+    },
+    format(item, runType) {
+      switch (runType) {
+        case "profiles":
+          return formatLinkedInProfileItem(item);
+        case "company_details":
+          return formatLinkedInCompanyItem(item);
+        case "company_posts":
+          return formatLinkedInPostItem(item);
+        case "jobs":
+          return formatLinkedInJobItem(item);
+        default:
+          return `\`\`\`json\n${JSON.stringify(item, null, 2)}\n\`\`\``;
+      }
+    },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -480,33 +419,47 @@ interface ApifyRunInfo {
   status: string;
 }
 
+async function apifyFetch<T>(params: {
+  method?: string;
+  path: string;
+  apiKey: string;
+  baseUrl: string;
+  body?: Record<string, unknown>;
+  errorPrefix: string;
+}): Promise<T> {
+  const res = await fetch(`${params.baseUrl}${params.path}`, {
+    method: params.method ?? "GET",
+    headers: {
+      ...(params.body ? { "Content-Type": "application/json" } : {}),
+      Authorization: `Bearer ${params.apiKey}`,
+      "x-apify-integration-platform": "openclaw",
+      "x-apify-integration-ai-tool": "true",
+    },
+    ...(params.body ? { body: JSON.stringify(params.body) } : {}),
+    signal: withTimeout(undefined, HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const detail = await readResponseText(res, { maxBytes: 64_000 });
+    throw new Error(`${params.errorPrefix} (${res.status}): ${detail.text || res.statusText}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 async function startApifyActorRun(params: {
   actorId: string;
   input: Record<string, unknown>;
   apiKey: string;
   baseUrl: string;
 }): Promise<ApifyRunInfo> {
-  const endpoint = `${params.baseUrl}/v2/acts/${params.actorId}/runs`;
-
-  const res = await fetch(endpoint, {
+  const result = await apifyFetch<{ data: ApifyRunInfo }>({
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
-    },
-    body: JSON.stringify(params.input),
-    signal: withTimeout(undefined, HTTP_TIMEOUT_MS),
+    path: `/v2/acts/${params.actorId}/runs`,
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+    body: params.input,
+    errorPrefix: "Failed to start Apify actor",
   });
-
-  if (!res.ok) {
-    const detail = await readResponseText(res, { maxBytes: 64_000 });
-    throw new Error(
-      `Failed to start Apify actor (${res.status}): ${detail.text || res.statusText}`,
-    );
-  }
-
-  const body = (await res.json()) as { data: ApifyRunInfo };
-  return body.data;
+  return result.data;
 }
 
 async function getApifyRunStatus(params: {
@@ -514,22 +467,13 @@ async function getApifyRunStatus(params: {
   apiKey: string;
   baseUrl: string;
 }): Promise<{ status: string; defaultDatasetId: string }> {
-  const endpoint = `${params.baseUrl}/v2/actor-runs/${params.runId}`;
-
-  const res = await fetch(endpoint, {
-    headers: { Authorization: `Bearer ${params.apiKey}` },
-    signal: withTimeout(undefined, HTTP_TIMEOUT_MS),
+  const result = await apifyFetch<{ data: { status: string; defaultDatasetId: string } }>({
+    path: `/v2/actor-runs/${params.runId}`,
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+    errorPrefix: "Failed to get run status",
   });
-
-  if (!res.ok) {
-    const detail = await readResponseText(res, { maxBytes: 64_000 });
-    throw new Error(`Failed to get run status (${res.status}): ${detail.text || res.statusText}`);
-  }
-
-  const body = (await res.json()) as {
-    data: { status: string; defaultDatasetId: string };
-  };
-  return body.data;
+  return result.data;
 }
 
 async function getApifyDatasetItems(params: {
@@ -537,21 +481,12 @@ async function getApifyDatasetItems(params: {
   apiKey: string;
   baseUrl: string;
 }): Promise<unknown[]> {
-  const endpoint = `${params.baseUrl}/v2/datasets/${params.datasetId}/items`;
-
-  const res = await fetch(endpoint, {
-    headers: { Authorization: `Bearer ${params.apiKey}` },
-    signal: withTimeout(undefined, HTTP_TIMEOUT_MS),
+  return apifyFetch<unknown[]>({
+    path: `/v2/datasets/${params.datasetId}/items`,
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+    errorPrefix: "Failed to get dataset items",
   });
-
-  if (!res.ok) {
-    const detail = await readResponseText(res, { maxBytes: 64_000 });
-    throw new Error(
-      `Failed to get dataset items (${res.status}): ${detail.text || res.statusText}`,
-    );
-  }
-
-  return (await res.json()) as unknown[];
 }
 
 // ---------------------------------------------------------------------------
@@ -971,11 +906,11 @@ async function handleStart(params: {
       hashtags: readStringArrayParam(req, "hashtags"),
       profiles: readStringArrayParam(req, "profiles"),
       maxResults: readNumberParam(req, "maxResults") ?? params.defaultMaxResults,
-      actorInput:
-        req.actorInput && typeof req.actorInput === "object" && !Array.isArray(req.actorInput)
-          ? (req.actorInput as Record<string, unknown>)
-          : {},
     };
+    const actorInput =
+      req.actorInput && typeof req.actorInput === "object" && !Array.isArray(req.actorInput)
+        ? (req.actorInput as Record<string, unknown>)
+        : {};
 
     const handler = HANDLERS[platform];
     const runs = handler.prepare(req, common);
@@ -983,7 +918,7 @@ async function handleStart(params: {
       prepared.push({
         platform,
         actorId: run.actorId,
-        input: run.input,
+        input: { ...run.input, ...actorInput },
         linkedinRunType: run.runType as LinkedinRunType | undefined,
       });
     }
