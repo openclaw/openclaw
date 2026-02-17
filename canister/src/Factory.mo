@@ -74,6 +74,11 @@ persistent actor Factory {
     let vault = await UserVault.UserVault(caller);
     let canisterId = Principal.fromActor(vault);
 
+    // Store the mapping first so a trap in update_settings doesn't orphan
+    // the vault. The owner can retry controller transfer via transferController.
+    vaults := Array.append(vaults, [(caller, canisterId)]);
+    totalCreated += 1;
+
     // Transfer IC-level controller to the user (+ keep Factory for future ops)
     let factoryPrincipal = Principal.fromActor(Factory);
     await ic.update_settings({
@@ -85,10 +90,6 @@ persistent actor Factory {
         freezing_threshold = null;
       };
     });
-
-    // Store the mapping (append to array)
-    vaults := Array.append(vaults, [(caller, canisterId)]);
-    totalCreated += 1;
 
     #ok(canisterId);
   };
