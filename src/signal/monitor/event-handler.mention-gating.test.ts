@@ -1,14 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
 
-let capturedCtx: MsgContext | undefined;
+type SignalMsgContext = MsgContext & {
+  Body?: string;
+  WasMentioned?: boolean;
+};
+
+let capturedCtx: SignalMsgContext | undefined;
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
   return buildDispatchInboundCaptureMock(actual, (ctx) => {
-    capturedCtx = ctx as MsgContext;
+    capturedCtx = ctx as SignalMsgContext;
   });
 });
 
@@ -51,15 +57,26 @@ function createMentionGatedHistoryHandler() {
   const groupHistories = new Map();
   const handler = createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
-      cfg: {
-        messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-        channels: { signal: { groups: { "*": { requireMention: true } } } },
-      },
+      cfg: createSignalConfig({ requireMention: true }),
       historyLimit: 5,
       groupHistories,
     }),
   );
   return { handler, groupHistories };
+}
+
+function createSignalConfig(params: { requireMention: boolean; mentionPattern?: string }) {
+  return {
+    messages: {
+      inbound: { debounceMs: 0 },
+      groupChat: { mentionPatterns: [params.mentionPattern ?? "@bot"] },
+    },
+    channels: {
+      signal: {
+        groups: { "*": { requireMention: params.requireMention } },
+      },
+    },
+  } as unknown as OpenClawConfig;
 }
 
 async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: string) {
@@ -78,10 +95,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true }),
       }),
     );
 
@@ -93,10 +107,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true }),
       }),
     );
 
@@ -109,10 +120,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: false } } } },
-        },
+        cfg: createSignalConfig({ requireMention: false }),
       }),
     );
 
@@ -147,10 +155,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true }),
       }),
     );
 
@@ -162,10 +167,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: false } } } },
-        },
+        cfg: createSignalConfig({ requireMention: false }),
       }),
     );
 
@@ -194,10 +196,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@123e4567"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true, mentionPattern: "@123e4567" }),
       }),
     );
 
