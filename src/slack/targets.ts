@@ -2,7 +2,7 @@ import {
   buildMessagingTarget,
   ensureTargetId,
   parseTargetMention,
-  parseTargetPrefix,
+  parseTargetPrefixes,
   requireTargetKind,
   type MessagingTarget,
   type MessagingTargetKind,
@@ -31,22 +31,14 @@ export function parseSlackTarget(
   if (mentionTarget) {
     return mentionTarget;
   }
-  const prefixedTarget =
-    parseTargetPrefix({
-      raw: trimmed,
-      prefix: "user:",
-      kind: "user",
-    }) ??
-    parseTargetPrefix({
-      raw: trimmed,
-      prefix: "channel:",
-      kind: "channel",
-    }) ??
-    parseTargetPrefix({
-      raw: trimmed,
-      prefix: "slack:",
-      kind: "user",
-    });
+  const prefixedTarget = parseTargetPrefixes({
+    raw: trimmed,
+    prefixes: [
+      { prefix: "user:", kind: "user" },
+      { prefix: "channel:", kind: "channel" },
+      { prefix: "slack:", kind: "user" },
+    ],
+  });
   if (prefixedTarget) {
     return prefixedTarget;
   }
