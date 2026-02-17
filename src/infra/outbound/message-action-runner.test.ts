@@ -815,6 +815,24 @@ describe("runMessageAction components parsing", () => {
     expect(handleAction).toHaveBeenCalled();
     expect(result.payload).toMatchObject({ ok: true, components });
   });
+
+  it("throws on invalid components JSON strings", async () => {
+    await expect(
+      runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "discord",
+          target: "channel:123",
+          message: "hi",
+          components: "{not-json}",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/--components must be valid JSON/);
+
+    expect(handleAction).not.toHaveBeenCalled();
+  });
 });
 
 describe("runMessageAction accountId defaults", () => {
