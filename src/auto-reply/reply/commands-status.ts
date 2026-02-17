@@ -145,7 +145,7 @@ export async function buildStatusReply(params: {
         ...agentDefaults.model,
         primary: `${provider}/${model}`,
       },
-      contextTokens,
+      contextTokens: agentDefaults.contextTokens ?? contextTokens,
       thinkingDefault: agentDefaults.thinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
