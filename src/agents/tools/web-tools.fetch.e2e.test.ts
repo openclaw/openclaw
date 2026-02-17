@@ -92,7 +92,6 @@ function requestUrl(input: RequestInfo): string {
 
 function installMockFetch(impl: (input: RequestInfo) => Promise<Response>) {
   const mockFetch = vi.fn(impl);
-  // @ts-expect-error mock fetch
   global.fetch = mockFetch;
   return mockFetch;
 }
@@ -141,7 +140,6 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   afterEach(() => {
-    // @ts-expect-error restore
     global.fetch = priorFetch;
     vi.restoreAllMocks();
   });

@@ -2,19 +2,29 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 
-const callGateway = vi.fn(async () => ({ ok: true }));
-const startGatewayServer = vi.fn(async () => ({
+type DiscoveredBeacon = Awaited<
+  ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
+>[number];
+
+const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const startGatewayServer = vi.fn<
+  (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
+>(async () => ({
   close: vi.fn(async () => {}),
 }));
 const setVerbose = vi.fn();
-const forceFreePortAndWait = vi.fn(async () => ({
+const forceFreePortAndWait = vi.fn<
+  (port: number) => Promise<{ killed: unknown[]; waitedMs: number; escalatedToSigkill: boolean }>
+>(async () => ({
   killed: [],
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
-const discoverGatewayBeacons = vi.fn(async () => []);
-const gatewayStatusCommand = vi.fn(async () => {});
+const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon[]>>(
+  async () => [],
+);
+const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () => {});
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
