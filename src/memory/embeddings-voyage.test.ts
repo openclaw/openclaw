@@ -14,11 +14,12 @@ vi.mock("../agents/model-auth.js", () => ({
 }));
 
 const createFetchMock = () => {
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
-  }));
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
   return withFetchPreconnect(fetchMock) as typeof fetch & typeof fetchMock;
 };
 
@@ -94,13 +95,17 @@ describe("voyage embedding provider", () => {
 
   it("passes input_type=document for embedBatch", async () => {
     const fetchMock = withFetchPreconnect(
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
-        }),
-      })),
+      vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        return new Response(
+          JSON.stringify({
+            data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
