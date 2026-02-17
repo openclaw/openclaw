@@ -51,26 +51,31 @@ function resolveRunner() {
 }
 
 function run(cmd, args) {
+  const isWindows = process.platform === "win32"; // Windows support
   const child = spawn(cmd, args, {
     cwd: uiDir,
     stdio: "inherit",
     env: process.env,
-    shell: process.platform === "win32",
+    shell: isWindows,
   });
-  child.on("exit", (code, signal) => {
-    if (signal) {
-      process.exit(1);
+  child.on("error", (err) => {
+    console.error(`Failed to launch ${cmd}:`, err);
+    process.exit(1);
+  });
+  child.on("exit", (code) => {
+    if (code !== 0) {
+      process.exit(code ?? 1);
     }
-    process.exit(code ?? 1);
   });
 }
 
 function runSync(cmd, args, envOverride) {
+  const isWindows = process.platform === "win32"; // Windows support
   const result = spawnSync(cmd, args, {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
-    shell: process.platform === "win32",
+    shell: isWindows,
   });
   if (result.signal) {
     process.exit(1);

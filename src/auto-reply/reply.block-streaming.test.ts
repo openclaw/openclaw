@@ -7,6 +7,7 @@ import { getReplyFromConfig } from "./reply.js";
 
 type RunEmbeddedPiAgent = typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
 type RunEmbeddedPiAgentParams = Parameters<RunEmbeddedPiAgent>[0];
+type RunEmbeddedPiAgentReply = Awaited<ReturnType<RunEmbeddedPiAgent>>;
 
 const piEmbeddedMock = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -53,6 +54,58 @@ function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
 
 let fixtureRoot = "";
 let caseId = 0;
+
+function createEmbeddedReply(text: string): RunEmbeddedPiAgentReply {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  };
+}
+
+function createTelegramMessage(messageSid: string) {
+  return {
+    Body: "ping",
+    From: "+1004",
+    To: "+2000",
+    MessageSid: messageSid,
+    Provider: "telegram",
+  } as const;
+}
+
+function createReplyConfig(home: string, streamMode?: "block") {
+  return {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "openclaw"),
+      },
+    },
+    channels: { telegram: { allowFrom: ["*"], streamMode } },
+    session: { store: path.join(home, "sessions.json") },
+  };
+}
+
+async function runTelegramReply(params: {
+  home: string;
+  messageSid: string;
+  onBlockReply?: Parameters<typeof getReplyFromConfig>[1]["onBlockReply"];
+  onReplyStart?: Parameters<typeof getReplyFromConfig>[1]["onReplyStart"];
+  disableBlockStreaming?: boolean;
+  streamMode?: "block";
+}) {
+  return getReplyFromConfig(
+    createTelegramMessage(params.messageSid),
+    {
+      onReplyStart: params.onReplyStart,
+      onBlockReply: params.onBlockReply,
+      disableBlockStreaming: params.disableBlockStreaming,
+    },
+    createReplyConfig(params.home, params.streamMode),
+  );
+}
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const home = path.join(fixtureRoot, `case-${++caseId}`);
@@ -135,38 +188,18 @@ describe("block streaming", () => {
         void params.onBlockReply?.({ text: "second" });
         return {
           payloads: [{ text: "first" }, { text: "second" }],
-          meta: {
-            durationMs: 5,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
+          meta: createEmbeddedReply("first").meta,
         };
       };
       piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
 
-      const replyPromise = getReplyFromConfig(
-        {
-          Body: "ping",
-          From: "+1004",
-          To: "+2000",
-          MessageSid: "msg-123",
-          Provider: "telegram",
-        },
-        {
-          onReplyStart,
-          onBlockReply,
-          disableBlockStreaming: false,
-        },
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { telegram: { allowFrom: ["*"] } },
-          session: { store: path.join(home, "sessions.json") },
-        },
-      );
+      const replyPromise = runTelegramReply({
+        home,
+        messageSid: "msg-123",
+        onReplyStart,
+        onBlockReply,
+        disableBlockStreaming: false,
+      });
 
       await onReplyStartCalled;
       releaseTyping?.();
@@ -176,39 +209,73 @@ describe("block streaming", () => {
       expect(seen).toEqual(["first\n\nsecond"]);
 
       const onBlockReplyStreamMode = vi.fn().mockResolvedValue(undefined);
-      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(async () => ({
-        payloads: [{ text: "final" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      }));
-
-      const resStreamMode = await getReplyFromConfig(
-        {
-          Body: "ping",
-          From: "+1004",
-          To: "+2000",
-          MessageSid: "msg-127",
-          Provider: "telegram",
-        },
-        {
-          onBlockReply: onBlockReplyStreamMode,
-        },
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { telegram: { allowFrom: ["*"], streamMode: "block" } },
-          session: { store: path.join(home, "sessions.json") },
-        },
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(async () =>
+        createEmbeddedReply("final"),
       );
+
+      const resStreamMode = await runTelegramReply({
+        home,
+        messageSid: "msg-127",
+        onBlockReply: onBlockReplyStreamMode,
+        streamMode: "block",
+      });
 
       expect(resStreamMode?.text).toBe("final");
       expect(onBlockReplyStreamMode).not.toHaveBeenCalled();
+    });
+  });
+
+  it("trims leading whitespace in block-streamed replies", async () => {
+    await withTempHome(async (home) => {
+      const seen: string[] = [];
+      const onBlockReply = vi.fn(async (payload) => {
+        seen.push(payload.text ?? "");
+      });
+
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(
+        async (params: RunEmbeddedPiAgentParams) => {
+          void params.onBlockReply?.({ text: "\n\n  Hello from stream" });
+          return createEmbeddedReply("\n\n  Hello from stream");
+        },
+      );
+
+      const res = await runTelegramReply({
+        home,
+        messageSid: "msg-128",
+        onBlockReply,
+        disableBlockStreaming: false,
+      });
+
+      expect(res).toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual(["Hello from stream"]);
+    });
+  });
+
+  it("still parses media directives for direct block payloads", async () => {
+    await withTempHome(async (home) => {
+      const onBlockReply = vi.fn();
+
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(
+        async (params: RunEmbeddedPiAgentParams) => {
+          void params.onBlockReply?.({ text: "Result\nMEDIA: ./image.png" });
+          return createEmbeddedReply("Result\nMEDIA: ./image.png");
+        },
+      );
+
+      const res = await runTelegramReply({
+        home,
+        messageSid: "msg-129",
+        onBlockReply,
+        disableBlockStreaming: false,
+      });
+
+      expect(res).toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(onBlockReply.mock.calls[0][0]).toMatchObject({
+        text: "Result",
+        mediaUrls: ["./image.png"],
+      });
     });
   });
 });

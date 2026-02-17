@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
@@ -104,13 +105,14 @@ export function execDockerRaw(
   });
 }
 
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
@@ -240,6 +242,9 @@ export function buildSandboxCreateArgs(params: {
   labels?: Record<string, string>;
   configHash?: string;
 }) {
+  // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
+  validateSandboxSecurity(params.cfg);
+
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
   args.push("--label", "openclaw.sandbox=1");
@@ -265,10 +270,26 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  for (const [key, value] of Object.entries(params.cfg.env ?? {})) {
-    if (!key.trim()) {
-      continue;
-    }
+  // Sanitize environment variables to prevent credential leakage (OC-09 fix)
+  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {}, {
+    strictMode: false, // Allow all non-blocked variables by default
+  });
+
+  // Log blocked variables for security audit
+  if (envSanitization.blocked.length > 0) {
+    console.warn(
+      "[Security] Blocked environment variables:",
+      envSanitization.blocked.map((b) => b.key).join(", "),
+    );
+  }
+
+  // Log warnings (e.g., suspicious base64 values)
+  if (envSanitization.warnings.length > 0) {
+    console.warn("[Security] Environment variable warnings:", envSanitization.warnings);
+  }
+
+  // Only pass sanitized (allowed) environment variables to Docker
+  for (const [key, value] of Object.entries(envSanitization.allowed)) {
     args.push("--env", key + "=" + value);
   }
   for (const cap of params.cfg.capDrop) {

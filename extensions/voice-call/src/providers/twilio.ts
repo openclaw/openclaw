@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
 import type { MediaStreamHandler } from "../media-stream.js";
+import { chunkAudio } from "../telephony-audio.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
   HangupCallInput,
@@ -14,9 +15,8 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
-import type { VoiceCallProvider } from "./base.js";
-import { chunkAudio } from "../telephony-audio.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
+import type { VoiceCallProvider } from "./base.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
@@ -62,6 +62,17 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
+  /** Pre-generated greeting audio for instant inbound playback */
+  private cachedGreetingAudio: Buffer | null = null;
+
+  setCachedGreetingAudio(audio: Buffer): void {
+    this.cachedGreetingAudio = audio;
+    console.log(`[voice-call] Cached greeting audio: ${audio.length} bytes`);
+  }
+
+  getCachedGreetingAudio(): Buffer | null {
+    return this.cachedGreetingAudio;
+  }
   /** Per-call tokens for media stream authentication */
   private streamAuthTokens = new Map<string, string>();
 

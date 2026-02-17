@@ -60,3 +60,25 @@ export async function callBrowserRequest<T>(
   }
   return payload as T;
 }
+
+export async function callBrowserResize(
+  opts: BrowserParentOpts,
+  params: { profile?: string; width: number; height: number; targetId?: string },
+  extra?: { timeoutMs?: number },
+): Promise<unknown> {
+  return callBrowserRequest(
+    opts,
+    {
+      method: "POST",
+      path: "/act",
+      query: params.profile ? { profile: params.profile } : undefined,
+      body: {
+        kind: "resize",
+        width: params.width,
+        height: params.height,
+        targetId: params.targetId?.trim() || undefined,
+      },
+    },
+    extra,
+  );
+}

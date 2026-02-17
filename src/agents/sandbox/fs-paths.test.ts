@@ -1,53 +1,40 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SandboxContext } from "./types.js";
 import {
   buildSandboxFsMounts,
   parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
 } from "./fs-paths.js";
+import { createSandboxTestContext } from "./test-fixtures.js";
+import type { SandboxContext } from "./types.js";
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
-  return {
-    enabled: true,
-    sessionKey: "sandbox:test",
-    workspaceDir: "/tmp/workspace",
-    agentWorkspaceDir: "/tmp/workspace",
-    workspaceAccess: "rw",
-    containerName: "openclaw-sbx-test",
-    containerWorkdir: "/workspace",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      network: "none",
-      user: "1000:1000",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      capDrop: [],
-      seccompProfile: "",
-      apparmorProfile: "",
-      setupCommand: "",
-      binds: [],
-      dns: [],
-      extraHosts: [],
-      pidsLimit: 0,
-    },
-    tools: { allow: ["*"], deny: [] },
-    browserAllowHostControl: false,
-    ...overrides,
-  };
+  return createSandboxTestContext({ overrides });
 }
 
 describe("parseSandboxBindMount", () => {
   it("parses bind mode and writeability", () => {
     expect(parseSandboxBindMount("/tmp/a:/workspace-a:ro")).toEqual({
-      hostRoot: "/tmp/a",
+      hostRoot: path.resolve("/tmp/a"),
       containerRoot: "/workspace-a",
       writable: false,
     });
     expect(parseSandboxBindMount("/tmp/b:/workspace-b:rw")).toEqual({
-      hostRoot: "/tmp/b",
+      hostRoot: path.resolve("/tmp/b"),
       containerRoot: "/workspace-b",
+      writable: true,
+    });
+  });
+
+  it("parses Windows drive-letter host paths", () => {
+    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
+      hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
+      containerRoot: "/workspace",
+      writable: false,
+    });
+    expect(parseSandboxBindMount("D:/data:/workspace-data:rw")).toEqual({
+      hostRoot: path.resolve("D:/data"),
+      containerRoot: "/workspace-data",
       writable: true,
     });
   });
@@ -70,7 +57,9 @@ describe("resolveSandboxFsPathWithMounts", () => {
       mounts,
     });
 
-    expect(resolved.hostPath).toBe("/tmp/workspace-two/docs/AGENTS.md");
+    expect(resolved.hostPath).toBe(
+      path.join(path.resolve("/tmp/workspace-two"), "docs", "AGENTS.md"),
+    );
     expect(resolved.containerPath).toBe("/workspace-two/docs/AGENTS.md");
     expect(resolved.relativePath).toBe("/workspace-two/docs/AGENTS.md");
     expect(resolved.writable).toBe(false);
@@ -86,7 +75,7 @@ describe("resolveSandboxFsPathWithMounts", () => {
       defaultContainerRoot: sandbox.containerWorkdir,
       mounts,
     });
-    expect(resolved.hostPath).toBe("/tmp/workspace/src/index.ts");
+    expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/workspace"), "src", "index.ts"));
     expect(resolved.containerPath).toBe("/workspace/src/index.ts");
     expect(resolved.relativePath).toBe("src/index.ts");
     expect(resolved.writable).toBe(true);

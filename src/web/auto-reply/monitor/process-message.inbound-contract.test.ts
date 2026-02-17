@@ -10,6 +10,52 @@ let sessionDir: string | undefined;
 let sessionStorePath: string;
 let backgroundTasks: Set<Promise<unknown>>;
 
+const defaultReplyLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+};
+
+function makeProcessMessageArgs(params: {
+  msg: Record<string, unknown>;
+  routeSessionKey: string;
+  groupHistoryKey: string;
+  cfg?: unknown;
+  groupHistories?: Map<string, Array<{ sender: string; body: string }>>;
+  groupHistory?: Array<{ sender: string; body: string }>;
+}) {
+  return {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    cfg: (params.cfg ?? { messages: {}, session: { store: sessionStorePath } }) as any,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    msg: params.msg as any,
+    route: {
+      agentId: "main",
+      accountId: "default",
+      sessionKey: params.routeSessionKey,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any,
+    groupHistoryKey: params.groupHistoryKey,
+    groupHistories: params.groupHistories ?? new Map(),
+    groupMemberNames: new Map(),
+    connectionId: "conn",
+    verbose: false,
+    maxMediaBytes: 1,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    replyResolver: (async () => undefined) as any,
+    // oxlint-disable-next-line typescript/no-explicit-any
+    replyLogger: defaultReplyLogger as any,
+    backgroundTasks,
+    rememberSentText: (_text: string | undefined, _opts: unknown) => {},
+    echoHas: () => false,
+    echoForget: () => {},
+    buildCombinedEchoKey: () => "echo",
+    ...(params.groupHistory ? { groupHistory: params.groupHistory } : {}),
+    // oxlint-disable-next-line typescript/no-explicit-any
+  } as any;
+}
+
 vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
   // oxlint-disable-next-line typescript/no-explicit-any
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
@@ -49,46 +95,25 @@ describe("web processMessage inbound contract", () => {
   });
 
   it("passes a finalized MsgContext to the dispatcher", async () => {
-    await processMessage({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      cfg: { messages: {}, session: { store: sessionStorePath } } as any,
-      msg: {
-        id: "msg1",
-        from: "123@g.us",
-        to: "+15550001111",
-        chatType: "group",
-        body: "hi",
-        senderName: "Alice",
-        senderJid: "alice@s.whatsapp.net",
-        senderE164: "+15550002222",
-        groupSubject: "Test Group",
-        groupParticipants: [],
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      route: {
-        agentId: "main",
-        accountId: "default",
-        sessionKey: "agent:main:whatsapp:group:123",
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      groupHistoryKey: "123@g.us",
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      connectionId: "conn",
-      verbose: false,
-      maxMediaBytes: 1,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyResolver: (async () => undefined) as any,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks,
-      rememberSentText: (_text: string | undefined, _opts: unknown) => {},
-      echoHas: () => false,
-      echoForget: () => {},
-      buildCombinedEchoKey: () => "echo",
-      groupHistory: [],
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:group:123",
+        groupHistoryKey: "123@g.us",
+        groupHistory: [],
+        msg: {
+          id: "msg1",
+          from: "123@g.us",
+          to: "+15550001111",
+          chatType: "group",
+          body: "hi",
+          senderName: "Alice",
+          senderJid: "alice@s.whatsapp.net",
+          senderE164: "+15550002222",
+          groupSubject: "Test Group",
+          groupParticipants: [],
+        },
+      }),
+    );
 
     expect(capturedCtx).toBeTruthy();
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -98,42 +123,21 @@ describe("web processMessage inbound contract", () => {
   it("falls back SenderId to SenderE164 when senderJid is empty", async () => {
     capturedCtx = undefined;
 
-    await processMessage({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      cfg: { messages: {}, session: { store: sessionStorePath } } as any,
-      msg: {
-        id: "msg1",
-        from: "+1000",
-        to: "+2000",
-        chatType: "direct",
-        body: "hi",
-        senderJid: "",
-        senderE164: "+1000",
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      route: {
-        agentId: "main",
-        accountId: "default",
-        sessionKey: "agent:main:whatsapp:direct:+1000",
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      groupHistoryKey: "+1000",
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      connectionId: "conn",
-      verbose: false,
-      maxMediaBytes: 1,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyResolver: (async () => undefined) as any,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks,
-      rememberSentText: (_text: string | undefined, _opts: unknown) => {},
-      echoHas: () => false,
-      echoForget: () => {},
-      buildCombinedEchoKey: () => "echo",
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1000",
+        groupHistoryKey: "+1000",
+        msg: {
+          id: "msg1",
+          from: "+1000",
+          to: "+2000",
+          chatType: "direct",
+          body: "hi",
+          senderJid: "",
+          senderE164: "+1000",
+        },
+      }),
+    );
 
     expect(capturedCtx).toBeTruthy();
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -149,53 +153,33 @@ describe("web processMessage inbound contract", () => {
   it("defaults responsePrefix to identity name in self-chats when unset", async () => {
     capturedDispatchParams = undefined;
 
-    await processMessage({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      cfg: {
-        agents: {
-          list: [
-            {
-              id: "main",
-              default: true,
-              identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
-            },
-          ],
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1555",
+        groupHistoryKey: "+1555",
+        cfg: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                default: true,
+                identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
+              },
+            ],
+          },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        msg: {
+          id: "msg1",
+          from: "+1555",
+          to: "+1555",
+          selfE164: "+1555",
+          chatType: "direct",
+          body: "hi",
         },
-        messages: {},
-        session: { store: sessionStorePath },
-      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
-      msg: {
-        id: "msg1",
-        from: "+1555",
-        to: "+1555",
-        selfE164: "+1555",
-        chatType: "direct",
-        body: "hi",
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      route: {
-        agentId: "main",
-        accountId: "default",
-        sessionKey: "agent:main:whatsapp:direct:+1555",
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      groupHistoryKey: "+1555",
-      groupHistories: new Map(),
-      groupMemberNames: new Map(),
-      connectionId: "conn",
-      verbose: false,
-      maxMediaBytes: 1,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyResolver: (async () => undefined) as any,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks,
-      rememberSentText: (_text: string | undefined, _opts: unknown) => {},
-      echoHas: () => false,
-      echoForget: () => {},
-      buildCombinedEchoKey: () => "echo",
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
+      }),
+    );
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
@@ -216,51 +200,32 @@ describe("web processMessage inbound contract", () => {
       ],
     ]);
 
-    await processMessage({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      cfg: {
-        messages: {},
-        session: { store: sessionStorePath },
-      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
-      msg: {
-        id: "g1",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        to: "+2000",
-        chatType: "group",
-        chatId: "123@g.us",
-        body: "second",
-        senderName: "Bob",
-        senderE164: "+222",
-        selfE164: "+999",
-        sendComposing: async () => {},
-        reply: async () => {},
-        sendMedia: async () => {},
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      route: {
-        agentId: "main",
-        accountId: "default",
-        sessionKey: "agent:main:whatsapp:group:123@g.us",
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any,
-      groupHistoryKey: "whatsapp:default:group:123@g.us",
-      groupHistories: groupHistories as never,
-      groupMemberNames: new Map(),
-      connectionId: "conn",
-      verbose: false,
-      maxMediaBytes: 1,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyResolver: (async () => undefined) as any,
-      // oxlint-disable-next-line typescript/no-explicit-any
-      replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
-      backgroundTasks,
-      rememberSentText: (_text: string | undefined, _opts: unknown) => {},
-      echoHas: () => false,
-      echoForget: () => {},
-      buildCombinedEchoKey: () => "echo",
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:group:123@g.us",
+        groupHistoryKey: "whatsapp:default:group:123@g.us",
+        groupHistories,
+        cfg: {
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        msg: {
+          id: "g1",
+          from: "123@g.us",
+          conversationId: "123@g.us",
+          to: "+2000",
+          chatType: "group",
+          chatId: "123@g.us",
+          body: "second",
+          senderName: "Bob",
+          senderE164: "+222",
+          selfE164: "+999",
+          sendComposing: async () => {},
+          reply: async () => {},
+          sendMedia: async () => {},
+        },
+      }),
+    );
 
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });

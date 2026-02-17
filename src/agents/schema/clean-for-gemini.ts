@@ -207,6 +207,36 @@ function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants:
   return { variants: stripped ? nonNullVariants : variants };
 }
 
+function flattenUnionFallback(
+  obj: Record<string, unknown>,
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const variants = (value as Record<string, unknown>[]).filter((v) => v && typeof v === "object");
+  const types = new Set(variants.map((v) => v.type).filter(Boolean));
+  if (variants.length === 1) {
+    const merged: Record<string, unknown> = { ...variants[0] };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  if (types.size === 1) {
+    const merged: Record<string, unknown> = { type: Array.from(types)[0] };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  const first = variants[0];
+  if (first?.type) {
+    const merged: Record<string, unknown> = { type: first.type };
+    copySchemaMeta(obj, merged);
+    return merged;
+  }
+  const merged: Record<string, unknown> = {};
+  copySchemaMeta(obj, merged);
+  return merged;
+}
+
 function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
@@ -337,6 +367,20 @@ function cleanSchemaForGeminiWithDefs(
     } else {
       cleaned[key] = value;
     }
+  }
+
+  // Cloud Code Assist API also rejects anyOf/oneOf in nested schemas.
+  // If simplifyUnionVariants couldn't reduce the union above, flatten it
+  // here as a fallback: pick the first variant's type or use a permissive
+  // schema so the tool declaration is accepted.
+  const flattenedAnyOf = flattenUnionFallback(cleaned, cleaned.anyOf);
+  if (flattenedAnyOf) {
+    return flattenedAnyOf;
+  }
+
+  const flattenedOneOf = flattenUnionFallback(cleaned, cleaned.oneOf);
+  if (flattenedOneOf) {
+    return flattenedOneOf;
   }
 
   return cleaned;

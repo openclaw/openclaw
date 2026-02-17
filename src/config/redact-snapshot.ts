@@ -301,7 +301,7 @@ export function redactConfigSnapshot(
   const redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
   const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
   // Also redact the resolved config (contains values after ${ENV} substitution)
-  const redactedResolved = redactConfigObject(snapshot.resolved);
+  const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
 
   return {
     ...snapshot,
@@ -369,8 +369,19 @@ class RedactionError extends Error {
     super("internal error class---should never escape");
     this.key = key;
     this.name = "RedactionError";
-    Object.setPrototypeOf(this, RedactionError.prototype);
   }
+}
+
+function restoreOriginalValueOrThrow(params: {
+  key: string;
+  path: string;
+  original: Record<string, unknown>;
+}): unknown {
+  if (params.key in params.original) {
+    return params.original[params.key];
+  }
+  log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+  throw new RedactionError(params.path);
 }
 
 /**
@@ -427,12 +438,7 @@ function restoreRedactedValuesWithLookup(
       if (lookup.has(candidate)) {
         matched = true;
         if (value === REDACTED_SENTINEL) {
-          if (key in orig) {
-            result[key] = orig[key];
-          } else {
-            log.warn(`Cannot un-redact config key ${candidate} as it doesn't have any value`);
-            throw new RedactionError(candidate);
-          }
+          result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
           result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
         }
@@ -442,12 +448,7 @@ function restoreRedactedValuesWithLookup(
     if (!matched && isExtensionPath(path)) {
       const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
       if (!markedNonSensitive && isSensitivePath(path) && value === REDACTED_SENTINEL) {
-        if (key in orig) {
-          result[key] = orig[key];
-        } else {
-          log.warn(`Cannot un-redact config key ${path} as it doesn't have any value`);
-          throw new RedactionError(path);
-        }
+        result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
       } else if (typeof value === "object" && value !== null) {
         result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
       }
@@ -506,12 +507,7 @@ function restoreRedactedValuesGuessing(
       isSensitivePath(path) &&
       value === REDACTED_SENTINEL
     ) {
-      if (key in orig) {
-        result[key] = orig[key];
-      } else {
-        log.warn(`Cannot un-redact config key ${path} as it doesn't have any value`);
-        throw new RedactionError(path);
-      }
+      result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {
       result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
     } else {

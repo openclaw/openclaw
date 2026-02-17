@@ -10,24 +10,31 @@ describe("config io write", () => {
     error: () => {},
   };
 
+  async function writeConfigAndCreateIo(params: {
+    home: string;
+    initialConfig: Record<string, unknown>;
+    env?: NodeJS.ProcessEnv;
+  }) {
+    const configPath = path.join(params.home, ".openclaw", "openclaw.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify(params.initialConfig, null, 2), "utf-8");
+
+    const io = createConfigIO({
+      env: params.env ?? {},
+      homedir: () => params.home,
+      logger: silentLogger,
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    return { configPath, io, snapshot };
+  }
+
   it("persists caller changes onto resolved config without leaking runtime defaults", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { port: 18789 } }, null, 2),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: { gateway: { port: 18789 } },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
 
       const next = structuredClone(snapshot.config);
       next.gateway = {
@@ -53,40 +60,25 @@ describe("config io write", () => {
 
   it("preserves env var references when writing", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            agents: {
-              defaults: {
-                cliBackends: {
-                  codex: {
-                    command: "codex",
-                    env: {
-                      OPENAI_API_KEY: "${OPENAI_API_KEY}",
-                    },
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        env: { OPENAI_API_KEY: "sk-secret" } as NodeJS.ProcessEnv,
+        initialConfig: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                codex: {
+                  command: "codex",
+                  env: {
+                    OPENAI_API_KEY: "${OPENAI_API_KEY}",
                   },
                 },
               },
             },
-            gateway: { port: 18789 },
           },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
-        env: { OPENAI_API_KEY: "sk-secret" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
+          gateway: { port: 18789 },
+        },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
 
       const next = structuredClone(snapshot.config);
       next.gateway = {
@@ -107,6 +99,52 @@ describe("config io write", () => {
         port: 18789,
         auth: { mode: "token" },
       });
+    });
+  });
+
+  it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          channels: {
+            discord: {
+              dmPolicy: "pairing",
+              dm: { enabled: true, policy: "pairing" },
+            },
+            slack: {
+              dmPolicy: "pairing",
+              dm: { enabled: true, policy: "pairing" },
+            },
+          },
+          gateway: { port: 18789 },
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      // Simulate doctor removing legacy keys while keeping dm enabled.
+      if (next.channels?.discord?.dm && typeof next.channels.discord.dm === "object") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
+        delete (next.channels.discord.dm as any).policy;
+      }
+      if (next.channels?.slack?.dm && typeof next.channels.slack.dm === "object") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
+        delete (next.channels.slack.dm as any).policy;
+      }
+
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        channels?: {
+          discord?: { dm?: Record<string, unknown>; dmPolicy?: unknown };
+          slack?: { dm?: Record<string, unknown>; dmPolicy?: unknown };
+        };
+      };
+
+      expect(persisted.channels?.discord?.dmPolicy).toBe("pairing");
+      expect(persisted.channels?.discord?.dm).toEqual({ enabled: true });
+      expect(persisted.channels?.slack?.dmPolicy).toBe("pairing");
+      expect(persisted.channels?.slack?.dm).toEqual({ enabled: true });
     });
   });
 

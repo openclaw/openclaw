@@ -137,7 +137,152 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
       mediaUrl: undefined,
       threadTs: "1234567890.123456",
+      blocks: undefined,
     });
+  });
+
+  it("accepts blocks JSON and allows empty content", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    sendSlackMessage.mockClear();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        blocks: JSON.stringify([
+          { type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } },
+        ]),
+      },
+      cfg,
+    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } }],
+    });
+  });
+
+  it("accepts blocks arrays directly", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    sendSlackMessage.mockClear();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        blocks: [{ type: "divider" }],
+      },
+      cfg,
+    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: [{ type: "divider" }],
+    });
+  });
+
+  it("rejects invalid blocks JSON", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "sendMessage",
+          to: "channel:C123",
+          blocks: "{bad-json",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/blocks must be valid JSON/i);
+  });
+
+  it("rejects empty blocks arrays", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "sendMessage",
+          to: "channel:C123",
+          blocks: "[]",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/at least one block/i);
+  });
+
+  it("requires at least one of content, blocks, or mediaUrl", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "sendMessage",
+          to: "channel:C123",
+          content: "",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/requires content, blocks, or mediaUrl/i);
+  });
+
+  it("rejects blocks combined with mediaUrl", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "sendMessage",
+          to: "channel:C123",
+          blocks: [{ type: "divider" }],
+          mediaUrl: "https://example.com/image.png",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/does not support blocks with mediaUrl/i);
+  });
+
+  it("passes blocks JSON to editSlackMessage with empty content", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    editSlackMessage.mockClear();
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        blocks: JSON.stringify([{ type: "section", text: { type: "mrkdwn", text: "Updated" } }]),
+      },
+      cfg,
+    );
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "Updated" } }],
+    });
+  });
+
+  it("passes blocks arrays to editSlackMessage", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    editSlackMessage.mockClear();
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        blocks: [{ type: "divider" }],
+      },
+      cfg,
+    );
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
+      blocks: [{ type: "divider" }],
+    });
+  });
+
+  it("requires content or blocks for editMessage", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    await expect(
+      handleSlackAction(
+        {
+          action: "editMessage",
+          channelId: "C123",
+          messageId: "123.456",
+          content: "",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/requires content or blocks/i);
   });
 
   it("auto-injects threadTs from context when replyToMode=all", async () => {
@@ -159,6 +304,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Auto-threaded", {
       mediaUrl: undefined,
       threadTs: "1111111111.111111",
+      blocks: undefined,
     });
   });
 
@@ -182,6 +328,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "First", {
       mediaUrl: undefined,
       threadTs: "1111111111.111111",
+      blocks: undefined,
     });
     expect(hasRepliedRef.value).toBe(true);
 
@@ -194,6 +341,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Second", {
       mediaUrl: undefined,
       threadTs: undefined,
+      blocks: undefined,
     });
   });
 
@@ -221,6 +369,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Explicit", {
       mediaUrl: undefined,
       threadTs: "2222222222.222222",
+      blocks: undefined,
     });
     expect(hasRepliedRef.value).toBe(true);
 
@@ -232,6 +381,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Second", {
       mediaUrl: undefined,
       threadTs: undefined,
+      blocks: undefined,
     });
   });
 
@@ -247,6 +397,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "No ref", {
       mediaUrl: undefined,
       threadTs: undefined,
+      blocks: undefined,
     });
   });
 
@@ -269,6 +420,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Off mode", {
       mediaUrl: undefined,
       threadTs: undefined,
+      blocks: undefined,
     });
   });
 
@@ -291,6 +443,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C999", "Different channel", {
       mediaUrl: undefined,
       threadTs: undefined,
+      blocks: undefined,
     });
   });
 
@@ -314,6 +467,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Explicit thread", {
       mediaUrl: undefined,
       threadTs: "2222222222.222222",
+      blocks: undefined,
     });
   });
 
@@ -336,6 +490,7 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).toHaveBeenCalledWith("C123", "No prefix", {
       mediaUrl: undefined,
       threadTs: "1111111111.111111",
+      blocks: undefined,
     });
   });
 

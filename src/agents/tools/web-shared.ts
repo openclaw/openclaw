@@ -8,6 +8,20 @@ export const DEFAULT_TIMEOUT_SECONDS = 30;
 export const DEFAULT_CACHE_TTL_MINUTES = 15;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
+export function resolveWebUrlAllowlist(web: unknown): string[] | undefined {
+  if (!web || typeof web !== "object") {
+    return undefined;
+  }
+  if (!("urlAllowlist" in web)) {
+    return undefined;
+  }
+  const allowlist = (web as { urlAllowlist?: unknown }).urlAllowlist;
+  if (!Array.isArray(allowlist)) {
+    return undefined;
+  }
+  return allowlist.length > 0 ? allowlist : undefined;
+}
+
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(1, Math.floor(parsed));
@@ -86,10 +100,85 @@ export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number):
   return controller.signal;
 }
 
-export async function readResponseText(res: Response): Promise<string> {
+export type ReadResponseTextResult = {
+  text: string;
+  truncated: boolean;
+  bytesRead: number;
+};
+
+export async function readResponseText(
+  res: Response,
+  options?: { maxBytes?: number },
+): Promise<ReadResponseTextResult> {
+  const maxBytesRaw = options?.maxBytes;
+  const maxBytes =
+    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
+      ? Math.floor(maxBytesRaw)
+      : undefined;
+
+  const body = (res as unknown as { body?: unknown }).body;
+  if (
+    maxBytes &&
+    body &&
+    typeof body === "object" &&
+    "getReader" in body &&
+    typeof (body as { getReader: () => unknown }).getReader === "function"
+  ) {
+    const reader = (body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let bytesRead = 0;
+    let truncated = false;
+    const parts: string[] = [];
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value || value.byteLength === 0) {
+          continue;
+        }
+
+        let chunk = value;
+        if (bytesRead + chunk.byteLength > maxBytes) {
+          const remaining = Math.max(0, maxBytes - bytesRead);
+          if (remaining <= 0) {
+            truncated = true;
+            break;
+          }
+          chunk = chunk.subarray(0, remaining);
+          truncated = true;
+        }
+
+        bytesRead += chunk.byteLength;
+        parts.push(decoder.decode(chunk, { stream: true }));
+
+        if (truncated || bytesRead >= maxBytes) {
+          truncated = true;
+          break;
+        }
+      }
+    } catch {
+      // Best-effort: return whatever we decoded so far.
+    } finally {
+      if (truncated) {
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    parts.push(decoder.decode());
+    return { text: parts.join(""), truncated, bytesRead };
+  }
+
   try {
-    return await res.text();
+    const text = await res.text();
+    return { text, truncated: false, bytesRead: text.length };
   } catch {
-    return "";
+    return { text: "", truncated: false, bytesRead: 0 };
   }
 }

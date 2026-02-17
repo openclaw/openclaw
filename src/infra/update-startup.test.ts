@@ -9,11 +9,23 @@ vi.mock("./openclaw-root.js", () => ({
 }));
 
 vi.mock("./update-check.js", async () => {
-  const actual = await vi.importActual<typeof import("./update-check.js")>("./update-check.js");
+  const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
+  const compareSemverStrings = (a: string, b: string) => {
+    const left = parse(a);
+    const right = parse(b);
+    for (let idx = 0; idx < 3; idx += 1) {
+      const l = left[idx] ?? 0;
+      const r = right[idx] ?? 0;
+      if (l !== r) {
+        return l < r ? -1 : 1;
+      }
+    }
+    return 0;
+  };
+
   return {
-    ...actual,
     checkUpdateStatus: vi.fn(),
-    fetchNpmTagVersion: vi.fn(),
+    compareSemverStrings,
     resolveNpmChannelTag: vi.fn(),
   };
 });
@@ -97,7 +109,7 @@ describe("update-startup", () => {
     suiteCase = 0;
   });
 
-  it("logs update hint for npm installs when newer tag exists", async () => {
+  async function runUpdateCheckAndReadState(channel: "stable" | "beta") {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -111,49 +123,35 @@ describe("update-startup", () => {
 
     const log = { info: vi.fn() };
     await runGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
+      cfg: { update: { channel } },
       log,
       isNixMode: false,
       allowInTests: true,
     });
 
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastNotifiedVersion?: string;
+      lastNotifiedTag?: string;
+    };
+    return { log, parsed };
+  }
+
+  it("logs update hint for npm installs when newer tag exists", async () => {
+    const { log, parsed } = await runUpdateCheckAndReadState("stable");
+
     expect(log.info).toHaveBeenCalledWith(
       expect.stringContaining("update available (latest): v2.0.0"),
     );
-
-    const statePath = path.join(tempDir, "update-check.json");
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as { lastNotifiedVersion?: string };
     expect(parsed.lastNotifiedVersion).toBe("2.0.0");
   });
 
   it("uses latest when beta tag is older than release", async () => {
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    } satisfies UpdateCheckResult);
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "2.0.0",
-    });
-
-    const log = { info: vi.fn() };
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "beta" } },
-      log,
-      isNixMode: false,
-      allowInTests: true,
-    });
+    const { log, parsed } = await runUpdateCheckAndReadState("beta");
 
     expect(log.info).toHaveBeenCalledWith(
       expect.stringContaining("update available (latest): v2.0.0"),
     );
-
-    const statePath = path.join(tempDir, "update-check.json");
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as { lastNotifiedTag?: string };
     expect(parsed.lastNotifiedTag).toBe("latest");
   });
 

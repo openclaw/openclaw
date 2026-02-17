@@ -14,6 +14,8 @@ import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookLlmInputEvent,
+  PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -34,6 +36,8 @@ import type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginHookBeforeMessageWriteEvent,
+  PluginHookBeforeMessageWriteResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -41,6 +45,8 @@ export type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookLlmInputEvent,
+  PluginHookLlmOutputEvent,
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
@@ -57,6 +63,8 @@ export type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginHookBeforeMessageWriteEvent,
+  PluginHookBeforeMessageWriteResult,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -196,6 +204,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           acc?.prependContext && next.prependContext
             ? `${acc.prependContext}\n\n${next.prependContext}`
             : (next.prependContext ?? acc?.prependContext),
+        // Keep the first defined override so higher-priority hooks win.
+        modelOverride: acc?.modelOverride ?? next.modelOverride,
+        providerOverride: acc?.providerOverride ?? next.providerOverride,
       }),
     );
   }
@@ -210,6 +221,24 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookAgentContext,
   ): Promise<void> {
     return runVoidHook("agent_end", event, ctx);
+  }
+
+  /**
+   * Run llm_input hook.
+   * Allows plugins to observe the exact input payload sent to the LLM.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
+    return runVoidHook("llm_input", event, ctx);
+  }
+
+  /**
+   * Run llm_output hook.
+   * Allows plugins to observe the exact output payload returned by the LLM.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
+    return runVoidHook("llm_output", event, ctx);
   }
 
   /**
@@ -386,6 +415,83 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Message Write Hooks
+  // =========================================================================
+
+  /**
+   * Run before_message_write hook.
+   *
+   * This hook is intentionally synchronous: it runs on the hot path where
+   * session transcripts are appended synchronously.
+   *
+   * Handlers are executed sequentially in priority order (higher first).
+   * If any handler returns { block: true }, the message is NOT written
+   * to the session JSONL and we return immediately.
+   * If a handler returns { message }, the modified message replaces the
+   * original for subsequent handlers and the final write.
+   */
+  function runBeforeMessageWrite(
+    event: PluginHookBeforeMessageWriteEvent,
+    ctx: { agentId?: string; sessionKey?: string },
+  ): PluginHookBeforeMessageWriteResult | undefined {
+    const hooks = getHooksForName(registry, "before_message_write");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    let current = event.message;
+
+    for (const hook of hooks) {
+      try {
+        // oxlint-disable-next-line typescript/no-explicit-any
+        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
+          | PluginHookBeforeMessageWriteResult
+          | void
+          | Promise<unknown>;
+
+        // Guard against accidental async handlers (this hook is sync-only).
+        // oxlint-disable-next-line typescript/no-explicit-any
+        if (out && typeof (out as any).then === "function") {
+          const msg =
+            `[hooks] before_message_write handler from ${hook.pluginId} returned a Promise; ` +
+            `this hook is synchronous and the result was ignored.`;
+          if (catchErrors) {
+            logger?.warn?.(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+
+        const result = out as PluginHookBeforeMessageWriteResult | undefined;
+
+        // If any handler blocks, return immediately.
+        if (result?.block) {
+          return { block: true };
+        }
+
+        // If handler provided a modified message, use it for subsequent handlers.
+        if (result?.message) {
+          current = result.message;
+        }
+      } catch (err) {
+        const msg = `[hooks] before_message_write handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+      }
+    }
+
+    // If message was modified by any handler, return it.
+    if (current !== event.message) {
+      return { message: current };
+    }
+
+    return undefined;
+  }
+
+  // =========================================================================
   // Session Hooks
   // =========================================================================
 
@@ -458,6 +564,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   return {
     // Agent hooks
     runBeforeAgentStart,
+    runLlmInput,
+    runLlmOutput,
     runAgentEnd,
     runBeforeCompaction,
     runAfterCompaction,
@@ -470,6 +578,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeToolCall,
     runAfterToolCall,
     runToolResultPersist,
+    // Message write hooks
+    runBeforeMessageWrite,
     // Session hooks
     runSessionStart,
     runSessionEnd,

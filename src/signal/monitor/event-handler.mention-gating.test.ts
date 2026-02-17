@@ -1,53 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
 
 let capturedCtx: MsgContext | undefined;
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
-  const dispatchInboundMessage = vi.fn(async (params: { ctx: MsgContext }) => {
-    capturedCtx = params.ctx;
-    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  return buildDispatchInboundCaptureMock(actual, (ctx) => {
+    capturedCtx = ctx as MsgContext;
   });
-  return {
-    ...actual,
-    dispatchInboundMessage,
-    dispatchInboundMessageWithDispatcher: dispatchInboundMessage,
-    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessage,
-  };
 });
 
 import { createSignalEventHandler } from "./event-handler.js";
-
-function createBaseDeps(overrides: Record<string, unknown> = {}) {
-  return {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    runtime: { log: () => {}, error: () => {} } as any,
-    baseUrl: "http://localhost",
-    accountId: "default",
-    historyLimit: 5,
-    groupHistories: new Map(),
-    textLimit: 4000,
-    dmPolicy: "open" as const,
-    allowFrom: ["*"],
-    groupAllowFrom: ["*"],
-    groupPolicy: "open" as const,
-    reactionMode: "off" as const,
-    reactionAllowlist: [],
-    mediaMaxBytes: 1024,
-    ignoreAttachments: true,
-    sendReadReceipts: false,
-    readReceiptsViaDaemon: false,
-    fetchAttachment: async () => null,
-    deliverReplies: async () => {},
-    resolveSignalReactionTargets: () => [],
-    // oxlint-disable-next-line typescript/no-explicit-any
-    isSignalReactionMessage: () => false as any,
-    shouldEmitSignalReactionNotification: () => false,
-    buildSignalReactionSystemEventText: () => "reaction",
-    ...overrides,
-  };
-}
+import { renderSignalMentions } from "./mentions.js";
 
 type GroupEventOpts = {
   message?: string;
@@ -81,11 +47,37 @@ function makeGroupEvent(opts: GroupEventOpts) {
   };
 }
 
+function createMentionGatedHistoryHandler() {
+  const groupHistories = new Map();
+  const handler = createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({
+      cfg: {
+        messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
+        channels: { signal: { groups: { "*": { requireMention: true } } } },
+      },
+      historyLimit: 5,
+      groupHistories,
+    }),
+  );
+  return { handler, groupHistories };
+}
+
+async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: string) {
+  capturedCtx = undefined;
+  const { handler, groupHistories } = createMentionGatedHistoryHandler();
+  await handler(makeGroupEvent(opts));
+  expect(capturedCtx).toBeUndefined();
+  const entries = groupHistories.get("g1");
+  expect(entries).toBeTruthy();
+  expect(entries).toHaveLength(1);
+  expect(entries[0].body).toBe(expectedBody);
+}
+
 describe("signal mention gating", () => {
   it("drops group messages without mention when requireMention is configured", async () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
-      createBaseDeps({
+      createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
           channels: { signal: { groups: { "*": { requireMention: true } } } },
@@ -100,7 +92,7 @@ describe("signal mention gating", () => {
   it("allows group messages with mention when requireMention is configured", async () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
-      createBaseDeps({
+      createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
           channels: { signal: { groups: { "*": { requireMention: true } } } },
@@ -116,7 +108,7 @@ describe("signal mention gating", () => {
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
-      createBaseDeps({
+      createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
           channels: { signal: { groups: { "*": { requireMention: false } } } },
@@ -131,75 +123,30 @@ describe("signal mention gating", () => {
 
   it("records pending history for skipped group messages", async () => {
     capturedCtx = undefined;
-    const groupHistories = new Map();
-    const handler = createSignalEventHandler(
-      createBaseDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
-        historyLimit: 5,
-        groupHistories,
-      }),
-    );
-
+    const { handler, groupHistories } = createMentionGatedHistoryHandler();
     await handler(makeGroupEvent({ message: "hello from alice" }));
     expect(capturedCtx).toBeUndefined();
     const entries = groupHistories.get("g1");
-    expect(entries).toBeTruthy();
     expect(entries).toHaveLength(1);
     expect(entries[0].sender).toBe("Alice");
     expect(entries[0].body).toBe("hello from alice");
   });
 
   it("records attachment placeholder in pending history for skipped attachment-only group messages", async () => {
-    capturedCtx = undefined;
-    const groupHistories = new Map();
-    const handler = createSignalEventHandler(
-      createBaseDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
-        historyLimit: 5,
-        groupHistories,
-      }),
+    await expectSkippedGroupHistory(
+      { message: "", attachments: [{ id: "a1" }] },
+      "<media:attachment>",
     );
-
-    await handler(makeGroupEvent({ message: "", attachments: [{ id: "a1" }] }));
-    expect(capturedCtx).toBeUndefined();
-    const entries = groupHistories.get("g1");
-    expect(entries).toBeTruthy();
-    expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("<media:attachment>");
   });
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {
-    capturedCtx = undefined;
-    const groupHistories = new Map();
-    const handler = createSignalEventHandler(
-      createBaseDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
-        historyLimit: 5,
-        groupHistories,
-      }),
-    );
-
-    await handler(makeGroupEvent({ message: "", quoteText: "quoted context" }));
-    expect(capturedCtx).toBeUndefined();
-    const entries = groupHistories.get("g1");
-    expect(entries).toBeTruthy();
-    expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("quoted context");
+    await expectSkippedGroupHistory({ message: "", quoteText: "quoted context" }, "quoted context");
   });
 
   it("bypasses mention gating for authorized control commands", async () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
-      createBaseDeps({
+      createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
           channels: { signal: { groups: { "*": { requireMention: true } } } },
@@ -214,7 +161,7 @@ describe("signal mention gating", () => {
   it("hydrates mention placeholders before trimming so offsets stay aligned", async () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
-      createBaseDeps({
+      createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
           channels: { signal: { groups: { "*": { requireMention: false } } } },
@@ -246,7 +193,7 @@ describe("signal mention gating", () => {
   it("counts mention metadata replacements toward requireMention gating", async () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
-      createBaseDeps({
+      createBaseSignalEventHandlerDeps({
         cfg: {
           messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@123e4567"] } },
           channels: { signal: { groups: { "*": { requireMention: true } } } },
@@ -268,5 +215,36 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeTruthy();
     expect(String(capturedCtx?.Body ?? "")).toContain("@123e4567");
     expect(capturedCtx?.WasMentioned).toBe(true);
+  });
+});
+
+describe("renderSignalMentions", () => {
+  const PLACEHOLDER = "\uFFFC";
+
+  it("returns the original message when no mentions are provided", () => {
+    const message = `${PLACEHOLDER} ping`;
+    expect(renderSignalMentions(message, null)).toBe(message);
+    expect(renderSignalMentions(message, [])).toBe(message);
+  });
+
+  it("replaces placeholder code points using mention metadata", () => {
+    const message = `${PLACEHOLDER} hi ${PLACEHOLDER}!`;
+    const normalized = renderSignalMentions(message, [
+      { uuid: "abc-123", start: 0, length: 1 },
+      { number: "+15550005555", start: message.lastIndexOf(PLACEHOLDER), length: 1 },
+    ]);
+
+    expect(normalized).toBe("@abc-123 hi @+15550005555!");
+  });
+
+  it("skips mentions that lack identifiers or out-of-bounds spans", () => {
+    const message = `${PLACEHOLDER} hi`;
+    const normalized = renderSignalMentions(message, [
+      { name: "ignored" },
+      { uuid: "valid", start: 0, length: 1 },
+      { number: "+1555", start: 999, length: 1 },
+    ]);
+
+    expect(normalized).toBe("@valid hi");
   });
 });
