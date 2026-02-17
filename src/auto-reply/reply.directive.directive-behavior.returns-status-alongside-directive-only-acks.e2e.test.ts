@@ -1,6 +1,7 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   installDirectiveBehaviorE2EHooks,
@@ -27,7 +28,7 @@ describe("directive behavior", () => {
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
-    };
+    } as unknown as OpenClawConfig;
   }
 
   async function runQueueDirective(params: { home: string; storePath: string; body: string }) {
@@ -94,7 +95,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeRestrictedElevatedDisabledConfig(home),
+        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
       );
 
       const text = extractReplyText(res);

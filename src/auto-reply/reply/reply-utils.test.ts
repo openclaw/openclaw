@@ -369,9 +369,9 @@ describe("createTypingSignaler", () => {
     });
 
     await signaler.signalTextDelta("hello");
-    typing.startTypingLoop.mockClear();
-    typing.startTypingOnText.mockClear();
-    typing.refreshTypingTtl.mockClear();
+    (typing.startTypingLoop as ReturnType<typeof vi.fn>).mockClear();
+    (typing.startTypingOnText as ReturnType<typeof vi.fn>).mockClear();
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalToolStart();
 
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
