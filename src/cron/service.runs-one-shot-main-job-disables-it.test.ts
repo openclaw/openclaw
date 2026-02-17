@@ -731,6 +731,43 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
+  it("enqueues system event with correct agentId for non-default agent jobs", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      delivered: false,
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+
+    const runAt = new Date("2025-12-13T00:00:01.000Z");
+    const job = await cron.add({
+      enabled: true,
+      name: "ops-agent-announce",
+      agentId: "ops",
+      schedule: { kind: "at", at: runAt.toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it" },
+      delivery: { mode: "announce" },
+    });
+    vi.setSystemTime(runAt);
+    await vi.runOnlyPendingTimersAsync();
+    await events.waitFor(
+      (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "ok",
+    );
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Cron: done",
+      expect.objectContaining({ agentId: "ops" }),
+    );
+    expect(requestHeartbeatNow).toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("skips invalid main jobs with agentTurn payloads from disk", async () => {
     ensureDir(fixturesRoot);
     const store = await makeStorePath();
