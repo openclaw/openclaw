@@ -113,6 +113,7 @@ const { checkUpdateStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
 const { runDaemonRestart } = await import("./daemon-cli.js");
+const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, registerUpdateCli, updateStatusCommand, updateWizardCommand } =
   await import("./update-cli.js");
@@ -200,6 +201,7 @@ describe("update-cli", () => {
     vi.mocked(resolveNpmChannelTag).mockReset();
     vi.mocked(runCommandWithTimeout).mockReset();
     vi.mocked(runDaemonRestart).mockReset();
+    vi.mocked(doctorCommand).mockReset();
     vi.mocked(defaultRuntime.log).mockReset();
     vi.mocked(defaultRuntime.error).mockReset();
     vi.mocked(defaultRuntime.exit).mockReset();
@@ -481,6 +483,41 @@ describe("update-cli", () => {
     await updateCommand({});
 
     expect(runDaemonRestart).toHaveBeenCalled();
+  });
+
+  it("updateCommand continues after doctor sub-step and clears update flag", async () => {
+    const mockResult: UpdateRunResult = {
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+    };
+
+    const envSnapshot = captureEnv(["OPENCLAW_UPDATE_IN_PROGRESS"]);
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+      vi.mocked(runDaemonRestart).mockResolvedValue(true);
+      vi.mocked(doctorCommand).mockResolvedValue(undefined);
+      vi.mocked(defaultRuntime.log).mockClear();
+
+      await updateCommand({});
+
+      expect(doctorCommand).toHaveBeenCalledWith(
+        defaultRuntime,
+        expect.objectContaining({ nonInteractive: true }),
+      );
+      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+
+      const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+      expect(
+        logLines.some((line) => line.includes("Leveled up! New skills unlocked. You're welcome.")),
+      ).toBe(true);
+    } finally {
+      randomSpy.mockRestore();
+      envSnapshot.restore();
+    }
   });
 
   it("updateCommand skips restart when --no-restart is set", async () => {
