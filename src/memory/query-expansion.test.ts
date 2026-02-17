@@ -54,11 +54,18 @@ describe("extractKeywords", () => {
     expect(keywords).toContain("확인");
   });
 
-  it("filters Korean stop words", () => {
+  it("filters Korean stop words including inflected forms", () => {
     const keywords = extractKeywords("나는 그리고 그래서");
     expect(keywords).not.toContain("나");
+    expect(keywords).not.toContain("나는");
     expect(keywords).not.toContain("그리고");
     expect(keywords).not.toContain("그래서");
+  });
+
+  it("does not produce bogus single-char stems from particle stripping", () => {
+    const keywords = extractKeywords("논의");
+    expect(keywords).toContain("논의");
+    expect(keywords).not.toContain("논");
   });
 
   it("handles mixed Korean and English query", () => {

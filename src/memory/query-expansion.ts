@@ -218,12 +218,12 @@ const STOP_WORDS_KO = new Set([
   "나중",
   "전에",
   // Request words
-  "좀",
   "제발",
   "부탁",
 ]);
 
 // Common Korean trailing particles to strip from words for tokenization
+// Sorted by descending length so longest-match-first is guaranteed.
 const KO_TRAILING_PARTICLES = [
   "에서",
   "으로",
@@ -250,7 +250,7 @@ const KO_TRAILING_PARTICLES = [
   "과",
   "도",
   "만",
-];
+].sort((a, b) => b.length - a.length);
 
 const STOP_WORDS_ZH = new Set([
   // Pronouns
@@ -403,7 +403,9 @@ function tokenize(text: string): string[] {
       for (const particle of KO_TRAILING_PARTICLES) {
         if (segment.length > particle.length && segment.endsWith(particle)) {
           const stem = segment.slice(0, -particle.length);
-          if (stem.length > 0 && /[\uac00-\ud7af]/.test(stem)) {
+          // Require at least 2 Hangul chars to avoid bogus single-char stems
+          // (e.g. "논의" should not produce "논" by stripping "의")
+          if (stem.length >= 2 && /[\uac00-\ud7af]/.test(stem)) {
             tokens.push(stem);
           }
           break; // Only strip the first (longest) matching particle
@@ -432,9 +434,23 @@ export function extractKeywords(query: string): string[] {
   const seen = new Set<string>();
 
   for (const token of tokens) {
-    // Skip stop words
+    // Skip stop words (checks both raw token and any particle-stripped form)
     if (STOP_WORDS_EN.has(token) || STOP_WORDS_ZH.has(token) || STOP_WORDS_KO.has(token)) {
       continue;
+    }
+    // For Korean tokens, also check if stripping particles yields a stop word
+    if (/[\uac00-\ud7af]/.test(token)) {
+      let isStop = false;
+      for (const particle of KO_TRAILING_PARTICLES) {
+        if (token.length > particle.length && token.endsWith(particle)) {
+          const stem = token.slice(0, -particle.length);
+          if (STOP_WORDS_KO.has(stem)) {
+            isStop = true;
+          }
+          break;
+        }
+      }
+      if (isStop) continue;
     }
     // Skip invalid keywords
     if (!isValidKeyword(token)) {
