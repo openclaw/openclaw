@@ -896,7 +896,6 @@ export async function handleFeishuMessage(params: {
       // and pass root_id for thread reconstruction.
       ReplyToId: ctx.parentId,
       RootMessageId: ctx.rootId,
-      
       RawBody: ctx.content,
       CommandBody: ctx.content,
       From: feishuFrom,
