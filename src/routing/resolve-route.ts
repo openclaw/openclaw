@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -23,7 +24,8 @@ export type RoutePeer = {
 };
 
 export type ResolveAgentRouteInput = {
-  cfg: OpenClawConfig;
+  /** @deprecated Config is now loaded internally via loadConfig(). Kept as optional fallback. */
+  cfg?: OpenClawConfig;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -293,6 +295,19 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 }
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
+  // Prefer fresh config so hot-reloaded binding changes take effect
+  // immediately. loadConfig() is sync with a TTL cache so there is no
+  // performance penalty. Fall back to the caller-provided cfg when
+  // loadConfig() degrades to {} (transient parse/read failures) or throws
+  // (e.g. DuplicateAgentDirError during live config edits).
+  let freshCfg: OpenClawConfig | undefined;
+  try {
+    freshCfg = loadConfig();
+  } catch {
+    // Swallow — fall through to input.cfg below.
+  }
+  const cfg =
+    freshCfg && Object.keys(freshCfg).length > 0 ? freshCfg : (input.cfg ?? freshCfg ?? {});
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
@@ -301,13 +316,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
 
-  const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
+  const bindings = getEvaluatedBindingsForChannelAccount(cfg, channel, accountId);
 
-  const dmScope = input.cfg.session?.dmScope ?? "main";
-  const identityLinks = input.cfg.session?.identityLinks;
+  const dmScope = cfg.session?.dmScope ?? "main";
+  const identityLinks = cfg.session?.identityLinks;
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
-    const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
+    const resolvedAgentId = pickFirstExistingAgentId(cfg, agentId);
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
@@ -435,5 +450,5 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
 
-  return choose(resolveDefaultAgentId(input.cfg), "default");
+  return choose(resolveDefaultAgentId(cfg), "default");
 }

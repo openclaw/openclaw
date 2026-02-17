@@ -1,7 +1,20 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentRoute } from "./resolve-route.js";
+
+const loadConfigMock = vi.hoisted(() => vi.fn<() => OpenClawConfig>(() => ({})));
+vi.mock("../config/config.js", () => ({ loadConfig: loadConfigMock }));
+
+import type { ResolveAgentRouteInput } from "./resolve-route.js";
+import { resolveAgentRoute as resolveAgentRouteImpl } from "./resolve-route.js";
+
+/** Wrapper that feeds the test cfg into the loadConfig mock. */
+function resolveAgentRoute(input: ResolveAgentRouteInput) {
+  if (input.cfg) {
+    loadConfigMock.mockReturnValue(input.cfg);
+  }
+  return resolveAgentRouteImpl(input);
+}
 
 describe("resolveAgentRoute", () => {
   test("defaults to main/default when no bindings exist", () => {
@@ -668,5 +681,43 @@ describe("role-based agent routing", () => {
       expectedAgentId: "guild-roles",
       expectedMatchedBy: "binding.guild+roles",
     });
+  });
+});
+
+describe("loadConfig fallback", () => {
+  test("falls back to input.cfg when loadConfig returns empty object", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [{ agentId: "fallback-agent", match: { channel: "telegram" } }],
+    };
+    // Simulate loadConfig() degrading to {} on parse/read failure.
+    loadConfigMock.mockReturnValue({});
+    const route = resolveAgentRouteImpl({ cfg, channel: "telegram" });
+    expect(route.agentId).toBe("fallback-agent");
+    expect(route.matchedBy).toBe("binding.account");
+  });
+
+  test("prefers fresh loadConfig over input.cfg when available", () => {
+    const staleCfg: OpenClawConfig = {
+      bindings: [{ agentId: "stale-agent", match: { channel: "telegram" } }],
+    };
+    const freshCfg: OpenClawConfig = {
+      bindings: [{ agentId: "fresh-agent", match: { channel: "telegram" } }],
+    };
+    loadConfigMock.mockReturnValue(freshCfg);
+    const route = resolveAgentRouteImpl({ cfg: staleCfg, channel: "telegram" });
+    expect(route.agentId).toBe("fresh-agent");
+    expect(route.matchedBy).toBe("binding.account");
+  });
+
+  test("falls back to input.cfg when loadConfig throws", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [{ agentId: "safe-agent", match: { channel: "slack" } }],
+    };
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("DuplicateAgentDirError");
+    });
+    const route = resolveAgentRouteImpl({ cfg, channel: "slack" });
+    expect(route.agentId).toBe("safe-agent");
+    expect(route.matchedBy).toBe("binding.account");
   });
 });

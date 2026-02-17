@@ -1,6 +1,6 @@
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
-import { loadConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { logVerbose } from "../../../globals.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../routing/session-key.js";
@@ -16,7 +16,7 @@ import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 
 export function createWebOnMessageHandler(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   verbose: boolean;
   connectionId: string;
   maxMediaBytes: number;
@@ -63,9 +63,8 @@ export function createWebOnMessageHandler(params: {
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
-    // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const route = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg: params.cfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
