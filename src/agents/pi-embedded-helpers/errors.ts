@@ -413,6 +413,11 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
   if (httpMatch) {
+    const code = Number(httpMatch[1]);
+    // Don't leak auth-related HTTP error bodies (401/403) to the user.
+    if (code === 401 || code === 403) {
+      return "Authentication error — please check your API credentials.";
+    }
     const rest = httpMatch[2].trim();
     if (!rest.startsWith("{")) {
       return `HTTP ${httpMatch[1]}: ${rest}`;
@@ -500,6 +505,10 @@ export function formatAssistantErrorText(
 
   if (isBillingErrorMessage(raw)) {
     return formatBillingErrorMessage(opts?.provider);
+  }
+
+  if (isAuthErrorMessage(raw)) {
+    return "Authentication error — please check your API credentials.";
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {

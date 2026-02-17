@@ -536,6 +536,16 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+
+      // For heartbeat runs, silently swallow errors instead of leaking API
+      // error details (e.g. "401 User not found") to the user channel.
+      if (params.isHeartbeat) {
+        return {
+          kind: "final",
+          payload: { text: "" },
+        };
+      }
+
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
