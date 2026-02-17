@@ -18,7 +18,7 @@ export type { UpdateCommandOptions, UpdateStatusOptions, UpdateWizardOptions };
 export function registerUpdateCli(program: Command) {
   const update = program
     .command("update")
-    .description("Update OpenClaw to the latest version")
+    .description("Update OpenClaw and inspect update channel status")
     .option("--json", "Output result as JSON", false)
     .option("--no-restart", "Skip restarting the gateway service after a successful update")
     .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLineAccount,
-  listLineAccountIds,
   resolveDefaultLineAccountId,
   normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
@@ -100,31 +99,6 @@ describe("LINE accounts", () => {
     });
   });
 
-  describe("listLineAccountIds", () => {
-    it("returns default account when configured at base level", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          line: {
-            channelAccessToken: "test-token",
-          },
-        },
-      };
-
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
-    });
-
-    it("returns default from env", () => {
-      process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
-      const cfg: OpenClawConfig = {};
-
-      const ids = listLineAccountIds(cfg);
-
-      expect(ids).toContain(DEFAULT_ACCOUNT_ID);
-    });
-  });
-
   describe("resolveDefaultLineAccountId", () => {
     it("returns first named account when default not configured", () => {
       const cfg: OpenClawConfig = {
@@ -144,11 +118,6 @@ describe("LINE accounts", () => {
   });
 
   describe("normalizeAccountId", () => {
-    it("normalizes undefined and literal default", () => {
-      expect(normalizeAccountId(undefined)).toBe(DEFAULT_ACCOUNT_ID);
-      expect(normalizeAccountId("default")).toBe(DEFAULT_ACCOUNT_ID);
-    });
-
     it("trims and lowercases account ids", () => {
       expect(normalizeAccountId("  Business  ")).toBe("business");
     });

@@ -154,11 +154,11 @@ describe("gateway.tools config", () => {
 });
 
 describe("cron webhook schema", () => {
-  it("accepts cron.webhook and cron.webhookToken", () => {
+  it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({
       cron: {
         enabled: true,
-        webhook: "https://example.invalid/cron",
+        webhook: "https://example.invalid/legacy-cron-webhook",
         webhookToken: "secret-token",
       },
     });
@@ -166,10 +166,10 @@ describe("cron webhook schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("rejects non-http(s) cron.webhook URLs", () => {
+  it("rejects non-http cron.webhook URLs", () => {
     const res = OpenClawSchema.safeParse({
       cron: {
-        webhook: "ftp://example.invalid/cron",
+        webhook: "ftp://example.invalid/legacy-cron-webhook",
       },
     });
 

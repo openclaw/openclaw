@@ -1,5 +1,5 @@
-import type { Skill } from "@mariozechner/pi-coding-agent";
 import crypto from "node:crypto";
+import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -159,6 +159,7 @@ export type SessionSystemPromptReport = {
   model?: string;
   workspaceDir?: string;
   bootstrapMaxChars?: number;
+  bootstrapTotalMaxChars?: number;
   sandbox?: {
     mode?: string;
     sandboxed?: boolean;

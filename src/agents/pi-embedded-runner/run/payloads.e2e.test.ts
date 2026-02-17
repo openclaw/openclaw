@@ -184,6 +184,29 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("code 1");
   });
 
+  it("does not add tool error fallback when assistant text exists after tool calls", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Checked the page and recovered with final answer."],
+      lastAssistant: makeAssistant({
+        stopReason: "toolUse",
+        errorMessage: undefined,
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_01",
+            name: "browser",
+            arguments: { action: "search", query: "openclaw docs" },
+          },
+        ],
+      }),
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.isError).toBeUndefined();
+    expect(payloads[0]?.text).toContain("recovered");
+  });
+
   it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "url required" },
@@ -227,6 +250,15 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads[0]?.text).toContain("connection timeout");
+  });
+
+  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command not found" },
+      suppressToolErrorWarnings: true,
+    });
+
+    expect(payloads).toHaveLength(0);
   });
 
   it("shows recoverable tool errors for mutating tools", () => {

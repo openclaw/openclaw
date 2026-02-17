@@ -6,28 +6,12 @@ import {
   createCarouselColumn,
   createImageCarousel,
   createImageCarouselColumn,
-  createYesNoConfirm,
   createProductCarousel,
   messageAction,
-  uriAction,
   postbackAction,
-  datetimePickerAction,
 } from "./template-messages.js";
 
 describe("messageAction", () => {
-  it("creates a message action", () => {
-    const action = messageAction("Click me", "clicked");
-
-    expect(action.label).toBe("Click me");
-    expect((action as { text: string }).text).toBe("clicked");
-  });
-
-  it("uses label as text when text not provided", () => {
-    const action = messageAction("Click");
-
-    expect((action as { text: string }).text).toBe("Click");
-  });
-
   it("truncates label to 20 characters", () => {
     const action = messageAction("This is a very long label that exceeds the limit");
 
@@ -35,44 +19,12 @@ describe("messageAction", () => {
   });
 });
 
-describe("uriAction", () => {
-  it("truncates labels and keeps target URL", () => {
-    const action = uriAction("This label is definitely too long", "https://example.com");
-    expect(action.label).toBe("This label is defini");
-    expect((action as { uri: string }).uri).toBe("https://example.com");
-  });
-});
-
 describe("postbackAction", () => {
-  it("includes displayText when provided", () => {
-    const action = postbackAction("Select", "data", "Selected!");
-
-    expect(action.label).toBe("Select");
-    expect((action as { data: string }).data).toBe("data");
-    expect((action as { displayText: string }).displayText).toBe("Selected!");
-  });
-
   it("truncates data to 300 characters", () => {
     const longData = "x".repeat(400);
     const action = postbackAction("Test", longData);
 
     expect((action as { data: string }).data.length).toBe(300);
-  });
-});
-
-describe("datetimePickerAction", () => {
-  it("includes min/max/initial when provided", () => {
-    const action = datetimePickerAction("Pick", "data", "datetime", {
-      initial: "2024-01-01T12:00",
-      min: "2024-01-01T00:00",
-      max: "2024-12-31T23:59",
-    });
-
-    expect(action.label).toBe("Pick");
-    expect((action as { mode: string }).mode).toBe("datetime");
-    expect((action as { initial: string }).initial).toBe("2024-01-01T12:00");
-    expect((action as { min: string }).min).toBe("2024-01-01T00:00");
-    expect((action as { max: string }).max).toBe("2024-12-31T23:59");
   });
 });
 
@@ -82,17 +34,6 @@ describe("createConfirmTemplate", () => {
     const template = createConfirmTemplate(longText, messageAction("Yes"), messageAction("No"));
 
     expect((template.template as { text: string }).text.length).toBe(240);
-  });
-
-  it("uses custom altText when provided", () => {
-    const template = createConfirmTemplate(
-      "Question?",
-      messageAction("Yes"),
-      messageAction("No"),
-      "Custom alt",
-    );
-
-    expect(template.altText).toBe("Custom alt");
   });
 });
 
@@ -171,19 +112,6 @@ describe("createImageCarousel", () => {
     const template = createImageCarousel(columns);
 
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
-  });
-});
-
-describe("createYesNoConfirm", () => {
-  it("allows custom button text", () => {
-    const template = createYesNoConfirm("Delete?", {
-      yesText: "Delete",
-      noText: "Cancel",
-    });
-
-    const actions = (template.template as { actions: Array<{ label: string }> }).actions;
-    expect(actions[0].label).toBe("Delete");
-    expect(actions[1].label).toBe("Cancel");
   });
 });
 

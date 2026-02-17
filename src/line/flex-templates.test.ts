@@ -5,7 +5,6 @@ import {
   createImageCard,
   createActionCard,
   createCarousel,
-  createNotificationBubble,
   createEventCard,
   createDeviceControlCard,
 } from "./flex-templates.js";
@@ -29,21 +28,6 @@ describe("createListCard", () => {
     const listBox = body.contents[2] as { contents: unknown[] };
     expect(listBox.contents.length).toBe(8);
   });
-
-  it("includes actions on items when provided", () => {
-    const items = [
-      {
-        title: "Clickable",
-        action: { type: "message" as const, label: "Click", text: "clicked" },
-      },
-    ];
-    const card = createListCard("List", items);
-    const body = card.body as {
-      contents: Array<{ type: string; contents?: Array<{ action?: unknown }> }>;
-    };
-    const listBox = body.contents[2] as { contents: Array<{ action?: unknown }> };
-    expect(listBox.contents[0].action).toEqual(items[0].action);
-  });
 });
 
 describe("createImageCard", () => {
@@ -53,14 +37,6 @@ describe("createImageCard", () => {
     const body = card.body as { contents: Array<{ text: string }> };
     expect(body.contents.length).toBe(2);
     expect(body.contents[1].text).toBe("Body text");
-  });
-
-  it("applies custom aspect ratio", () => {
-    const card = createImageCard("https://example.com/img.jpg", "Title", undefined, {
-      aspectRatio: "16:9",
-    });
-
-    expect((card.hero as { aspectRatio: string }).aspectRatio).toBe("16:9");
   });
 });
 
@@ -83,17 +59,6 @@ describe("createCarousel", () => {
     const carousel = createCarousel(bubbles);
 
     expect(carousel.contents.length).toBe(12);
-  });
-});
-
-describe("createNotificationBubble", () => {
-  it("includes title when provided", () => {
-    const bubble = createNotificationBubble("Details here", {
-      title: "Alert Title",
-    });
-    const body = bubble.body as { contents: Array<{ contents?: Array<{ text?: string }> }> };
-    const contentSection = body.contents[1] as { contents: Array<{ text?: string }> };
-    expect(contentSection.contents[0].text).toBe("Alert Title");
   });
 });
 

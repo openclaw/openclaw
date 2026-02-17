@@ -8,6 +8,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { formatHelpExamples } from "./help-format.js";
 
 function parseLimit(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -64,11 +65,22 @@ function printDirectoryList(params: {
 export function registerDirectoryCli(program: Command) {
   const directory = program
     .command("directory")
-    .description("Directory lookups (self, peers, groups) for channels that support it")
+    .description("Lookup contact and group IDs (self, peers, groups) for supported chat channels")
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw directory self --channel slack", "Show the connected account identity."],
+          [
+            'openclaw directory peers list --channel slack --query "alice"',
+            "Search contact/user IDs by name.",
+          ],
+          ["openclaw directory groups list --channel discord", "List available groups/channels."],
+          [
+            "openclaw directory groups members --channel discord --group-id <id>",
+            "List members for a specific group.",
+          ],
+        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/directory",
           "docs.openclaw.ai/cli/directory",
         )}\n`,

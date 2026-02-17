@@ -1,4 +1,3 @@
-import type { CronJobCreate, CronJobPatch } from "./types.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
@@ -9,6 +8,7 @@ import {
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
+import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -151,7 +151,7 @@ function coerceDelivery(delivery: UnknownRecord) {
     const mode = delivery.mode.trim().toLowerCase();
     if (mode === "deliver") {
       next.mode = "announce";
-    } else if (mode === "announce" || mode === "none") {
+    } else if (mode === "announce" || mode === "none" || mode === "webhook") {
       next.mode = mode;
     } else {
       delete next.mode;
@@ -297,6 +297,20 @@ export function normalizeCronJobInput(
         next.agentId = sanitizeAgentId(trimmed);
       } else {
         delete next.agentId;
+      }
+    }
+  }
+
+  if ("sessionKey" in base) {
+    const sessionKey = base.sessionKey;
+    if (sessionKey === null) {
+      next.sessionKey = null;
+    } else if (typeof sessionKey === "string") {
+      const trimmed = sessionKey.trim();
+      if (trimmed) {
+        next.sessionKey = trimmed;
+      } else {
+        delete next.sessionKey;
       }
     }
   }

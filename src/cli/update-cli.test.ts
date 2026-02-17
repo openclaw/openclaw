@@ -13,6 +13,9 @@ const isCancel = (value: unknown) => value === "cancel";
 const readPackageName = vi.fn();
 const readPackageVersion = vi.fn();
 const resolveGlobalManager = vi.fn();
+const serviceLoaded = vi.fn();
+const prepareRestartScript = vi.fn();
+const runRestartScript = vi.fn();
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -35,46 +38,10 @@ vi.mock("../config/config.js", () => ({
   writeConfigFile: vi.fn(),
 }));
 
-vi.mock("../infra/update-check.js", () => {
-  const parseSemver = (
-    value: string | null,
-  ): { major: number; minor: number; patch: number } | null => {
-    if (!value) {
-      return null;
-    }
-    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(value);
-    if (!m) {
-      return null;
-    }
-    const major = Number(m[1]);
-    const minor = Number(m[2]);
-    const patch = Number(m[3]);
-    if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) {
-      return null;
-    }
-    return { major, minor, patch };
-  };
-
-  const compareSemverStrings = (a: string | null, b: string | null): number | null => {
-    const pa = parseSemver(a);
-    const pb = parseSemver(b);
-    if (!pa || !pb) {
-      return null;
-    }
-    if (pa.major !== pb.major) {
-      return pa.major < pb.major ? -1 : 1;
-    }
-    if (pa.minor !== pb.minor) {
-      return pa.minor < pb.minor ? -1 : 1;
-    }
-    if (pa.patch !== pb.patch) {
-      return pa.patch < pb.patch ? -1 : 1;
-    }
-    return 0;
-  };
-
+vi.mock("../infra/update-check.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-check.js")>();
   return {
-    compareSemverStrings,
+    ...actual,
     checkUpdateStatus: vi.fn(),
     fetchNpmTagVersion: vi.fn(),
     resolveNpmChannelTag: vi.fn(),
@@ -109,6 +76,17 @@ vi.mock("./update-cli/shared.js", async (importOriginal) => {
     resolveGlobalManager,
   };
 });
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: vi.fn(() => ({
+    isLoaded: (...args: unknown[]) => serviceLoaded(...args),
+  })),
+}));
+
+vi.mock("./update-cli/restart-helper.js", () => ({
+  prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
+  runRestartScript: (...args: unknown[]) => runRestartScript(...args),
+}));
 
 // Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
@@ -228,6 +206,9 @@ describe("update-cli", () => {
     readPackageName.mockReset();
     readPackageVersion.mockReset();
     resolveGlobalManager.mockReset();
+    serviceLoaded.mockReset();
+    prepareRestartScript.mockReset();
+    runRestartScript.mockReset();
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -273,6 +254,9 @@ describe("update-cli", () => {
     readPackageName.mockResolvedValue("openclaw");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
+    serviceLoaded.mockResolvedValue(false);
+    prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
+    runRestartScript.mockResolvedValue(undefined);
     setTty(false);
     setStdoutTty(false);
   });

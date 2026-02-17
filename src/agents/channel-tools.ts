@@ -1,12 +1,12 @@
+import { getChannelDock } from "../channels/dock.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type {
   ChannelAgentTool,
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { getChannelDock } from "../channels/dock.js";
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 
 /**

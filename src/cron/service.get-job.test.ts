@@ -44,42 +44,25 @@ describe("CronService.getJob", () => {
     }
   });
 
-  it("preserves notify on create for true, false, and omitted", async () => {
+  it("preserves webhook delivery on create", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);
     await cron.start();
 
     try {
-      const notifyTrue = await cron.add({
-        name: "notify-true",
-        enabled: true,
-        notify: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "ping" },
-      });
-      const notifyFalse = await cron.add({
-        name: "notify-false",
-        enabled: true,
-        notify: false,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "ping" },
-      });
-      const notifyOmitted = await cron.add({
-        name: "notify-omitted",
+      const webhookJob = await cron.add({
+        name: "webhook-job",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "ping" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron" },
       });
-
-      expect(cron.getJob(notifyTrue.id)?.notify).toBe(true);
-      expect(cron.getJob(notifyFalse.id)?.notify).toBe(false);
-      expect(cron.getJob(notifyOmitted.id)?.notify).toBeUndefined();
+      expect(cron.getJob(webhookJob.id)?.delivery).toEqual({
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      });
     } finally {
       cron.stop();
     }

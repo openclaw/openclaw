@@ -62,6 +62,16 @@ async function waitForCompletion(sessionId: string) {
   return status;
 }
 
+async function runBackgroundEchoLines(lines: string[]) {
+  const result = await execTool.execute("call1", {
+    command: echoLines(lines),
+    background: true,
+  });
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+  await waitForCompletion(sessionId);
+  return sessionId;
+}
+
 beforeEach(() => {
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
@@ -223,12 +233,7 @@ describe("exec tool backgrounding", () => {
 
   it("defaults process log to a bounded tail when no window is provided", async () => {
     const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
-    const result = await execTool.execute("call1", {
-      command: echoLines(lines),
-      background: true,
-    });
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    await waitForCompletion(sessionId);
+    const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
       action: "log",
@@ -263,12 +268,7 @@ describe("exec tool backgrounding", () => {
 
   it("keeps offset-only log requests unbounded by default tail mode", async () => {
     const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
-    const result = await execTool.execute("call1", {
-      command: echoLines(lines),
-      background: true,
-    });
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    await waitForCompletion(sessionId);
+    const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
       action: "log",

@@ -1,8 +1,7 @@
+import { EventEmitter } from "node:events";
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
-import { EventEmitter } from "node:events";
-import type { TranscriptPolicy } from "../transcript-policy.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
   hasInterSessionUserProvenance,
@@ -21,6 +20,7 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
@@ -457,10 +457,9 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-      : sanitizedToolResults;
+  const sanitizedOpenAI = isOpenAIResponsesApi
+    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
+    : sanitizedToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

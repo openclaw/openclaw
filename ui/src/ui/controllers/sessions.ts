@@ -1,6 +1,6 @@
+import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsListResult } from "../types.ts";
-import { toNumber } from "../format.ts";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -108,7 +108,6 @@ export async function deleteSession(state: SessionsState, key: string) {
   state.sessionsError = null;
   try {
     await state.client.request("sessions.delete", { key, deleteTranscript: true });
-    await loadSessions(state);
   } catch (err) {
     state.sessionsError = String(err);
   } finally {

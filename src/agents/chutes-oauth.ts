@@ -1,5 +1,5 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { createHash, randomBytes } from "node:crypto";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 
 export const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;

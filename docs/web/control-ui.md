@@ -83,9 +83,10 @@ Cron jobs panel notes:
 
 - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
 - Channel/target fields appear when announce is selected.
-- New job form includes a **Notify webhook** toggle (`notify` on the job).
-- Gateway webhook posting requires both `notify: true` on the job and `cron.webhook` in config.
+- Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
+- For main-session jobs, webhook and none delivery modes are available.
 - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
+- Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
 
 ## Chat behavior
 

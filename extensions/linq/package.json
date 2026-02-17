@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/linq",
+  "version": "2026.2.16",
+  "private": true,
+  "description": "OpenClaw Linq iMessage channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
