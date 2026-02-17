@@ -156,6 +156,7 @@ const entries: SubCliEntry[] = [
   {
     name: "spool",
     description: "Event-driven dispatch",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../spool-cli.js");
       mod.registerSpoolCli(program);
