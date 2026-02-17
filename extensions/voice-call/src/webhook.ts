@@ -362,13 +362,10 @@ export class VoiceCallWebhookServer {
     // Parse events
     const result = this.provider.parseWebhookEvent(ctx);
 
-    // Process each event
+    // Process each event. If processing fails (including persistence failures),
+    // surface a 500 so providers can retry instead of silently dropping state.
     for (const event of result.events) {
-      try {
-        this.manager.processEvent(event);
-      } catch (err) {
-        console.error(`[voice-call] Error processing event ${event.type}:`, err);
-      }
+      this.manager.processEvent(event);
     }
 
     // Send response
