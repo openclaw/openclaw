@@ -495,7 +495,12 @@ function normalizeBraveUiLang(value: string | undefined, country?: string): stri
     }
   }
 
-  return BRAVE_UI_LANG_DEFAULTS_BY_LANGUAGE[lower];
+  if (lower in BRAVE_UI_LANG_DEFAULTS_BY_LANGUAGE) {
+    return BRAVE_UI_LANG_DEFAULTS_BY_LANGUAGE[
+      lower as keyof typeof BRAVE_UI_LANG_DEFAULTS_BY_LANGUAGE
+    ];
+  }
+  return undefined;
 }
 
 /**
