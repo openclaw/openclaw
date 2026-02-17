@@ -158,7 +158,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "meganova",
     label: "MegaNova AI",
-    hint: "API key (30+ models)",
+    hint: "API key (15+ models)",
     choices: ["meganova-api-key"],
   },
   {
