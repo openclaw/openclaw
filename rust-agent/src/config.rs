@@ -26,6 +26,12 @@ pub struct RuntimeConfig {
     pub max_queue: usize,
     pub eval_timeout_ms: u64,
     pub memory_sample_secs: u64,
+    #[serde(default = "default_idempotency_ttl_secs")]
+    pub idempotency_ttl_secs: u64,
+    #[serde(default = "default_idempotency_max_entries")]
+    pub idempotency_max_entries: usize,
+    #[serde(default = "default_session_state_path")]
+    pub session_state_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +75,9 @@ impl Default for Config {
                 max_queue: 256,
                 eval_timeout_ms: 2_500,
                 memory_sample_secs: 15,
+                idempotency_ttl_secs: default_idempotency_ttl_secs(),
+                idempotency_max_entries: default_idempotency_max_entries(),
+                session_state_path: default_session_state_path(),
             },
             security: SecurityConfig {
                 review_threshold: 35,
@@ -169,6 +178,19 @@ impl Config {
                 self.runtime.memory_sample_secs = n.max(1);
             }
         }
+        if let Ok(v) = env::var("OPENCLAW_RS_IDEMPOTENCY_TTL_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                self.runtime.idempotency_ttl_secs = n.max(1);
+            }
+        }
+        if let Ok(v) = env::var("OPENCLAW_RS_IDEMPOTENCY_MAX_ENTRIES") {
+            if let Ok(n) = v.parse::<usize>() {
+                self.runtime.idempotency_max_entries = n.max(32);
+            }
+        }
+        if let Ok(v) = env::var("OPENCLAW_RS_SESSION_STATE_PATH") {
+            self.runtime.session_state_path = PathBuf::from(v);
+        }
     }
 
     fn validate(&self) -> Result<()> {
@@ -183,6 +205,12 @@ impl Config {
         }
         if self.runtime.memory_sample_secs == 0 {
             anyhow::bail!("runtime.memory_sample_secs must be > 0");
+        }
+        if self.runtime.idempotency_ttl_secs == 0 {
+            anyhow::bail!("runtime.idempotency_ttl_secs must be > 0");
+        }
+        if self.runtime.idempotency_max_entries == 0 {
+            anyhow::bail!("runtime.idempotency_max_entries must be > 0");
         }
         Ok(())
     }
@@ -224,4 +252,16 @@ fn default_channel_risk_bonus() -> HashMap<String, u8> {
         ("whatsapp".to_owned(), 6),
         ("webchat".to_owned(), 8),
     ])
+}
+
+fn default_idempotency_ttl_secs() -> u64 {
+    300
+}
+
+fn default_idempotency_max_entries() -> usize {
+    5000
+}
+
+fn default_session_state_path() -> PathBuf {
+    PathBuf::from(".openclaw-rs/session-state.json")
 }

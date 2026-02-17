@@ -9,6 +9,9 @@ worker_concurrency = 8
 max_queue = 256
 eval_timeout_ms = 2500
 memory_sample_secs = 15
+idempotency_ttl_secs = 300
+idempotency_max_entries = 5000
+session_state_path = ".openclaw-rs/session-state.json"
 
 [security]
 review_threshold = 35

@@ -15,6 +15,7 @@ use tokio::time::timeout;
 use tracing::{info, warn};
 
 use crate::config::{Config, PolicyAction};
+use crate::state::{IdempotencyCache, SessionStateStore};
 use crate::types::{ActionRequest, Decision, DecisionAction};
 
 use self::command_guard::CommandGuard;
@@ -34,6 +35,8 @@ pub struct DefenderEngine {
     host_guard: HostIntegrityGuard,
     vt: Option<VirusTotalClient>,
     permits: Arc<Semaphore>,
+    idempotency: IdempotencyCache,
+    session_store: SessionStateStore,
 }
 
 impl DefenderEngine {
@@ -46,6 +49,11 @@ impl DefenderEngine {
         let host_guard = HostIntegrityGuard::new(&cfg.security.protect_paths).await?;
         let vt = VirusTotalClient::from_config(&cfg)?;
         let permits = Arc::new(Semaphore::new(cfg.runtime.worker_concurrency.max(1)));
+        let idempotency = IdempotencyCache::new(
+            Duration::from_secs(cfg.runtime.idempotency_ttl_secs.max(1)),
+            cfg.runtime.idempotency_max_entries.max(32),
+        );
+        let session_store = SessionStateStore::new(cfg.runtime.session_state_path.clone()).await?;
 
         info!(
             "defender initialized (vt={}, protected_paths={})",
@@ -60,6 +68,8 @@ impl DefenderEngine {
             host_guard,
             vt,
             permits,
+            idempotency,
+            session_store,
         }))
     }
 
@@ -193,6 +203,18 @@ impl DefenderEngine {
 #[async_trait]
 impl ActionEvaluator for DefenderEngine {
     async fn evaluate(&self, request: ActionRequest) -> Decision {
+        let idempotency_key = IdempotencyCache::key_for_request(&request);
+        if let Some(mut cached) = self.idempotency.get(&idempotency_key).await {
+            cached.tags.push("idempotency_hit".to_owned());
+            cached
+                .reasons
+                .push("decision reused from idempotency cache".to_owned());
+            if let Err(err) = self.session_store.record(&request, &cached).await {
+                warn!("failed recording session state: {err:#}");
+            }
+            return cached;
+        }
+
         let permit = match self.permits.clone().acquire_owned().await {
             Ok(p) => p,
             Err(_) => {
@@ -207,11 +229,17 @@ impl ActionEvaluator for DefenderEngine {
         };
 
         let timeout_dur = Duration::from_millis(self.cfg.runtime.eval_timeout_ms.max(100));
-        let decision = timeout(timeout_dur, self.evaluate_inner(request)).await;
+        let decision = timeout(timeout_dur, self.evaluate_inner(request.clone())).await;
         drop(permit);
 
         match decision {
-            Ok(d) => d,
+            Ok(d) => {
+                self.idempotency.put(idempotency_key, d.clone()).await;
+                if let Err(err) = self.session_store.record(&request, &d).await {
+                    warn!("failed recording session state: {err:#}");
+                }
+                d
+            }
             Err(_) => Decision {
                 action: DecisionAction::Review,
                 risk_score: 60,
@@ -322,6 +350,9 @@ mod tests {
                 max_queue: 16,
                 eval_timeout_ms: 1_000,
                 memory_sample_secs: 30,
+                idempotency_ttl_secs: 60,
+                idempotency_max_entries: 512,
+                session_state_path: base_dir.join("session-state.json"),
             },
             security: SecurityConfig {
                 review_threshold: 35,
@@ -435,5 +466,29 @@ mod tests {
         assert_eq!(decision.action, DecisionAction::Review);
         assert!(decision.risk_score >= 40);
         assert!(decision.tags.iter().any(|t| t == "channel_risk_bonus"));
+    }
+
+    #[tokio::test]
+    async fn reuses_decision_from_idempotency_cache() {
+        let cfg = test_config(false);
+        let engine: Arc<dyn ActionEvaluator> = DefenderEngine::new(cfg).await.expect("engine");
+        let req = ActionRequest {
+            id: "idem-1".to_owned(),
+            source: "test".to_owned(),
+            session_id: Some("s-idem".to_owned()),
+            prompt: None,
+            command: Some("git status".to_owned()),
+            tool_name: Some("exec".to_owned()),
+            channel: Some("discord".to_owned()),
+            url: None,
+            file_path: None,
+            raw: serde_json::json!({}),
+        };
+
+        let first = engine.evaluate(req.clone()).await;
+        let second = engine.evaluate(req).await;
+        assert_eq!(first.action, second.action);
+        assert_eq!(first.risk_score, second.risk_score);
+        assert!(second.tags.iter().any(|t| t == "idempotency_hit"));
     }
 }

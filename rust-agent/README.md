@@ -66,6 +66,9 @@ systemctl --user status openclaw-agent-rs.service
 - `runtime.max_queue`: bounded work queue.
 - `runtime.eval_timeout_ms`: fail-safe timeout per decision.
 - `runtime.memory_sample_secs`: periodic RSS logging cadence on Linux.
+- `runtime.idempotency_ttl_secs`: duplicate decision cache retention window.
+- `runtime.idempotency_max_entries`: cap for idempotency cache footprint.
+- `runtime.session_state_path`: JSON state store for session counters and last decisions.
 - `security.review_threshold`: minimum risk for "review".
 - `security.block_threshold`: minimum risk for "block".
 - `security.protect_paths`: files to hash and verify at runtime.
@@ -79,3 +82,12 @@ systemctl --user status openclaw-agent-rs.service
 2. Move core scheduling/session state to Rust.
 3. Move high-throughput channel adapters incrementally behind trait-based drivers.
 4. Keep protocol schema stable for macOS/iOS/Android/Web clients during migration.
+
+## Replay Harness (sidecar integration)
+
+The replay harness runs the real bridge + defender engine against fixture frames and
+asserts emitted `security.decision` output.
+
+```bash
+cargo test replay_harness_with_real_defender -- --nocapture
+```

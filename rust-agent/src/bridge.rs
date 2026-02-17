@@ -9,14 +9,16 @@ use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
+use crate::channels::DriverRegistry;
 use crate::config::GatewayConfig;
 use crate::security::ActionEvaluator;
-use crate::types::{decision_event_frame, ActionRequest};
+use crate::types::decision_event_frame;
 
 pub struct GatewayBridge {
     gateway: GatewayConfig,
     decision_event: String,
     max_queue: usize,
+    drivers: Arc<DriverRegistry>,
 }
 
 impl GatewayBridge {
@@ -25,6 +27,7 @@ impl GatewayBridge {
             gateway,
             decision_event,
             max_queue: max_queue.max(16),
+            drivers: Arc::new(DriverRegistry::default_registry()),
         }
     }
 
@@ -95,7 +98,7 @@ impl GatewayBridge {
                                 }
                             };
 
-                            if let Some(request) = ActionRequest::from_gateway_frame(&frame) {
+                            if let Some(request) = self.drivers.extract(&frame) {
                                 let Ok(slot) = inflight.clone().try_acquire_owned() else {
                                     warn!("decision queue saturated, dropping request {}", request.id);
                                     continue;
@@ -140,17 +143,37 @@ mod tests {
     use anyhow::Result;
     use async_trait::async_trait;
     use futures_util::{SinkExt, StreamExt};
+    use serde::Deserialize;
     use serde_json::{json, Value};
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
-    use crate::config::GatewayConfig;
-    use crate::security::ActionEvaluator;
+    use crate::config::{Config, GatewayConfig, PolicyAction};
+    use crate::security::{ActionEvaluator, DefenderEngine};
     use crate::types::{ActionRequest, Decision, DecisionAction};
 
     use super::GatewayBridge;
 
     struct StubEvaluator;
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct ReplaySuite {
+        cases: Vec<ReplayCase>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct ReplayCase {
+        name: String,
+        frame: Value,
+        expect: ReplayExpectation,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct ReplayExpectation {
+        action: DecisionAction,
+        min_risk: Option<u8>,
+        tags_include: Option<Vec<String>>,
+    }
 
     #[async_trait]
     impl ActionEvaluator for StubEvaluator {
@@ -229,6 +252,112 @@ mod tests {
         bridge.run_once(evaluator).await?;
         server.await??;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_harness_with_real_defender() -> Result<()> {
+        let suite: ReplaySuite = serde_json::from_str(include_str!("../tests/replay/basic.json"))?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let cases = suite.cases.clone();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+            let connect_txt = connect.to_text()?;
+            let connect_json: Value = serde_json::from_str(connect_txt)?;
+            assert_eq!(
+                connect_json.get("method").and_then(Value::as_str),
+                Some("connect")
+            );
+
+            for case in cases {
+                write.send(Message::Text(case.frame.to_string())).await?;
+                let decision = read
+                    .next()
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("missing decision for case {}", case.name))??;
+                let decision_txt = decision.to_text()?;
+                let decision_json: Value = serde_json::from_str(decision_txt)?;
+
+                assert_eq!(
+                    decision_json.get("event").and_then(Value::as_str),
+                    Some("security.decision"),
+                    "case {}",
+                    case.name
+                );
+                let action_value = decision_json
+                    .pointer("/payload/decision/action")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("missing action for case {}", case.name))?;
+                let action: DecisionAction = serde_json::from_value(action_value)?;
+                assert_eq!(action, case.expect.action, "case {}", case.name);
+
+                if let Some(min_risk) = case.expect.min_risk {
+                    let risk = decision_json
+                        .pointer("/payload/decision/risk_score")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as u8;
+                    assert!(
+                        risk >= min_risk,
+                        "case {} risk {} < expected {}",
+                        case.name,
+                        risk,
+                        min_risk
+                    );
+                }
+                if let Some(tags_include) = case.expect.tags_include {
+                    let tags = decision_json
+                        .pointer("/payload/decision/tags")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    let tag_set: std::collections::HashSet<String> = tags
+                        .into_iter()
+                        .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                        .collect();
+                    for expected_tag in tags_include {
+                        assert!(
+                            tag_set.contains(&expected_tag),
+                            "case {} missing expected tag {}",
+                            case.name,
+                            expected_tag
+                        );
+                    }
+                }
+            }
+
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let mut cfg = Config {
+            gateway: GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            ..Config::default()
+        };
+        cfg.security.protect_paths.clear();
+        cfg.security
+            .tool_policies
+            .insert("browser".to_owned(), PolicyAction::Review);
+
+        let evaluator: Arc<dyn ActionEvaluator> = DefenderEngine::new(cfg.clone()).await?;
+        let bridge = GatewayBridge::new(
+            cfg.gateway,
+            cfg.runtime.decision_event,
+            cfg.runtime.max_queue,
+        );
+        bridge.run_once(evaluator).await?;
+        server.await??;
         Ok(())
     }
 }

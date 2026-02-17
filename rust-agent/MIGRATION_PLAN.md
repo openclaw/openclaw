@@ -17,15 +17,18 @@
 - VirusTotal signal integration for URL/file indicators.
 - Quarantine ledger for blocked actions.
 
-### Phase 2 (next)
+### Phase 2 (in progress)
 
 - Move session scheduler and idempotency dedupe cache to Rust.
+- Implemented first pass idempotency dedupe cache with TTL + bounded entries.
+- Implemented JSON-backed session state tracking as an interim store.
 - Introduce a compact internal event model (`bytes` + pooled buffers).
 - Persist runtime state in SQLite with WAL mode.
 
-### Phase 3 (next)
+### Phase 3 (in progress)
 
 - Migrate core channel adapters incrementally behind trait drivers.
+- Added first trait-based channel adapter scaffold (`discord` + generic fallback).
 - Keep protocol schema stable for existing clients (macOS/iOS/Android/Web/CLI).
 
 ### Phase 4 (next)

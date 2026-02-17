@@ -30,10 +30,12 @@ impl AgentRuntime {
         );
 
         info!(
-            "starting runtime (audit_only={}, workers={}, max_queue={})",
+            "starting runtime (audit_only={}, workers={}, max_queue={}, idem_ttl_s={}, idem_max={})",
             self.config.runtime.audit_only,
             self.config.runtime.worker_concurrency,
-            self.config.runtime.max_queue
+            self.config.runtime.max_queue,
+            self.config.runtime.idempotency_ttl_secs,
+            self.config.runtime.idempotency_max_entries
         );
 
         tokio::select! {
