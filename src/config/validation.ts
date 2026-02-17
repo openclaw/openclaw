@@ -145,7 +145,7 @@ export function validateConfigObjectRaw(
   // This ensures the returned config *only* contains valid providers.
   if (providersToDisable.size > 0 && finalConfig.models?.providers) {
     const originalProviders = finalConfig.models.providers;
-    const filteredProviders = {};
+    const filteredProviders: Record<string, z.infer<typeof ModelProviderSchema>> = {};
 
     for (const [providerKey, providerConfig] of Object.entries(originalProviders)) {
       if (!providersToDisable.has(providerKey)) {
