@@ -62,7 +62,7 @@ function expectUnknownModelError(provider: string, id: string) {
 
 describe("buildInlineProviderModels", () => {
   it("attaches provider ids to inline models", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       " alpha ": { baseUrl: "http://alpha.local", models: [makeModel("alpha-model")] },
       beta: { baseUrl: "http://beta.local", models: [makeModel("beta-model")] },
     };
@@ -86,7 +86,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("inherits baseUrl from provider when model does not specify it", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:8000",
         models: [makeModel("custom-model")],
@@ -100,7 +100,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("inherits api from provider when model does not specify it", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:8000",
         api: "anthropic-messages",
@@ -115,7 +115,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("model-level api takes precedence over provider-level api", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:8000",
         api: "openai-responses",
@@ -130,7 +130,7 @@ describe("buildInlineProviderModels", () => {
   });
 
   it("inherits both baseUrl and api from provider config", () => {
-    const providers = {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
         baseUrl: "http://localhost:10000",
         api: "anthropic-messages",
@@ -327,7 +327,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expectResolvedForwardCompatFallback({
       provider: "openai-codex",
