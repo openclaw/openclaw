@@ -741,6 +741,7 @@ Periodic heartbeat runs.
         reserveTokensFloor: 24000,
         memoryFlush: {
           enabled: true,
+          onManualCompact: true,
           softThresholdTokens: 6000,
           systemPrompt: "Session nearing compaction. Store durable memories now.",
           prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
@@ -753,6 +754,7 @@ Periodic heartbeat runs.
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
+- `memoryFlush.onManualCompact`: when true, run a flush turn before a manual `/compact` (default: false).
 
 ### `agents.defaults.contextPruning`
 

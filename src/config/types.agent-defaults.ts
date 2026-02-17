@@ -297,6 +297,8 @@ export type AgentCompactionConfig = {
 export type AgentCompactionMemoryFlushConfig = {
   /** Enable the pre-compaction memory flush (default: true). */
   enabled?: boolean;
+  /** When true, run a memory flush turn before executing a manual /compact command (default: false). */
+  onManualCompact?: boolean;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
   /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */

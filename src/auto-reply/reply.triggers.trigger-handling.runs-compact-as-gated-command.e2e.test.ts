@@ -103,6 +103,71 @@ describe("trigger handling", () => {
       expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
+
+  it("runs a memory flush turn before /compact when onManualCompact is enabled", async () => {
+    await withTempHome(async (home) => {
+      const storePath = join(tmpdir(), `openclaw-session-test-${Date.now()}.json`);
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "NO_REPLY" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      vi.mocked(compactEmbeddedPiSession).mockResolvedValue({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "x",
+          tokensBefore: 12000,
+        },
+      });
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/compact focus on decisions",
+          From: "+1003",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "openclaw"),
+              compaction: {
+                memoryFlush: {
+                  onManualCompact: true,
+                },
+              },
+            },
+          },
+          channels: {
+            whatsapp: {
+              allowFrom: ["*"],
+            },
+          },
+          session: {
+            store: storePath,
+          },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const flushPrompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(flushPrompt).toContain("Pre-compaction memory flush");
+
+      expect(compactEmbeddedPiSession).toHaveBeenCalledOnce();
+      expect(vi.mocked(runEmbeddedPiAgent).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(compactEmbeddedPiSession).mock.invocationCallOrder[0],
+      );
+    });
+  });
   it("ignores think directives that only appear in the context wrapper", async () => {
     await withTempHome(async (home) => {
       getRunEmbeddedPiAgentMock().mockResolvedValue({

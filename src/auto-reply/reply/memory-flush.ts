@@ -57,6 +57,8 @@ export function resolveMemoryFlushPromptForRun(params: {
 
 export type MemoryFlushSettings = {
   enabled: boolean;
+  /** When true, run a memory flush turn before executing a manual /compact command. Default: false. */
+  onManualCompact: boolean;
   softThresholdTokens: number;
   prompt: string;
   systemPrompt: string;
@@ -77,6 +79,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   if (!enabled) {
     return null;
   }
+  const onManualCompact = defaults?.onManualCompact ?? false;
   const softThresholdTokens =
     normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
@@ -87,6 +90,7 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
 
   return {
     enabled,
+    onManualCompact,
     softThresholdTokens,
     prompt: ensureNoReplyHint(prompt),
     systemPrompt: ensureNoReplyHint(systemPrompt),

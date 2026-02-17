@@ -107,6 +107,7 @@ export const AgentDefaultsSchema = z
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
+            onManualCompact: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
