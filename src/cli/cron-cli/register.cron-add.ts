@@ -29,6 +29,7 @@ export function registerCronStatusCommand(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 }
 
@@ -55,6 +56,7 @@ export function registerCronListCommand(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 }
 
@@ -246,5 +248,6 @@ export function registerCronAddCommand(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 }

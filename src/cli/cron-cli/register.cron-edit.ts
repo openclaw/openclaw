@@ -209,5 +209,6 @@ export function registerCronEditCommand(cron: Command) {
           defaultRuntime.exit(1);
         }
       }),
+    { defaultTimeoutMs: 90_000 },
   );
 }
