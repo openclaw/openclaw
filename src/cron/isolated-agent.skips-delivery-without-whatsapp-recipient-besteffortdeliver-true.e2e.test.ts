@@ -15,6 +15,7 @@ import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
+    sendMessageSlack: vi.fn(),
     sendMessageWhatsApp: vi.fn(),
     sendMessageTelegram: vi.fn(),
     sendMessageDiscord: vi.fn(),

@@ -30,9 +30,9 @@ describe("CronService restart catch-up", () => {
       storePath: params.storePath,
       cronEnabled: true,
       log: noopLogger,
-      enqueueSystemEvent: params.enqueueSystemEvent,
-      requestHeartbeatNow: params.requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      enqueueSystemEvent: params.enqueueSystemEvent as never,
+      requestHeartbeatNow: params.requestHeartbeatNow as never,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
     });
   }
 
