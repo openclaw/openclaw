@@ -125,6 +125,14 @@ curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
   -d '{"properties": {"Status": {"select": {"name": "Done"}}}}'
 ```
 
+**Get page blocks:**
+
+```bash
+curl "https://api.notion.com/v1/blocks/{block_id}/children" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2025-09-03"
+```
+
 **Add blocks to page:**
 
 ```bash
