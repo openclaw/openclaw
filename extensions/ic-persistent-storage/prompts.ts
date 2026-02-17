@@ -100,8 +100,8 @@ export function shouldNudgeForMilestone(state: PromptState, currentCount: number
 export function getFirstRunMessage(): string[] {
   return [
     "IC Memory Vault: Your AI memories are only stored on this device.",
-    "  Set up free, encrypted cloud backup in 10 seconds:",
-    "  - Your data, your rules -- no one else can access it, not even us",
+    "  Set up free, persistent cloud backup in 10 seconds:",
+    "  - Owner-only access control -- only your identity can read or write your vault",
     "  - Switch devices anytime -- your memories follow you",
     "  - Never lose a conversation, preference, or decision again",
     "  Run: openclaw ic-memory setup",
@@ -113,8 +113,8 @@ export function getMilestoneNudgeMessage(memoryCount: number): string[] {
   return [
     `IC Memory Vault: You have ${memoryCount} memories with no backup.`,
     "  If this device is lost, reset, or replaced -- they're gone.",
-    "  Protect them in 10 seconds with free, private cloud backup:",
-    "  - Only you hold the keys -- your data can never be read by anyone else",
+    "  Protect them in 10 seconds with free, persistent cloud backup:",
+    "  - Owner-only access control -- only your identity can read or write your vault",
     "  - Access from any device, anytime",
     "  Run: openclaw ic-memory setup",
   ];

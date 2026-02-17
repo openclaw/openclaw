@@ -81,6 +81,8 @@ const VaultError = IDL.Variant({
 const FactoryError = IDL.Variant({
   alreadyExists: IDL.Null,
   insufficientCycles: IDL.Null,
+  unauthorized: IDL.Text,
+  notFound: IDL.Text,
   creationFailed: IDL.Text,
 });
 

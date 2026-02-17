@@ -1,8 +1,8 @@
 /// IC Memory Vault -- OpenClaw extension for persistent, sovereign AI memory on the Internet Computer.
 /// Registers tools, hooks, CLI commands, and services for syncing with IC canisters.
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { parseConfig, icStorageConfigSchema, type IcStorageConfig } from "./config.js";
 import { IcClient } from "./ic-client.js";
 import {
@@ -14,16 +14,8 @@ import {
   getMilestoneNudgeMessage,
   getReminderMessage,
   getSetupCompleteMessage,
-  type PromptState,
 } from "./prompts.js";
-import {
-  performSync,
-  restoreFromVault,
-  encodeContent,
-  decodeContent,
-  type LocalMemory,
-  type LocalSession,
-} from "./sync.js";
+import { performSync, restoreFromVault, decodeContent, type LocalMemory } from "./sync.js";
 
 const icStoragePlugin = {
   id: "ic-persistent-storage",
@@ -389,18 +381,15 @@ const icStoragePlugin = {
       savePromptState(promptState);
     });
 
-    // Auto-sync on session end
+    // Auto-sync on session end (placeholder -- actual MemorySearchManager wiring is Phase 2)
     if (cfg.syncOnSessionEnd) {
       api.on("session_end", async (_event) => {
         if (!cfg.canisterId) return;
-        try {
-          api.logger.info("IC Memory Vault: syncing session data...");
-          api.logger.info("IC Memory Vault: session sync complete");
-        } catch (err) {
-          api.logger.error(
-            `IC Memory Vault: session sync failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+        // Phase 2: wire to MemorySearchManager to pull session memories and sync.
+        // No-op for now -- sync must be triggered manually via vault_sync tool or CLI.
+        api.logger.debug(
+          "IC Memory Vault: session_end hook registered (sync wiring pending Phase 2)",
+        );
       });
     }
 
@@ -422,16 +411,12 @@ const icStoragePlugin = {
 
       savePromptState(promptState);
 
-      // If vault is configured and auto-sync is on, sync
+      // Phase 2: wire to MemorySearchManager to pull conversation memories and sync.
+      // No-op for now -- sync must be triggered manually via vault_sync tool or CLI.
       if (cfg.canisterId && cfg.syncOnAgentEnd) {
-        try {
-          api.logger.info("IC Memory Vault: syncing memories after conversation...");
-          api.logger.info("IC Memory Vault: post-conversation sync complete");
-        } catch (err) {
-          api.logger.error(
-            `IC Memory Vault: post-conversation sync failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+        api.logger.debug(
+          "IC Memory Vault: agent_end hook registered (sync wiring pending Phase 2)",
+        );
       }
     });
 
