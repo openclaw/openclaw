@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/fogclaw",
+  "version": "2026.2.16",
+  "description": "OpenClaw PII detection & custom entity redaction plugin powered by DataFog",
+  "type": "module",
+  "dependencies": {
+    "gliner": "^0.0.19",
+    "onnxruntime-node": "^1.20.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

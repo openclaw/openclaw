@@ -1,0 +1,61 @@
+{
+  "id": "fogclaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "guardrail_mode": {
+        "type": "string",
+        "enum": ["redact", "block", "warn"]
+      },
+      "redactStrategy": {
+        "type": "string",
+        "enum": ["token", "mask", "hash"]
+      },
+      "model": {
+        "type": "string"
+      },
+      "confidence_threshold": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "custom_entities": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "entityActions": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string",
+          "enum": ["redact", "block", "warn"]
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "guardrail_mode": {
+      "label": "Guardrail Mode",
+      "help": "Default action when PII is detected: redact, block, or warn."
+    },
+    "redactStrategy": {
+      "label": "Redaction Strategy",
+      "help": "How to redact: token ([EMAIL_1]), mask (****), or hash ([EMAIL_a1b2c3...])."
+    },
+    "model": {
+      "label": "GLiNER Model",
+      "help": "HuggingFace ONNX model path for zero-shot NER."
+    },
+    "confidence_threshold": {
+      "label": "Confidence Threshold",
+      "help": "Minimum confidence score for GLiNER detections (0-1)."
+    },
+    "custom_entities": {
+      "label": "Custom Entity Labels",
+      "help": "Additional entity types for zero-shot detection (e.g., 'project codename')."
+    }
+  }
+}
