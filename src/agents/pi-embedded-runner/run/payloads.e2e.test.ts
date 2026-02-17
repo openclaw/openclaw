@@ -271,7 +271,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toContain("required");
   });
 
-  it("shows mutating tool errors even when assistant output exists", () => {
+  it("shows mutating tool errors before assistant output for visibility", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
@@ -279,9 +279,10 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("Done.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("missing");
+    // Warning comes first so the assistant's actual reply is the last (most visible) item
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads[0]?.text).toContain("missing");
+    expect(payloads[1]?.text).toBe("Done.");
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
