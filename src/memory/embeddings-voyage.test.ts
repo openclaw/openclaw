@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
+import { type FetchMock, withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { createVoyageEmbeddingProvider, normalizeVoyageModel } from "./embeddings-voyage.js";
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -12,12 +13,16 @@ vi.mock("../agents/model-auth.js", () => ({
   },
 }));
 
-const createFetchMock = () =>
-  vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
-  })) as unknown as typeof fetch;
+const createFetchMock = () => {
+  const fetchMock = vi.fn<FetchMock>(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
+  return withFetchPreconnect(fetchMock);
+};
 
 describe("voyage embedding provider", () => {
   afterEach(() => {
@@ -26,8 +31,8 @@ describe("voyage embedding provider", () => {
   });
 
   it("configures client with correct defaults and headers", async () => {
-    const fetchMock = createFetchMock() as ReturnType<typeof vi.fn>;
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
 
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "voyage-key-123",
@@ -64,8 +69,8 @@ describe("voyage embedding provider", () => {
   });
 
   it("respects remote overrides for baseUrl and apiKey", async () => {
-    const fetchMock = createFetchMock() as ReturnType<typeof vi.fn>;
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
 
     const result = await createVoyageEmbeddingProvider({
       config: {} as never,
@@ -90,14 +95,18 @@ describe("voyage embedding provider", () => {
   });
 
   it("passes input_type=document for embedBatch", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
-      }),
-    })) as ReturnType<typeof vi.fn>;
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const fetchMock = withFetchPreconnect(
+      vi.fn<FetchMock>(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(
+            JSON.stringify({
+              data: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "voyage-key-123",
