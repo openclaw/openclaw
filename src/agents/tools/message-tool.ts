@@ -194,6 +194,9 @@ function buildSendSchema(options: {
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
+    linkPreview: Type.Optional(
+      Type.Boolean({ description: "Controls whether link previews are shown for URLs in messages" }),
+    ),
     quoteText: Type.Optional(
       Type.String({ description: "Quote text for Telegram reply_parameters" }),
     ),

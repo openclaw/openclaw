@@ -60,6 +60,8 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
+  /** Controls whether link previews are shown. Defaults to account config. */
+  linkPreview?: boolean;
 };
 
 type TelegramSendResult = {
@@ -466,8 +468,8 @@ export async function sendMessageTelegram(
   });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
 
-  // Resolve link preview setting from config (default: enabled).
-  const linkPreviewEnabled = account.config.linkPreview ?? true;
+  // Resolve link preview setting: per-message > account config > default enabled.
+  const linkPreviewEnabled = opts.linkPreview ?? account.config.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
 
   const sendTelegramText = async (
