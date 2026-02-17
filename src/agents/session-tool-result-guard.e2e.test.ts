@@ -261,6 +261,63 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toBe(originalText);
   });
 
+  it("blocks persistence when before_message_write returns block=true", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: () => ({ block: true }),
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "hidden",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(getPersistedMessages(sm)).toHaveLength(0);
+  });
+
+  it("applies before_message_write message mutations before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => {
+        if ((message as { role?: string }).role !== "toolResult") {
+          return undefined;
+        }
+        return {
+          message: {
+            ...(message as unknown as Record<string, unknown>),
+            content: [{ type: "text", text: "rewritten by hook" }],
+          } as unknown as AgentMessage,
+        };
+      },
+    });
+
+    appendToolResultText(sm, "original");
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text).toBe("rewritten by hook");
+  });
+
+  it("applies before_message_write to synthetic tool-result flushes", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => {
+        if ((message as { role?: string }).role !== "toolResult") {
+          return undefined;
+        }
+        return { block: true };
+      },
+    });
+
+    sm.appendMessage(toolCallMessage);
+    guard.flushPendingToolResults();
+
+    const messages = getPersistedMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+  });
+
   it("applies message persistence transform to user messages", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
