@@ -23,7 +23,6 @@ describe("web_fetch response size limits", () => {
     });
 
     const fetchSpy = vi.fn().mockResolvedValue(response);
-    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const tool = createWebFetchTool(baseToolConfig);
