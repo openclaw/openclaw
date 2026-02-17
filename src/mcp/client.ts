@@ -120,7 +120,19 @@ class StdioTransport extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    const mergedEnv = { ...process.env, ...this.env };
+    // Only pass a minimal safe set of env vars plus explicitly configured ones.
+    // This prevents leaking secrets (API keys, tokens) to MCP server processes.
+    const safeBaseEnv: Record<string, string | undefined> = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      USER: process.env.USER,
+      SHELL: process.env.SHELL,
+      LANG: process.env.LANG,
+      TERM: process.env.TERM,
+      NODE_ENV: process.env.NODE_ENV,
+      TMPDIR: process.env.TMPDIR,
+    };
+    const mergedEnv = { ...safeBaseEnv, ...this.env };
 
     this.process = spawn(this.command, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -409,7 +421,18 @@ class SseTransport extends EventEmitter {
       // The server sends the messages URL as the data.
       // It may be relative to the base URL.
       try {
-        this.messagesUrl = new URL(data, this.url).href;
+        const resolved = new URL(data, this.url);
+        const baseOrigin = new URL(this.url).origin;
+        // Prevent SSRF: reject endpoint redirects to a different origin.
+        // A malicious SSE server could redirect requests (with auth headers) elsewhere.
+        if (resolved.origin !== baseOrigin) {
+          log.error(
+            `SSE endpoint redirected to different origin: ${resolved.origin} (expected ${baseOrigin})`,
+          );
+          this.emit("error", new Error("SSE endpoint origin mismatch"));
+          return;
+        }
+        this.messagesUrl = resolved.href;
       } catch {
         this.messagesUrl = data;
       }

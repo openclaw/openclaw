@@ -71,8 +71,8 @@ describe("resolveApprovalMode", () => {
     expect(resolveApprovalMode({ command: "echo", approval: "none" })).toBe("none");
   });
 
-  it("defaults to 'none' for invalid values", () => {
-    expect(resolveApprovalMode({ command: "echo", approval: "invalid" as "none" })).toBe("none");
+  it("defaults to 'always' for invalid values (fail-closed)", () => {
+    expect(resolveApprovalMode({ command: "echo", approval: "invalid" as "none" })).toBe("always");
   });
 });
 

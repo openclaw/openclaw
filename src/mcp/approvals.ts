@@ -26,6 +26,7 @@
  * ```
  */
 
+import { defaultRuntime } from "../runtime.js";
 import type { McpApprovalMode, McpServerConfig } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -81,14 +82,24 @@ export function requiresMcpApproval(
 }
 
 /**
- * Resolve the approval mode for a server, defaulting to "none".
+ * Resolve the approval mode for a server.
+ *
+ * Defaults to "none" when unset. If set to an unrecognized value,
+ * defaults to "always" (fail-closed) and logs a warning.
  */
 export function resolveApprovalMode(serverConfig: McpServerConfig): McpApprovalMode {
   const raw = serverConfig.approval;
+  if (raw === undefined) {
+    return "none";
+  }
   if (raw === "always" || raw === "allowlist" || raw === "none") {
     return raw;
   }
-  return "none";
+  // Fail-closed: an unrecognized approval mode should not silently disable approvals.
+  defaultRuntime.error(
+    `[mcp:approvals] Unknown approval mode "${String(raw)}" — defaulting to "always" for safety`,
+  );
+  return "always";
 }
 
 // ---------------------------------------------------------------------------
