@@ -433,4 +433,5 @@ High-signal WhatsApp fields:
 
 - [Pairing](/channels/pairing)
 - [Channel routing](/channels/channel-routing)
+- [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)
