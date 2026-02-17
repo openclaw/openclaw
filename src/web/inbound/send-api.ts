@@ -1,8 +1,4 @@
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
-  WAPresence,
-} from "@whiskeysockets/baileys";
+import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
 import type { ActiveWebSendOptions } from "../active-listener.js";
