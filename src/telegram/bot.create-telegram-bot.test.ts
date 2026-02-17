@@ -1890,13 +1890,13 @@ describe("createTelegramBot", () => {
       },
     });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: () => "image/png" },
-      arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
-    } as Response);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
 
     createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
     const handler = getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -2009,13 +2009,13 @@ describe("createTelegramBot", () => {
       },
     });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: () => "image/jpeg" },
-      arrayBuffer: async () => new Uint8Array([0xff, 0xd8, 0xff, 0x00]).buffer,
-    } as Response);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
 
     createTelegramBot({ token: "tok", mediaMaxMb: 0 });
     const handler = getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
