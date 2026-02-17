@@ -147,7 +147,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();

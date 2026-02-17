@@ -558,6 +558,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
     });
   });
@@ -575,6 +578,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "note.ogg"));
     });
   });
@@ -809,6 +815,24 @@ describe("runMessageAction components parsing", () => {
     expect(handleAction).toHaveBeenCalled();
     expect(result.payload).toMatchObject({ ok: true, components });
   });
+
+  it("throws on invalid components JSON strings", async () => {
+    await expect(
+      runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "discord",
+          target: "channel:123",
+          message: "hi",
+          components: "{not-json}",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/--components must be valid JSON/);
+
+    expect(handleAction).not.toHaveBeenCalled();
+  });
 });
 
 describe("runMessageAction accountId defaults", () => {
@@ -864,10 +888,15 @@ describe("runMessageAction accountId defaults", () => {
     });
 
     expect(handleAction).toHaveBeenCalled();
-    const ctx = handleAction.mock.calls[0]?.[0] as {
-      accountId?: string | null;
-      params: Record<string, unknown>;
-    };
+    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | {
+          accountId?: string | null;
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (!ctx) {
+      throw new Error("expected action context");
+    }
     expect(ctx.accountId).toBe("ops");
     expect(ctx.params.accountId).toBe("ops");
   });

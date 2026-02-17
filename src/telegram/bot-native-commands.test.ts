@@ -56,7 +56,7 @@ describe("registerTelegramNativeCommands", () => {
       command: vi.fn(),
     } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
     cfg,
-    runtime: {} as RuntimeEnv,
+    runtime: {} as unknown as RuntimeEnv,
     accountId,
     telegramCfg: {} as TelegramAccountConfig,
     allowFrom: [],
@@ -132,7 +132,7 @@ describe("registerTelegramNativeCommands", () => {
         },
         command: vi.fn(),
       } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      runtime: { log: runtimeLog } as RuntimeEnv,
+      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
       telegramCfg: { customCommands } as TelegramAccountConfig,
       nativeEnabled: false,
       nativeSkillsEnabled: false,
@@ -164,15 +164,15 @@ describe("registerTelegramNativeCommands", () => {
         name: "plug",
         description: "Plugin command",
       },
-    ]);
+    ] as never);
     pluginCommandMocks.matchPluginCommand.mockReturnValue({
       command: { key: "plug", requireAuth: false },
       args: undefined,
-    });
+    } as never);
     pluginCommandMocks.executePluginCommand.mockResolvedValue({
       text: "with media",
       mediaUrl: "/tmp/workspace-work/render.png",
-    });
+    } as never);
 
     registerTelegramNativeCommands({
       ...buildParams(cfg),

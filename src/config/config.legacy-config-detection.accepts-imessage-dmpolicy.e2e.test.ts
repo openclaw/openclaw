@@ -187,7 +187,9 @@ describe("legacy config detection", () => {
       'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
     );
     expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.channels?.telegram?.requireMention).toBeUndefined();
+    expect(
+      (res.config?.channels?.telegram as { requireMention?: boolean } | undefined)?.requireMention,
+    ).toBeUndefined();
   });
   it("migrates messages.tts.enabled to messages.tts.auto", async () => {
     const res = migrateLegacyConfig({
@@ -219,7 +221,7 @@ describe("legacy config detection", () => {
       alias: "Opus",
     });
     expect(res.config?.agents?.defaults?.models?.["openai/gpt-4.1-mini"]).toBeTruthy();
-    expect(res.config?.agent).toBeUndefined();
+    expect((res.config as { agent?: unknown } | undefined)?.agent).toBeUndefined();
   });
   it("flags legacy config in snapshot", async () => {
     await withTempHome(async (home) => {

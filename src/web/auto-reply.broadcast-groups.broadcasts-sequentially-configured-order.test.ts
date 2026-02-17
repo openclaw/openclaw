@@ -158,6 +158,7 @@ describe("broadcast groups", () => {
       from: "+1000",
       conversationId: "+1000",
       to: "+2000",
+      accountId: "default",
       body: "hello",
       timestamp: Date.now(),
       chatType: "direct",
