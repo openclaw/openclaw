@@ -136,7 +136,9 @@ describe("buildInboundMetaSystemPrompt", () => {
       instructions: "Be casual.\n\nShare updates.",
     };
 
-    const payload = parseInboundMetaPayload(buildInboundMetaSystemPrompt(baseCtx, { contactContext }));
+    const payload = parseInboundMetaPayload(
+      buildInboundMetaSystemPrompt(baseCtx, { contactContext }),
+    );
     const contact = payload["contact"] as Record<string, unknown>;
     expect(contact["name"]).toBe("Alice Smith");
     expect(contact["verified"]).toBe(true);
@@ -179,7 +181,9 @@ describe("buildInboundMetaSystemPrompt", () => {
       instructions: undefined,
     };
 
-    const payload = parseInboundMetaPayload(buildInboundMetaSystemPrompt(baseCtx, { contactContext }));
+    const payload = parseInboundMetaPayload(
+      buildInboundMetaSystemPrompt(baseCtx, { contactContext }),
+    );
     const contact = payload["contact"] as Record<string, unknown>;
     expect(contact["is_owner"]).toBe(true);
   });
@@ -193,7 +197,9 @@ describe("buildInboundMetaSystemPrompt", () => {
       instructions: undefined,
     };
 
-    const payload = parseInboundMetaPayload(buildInboundMetaSystemPrompt(baseCtx, { contactContext }));
+    const payload = parseInboundMetaPayload(
+      buildInboundMetaSystemPrompt(baseCtx, { contactContext }),
+    );
     const contact = payload["contact"] as Record<string, unknown>;
     expect(contact["verified"]).toBe(true);
     expect(contact["name"]).toBeUndefined();
@@ -208,7 +214,9 @@ describe("buildInboundMetaSystemPrompt", () => {
       instructions: undefined,
     };
 
-    const payload = parseInboundMetaPayload(buildInboundMetaSystemPrompt(baseCtx, { contactContext }));
+    const payload = parseInboundMetaPayload(
+      buildInboundMetaSystemPrompt(baseCtx, { contactContext }),
+    );
     const contact = payload["contact"] as Record<string, unknown>;
     expect(contact["verified"]).toBe(false);
   });
