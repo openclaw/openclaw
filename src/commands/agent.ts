@@ -1,5 +1,6 @@
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveAgentModelPrimary,
@@ -215,6 +216,7 @@ export async function agentCommand(
   }
   const agentCfg = cfg.agents?.defaults;
   const sessionAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
+  const resolvedAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
@@ -297,11 +299,7 @@ export async function agentCommand(
       }
     }
 
-    let resolvedThinkLevel =
-      thinkOnce ??
-      thinkOverride ??
-      persistedThinking ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+    let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
 
@@ -485,6 +483,7 @@ export async function agentCommand(
         provider,
         model,
         catalog: catalogForThinking,
+        agentThinkingDefault: resolvedAgentCfg?.thinkingDefault as ThinkLevel | undefined,
       });
     }
     if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {

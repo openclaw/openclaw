@@ -4,6 +4,7 @@ import {
   parseModelRef,
   resolveModelRefFromString,
   resolveConfiguredModelRef,
+  resolveThinkingDefault,
   buildModelAliasIndex,
   normalizeProviderId,
   modelKey,
@@ -168,6 +169,92 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("resolveThinkingDefault", () => {
+    it("prefers per-agent thinkingDefault over all other sources", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "openai-codex/gpt-5.3-codex": { thinkingDefault: "minimal" },
+            },
+          },
+        },
+      };
+
+      const result = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        agentThinkingDefault: "xhigh",
+      });
+
+      expect(result).toBe("xhigh");
+    });
+
+    it("uses per-model thinkingDefault when no agent override", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "openai-codex/gpt-5.3-codex": { thinkingDefault: "high" },
+            },
+          },
+        },
+      };
+
+      const result = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      });
+
+      expect(result).toBe("high");
+    });
+
+    it("falls back to global thinkingDefault", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+          },
+        },
+      };
+
+      const result = resolveThinkingDefault({
+        cfg: cfg as OpenClawConfig,
+        provider: "openai-codex",
+        model: "gpt-5.2-codex",
+      });
+
+      expect(result).toBe("low");
+    });
+
+    it("auto-detects reasoning models from catalog", () => {
+      const cfg = {} as OpenClawConfig;
+      const result = resolveThinkingDefault({
+        cfg,
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        catalog: [{ provider: "openai-codex", id: "gpt-5.3-codex", reasoning: true } as never],
+      });
+
+      expect(result).toBe("low");
+    });
+
+    it("returns 'off' when no config and model is not reasoning", () => {
+      const cfg = {} as OpenClawConfig;
+      const result = resolveThinkingDefault({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+      });
+
+      expect(result).toBe("off");
     });
   });
 });

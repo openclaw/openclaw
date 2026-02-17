@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -606,20 +607,17 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const configured = cfg.agents?.defaults?.thinkingDefault;
-      if (configured) {
-        thinkingLevel = configured;
-      } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
-        const catalog = await context.loadGatewayModelCatalog();
-        thinkingLevel = resolveThinkingDefault({
-          cfg,
-          provider,
-          model,
-          catalog,
-        });
-      }
+      const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+      const agentCfg = resolveAgentConfig(cfg, sessionAgentId);
+      const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const catalog = await context.loadGatewayModelCatalog();
+      thinkingLevel = resolveThinkingDefault({
+        cfg,
+        provider,
+        model,
+        catalog,
+        agentThinkingDefault: agentCfg?.thinkingDefault,
+      });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
