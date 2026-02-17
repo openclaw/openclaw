@@ -58,7 +58,7 @@ describe("CronService store migrations", () => {
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok", summary: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
     });
 
     await cron.start();
@@ -98,6 +98,58 @@ describe("CronService store migrations", () => {
     expect(persistedJob?.channel).toBeUndefined();
     expect(persistedJob?.to).toBeUndefined();
     expect(persistedJob?.bestEffortDeliver).toBeUndefined();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("preserves legacy timeoutSeconds=0 during top-level agentTurn field migration", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "legacy-agentturn-no-timeout",
+              name: "legacy no-timeout",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-05T12:00:00.000Z"),
+              schedule: { kind: "cron", expr: "0 23 * * *", tz: "UTC" },
+              sessionTarget: "isolated",
+              wakeMode: "next-heartbeat",
+              timeoutSeconds: 0,
+              payload: { kind: "agentTurn", message: "legacy payload fields" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+    });
+
+    await cron.start();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const job = jobs.find((entry) => entry.id === "legacy-agentturn-no-timeout");
+    expect(job).toBeDefined();
+    expect(job?.payload.kind).toBe("agentTurn");
+    if (job?.payload.kind === "agentTurn") {
+      expect(job.payload.timeoutSeconds).toBe(0);
+    }
 
     cron.stop();
     await store.cleanup();

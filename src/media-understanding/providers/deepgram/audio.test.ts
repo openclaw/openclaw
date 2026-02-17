@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withFetchPreconnect } from "../../../test-utils/fetch-mock.js";
 import { installPinnedHostnameTestHooks, resolveRequestUrl } from "../audio.test-helpers.js";
 import { transcribeDeepgramAudio } from "./audio.js";
 
@@ -7,7 +8,7 @@ installPinnedHostnameTestHooks();
 describe("transcribeDeepgramAudio", () => {
   it("respects lowercase authorization header overrides", async () => {
     let seenAuth: string | null = null;
-    const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       seenAuth = headers.get("authorization");
       return new Response(
@@ -19,7 +20,7 @@ describe("transcribeDeepgramAudio", () => {
           headers: { "content-type": "application/json" },
         },
       );
-    };
+    });
 
     const result = await transcribeDeepgramAudio({
       buffer: Buffer.from("audio"),
@@ -37,7 +38,7 @@ describe("transcribeDeepgramAudio", () => {
   it("builds the expected request payload", async () => {
     let seenUrl: string | null = null;
     let seenInit: RequestInit | undefined;
-    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
       seenUrl = resolveRequestUrl(input);
       seenInit = init;
       return new Response(
@@ -49,7 +50,7 @@ describe("transcribeDeepgramAudio", () => {
           headers: { "content-type": "application/json" },
         },
       );
-    };
+    });
 
     const result = await transcribeDeepgramAudio({
       buffer: Buffer.from("audio-bytes"),
