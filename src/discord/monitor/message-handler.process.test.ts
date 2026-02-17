@@ -74,7 +74,8 @@ beforeEach(() => {
 function getLastRouteUpdate():
   | { sessionKey?: string; channel?: string; to?: string; accountId?: string }
   | undefined {
-  const params = recordInboundSession.mock.calls.at(-1)?.[0] as
+  const callArgs = recordInboundSession.mock.calls.at(-1) as unknown[] | undefined;
+  const params = callArgs?.[0] as
     | {
         updateLastRoute?: {
           sessionKey?: string;
