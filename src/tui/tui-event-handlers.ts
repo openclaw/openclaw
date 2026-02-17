@@ -201,6 +201,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       // Refresh session info to update token counts in footer
       void refreshSessionInfo?.();
+      tui.requestRender();
     }
     if (evt.state === "aborted") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
