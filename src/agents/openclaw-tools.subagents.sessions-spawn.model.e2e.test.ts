@@ -156,7 +156,8 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     expect(result.details).toMatchObject({
       status: "error",
     });
-    expect(String(result.details?.error)).toMatch(/Invalid thinking level/i);
+    const errorDetails = result.details as { error?: unknown };
+    expect(String(errorDetails.error)).toMatch(/Invalid thinking level/i);
     expect(calls).toHaveLength(0);
   });
 

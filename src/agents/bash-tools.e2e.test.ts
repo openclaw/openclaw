@@ -311,7 +311,8 @@ describe("exec tool backgrounding", () => {
       action: "poll",
       sessionId: sessionA,
     });
-    expect(pollB.details.status).toBe("failed");
+    const pollBDetails = pollB.details as { status?: string };
+    expect(pollBDetails.status).toBe("failed");
   });
 });
 
@@ -335,9 +336,9 @@ describe("exec exit codes", () => {
       ? joinCommands(["Write-Output nope", "exit 1"])
       : joinCommands(["echo nope", "exit 1"]);
     const result = await execTool.execute("call1", { command });
-
-    expect(result.details.status).toBe("completed");
-    expect(result.details.exitCode).toBe(1);
+    const resultDetails = result.details as { status?: string; exitCode?: number | null };
+    expect(resultDetails.status).toBe("completed");
+    expect(resultDetails.exitCode).toBe(1);
 
     const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
     expect(text).toContain("nope");

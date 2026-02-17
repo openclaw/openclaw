@@ -33,7 +33,10 @@ describe("handleDiscordPresenceAction", () => {
       status: "online",
       afk: false,
     });
-    const payload = JSON.parse(result.content[0].text ?? "");
+    const textBlock = result.content.find((block) => block.type === "text");
+    const payload = JSON.parse(
+      (textBlock as { type: "text"; text: string } | undefined)?.text ?? "{}",
+    );
     expect(payload.ok).toBe(true);
     expect(payload.activities[0]).toEqual({ type: 0, name: "with fire" });
   });
