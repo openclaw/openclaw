@@ -427,6 +427,62 @@ describe("resolveSlackMedia", () => {
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
   });
+
+  it("rejects HTML error pages returned as file content", async () => {
+    const htmlErrorPage =
+      '<!DOCTYPE html><html lang="en-US"><head><script>(function() { var data; })();</script></head><body>Sign in to Slack</body></html>';
+
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from(htmlErrorPage), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          url_private: "https://files.slack.com/test.pdf",
+          name: "invoice.pdf",
+          mimetype: "application/pdf",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not reject actual HTML files uploaded to Slack", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/page.html", "text/html"),
+    );
+
+    const htmlContent = "<!DOCTYPE html><html><body>Hello world</body></html>";
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from(htmlContent), {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          url_private: "https://files.slack.com/page.html",
+          name: "page.html",
+          mimetype: "text/html",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+  });
+
 });
 
 describe("resolveSlackAttachmentContent", () => {

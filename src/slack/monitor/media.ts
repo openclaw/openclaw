@@ -19,6 +19,19 @@ function isSlackHostname(hostname: string): boolean {
   );
 }
 
+
+/**
+ * Detects whether a fetched buffer contains an HTML error/sign-in page
+ * instead of the expected file content.  Slack may return a 200 OK with
+ * an HTML sign-in page when the bot token is invalid or the file URL has
+ * expired, and this HTML content would otherwise be saved as the file.
+ */
+function isLikelyHtmlErrorPage(buffer: Buffer): boolean {
+  // Only inspect the first 256 bytes for efficiency
+  const head = buffer.subarray(0, 256).toString("utf-8").trimStart().toLowerCase();
+  return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
 function assertSlackFileUrl(rawUrl: string): URL {
   let parsed: URL;
   try {
@@ -215,6 +228,16 @@ export async function resolveSlackMedia(params: {
           maxBytes: params.maxBytes,
         });
         if (fetched.buffer.byteLength > params.maxBytes) {
+          return null;
+        }
+        // Slack may return an HTML sign-in/error page (200 OK) instead of
+        // the actual file when the bot token is invalid or the URL expired.
+        // Detect and reject these to avoid saving garbage HTML as media.
+        const expectsHtml =
+          file.mimetype?.startsWith("text/html") ||
+          file.name?.toLowerCase().endsWith(".html") ||
+          file.name?.toLowerCase().endsWith(".htm");
+        if (!expectsHtml && isLikelyHtmlErrorPage(fetched.buffer)) {
           return null;
         }
         const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
