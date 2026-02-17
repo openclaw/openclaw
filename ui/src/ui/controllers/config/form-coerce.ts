@@ -1,5 +1,17 @@
 import { schemaType, type JsonSchema } from "../../views/config-form.shared.ts";
 
+/**
+ * Coerce a string to a number if possible without losing precision.
+ *
+ * Returns:
+ * - `undefined` if the string is empty (field cleared)
+ * - A number if conversion is safe and lossless
+ * - The original string if conversion would lose precision or fail
+ *
+ * This is critical for large integers like Discord Snowflake IDs (64-bit)
+ * which exceed JavaScript's safe integer range (2^53 - 1). Converting
+ * "805422583936421918" to Number would silently produce 805422583936421900.
+ */
 function coerceNumberString(value: string, integer: boolean): number | undefined | string {
   const trimmed = value.trim();
   if (trimmed === "") {
@@ -10,6 +22,12 @@ function coerceNumberString(value: string, integer: boolean): number | undefined
     return value;
   }
   if (integer && !Number.isInteger(parsed)) {
+    return value;
+  }
+  // Check for precision loss: if round-tripping through Number loses data,
+  // keep the original string. This protects Discord Snowflakes and other
+  // large numeric strings from silent corruption.
+  if (String(parsed) !== trimmed) {
     return value;
   }
   return parsed;
