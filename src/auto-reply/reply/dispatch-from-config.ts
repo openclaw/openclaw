@@ -166,8 +166,8 @@ export async function dispatchReplyFromConfig(params: {
     const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
     const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
 
-    void hookRunner
-      .runMessageReceived(
+    try {
+      const hookResult = await hookRunner.runMessageReceived(
         {
           from: ctx.From ?? "",
           content,
@@ -191,10 +191,20 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           conversationId,
         },
-      )
-      .catch((err) => {
-        logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
-      });
+      );
+
+      // If plugin marked message for cancel, stop processing
+      if (hookResult?.cancel) {
+        logVerbose(
+          `dispatch-from-config: message marked for cancel by plugin hook from ${ctx.From ?? "unknown"}`,
+        );
+        recordProcessed("skipped", { reason: "cancelled_by_plugin" });
+        markIdle("message_cancelled");
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+    } catch (err) {
+      logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
+    }
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.
