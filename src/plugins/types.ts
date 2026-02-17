@@ -296,6 +296,8 @@ export type PluginDiagnostic = {
 // ============================================================================
 
 export type PluginHookName =
+  | "before_model_resolve"
+  | "before_prompt_build"
   | "before_agent_start"
   | "llm_input"
   | "llm_output"
@@ -324,20 +326,40 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
 };
 
-// before_agent_start hook
-export type PluginHookBeforeAgentStartEvent = {
+// before_model_resolve hook
+export type PluginHookBeforeModelResolveEvent = {
+  /** User prompt for this run. No session messages are available yet in this phase. */
   prompt: string;
-  messages?: unknown[];
 };
 
-export type PluginHookBeforeAgentStartResult = {
-  systemPrompt?: string;
-  prependContext?: string;
+export type PluginHookBeforeModelResolveResult = {
   /** Override the model for this agent run. E.g. "llama3.3:8b" */
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "ollama" */
   providerOverride?: string;
 };
+
+// before_prompt_build hook
+export type PluginHookBeforePromptBuildEvent = {
+  prompt: string;
+  /** Session messages prepared for this run. */
+  messages: unknown[];
+};
+
+export type PluginHookBeforePromptBuildResult = {
+  systemPrompt?: string;
+  prependContext?: string;
+};
+
+// before_agent_start hook (legacy compatibility: combines both phases)
+export type PluginHookBeforeAgentStartEvent = {
+  prompt: string;
+  /** Optional because legacy hook can run in pre-session phase. */
+  messages?: unknown[];
+};
+
+export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
+  PluginHookBeforeModelResolveResult;
 
 // llm_input hook
 export type PluginHookLlmInputEvent = {
@@ -542,6 +564,17 @@ export type PluginHookGatewayStopEvent = {
 
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
+  before_model_resolve: (
+    event: PluginHookBeforeModelResolveEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeModelResolveResult | void>
+    | PluginHookBeforeModelResolveResult
+    | void;
+  before_prompt_build: (
+    event: PluginHookBeforePromptBuildEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
   before_agent_start: (
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,

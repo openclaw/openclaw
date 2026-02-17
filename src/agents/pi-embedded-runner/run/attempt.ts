@@ -863,31 +863,52 @@ export async function runEmbeddedAttempt(
       try {
         const promptStartedAt = Date.now();
 
-        // Run before_agent_start hooks to allow plugins to inject context.
-        // If run.ts already fired the hook (for model override), reuse its result.
+        // Run before_prompt_build hooks to allow plugins to inject prompt context.
+        // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = params.prompt;
-        const hookResult =
-          params.earlyHookResult ??
-          (hookRunner?.hasHooks("before_agent_start")
-            ? await hookRunner
-                .runBeforeAgentStart(
-                  {
-                    prompt: params.prompt,
-                    messages: activeSession.messages,
-                  },
-                  {
-                    agentId: hookAgentId,
-                    sessionKey: params.sessionKey,
-                    sessionId: params.sessionId,
-                    workspaceDir: params.workspaceDir,
-                    messageProvider: params.messageProvider ?? undefined,
-                  },
-                )
-                .catch((hookErr: unknown) => {
-                  log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
-                  return undefined;
-                })
-            : undefined);
+        const hookCtx = {
+          agentId: hookAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          messageProvider: params.messageProvider ?? undefined,
+        };
+        const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
+          ? await hookRunner
+              .runBeforePromptBuild(
+                {
+                  prompt: params.prompt,
+                  messages: activeSession.messages,
+                },
+                hookCtx,
+              )
+              .catch((hookErr: unknown) => {
+                log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+                return undefined;
+              })
+          : undefined;
+        const legacyResult = hookRunner?.hasHooks("before_agent_start")
+          ? await hookRunner
+              .runBeforeAgentStart(
+                {
+                  prompt: params.prompt,
+                  messages: activeSession.messages,
+                },
+                hookCtx,
+              )
+              .catch((hookErr: unknown) => {
+                log.warn(
+                  `before_agent_start hook (legacy prompt build path) failed: ${String(hookErr)}`,
+                );
+                return undefined;
+              })
+          : undefined;
+        const hookResult = {
+          systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
+          prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
+            .filter((value): value is string => Boolean(value))
+            .join("\n\n"),
+        };
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
