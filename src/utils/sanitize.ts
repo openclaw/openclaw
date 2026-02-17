@@ -31,7 +31,7 @@ export function sanitizeUserText(text: string | undefined, maxLength = 256): str
   }
 
   if (trimmed.length > maxLength) {
-    return `${trimmed.slice(0, maxLength)}...`;
+    return `${trimmed.slice(0, Math.max(0, maxLength - 3))}...`;
   }
   return trimmed;
 }

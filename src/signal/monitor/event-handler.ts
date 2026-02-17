@@ -604,14 +604,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         accountId: deps.accountId,
       });
-      if (ingestEnabled && groupId) {
+      if (groupId) {
         const timestamp =
           typeof envelope.timestamp === "number" && envelope.timestamp > 0
             ? envelope.timestamp
             : undefined;
         const messageIdForHook = timestamp ? String(timestamp) : undefined;
         void runSilentMessageIngest({
-          enabled: true,
+          enabled: ingestEnabled,
           event: {
             from: senderDisplay,
             content: pendingBodyText,

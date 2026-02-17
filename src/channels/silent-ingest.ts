@@ -10,6 +10,7 @@ let ingestInflightGlobal = 0;
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_INFLIGHT = 64;
 const DEFAULT_MAX_GLOBAL_INFLIGHT = 256;
+const DEFAULT_CONTENT_MAX_LENGTH = 8192;
 
 function makeInflightKey(ctx: PluginHookMessageContext): InflightKey {
   return `${ctx.channelId}:${ctx.accountId ?? ""}:${ctx.conversationId}`;
@@ -43,7 +44,7 @@ export async function runSilentMessageIngest(params: {
   log: (message: string) => void;
   logPrefix: string;
 }): Promise<boolean> {
-  const content = params.event.content?.trim();
+  const content = sanitizeUserText(params.event.content, DEFAULT_CONTENT_MAX_LENGTH);
   if (!params.enabled || !content) {
     return false;
   }
