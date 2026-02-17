@@ -503,7 +503,7 @@ describe("gateway server cron", () => {
       expect(notifyRunRes.ok).toBe(true);
 
       await waitForCondition(() => fetchMock.mock.calls.length === 1, 5000);
-      const [notifyUrl, notifyInit] = fetchMock.mock.calls[0] as [
+      const [notifyUrl, notifyInit] = fetchMock.mock.calls[0] as unknown as [
         string,
         {
           method?: string;
@@ -527,7 +527,7 @@ describe("gateway server cron", () => {
       );
       expect(legacyRunRes.ok).toBe(true);
       await waitForCondition(() => fetchMock.mock.calls.length === 2, 5000);
-      const [legacyUrl, legacyInit] = fetchMock.mock.calls[1] as [
+      const [legacyUrl, legacyInit] = fetchMock.mock.calls[1] as unknown as [
         string,
         {
           method?: string;

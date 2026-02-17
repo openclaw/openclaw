@@ -57,7 +57,8 @@ async function setTestSessionStore(params: {
 }
 
 function latestAgentCall(): AgentCommandCall {
-  return vi.mocked(agentCommand).mock.calls.at(-1)?.[0] as AgentCommandCall;
+  const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[unknown]>;
+  return calls.at(-1)?.[0] as AgentCommandCall;
 }
 
 async function runMainAgentDeliveryWithSession(params: {

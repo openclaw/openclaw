@@ -103,7 +103,9 @@ function expectActiveRunCleanup(
     requesterSessionKey,
   });
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-  const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
+  const clearedKeys = (
+    sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
+  )[0]?.[0];
   expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
@@ -656,7 +658,12 @@ describe("gateway server sessions", () => {
     });
     expect(reset.ok).toBe(true);
     expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    const [event] = sessionHookMocks.triggerInternalHook.mock.calls[0] ?? [];
+    const event = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
+    if (!event) {
+      throw new Error("expected session hook event");
+    }
     expect(event).toMatchObject({
       type: "command",
       action: "new",
@@ -665,7 +672,7 @@ describe("gateway server sessions", () => {
         commandSource: "gateway:sessions.reset",
       },
     });
-    expect(event.context.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
     ws.close();
   });
 
