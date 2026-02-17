@@ -746,7 +746,7 @@ function resolveNostrSession(
     peer,
     chatType: "direct",
     from: `nostr:${trimmed}`,
-    to: `nostr:${trimmed}`,
+    to: trimmed,
   };
 }
 

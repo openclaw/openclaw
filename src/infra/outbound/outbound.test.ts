@@ -802,6 +802,19 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.sessionKey).toBe("agent:main:slack:group:g123");
     expect(route?.from).toBe("slack:group:G123");
   });
+
+  it("keeps Nostr outbound targets canonical for bus delivery", async () => {
+    const nostrPubkey = "ac6ac2941f19978783d15158f9cb959129d2d1c01fe5d8504232833aef35d4d9";
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "nostr",
+      agentId: "main",
+      target: `nostr:${nostrPubkey}`,
+    });
+
+    expect(route?.to).toBe(nostrPubkey);
+    expect(route?.from).toBe(`nostr:${nostrPubkey}`);
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {

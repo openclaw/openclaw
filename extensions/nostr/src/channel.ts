@@ -343,6 +343,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
                   inReplyTo: payload.eventId,
                 });
               },
+              onSkip: (payload, { kind, reason }) => {
+                ctx.log?.debug?.(
+                  `[${account.accountId}] Nostr outbound ${kind} skipped (${reason}) for session ${sessionId} from ${senderPubkey}; payload=${JSON.stringify(payload)}`,
+                );
+              },
               onError: (err, info) => {
                 ctx.log?.error?.(
                   `[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`,
@@ -399,15 +404,33 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
       );
 
-      // Return cleanup function
-      return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
+      let stopped = false;
+      const stopBus = (): void => {
+        if (stopped) {
+          return;
+        }
+        stopped = true;
+        bus.close();
+        activeBuses.delete(account.accountId);
+        metricsSnapshots.delete(account.accountId);
+        ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
       };
+
+      if (ctx.abortSignal?.aborted) {
+        stopBus();
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal?.addEventListener(
+          "abort",
+          () => {
+            stopBus();
+            resolve();
+          },
+          { once: true },
+        );
+      });
     },
   },
 };

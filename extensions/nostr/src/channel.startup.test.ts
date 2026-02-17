@@ -86,6 +86,8 @@ describe("nostrPlugin gateway.startAccount", () => {
     if (!startAccount) {
       throw new Error("nostr plugin startAccount is not defined");
     }
+    const abort = new AbortController();
+    abort.abort();
     await startAccount({
       account: {
         accountId: "default",
@@ -101,7 +103,7 @@ describe("nostrPlugin gateway.startAccount", () => {
       },
       cfg: {},
       runtime,
-      abortSignal: undefined,
+      abortSignal: abort.signal,
       log: { info: vi.fn(), debug: vi.fn(), error: vi.fn() },
       setStatus: vi.fn(),
     } as never);

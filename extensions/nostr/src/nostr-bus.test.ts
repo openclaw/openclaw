@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  normalizeRelayUrls,
   getPublicKeyFromPrivate,
   isValidPubkey,
   normalizePubkey,
@@ -291,6 +292,25 @@ describe("pubkeyToNpub", () => {
   });
 });
 
+describe("normalizeRelayUrls", () => {
+  it("normalizes JSON array relay strings", () => {
+    expect(normalizeRelayUrls(`["${TEST_RELAY}","${TEST_RELAY}"]`)).toEqual([TEST_RELAY]);
+  });
+
+  it("normalizes delimiter-separated relay strings", () => {
+    expect(normalizeRelayUrls(`${TEST_RELAY}, wss://relay.example.com`)).toEqual([
+      TEST_RELAY,
+      "wss://relay.example.com",
+    ]);
+  });
+
+  it("ignores non-string entries and empty values", () => {
+    expect(
+      normalizeRelayUrls([TEST_RELAY, "", " ", 123 as never, TEST_RELAY, null as never]),
+    ).toEqual([TEST_RELAY]);
+  });
+});
+
 describe("startNostrBus NIP-63 protocol flow", () => {
   beforeEach(() => {
     mocks.subscriptions.length = 0;
@@ -315,6 +335,31 @@ describe("startNostrBus NIP-63 protocol flow", () => {
     expect(filters.since).toBeGreaterThan(0);
 
     bus.close();
+  });
+
+  it("normalizes legacy relay string input from configuration", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: JSON.stringify([TEST_RELAY]) as unknown as string[],
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    expect(mocks.subscriptions).toHaveLength(1);
+    expect(mocks.subscriptions[0]?.relays).toEqual([TEST_RELAY]);
+
+    bus.close();
+  });
+
+  it("rejects relay configs that cannot be resolved to relay URLs", async () => {
+    await expect(
+      startNostrBus({
+        privateKey: TEST_HEX_KEY,
+        relays: "",
+        onMessage: vi.fn(),
+        onError: vi.fn(),
+      }),
+    ).rejects.toThrow("At least one Nostr relay is required");
   });
 
   it("processes NIP-63 prompts and replies with session/thread tags", async () => {
@@ -491,6 +536,56 @@ describe("startNostrBus NIP-63 protocol flow", () => {
         ],
       }),
     );
+
+    bus.close();
+  });
+
+  it("sendDm handles publish return values as promise arrays", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    mocks.publishMock.mockImplementationOnce(() => {
+      const settle = Promise.resolve();
+      return [settle, settle] as unknown as Promise<void>;
+    });
+
+    await bus.sendDm("deadbeef", "hello");
+
+    expect(mocks.publishMock).toHaveBeenCalledWith(
+      [TEST_RELAY],
+      expect.objectContaining({
+        kind: 25803,
+        content: expect.stringContaining(`"text":"hello"`),
+      }),
+    );
+
+    bus.close();
+  });
+
+  it("sendDm rejects when publish returns rejected promise in array", async () => {
+    const onError = vi.fn();
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_KEY,
+      relays: [TEST_RELAY],
+      onMessage: vi.fn(),
+      onError,
+    });
+
+    const publishFailure = new Error("relay rejected");
+    mocks.publishMock.mockImplementationOnce(() => {
+      const rejected = Promise.reject(publishFailure);
+      void rejected.catch(() => {});
+      return [Promise.resolve(), rejected] as unknown as Promise<void>;
+    });
+
+    await expect(bus.sendDm("deadbeef", "hello")).rejects.toThrow(
+      "Failed to publish to any relay (1 configured)",
+    );
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), "sendEncryptedDm");
 
     bus.close();
   });

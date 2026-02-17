@@ -55,8 +55,10 @@ const NIP63_SUBSCRIBE_KINDS = [25800, 25801, 25802, 25803, 25804, 25805, 25806, 
 export interface NostrBusOptions {
   /** Private key in hex or nsec format */
   privateKey: string;
-  /** WebSocket relay URLs (defaults to damus + nos.lol) */
-  relays?: string[];
+  /** WebSocket relay URLs (defaults to damus + nos.lol).
+   * Accepts legacy string forms for backward compatibility.
+   */
+  relays?: string[] | string;
   /** Account ID for state persistence (optional, defaults to pubkey prefix) */
   accountId?: string;
   /** Called when a NIP-63 prompt is received */
@@ -117,6 +119,54 @@ export interface NostrOutboundMessageOptions {
 interface NostrPromptPayload {
   ver: number;
   message: string;
+}
+
+export function normalizeRelayUrls(rawRelays: unknown): string[] {
+  const relays = new Set<string>();
+
+  const pushRelay = (rawRelay: unknown): void => {
+    if (typeof rawRelay !== "string") {
+      return;
+    }
+    const relay = rawRelay.trim();
+    if (relay) {
+      relays.add(relay);
+    }
+  };
+
+  if (Array.isArray(rawRelays)) {
+    for (const relay of rawRelays) {
+      pushRelay(relay);
+    }
+    return [...relays];
+  }
+
+  if (typeof rawRelays === "string") {
+    const trimmed = rawRelays.trim();
+    if (!trimmed) {
+      return [];
+    }
+
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          for (const relay of parsed) {
+            pushRelay(relay);
+          }
+          return [...relays];
+        }
+      } catch {
+        // If JSON parse fails, treat it as a delimiter-separated list below.
+      }
+    }
+
+    for (const relay of trimmed.split(/[\n,;]+/g)) {
+      pushRelay(relay);
+    }
+  }
+
+  return [...relays];
 }
 
 // ============================================================================
@@ -346,7 +396,7 @@ export function getPublicKeyFromPrivate(privateKey: string): string {
 export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
   const {
     privateKey,
-    relays = DEFAULT_RELAYS,
+    relays,
     onMessage,
     onError,
     onEose,
@@ -357,6 +407,10 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
+  const normalizedRelays = normalizeRelayUrls(relays ?? DEFAULT_RELAYS);
+  if (normalizedRelays.length === 0) {
+    throw new Error("At least one Nostr relay is required");
+  }
   const pool = new SimplePool();
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
@@ -374,7 +428,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const circuitBreakers = new Map<string, CircuitBreaker>();
   const healthTracker = createRelayHealthTracker();
 
-  for (const relay of relays) {
+  for (const relay of normalizedRelays) {
     circuitBreakers.set(relay, createCircuitBreaker(relay, metrics));
   }
 
@@ -519,7 +573,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           event.pubkey,
           text,
           replyOptions,
-          relays,
+          normalizedRelays,
           metrics,
           circuitBreakers,
           healthTracker,
@@ -557,7 +611,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   }
 
   const sub = pool.subscribeMany(
-    relays,
+    normalizedRelays,
     {
       kinds: [...NIP63_SUBSCRIBE_KINDS],
       "#p": [pk],
@@ -567,14 +621,14 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       onevent: handleEvent,
       oneose: () => {
         // EOSE handler - called when all stored events have been received
-        for (const relay of relays) {
+        for (const relay of normalizedRelays) {
           metrics.emit("relay.message.eose", 1, { relay });
         }
-        onEose?.(relays.join(", "));
+        onEose?.(normalizedRelays.join(", "));
       },
       onclose: (reason) => {
         // Handle subscription close
-        for (const relay of relays) {
+        for (const relay of normalizedRelays) {
           metrics.emit("relay.message.closed", 1, { relay });
           options.onDisconnect?.(relay);
         }
@@ -595,7 +649,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       toPubkey,
       text,
       options,
-      relays,
+      normalizedRelays,
       metrics,
       circuitBreakers,
       healthTracker,
@@ -610,7 +664,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     const lastPublishedAt = profileState?.lastPublishedAt ?? undefined;
 
     // Publish the profile
-    const result = await publishProfileFn(pool, sk, relays, profile, lastPublishedAt);
+    const result = await publishProfileFn(pool, sk, normalizedRelays, profile, lastPublishedAt);
 
     // Convert results to state format
     const publishResults: Record<string, "ok" | "failed" | "timeout"> = {};
@@ -684,6 +738,13 @@ async function sendEncryptedDm(
   healthTracker: RelayHealthTracker,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
+  const relayList = [...relays];
+  if (!relayList.length) {
+    const error = new Error("Nostr send failed: no relays configured");
+    onError?.(error, "sendEncryptedDm");
+    throw error;
+  }
+
   const tags: string[][] = [["p", toPubkey]];
   tags.push(["encryption", NIP63_ENCRYPTION_SCHEME]);
   if (options?.sessionId) {
@@ -711,7 +772,7 @@ async function sendEncryptedDm(
   );
 
   // Sort relays by health score (best first)
-  const sortedRelays = healthTracker.getSortedRelays(relays);
+  const sortedRelays = healthTracker.getSortedRelays(relayList);
 
   // Try relays in order of health, respecting circuit breakers
   let lastError: Error | undefined;
@@ -720,13 +781,14 @@ async function sendEncryptedDm(
 
     // Skip if circuit breaker is open
     if (cb && !cb.canAttempt()) {
+      onError?.(new Error("Nostr relay skipped by circuit breaker"), `relay ${relay}`);
       continue;
     }
 
     const startTime = Date.now();
     try {
-      // oxlint-disable-next-line typescript/await-thenable typesciript/no-floating-promises
-      await pool.publish([relay], reply);
+      const publishResult = await pool.publish([relay], reply);
+      await Promise.all(Array.isArray(publishResult) ? publishResult : [publishResult]);
       const latency = Date.now() - startTime;
 
       // Record success
@@ -737,17 +799,23 @@ async function sendEncryptedDm(
     } catch (err) {
       lastError = err as Error;
       const latency = Date.now() - startTime;
+      onError?.(
+        lastError,
+        `publish failed relay=${relay} latencyMs=${latency} relays=${relayList.length}`,
+      );
 
       // Record failure
       cb?.recordFailure();
       healthTracker.recordFailure(relay);
       metrics.emit("relay.error", 1, { relay, latency });
-
-      onError?.(lastError, `publish to ${relay}`);
     }
   }
 
-  throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
+  const aggregateError = new Error(
+    `Failed to publish to any relay (${relayList.length} configured): ${lastError?.message}`,
+  );
+  onError?.(aggregateError, "sendEncryptedDm");
+  throw aggregateError;
 }
 
 /**

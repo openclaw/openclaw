@@ -110,12 +110,28 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
-  const sendText = outbound.sendText;
-  const sendMedia = outbound.sendMedia;
+  const sendText = async (text: string) =>
+    outbound.sendText({
+      ...baseCtx,
+      text,
+    });
+  const sendMedia = async (caption: string, mediaUrl: string) => {
+    if (mediaUrl) {
+      if (!outbound.sendMedia) {
+        throw new Error("This channel does not support media messages.");
+      }
+      return outbound.sendMedia({
+        ...baseCtx,
+        text: caption,
+        mediaUrl,
+      });
+    }
+    return sendText(caption);
+  };
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   return {
@@ -131,17 +147,8 @@ function createPluginHandler(
             payload,
           })
       : undefined,
-    sendText: async (text) =>
-      sendText({
-        ...baseCtx,
-        text,
-      }),
-    sendMedia: async (caption, mediaUrl) =>
-      sendMedia({
-        ...baseCtx,
-        text: caption,
-        mediaUrl,
-      }),
+    sendText: async (text) => sendText(text),
+    sendMedia: async (caption, mediaUrl) => sendMedia(caption, mediaUrl ?? ""),
   };
 }
 
