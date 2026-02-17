@@ -266,10 +266,9 @@ export function createFollowupRunner(params: {
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
 
-      if (finalPayloads.length === 0) {
-        return;
-      }
-
+      // Handle post-compaction tasks (flag + verbose notice) regardless of whether
+      // the compaction response had payloads. A NO_REPLY/silent compaction response
+      // would otherwise cause the early-return below to skip flag-setting entirely.
       if (autoCompactionCompleted) {
         const count = await incrementCompactionCount({
           sessionEntry,
@@ -298,6 +297,10 @@ export function createFollowupRunner(params: {
             text: `🧹 Auto-compaction complete${suffix}.`,
           });
         }
+      }
+
+      if (finalPayloads.length === 0) {
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, queued);
