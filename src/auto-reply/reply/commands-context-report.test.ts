@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildContextReply } from "./commands-context-report.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { buildContextReply } from "./commands-context-report.js";
 
 function makeParams(commandBodyNormalized: string, truncated: boolean): HandleCommandsParams {
   return {
