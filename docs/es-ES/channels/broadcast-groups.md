@@ -57,6 +57,7 @@ Para crear un grupo de difusión en WhatsApp:
 Una vez que tengas un grupo de difusión creado:
 
 1. Obtén el ID del grupo de difusión:
+
    ```bash
    openclaw channels status --deep
    ```
@@ -127,12 +128,12 @@ Usa habilidades o prompts del sistema para enrutar mensajes según el contenido:
 
 ```typescript
 // En tu código de agente personalizado
-if (message.content.includes('venta') || message.content.includes('precio')) {
-  routeToAgent('sales');
-} else if (message.content.includes('soporte') || message.content.includes('ayuda')) {
-  routeToAgent('support');
-} else if (message.content.includes('factura') || message.content.includes('pago')) {
-  routeToAgent('billing');
+if (message.content.includes("venta") || message.content.includes("precio")) {
+  routeToAgent("sales");
+} else if (message.content.includes("soporte") || message.content.includes("ayuda")) {
+  routeToAgent("support");
+} else if (message.content.includes("factura") || message.content.includes("pago")) {
+  routeToAgent("billing");
 }
 ```
 
@@ -242,11 +243,13 @@ Si los mensajes al grupo de difusión no se entregan:
 Si los agentes no reciben mensajes del grupo de difusión:
 
 1. Verifica la configuración del broadcastGroupId:
+
    ```bash
    openclaw config get agents.agent_name.channels.whatsapp.broadcastGroupId
    ```
 
 2. Asegúrate de que el agente esté ejecutándose:
+
    ```bash
    openclaw agent status agent_name
    ```
@@ -269,27 +272,27 @@ Si múltiples agentes están respondiendo al mismo mensaje:
 ### Ejemplo 1: Sistema de Tickets con Grupos de Difusión
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const coordinatorAgent = new OpenClawAgent({
-  name: 'coordinator',
+  name: "coordinator",
   channels: {
     whatsapp: {
-      broadcastGroupId: 'customer_support'
-    }
+      broadcastGroupId: "customer_support",
+    },
   },
   systemPrompt: `Eres un coordinador que:
   1. Recibe nuevos tickets de clientes
   2. Analiza el tipo de solicitud
   3. Asigna al agente apropiado
-  4. Rastrea el estado del ticket`
+  4. Rastrea el estado del ticket`,
 });
 
-coordinatorAgent.on('message', async (message) => {
+coordinatorAgent.on("message", async (message) => {
   // Analiza el mensaje y asigna al agente apropiado
   const ticketType = analyzeMessage(message.content);
   const assignedAgent = assignToAgent(ticketType);
-  
+
   // Crea ticket y notifica al agente asignado
   await createTicket(message, assignedAgent);
   await notifyAgent(assignedAgent, message);
@@ -299,22 +302,22 @@ coordinatorAgent.on('message', async (message) => {
 ### Ejemplo 2: Respuestas Automáticas de Grupo de Difusión
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const autoResponderAgent = new OpenClawAgent({
-  name: 'autoresponder',
+  name: "autoresponder",
   channels: {
     whatsapp: {
-      broadcastGroupId: 'product_updates'
-    }
+      broadcastGroupId: "product_updates",
+    },
   },
-  systemPrompt: 'Respondes automáticamente a preguntas comunes sobre actualizaciones de producto'
+  systemPrompt: "Respondes automáticamente a preguntas comunes sobre actualizaciones de producto",
 });
 
-autoResponderAgent.on('message', async (message) => {
+autoResponderAgent.on("message", async (message) => {
   // Verifica si hay respuesta automática disponible
   const autoResponse = await findAutoResponse(message.content);
-  
+
   if (autoResponse) {
     await message.reply(autoResponse);
   } else {
@@ -327,31 +330,31 @@ autoResponderAgent.on('message', async (message) => {
 ### Ejemplo 3: Alertas Multi-Canal con Difusión
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const alertAgent = new OpenClawAgent({
-  name: 'alerts',
+  name: "alerts",
   channels: {
     whatsapp: {
-      broadcastGroupId: 'team_alerts'
-    }
+      broadcastGroupId: "team_alerts",
+    },
   },
-  systemPrompt: 'Monitoreas sistemas y envías alertas al equipo'
+  systemPrompt: "Monitoreas sistemas y envías alertas al equipo",
 });
 
 // Envía alertas al grupo de difusión
 async function sendAlert(alertType: string, message: string) {
-  await alertAgent.sendToBroadcastGroup('team_alerts', {
+  await alertAgent.sendToBroadcastGroup("team_alerts", {
     type: alertType,
     message: message,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 }
 
 // Ejemplo de uso
-await sendAlert('critical', 'El servidor está caído - se requiere atención inmediata');
-await sendAlert('warning', 'Alto uso de CPU detectado en producción');
-await sendAlert('info', 'Despliegue completado exitosamente');
+await sendAlert("critical", "El servidor está caído - se requiere atención inmediata");
+await sendAlert("warning", "Alto uso de CPU detectado en producción");
+await sendAlert("info", "Despliegue completado exitosamente");
 ```
 
 ## Recursos Adicionales

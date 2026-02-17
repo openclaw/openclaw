@@ -71,18 +71,18 @@ El modo predeterminado es `gateway.reload.mode="hybrid"`.
 
 ### Precedencia de puerto y enlace
 
-| Configuración | Orden de resolución                                           |
-| ------------- | ------------------------------------------------------------- |
-| Puerto Gateway| `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789` |
-| Modo de enlace| CLI/override → `gateway.bind` → `loopback`                    |
+| Configuración  | Orden de resolución                                           |
+| -------------- | ------------------------------------------------------------- |
+| Puerto Gateway | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789` |
+| Modo de enlace | CLI/override → `gateway.bind` → `loopback`                    |
 
 ### Modos de recarga en caliente
 
-| `gateway.reload.mode` | Comportamiento                                    |
-| --------------------- | ------------------------------------------------- |
-| `off`                 | Sin recarga de configuración                      |
-| `hot`                 | Aplicar solo cambios seguros en caliente          |
-| `restart`             | Reiniciar en cambios que requieren recarga        |
+| `gateway.reload.mode`     | Comportamiento                                                        |
+| ------------------------- | --------------------------------------------------------------------- |
+| `off`                     | Sin recarga de configuración                                          |
+| `hot`                     | Aplicar solo cambios seguros en caliente                              |
+| `restart`                 | Reiniciar en cambios que requieren recarga                            |
 | `hybrid` (predeterminado) | Aplicar en caliente cuando sea seguro, reiniciar cuando sea necesario |
 
 ## Conjunto de comandos del operador
@@ -227,11 +227,11 @@ Los eventos no se reproducen. En brechas de secuencia, refresca el estado (`heal
 
 ## Firmas de falla comunes
 
-| Firma                                                          | Problema probable                             |
-| -------------------------------------------------------------- | --------------------------------------------- |
-| `refusing to bind gateway ... without auth`                    | Enlace no-loopback sin token/password         |
-| `another gateway instance is already listening` / `EADDRINUSE` | Conflicto de puerto                           |
-| `Gateway start blocked: set gateway.mode=local`                | Configuración establecida en modo remoto      |
+| Firma                                                          | Problema probable                                  |
+| -------------------------------------------------------------- | -------------------------------------------------- |
+| `refusing to bind gateway ... without auth`                    | Enlace no-loopback sin token/password              |
+| `another gateway instance is already listening` / `EADDRINUSE` | Conflicto de puerto                                |
+| `Gateway start blocked: set gateway.mode=local`                | Configuración establecida en modo remoto           |
 | `unauthorized` durante connect                                 | Desajuste de autenticación entre cliente y gateway |
 
 Para escaleras de diagnóstico completas, usa [Solución de Problemas del Gateway](/gateway/troubleshooting).

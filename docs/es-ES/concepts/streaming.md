@@ -304,17 +304,17 @@ Si el streaming se siente lento:
 OpenClaw proporciona APIs programáticas para streaming:
 
 ```typescript
-import { Agent } from 'openclaw'
+import { Agent } from "openclaw";
 
 // Enviar mensaje con streaming
-const stream = await agent.sendMessage('Hola', { stream: true })
+const stream = await agent.sendMessage("Hola", { stream: true });
 
 // Manejar chunks del stream
 for await (const chunk of stream) {
-  if (chunk.type === 'text_delta') {
-    process.stdout.write(chunk.text)
-  } else if (chunk.type === 'tool_use') {
-    console.log(`Calling tool: ${chunk.name}`)
+  if (chunk.type === "text_delta") {
+    process.stdout.write(chunk.text);
+  } else if (chunk.type === "tool_use") {
+    console.log(`Calling tool: ${chunk.name}`);
   }
 }
 ```

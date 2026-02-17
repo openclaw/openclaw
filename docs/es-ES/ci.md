@@ -9,20 +9,20 @@ El CI se ejecuta en cada push a `main` y en cada pull request. Utiliza alcance i
 
 ## Resumen de trabajos
 
-| Trabajo           | Propósito                                       | Cuándo se ejecuta             |
-| ----------------- | ----------------------------------------------- | ----------------------------- |
-| `docs-scope`      | Detectar cambios solo en documentación         | Siempre                       |
-| `changed-scope`   | Detectar qué áreas cambiaron (node/macos/android) | PRs que no son solo docs      |
-| `check`           | Tipos TypeScript, lint, formato                 | Cambios que no son solo docs  |
-| `check-docs`      | Lint de Markdown + verificación de enlaces rotos | Documentación modificada      |
-| `code-analysis`   | Verificación de umbral de LOC (1000 líneas)     | Solo PRs                      |
-| `secrets`         | Detectar secretos filtrados                     | Siempre                       |
-| `build-artifacts` | Construir dist una vez, compartir con otros trabajos | No docs, cambios en node      |
-| `release-check`   | Validar contenidos de npm pack                  | Después de build              |
-| `checks`          | Pruebas Node/Bun + verificación de protocolo    | No docs, cambios en node      |
-| `checks-windows`  | Pruebas específicas de Windows                  | No docs, cambios en node      |
-| `macos`           | Swift lint/build/test + pruebas TS              | PRs con cambios en macos      |
-| `android`         | Build y pruebas de Gradle                       | No docs, cambios en android   |
+| Trabajo           | Propósito                                            | Cuándo se ejecuta            |
+| ----------------- | ---------------------------------------------------- | ---------------------------- |
+| `docs-scope`      | Detectar cambios solo en documentación               | Siempre                      |
+| `changed-scope`   | Detectar qué áreas cambiaron (node/macos/android)    | PRs que no son solo docs     |
+| `check`           | Tipos TypeScript, lint, formato                      | Cambios que no son solo docs |
+| `check-docs`      | Lint de Markdown + verificación de enlaces rotos     | Documentación modificada     |
+| `code-analysis`   | Verificación de umbral de LOC (1000 líneas)          | Solo PRs                     |
+| `secrets`         | Detectar secretos filtrados                          | Siempre                      |
+| `build-artifacts` | Construir dist una vez, compartir con otros trabajos | No docs, cambios en node     |
+| `release-check`   | Validar contenidos de npm pack                       | Después de build             |
+| `checks`          | Pruebas Node/Bun + verificación de protocolo         | No docs, cambios en node     |
+| `checks-windows`  | Pruebas específicas de Windows                       | No docs, cambios en node     |
+| `macos`           | Swift lint/build/test + pruebas TS                   | PRs con cambios en macos     |
+| `android`         | Build y pruebas de Gradle                            | No docs, cambios en android  |
 
 ## Orden de Fail-Fast
 

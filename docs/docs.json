@@ -1155,7 +1155,11 @@
               },
               {
                 "group": "Mantenimiento",
-                "pages": ["es-ES/install/updating", "es-ES/install/migrating", "es-ES/install/uninstall"]
+                "pages": [
+                  "es-ES/install/updating",
+                  "es-ES/install/migrating",
+                  "es-ES/install/uninstall"
+                ]
               },
               {
                 "group": "Alojamiento y despliegue",
@@ -1293,7 +1297,11 @@
               },
               {
                 "group": "Coordinación de agentes",
-                "pages": ["es-ES/tools/agent-send", "es-ES/tools/subagents", "es-ES/tools/multi-agent-sandbox-tools"]
+                "pages": [
+                  "es-ES/tools/agent-send",
+                  "es-ES/tools/subagents",
+                  "es-ES/tools/multi-agent-sandbox-tools"
+                ]
               },
               {
                 "group": "Habilidades",
@@ -1473,7 +1481,11 @@
               },
               {
                 "group": "Acceso remoto",
-                "pages": ["es-ES/gateway/remote", "es-ES/gateway/remote-gateway-readme", "es-ES/gateway/tailscale"]
+                "pages": [
+                  "es-ES/gateway/remote",
+                  "es-ES/gateway/remote-gateway-readme",
+                  "es-ES/gateway/tailscale"
+                ]
               },
               {
                 "group": "Seguridad",
@@ -1486,7 +1498,13 @@
               },
               {
                 "group": "Interfaces web",
-                "pages": ["es-ES/web/index", "es-ES/web/control-ui", "es-ES/web/dashboard", "es-ES/web/webchat", "es-ES/web/tui"]
+                "pages": [
+                  "es-ES/web/index",
+                  "es-ES/web/control-ui",
+                  "es-ES/web/dashboard",
+                  "es-ES/web/webchat",
+                  "es-ES/web/tui"
+                ]
               }
             ]
           },
@@ -1622,7 +1640,12 @@
               },
               {
                 "group": "Entorno y depuración",
-                "pages": ["es-ES/help/environment", "es-ES/help/debugging", "es-ES/help/testing", "es-ES/help/scripts"]
+                "pages": [
+                  "es-ES/help/environment",
+                  "es-ES/help/debugging",
+                  "es-ES/help/testing",
+                  "es-ES/help/scripts"
+                ]
               },
               {
                 "group": "Entorno de ejecución Node",

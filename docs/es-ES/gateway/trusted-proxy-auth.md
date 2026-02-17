@@ -64,12 +64,12 @@ Usa el modo de autenticación `trusted-proxy` cuando:
 
 ### Referencia de configuración
 
-| Campo                                       | Requerido | Descripción                                                                        |
-| ------------------------------------------- | --------- | ---------------------------------------------------------------------------------- |
-| `gateway.trustedProxies`                    | Sí        | Array de direcciones IP de proxy confiables. Solicitudes de otras IPs son rechazadas. |
-| `gateway.auth.mode`                         | Sí        | Debe ser `"trusted-proxy"`                                                         |
-| `gateway.auth.trustedProxy.userHeader`      | Sí        | Nombre del encabezado que contiene la identidad del usuario autenticado            |
-| `gateway.auth.trustedProxy.requiredHeaders` | No        | Encabezados adicionales que deben estar presentes para que la solicitud sea confiable |
+| Campo                                       | Requerido | Descripción                                                                                           |
+| ------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------- |
+| `gateway.trustedProxies`                    | Sí        | Array de direcciones IP de proxy confiables. Solicitudes de otras IPs son rechazadas.                 |
+| `gateway.auth.mode`                         | Sí        | Debe ser `"trusted-proxy"`                                                                            |
+| `gateway.auth.trustedProxy.userHeader`      | Sí        | Nombre del encabezado que contiene la identidad del usuario autenticado                               |
+| `gateway.auth.trustedProxy.requiredHeaders` | No        | Encabezados adicionales que deben estar presentes para que la solicitud sea confiable                 |
 | `gateway.auth.trustedProxy.allowUsers`      | No        | Lista de identidades de usuario permitidas. Vacío significa permitir todos los usuarios autenticados. |
 
 ## Ejemplos de configuración de proxy
@@ -229,7 +229,7 @@ El encabezado de usuario estaba vacío o faltante. Verifica:
 - ¿Es correcto el nombre del encabezado? (insensible a mayúsculas, pero la ortografía importa)
 - ¿Está el usuario realmente autenticado en el proxy?
 
-### "trusted_proxy_missing_header_*"
+### "trusted*proxy_missing_header*\*"
 
 Un encabezado requerido no estaba presente. Verifica:
 

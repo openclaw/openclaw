@@ -17,9 +17,9 @@ La herramienta `llm-task` permite a los agentes delegar subtareas específicas a
 ```typescript
 // Delegar una tarea a un modelo especializado
 const result = await llmTask({
-  task: 'Resumir este artículo en 3 puntos clave',
+  task: "Resumir este artículo en 3 puntos clave",
   context: articleContent,
-  model: 'gpt-4-turbo'
+  model: "gpt-4-turbo",
 });
 
 console.log(result.output);
@@ -27,13 +27,13 @@ console.log(result.output);
 
 ## Parámetros
 
-| Parámetro | Tipo | Requerido | Descripción |
-|-----------|------|-----------|-------------|
-| `task` | string | Sí | Descripción de la tarea a realizar |
-| `context` | string | No | Contexto o datos para la tarea |
-| `model` | string | No | Modelo específico a usar (por defecto: modelo configurado) |
-| `temperature` | number | No | Creatividad del modelo (0-1) |
-| `maxTokens` | number | No | Máximo de tokens de salida |
+| Parámetro     | Tipo   | Requerido | Descripción                                                |
+| ------------- | ------ | --------- | ---------------------------------------------------------- |
+| `task`        | string | Sí        | Descripción de la tarea a realizar                         |
+| `context`     | string | No        | Contexto o datos para la tarea                             |
+| `model`       | string | No        | Modelo específico a usar (por defecto: modelo configurado) |
+| `temperature` | number | No        | Creatividad del modelo (0-1)                               |
+| `maxTokens`   | number | No        | Máximo de tokens de salida                                 |
 
 ## Casos de Uso Comunes
 
@@ -42,10 +42,10 @@ console.log(result.output);
 ```typescript
 // Resumir un artículo largo
 const summary = await llmTask({
-  task: 'Crear un resumen ejecutivo de este informe',
+  task: "Crear un resumen ejecutivo de este informe",
   context: longReport,
-  model: 'gpt-4-turbo',
-  maxTokens: 500
+  model: "gpt-4-turbo",
+  maxTokens: 500,
 });
 ```
 
@@ -54,9 +54,9 @@ const summary = await llmTask({
 ```typescript
 // Analizar calidad del código
 const analysis = await llmTask({
-  task: 'Revisar este código en busca de problemas de seguridad y mejores prácticas',
+  task: "Revisar este código en busca de problemas de seguridad y mejores prácticas",
   context: codeSnippet,
-  model: 'claude-3-opus'
+  model: "claude-3-opus",
 });
 ```
 
@@ -65,10 +65,10 @@ const analysis = await llmTask({
 ```typescript
 // Extraer datos estructurados
 const extracted = await llmTask({
-  task: 'Extraer todos los nombres, emails y números de teléfono de este texto',
+  task: "Extraer todos los nombres, emails y números de teléfono de este texto",
   context: rawText,
-  model: 'gpt-4-turbo',
-  temperature: 0 // Baja temperatura para consistencia
+  model: "gpt-4-turbo",
+  temperature: 0, // Baja temperatura para consistencia
 });
 ```
 
@@ -77,10 +77,10 @@ const extracted = await llmTask({
 ```typescript
 // Generar contenido creativo
 const content = await llmTask({
-  task: 'Escribir una descripción de producto atractiva',
+  task: "Escribir una descripción de producto atractiva",
   context: productDetails,
-  model: 'gpt-4-turbo',
-  temperature: 0.8 // Alta temperatura para creatividad
+  model: "gpt-4-turbo",
+  temperature: 0.8, // Alta temperatura para creatividad
 });
 ```
 
@@ -92,17 +92,17 @@ Ejecuta múltiples tareas simultáneamente:
 // Procesar múltiples documentos en paralelo
 const results = await Promise.all([
   llmTask({
-    task: 'Resumir documento 1',
-    context: doc1
+    task: "Resumir documento 1",
+    context: doc1,
   }),
   llmTask({
-    task: 'Resumir documento 2',
-    context: doc2
+    task: "Resumir documento 2",
+    context: doc2,
   }),
   llmTask({
-    task: 'Resumir documento 3',
-    context: doc3
-  })
+    task: "Resumir documento 3",
+    context: doc3,
+  }),
 ]);
 ```
 
@@ -110,20 +110,20 @@ const results = await Promise.all([
 
 Elige el modelo adecuado para tu tarea:
 
-| Modelo | Mejor Para | Velocidad | Costo |
-|--------|-----------|-----------|-------|
-| `gpt-4-turbo` | Razonamiento complejo | Media | Alto |
-| `gpt-3.5-turbo` | Tareas generales | Rápida | Bajo |
-| `claude-3-opus` | Análisis largo | Lenta | Alto |
-| `claude-3-sonnet` | Equilibrado | Media | Medio |
-| `claude-3-haiku` | Tareas rápidas | Rápida | Bajo |
+| Modelo            | Mejor Para            | Velocidad | Costo |
+| ----------------- | --------------------- | --------- | ----- |
+| `gpt-4-turbo`     | Razonamiento complejo | Media     | Alto  |
+| `gpt-3.5-turbo`   | Tareas generales      | Rápida    | Bajo  |
+| `claude-3-opus`   | Análisis largo        | Lenta     | Alto  |
+| `claude-3-sonnet` | Equilibrado           | Media     | Medio |
+| `claude-3-haiku`  | Tareas rápidas        | Rápida    | Bajo  |
 
 ```typescript
 // Usar modelo específico para la tarea
 const result = await llmTask({
-  task: 'Análisis rápido de sentimiento',
+  task: "Análisis rápido de sentimiento",
   context: tweets,
-  model: 'gpt-3.5-turbo' // Más rápido y económico
+  model: "gpt-3.5-turbo", // Más rápido y económico
 });
 ```
 
@@ -134,18 +134,18 @@ Optimiza el uso de modelos para controlar costos:
 ```typescript
 // Usar modelos más baratos para tareas simples
 const quickSummary = await llmTask({
-  task: 'Resumir en una oración',
+  task: "Resumir en una oración",
   context: article,
-  model: 'gpt-3.5-turbo',
-  maxTokens: 50
+  model: "gpt-3.5-turbo",
+  maxTokens: 50,
 });
 
 // Reservar modelos caros para tareas complejas
 const deepAnalysis = await llmTask({
-  task: 'Análisis detallado con recomendaciones',
+  task: "Análisis detallado con recomendaciones",
   context: dataSet,
-  model: 'gpt-4-turbo',
-  maxTokens: 2000
+  model: "gpt-4-turbo",
+  maxTokens: 2000,
 });
 ```
 
@@ -154,20 +154,20 @@ const deepAnalysis = await llmTask({
 ```typescript
 try {
   const result = await llmTask({
-    task: 'Analizar estos datos',
-    context: data
+    task: "Analizar estos datos",
+    context: data,
   });
 } catch (error) {
-  if (error.code === 'RATE_LIMIT') {
+  if (error.code === "RATE_LIMIT") {
     // Manejar error de límite de tasa
     await sleep(5000);
     // Reintentar...
-  } else if (error.code === 'INVALID_MODEL') {
+  } else if (error.code === "INVALID_MODEL") {
     // Recurrir a modelo predeterminado
     const result = await llmTask({
-      task: 'Analizar estos datos',
+      task: "Analizar estos datos",
       context: data,
-      model: 'gpt-3.5-turbo'
+      model: "gpt-3.5-turbo",
     });
   }
 }

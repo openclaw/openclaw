@@ -127,16 +127,16 @@ Soporte multi-cuenta: usa `channels.zalo.accounts` con tokens por cuenta y `name
 
 ## Capacidades
 
-| Característica   | Estado                            |
-| ---------------- | --------------------------------- |
-| Mensajes directos| ✅ Compatible                     |
-| Grupos           | ❌ Próximamente (según docs Zalo) |
-| Medios (imágenes)| ✅ Compatible                     |
-| Reacciones       | ❌ No compatible                  |
-| Hilos            | ❌ No compatible                  |
-| Encuestas        | ❌ No compatible                  |
-| Comandos nativos | ❌ No compatible                  |
-| Streaming        | ⚠️ Bloqueado (límite 2000 chars)  |
+| Característica    | Estado                            |
+| ----------------- | --------------------------------- |
+| Mensajes directos | ✅ Compatible                     |
+| Grupos            | ❌ Próximamente (según docs Zalo) |
+| Medios (imágenes) | ✅ Compatible                     |
+| Reacciones        | ❌ No compatible                  |
+| Hilos             | ❌ No compatible                  |
+| Encuestas         | ❌ No compatible                  |
+| Comandos nativos  | ❌ No compatible                  |
+| Streaming         | ⚠️ Bloqueado (límite 2000 chars)  |
 
 ## Objetivos de entrega (CLI/cron)
 

@@ -572,12 +572,12 @@ Las puertas de acción viven bajo `channels.discord.actions.*`.
 
 Comportamiento de puerta predeterminado:
 
-| Grupo de acción                                                                                                                                                         | Predeterminado |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| Grupo de acción                                                                                                                                                          | Predeterminado |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- |
 | reactions, messages, threads, pins, polls, search, memberInfo, roleInfo, channelInfo, channels, voiceStatus, events, stickers, emojiUploads, stickerUploads, permissions | habilitado     |
-| roles                                                                                                                                                                   | deshabilitado  |
-| moderation                                                                                                                                                              | deshabilitado  |
-| presence                                                                                                                                                                | deshabilitado  |
+| roles                                                                                                                                                                    | deshabilitado  |
+| moderation                                                                                                                                                               | deshabilitado  |
+| presence                                                                                                                                                                 | deshabilitado  |
 
 ## UI de componentes v2
 

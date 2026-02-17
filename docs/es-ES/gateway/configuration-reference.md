@@ -2849,10 +2849,7 @@ Lista de URLs de backend para load balancing.
 ```json
 {
   "gateway": {
-    "loadBalancingTargets": [
-      "http://backend1.example.com",
-      "http://backend2.example.com"
-    ]
+    "loadBalancingTargets": ["http://backend1.example.com", "http://backend2.example.com"]
   }
 }
 ```
@@ -2886,10 +2883,7 @@ Lista de URLs de backend de failover, en orden de prioridad.
 ```json
 {
   "gateway": {
-    "failoverTargets": [
-      "http://backup1.example.com",
-      "http://backup2.example.com"
-    ]
+    "failoverTargets": ["http://backup1.example.com", "http://backup2.example.com"]
   }
 }
 ```
@@ -3456,10 +3450,7 @@ Lista de URLs de gateway objetivo para replicación.
 ```json
 {
   "gateway": {
-    "replicationTargets": [
-      "https://gateway2.example.com",
-      "https://gateway3.example.com"
-    ]
+    "replicationTargets": ["https://gateway2.example.com", "https://gateway3.example.com"]
   }
 }
 ```
@@ -3509,10 +3500,7 @@ Lista de URLs de nodos en el cluster.
 ```json
 {
   "gateway": {
-    "clusterNodes": [
-      "http://node1.example.com:18789",
-      "http://node2.example.com:18789"
-    ]
+    "clusterNodes": ["http://node1.example.com:18789", "http://node2.example.com:18789"]
   }
 }
 ```

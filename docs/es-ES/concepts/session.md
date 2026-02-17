@@ -390,22 +390,22 @@ Si una sesión se vuelve lenta:
 OpenClaw proporciona APIs programáticas para gestión de sesiones:
 
 ```typescript
-import { SessionManager } from 'openclaw'
+import { SessionManager } from "openclaw";
 
 // Crear sesión
 const session = await manager.create({
-  name: 'my-session',
-  workspace: '/path/to/project',
-})
+  name: "my-session",
+  workspace: "/path/to/project",
+});
 
 // Enviar mensaje
-await manager.sendMessage(session.id, 'Hola')
+await manager.sendMessage(session.id, "Hola");
 
 // Obtener historial
-const messages = await manager.getMessages(session.id)
+const messages = await manager.getMessages(session.id);
 
 // Exportar sesión
-const data = await manager.export(session.id, { format: 'json' })
+const data = await manager.export(session.id, { format: "json" });
 ```
 
 Consulta la [Referencia API](/es-ES/api/session) para documentación completa.

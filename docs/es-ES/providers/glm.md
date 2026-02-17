@@ -26,7 +26,7 @@ openclaw config set model.default=glm-4
 
 ## Configuración
 
-| Clave | Descripción | Valor predeterminado |
-|-------|-------------|----------------------|
-| `glm.apiKey` | Clave API de Zhipu AI | - |
-| `glm.baseURL` | URL base de la API | `https://open.bigmodel.cn/api/paas/v4` |
+| Clave         | Descripción           | Valor predeterminado                   |
+| ------------- | --------------------- | -------------------------------------- |
+| `glm.apiKey`  | Clave API de Zhipu AI | -                                      |
+| `glm.baseURL` | URL base de la API    | `https://open.bigmodel.cn/api/paas/v4` |

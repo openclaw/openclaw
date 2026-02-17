@@ -25,16 +25,18 @@ OpenClaw admite **GitHub Flavored Markdown (GFM)**, que incluye:
 
 ```markdown
 # Encabezado de nivel 1
+
 ## Encabezado de nivel 2
+
 ### Encabezado de nivel 3
 ```
 
 ### Énfasis
 
 ```markdown
-*cursiva* o _cursiva_
-**negrita** o __negrita__
-***negrita y cursiva***
+_cursiva_ o _cursiva_
+**negrita** o **negrita**
+**_negrita y cursiva_**
 ~~tachado~~
 ```
 
@@ -42,16 +44,19 @@ OpenClaw admite **GitHub Flavored Markdown (GFM)**, que incluye:
 
 ```markdown
 # Lista desordenada
+
 - Elemento 1
 - Elemento 2
   - Subíndice
 
 # Lista ordenada
+
 1. Primer elemento
 2. Segundo elemento
 3. Tercer elemento
 
 # Lista de tareas
+
 - [x] Tarea completada
 - [ ] Tarea pendiente
 ```
@@ -117,7 +122,7 @@ Lenguajes admitidos incluyen: `python`, `javascript`, `typescript`, `bash`, `jso
 
 ```markdown
 | Encabezado 1 | Encabezado 2 | Encabezado 3 |
-|--------------|--------------|--------------|
+| ------------ | ------------ | ------------ |
 | Fila 1       | Datos        | Más datos    |
 | Fila 2       | Datos        | Más datos    |
 ```
@@ -126,16 +131,18 @@ Lenguajes admitidos incluyen: `python`, `javascript`, `typescript`, `bash`, `jso
 
 ```markdown
 | Izquierda | Centro | Derecha |
-|:----------|:------:|--------:|
-| Texto     | Texto  | Texto   |
+| :-------- | :----: | ------: |
+| Texto     | Texto  |   Texto |
 ```
 
 ## Reglas horizontales
 
 ```markdown
 ---
-***
-___
+
+---
+
+---
 ```
 
 ## Listas de tareas
@@ -163,11 +170,13 @@ Cuando los agentes responden, usan Markdown para formatear su salida:
 ### Ejemplo: Bloque de código
 
 **Entrada del usuario**:
+
 ```
 Escribe una función de Python para calcular números de Fibonacci.
 ```
 
 **Respuesta del agente**:
+
 ````markdown
 Aquí está una función de Python para calcular números de Fibonacci:
 
@@ -180,6 +189,7 @@ def fibonacci(n):
 ```
 
 Uso:
+
 ```python
 print(fibonacci(10))  # Salida: 55
 ```
@@ -188,19 +198,21 @@ print(fibonacci(10))  # Salida: 55
 ### Ejemplo: Tabla
 
 **Entrada del usuario**:
+
 ```
 Compara diferentes proveedores de modelos.
 ```
 
 **Respuesta del agente**:
+
 ```markdown
 Aquí hay una comparación de proveedores de modelos:
 
-| Proveedor  | Modelo              | Tokens de contexto | Costo (por 1M tokens) |
-|------------|---------------------|--------------------|-----------------------|
-| OpenAI     | GPT-4 Turbo         | 128,000            | $10                   |
-| Anthropic  | Claude 3 Opus       | 200,000            | $15                   |
-| Google     | Gemini 1.5 Pro      | 1,000,000          | $7                    |
+| Proveedor | Modelo         | Tokens de contexto | Costo (por 1M tokens) |
+| --------- | -------------- | ------------------ | --------------------- |
+| OpenAI    | GPT-4 Turbo    | 128,000            | $10                   |
+| Anthropic | Claude 3 Opus  | 200,000            | $15                   |
+| Google    | Gemini 1.5 Pro | 1,000,000          | $7                    |
 ```
 
 ## Markdown en canales
@@ -283,10 +295,10 @@ Siempre especifica el lenguaje para resaltado de sintaxis:
 Las tablas son excelentes para comparaciones y datos estructurados:
 
 ```markdown
-| Característica | Estado    |
-|----------------|-----------|
-| Soporte de CLI | ✅        |
-| Soporte web    | 🚧        |
+| Característica | Estado |
+| -------------- | ------ |
+| Soporte de CLI | ✅     |
+| Soporte web    | 🚧     |
 ```
 
 ### 4. Mantén el markdown simple
@@ -312,10 +324,10 @@ Las listas ordenadas son excelentes para instrucciones paso a paso:
 Al construir herramientas personalizadas, puedes devolver markdown en las respuestas de tu herramienta:
 
 ```typescript
-import { Agent } from 'openclaw/plugin-sdk'
+import { Agent } from "openclaw/plugin-sdk";
 
 const myTool = {
-  name: 'example-tool',
+  name: "example-tool",
   async execute(context: Agent.Context) {
     return {
       markdown: `
@@ -326,10 +338,10 @@ Aquí está el resultado de la herramienta:
 \`\`\`json
 ${JSON.stringify(data, null, 2)}
 \`\`\`
-      `
-    }
-  }
-}
+      `,
+    };
+  },
+};
 ```
 
 ## Renderizado de markdown

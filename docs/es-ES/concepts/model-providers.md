@@ -263,12 +263,12 @@ ollama serve
 
 Diferentes modelos tienen diferentes límites de contexto:
 
-| Modelo | Contexto |
-|-------|---------|
-| Claude 3.5 Sonnet | 200K |
-| GPT-4o | 128K |
-| Gemini 1.5 Pro | 2M |
-| Llama 3.1 405B | 128K |
+| Modelo            | Contexto |
+| ----------------- | -------- |
+| Claude 3.5 Sonnet | 200K     |
+| GPT-4o            | 128K     |
+| Gemini 1.5 Pro    | 2M       |
+| Llama 3.1 405B    | 128K     |
 
 OpenClaw maneja automáticamente compactación de contexto para todos los modelos.
 
@@ -334,27 +334,27 @@ OpenClaw maneja automáticamente límites de tasa con reintentos exponenciales.
 
 ### Anthropic
 
-| Modelo | Entrada | Salida |
-|-------|-------|--------|
-| Claude 3.5 Sonnet | $3/M tokens | $15/M tokens |
-| Claude 3.5 Haiku | $0.80/M tokens | $4/M tokens |
-| Claude 3 Opus | $15/M tokens | $75/M tokens |
+| Modelo            | Entrada        | Salida       |
+| ----------------- | -------------- | ------------ |
+| Claude 3.5 Sonnet | $3/M tokens    | $15/M tokens |
+| Claude 3.5 Haiku  | $0.80/M tokens | $4/M tokens  |
+| Claude 3 Opus     | $15/M tokens   | $75/M tokens |
 
 ### OpenAI
 
-| Modelo | Entrada | Salida |
-|-------|-------|--------|
-| GPT-4o | $2.50/M tokens | $10/M tokens |
+| Modelo      | Entrada        | Salida         |
+| ----------- | -------------- | -------------- |
+| GPT-4o      | $2.50/M tokens | $10/M tokens   |
 | GPT-4o mini | $0.15/M tokens | $0.60/M tokens |
-| GPT-4 Turbo | $10/M tokens | $30/M tokens |
+| GPT-4 Turbo | $10/M tokens   | $30/M tokens   |
 
 ### Google
 
-| Modelo | Entrada | Salida |
-|-------|-------|--------|
-| Gemini 1.5 Pro | $1.25/M tokens | $5/M tokens |
-| Gemini 1.5 Flash | $0.075/M tokens | $0.30/M tokens |
-| Gemini 2.0 Flash | $0.00 (gratis durante preview) | $0.00 |
+| Modelo           | Entrada                        | Salida         |
+| ---------------- | ------------------------------ | -------------- |
+| Gemini 1.5 Pro   | $1.25/M tokens                 | $5/M tokens    |
+| Gemini 1.5 Flash | $0.075/M tokens                | $0.30/M tokens |
+| Gemini 2.0 Flash | $0.00 (gratis durante preview) | $0.00          |
 
 ### Ollama
 

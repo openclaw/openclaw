@@ -78,13 +78,13 @@ primary_region = "iad"
 
 **Configuraciones clave:**
 
-| Configuración                  | Por qué                                                                       |
-| ------------------------------ | ----------------------------------------------------------------------------- |
-| `--bind lan`                   | Se vincula a `0.0.0.0` para que el proxy de Fly pueda alcanzar el gateway    |
-| `--allow-unconfigured`         | Inicia sin archivo de configuración (lo crearás después)                     |
+| Configuración                  | Por qué                                                                                |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Se vincula a `0.0.0.0` para que el proxy de Fly pueda alcanzar el gateway              |
+| `--allow-unconfigured`         | Inicia sin archivo de configuración (lo crearás después)                               |
 | `internal_port = 3000`         | Debe coincidir con `--port 3000` (o `OPENCLAW_GATEWAY_PORT`) para health checks de Fly |
-| `memory = "2048mb"`            | 512MB es muy poco; se recomienda 2GB                                          |
-| `OPENCLAW_STATE_DIR = "/data"` | Persiste el estado en el volumen                                              |
+| `memory = "2048mb"`            | 512MB es muy poco; se recomienda 2GB                                                   |
+| `OPENCLAW_STATE_DIR = "/data"` | Persiste el estado en el volumen                                                       |
 
 ## 3) Establecer secretos
 
@@ -461,12 +461,12 @@ El túnel ngrok se ejecuta dentro del contenedor y proporciona una URL de webhoo
 
 ### Beneficios de seguridad
 
-| Aspecto               | Público       | Privado    |
-| --------------------- | ------------- | ---------- |
-| Escáneres de internet | Descubrible   | Oculto     |
-| Ataques directos      | Posible       | Bloqueado  |
-| Acceso UI de Control  | Navegador     | Proxy/VPN  |
-| Entrega de webhook    | Directo       | Vía túnel  |
+| Aspecto               | Público     | Privado   |
+| --------------------- | ----------- | --------- |
+| Escáneres de internet | Descubrible | Oculto    |
+| Ataques directos      | Posible     | Bloqueado |
+| Acceso UI de Control  | Navegador   | Proxy/VPN |
+| Entrega de webhook    | Directo     | Vía túnel |
 
 ## Notas
 

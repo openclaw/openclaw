@@ -301,21 +301,21 @@ Si la poda toma demasiado tiempo:
 OpenClaw proporciona APIs programáticas para poda de sesiones:
 
 ```typescript
-import { SessionPruner } from 'openclaw'
+import { SessionPruner } from "openclaw";
 
 // Ejecutar poda
 const result = await pruner.prune({
-  maxAge: '30d',
-  maxInactivity: '14d',
-  maxSize: '100MB',
+  maxAge: "30d",
+  maxInactivity: "14d",
+  maxSize: "100MB",
   dryRun: false,
-})
+});
 
 // Proteger sesión
-await pruner.protect(sessionId)
+await pruner.protect(sessionId);
 
 // Desproteger sesión
-await pruner.unprotect(sessionId)
+await pruner.unprotect(sessionId);
 ```
 
 Consulta la [Referencia API](/es-ES/api/session-pruning) para documentación completa.

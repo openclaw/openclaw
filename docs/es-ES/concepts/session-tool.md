@@ -466,22 +466,22 @@ Si exportar/importar falla:
 OpenClaw proporciona APIs programáticas para gestión de sesiones:
 
 ```typescript
-import { SessionManager } from 'openclaw'
+import { SessionManager } from "openclaw";
 
 // Listar sesiones
-const sessions = await manager.list()
+const sessions = await manager.list();
 
 // Crear sesión
 const session = await manager.create({
-  name: 'my-session',
-  workspace: '/path/to/project',
-})
+  name: "my-session",
+  workspace: "/path/to/project",
+});
 
 // Cambiar sesión
-await manager.switch(sessionId)
+await manager.switch(sessionId);
 
 // Eliminar sesión
-await manager.delete(sessionId)
+await manager.delete(sessionId);
 ```
 
 Consulta la [Referencia API](/es-ES/api/session) para documentación completa.

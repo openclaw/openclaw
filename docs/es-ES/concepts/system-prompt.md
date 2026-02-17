@@ -144,7 +144,7 @@ El agente ve el contenido completo del archivo como parte de su system prompt.
 
 Ejemplo de buenas instrucciones:
 
-```markdown
+````markdown
 # Pautas del Proyecto
 
 ## Estilo de Código
@@ -160,11 +160,11 @@ Componentes viven en `src/components/` con este patrón:
 
 \```typescript
 export interface MyComponentProps {
-  title: string
+title: string
 }
 
 export function MyComponent({ title }: MyComponentProps) {
-  // implementación
+// implementación
 }
 \```
 
@@ -174,12 +174,12 @@ Escribe pruebas en `*.test.ts` usando este patrón:
 
 \```typescript
 describe('MyComponent', () => {
-  it('renders title', () => {
-    // prueba
-  })
+it('renders title', () => {
+// prueba
+})
 })
 \```
-```
+````
 
 ## Ver el System Prompt
 
@@ -303,21 +303,21 @@ Si el system prompt consume demasiado contexto:
 OpenClaw proporciona APIs programáticas para system prompt:
 
 ```typescript
-import { SystemPromptBuilder } from 'openclaw'
+import { SystemPromptBuilder } from "openclaw";
 
 // Construir system prompt
-const builder = new SystemPromptBuilder()
+const builder = new SystemPromptBuilder();
 const prompt = await builder.build({
-  workspace: '/path/to/project',
-  agentId: 'my-agent',
-  tools: ['read_file', 'write_file'],
-})
+  workspace: "/path/to/project",
+  agentId: "my-agent",
+  tools: ["read_file", "write_file"],
+});
 
 // Añadir instrucciones personalizadas
-builder.addInstructions('Texto de instrucción personalizado...')
+builder.addInstructions("Texto de instrucción personalizado...");
 
 // Obtener tamaño de tokens
-const tokens = await builder.countTokens()
+const tokens = await builder.countTokens();
 ```
 
 Consulta la [Referencia API](/es-ES/api/system-prompt) para documentación completa.

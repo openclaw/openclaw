@@ -8,6 +8,7 @@ El **Modo de Pensamiento** controla si el agente muestra **razonamiento extendid
 ## Descripción General
 
 Cuando está habilitado, el agente puede usar **pensamiento visible** (razonamiento de cadena de pensamiento) para:
+
 - Resolver problemas complejos paso a paso
 - Explicar su razonamiento
 - Planificar subtareas
@@ -38,21 +39,23 @@ En tu `~/.openclaw/slash-commands.json`:
 
 ## Niveles de Pensamiento
 
-| Nivel | Comportamiento |
-|-------|----------------|
-| `high` | Razonamiento extendido visible; paso a paso |
-| `medium` | Equilibrado; pensamiento moderado |
-| `low` | Mínimo razonamiento; respuestas rápidas |
-| `off` | Sin pensamiento visible; solo salida final |
+| Nivel    | Comportamiento                              |
+| -------- | ------------------------------------------- |
+| `high`   | Razonamiento extendido visible; paso a paso |
+| `medium` | Equilibrado; pensamiento moderado           |
+| `low`    | Mínimo razonamiento; respuestas rápidas     |
+| `off`    | Sin pensamiento visible; solo salida final  |
 
 ## Cuándo Usarlo
 
 ✅ **Usa `high` para:**
+
 - Resolución de problemas complejos
 - Depuración de tareas multipasos
 - Explicación de decisiones de arquitectura
 
 ✅ **Usa `low` o `off` para:**
+
 - Respuestas de hechos rápidos
 - Comandos simples (como "ejecutar pruebas")
 - Salida que va directamente a canales de mensajería

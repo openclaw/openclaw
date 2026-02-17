@@ -119,11 +119,11 @@ Las URL directas se obtienen tal cual. Esto usa la herramienta `web_fetch` (o `e
 
 Los programas OpenProse se mapean a primitivas de OpenClaw:
 
-| Concepto de OpenProse         | Herramienta de OpenClaw |
-| ----------------------------- | ----------------------- |
-| Generar sesión / herramienta Task | `sessions_spawn`    |
-| Lectura/escritura de archivos | `read` / `write`       |
-| Obtención web                 | `web_fetch`             |
+| Concepto de OpenProse             | Herramienta de OpenClaw |
+| --------------------------------- | ----------------------- |
+| Generar sesión / herramienta Task | `sessions_spawn`        |
+| Lectura/escritura de archivos     | `read` / `write`        |
+| Obtención web                     | `web_fetch`             |
 
 Si tu lista permitida de herramientas bloquea estas herramientas, los programas de OpenProse fallarán. Ver [Configuración de Habilidades](/es-ES/tools/skills-config).
 

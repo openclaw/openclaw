@@ -213,16 +213,16 @@ Si los indicadores de escritura se quedan "atascados":
 OpenClaw proporciona APIs programáticas para presencia:
 
 ```typescript
-import { PresenceManager } from 'openclaw'
+import { PresenceManager } from "openclaw";
 
 // Establecer estado
-await presence.setStatus('online')
+await presence.setStatus("online");
 
 // Mostrar indicador de escritura
-await presence.showTyping(channelId)
+await presence.showTyping(channelId);
 
 // Establecer mensaje de estado personalizado
-await presence.setStatusMessage('Trabajando en actualizaciones')
+await presence.setStatusMessage("Trabajando en actualizaciones");
 ```
 
 Consulta la [Referencia API](/es-ES/api/presence) para documentación completa.

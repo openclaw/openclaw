@@ -25,9 +25,9 @@ La compactación resuelve estos problemas resumiendo selectivamente partes de la
 OpenClaw monitorea el tamaño de la sesión. Cuando se alcanza un umbral:
 
 ```typescript
-const threshold = config.session.compactionThreshold // Por defecto: 32000 tokens
+const threshold = config.session.compactionThreshold; // Por defecto: 32000 tokens
 if (session.totalTokens > threshold) {
-  await compact(session)
+  await compact(session);
 }
 ```
 
@@ -113,11 +113,13 @@ openclaw config set session.compactionStrategy summary
 ```
 
 **Ventajas**:
+
 - Preserva la esencia de las conversaciones
 - Bueno para contexto a largo plazo
 - Flexible y adaptable
 
 **Desventajas**:
+
 - Puede perder detalles específicos
 - Requiere una llamada de modelo adicional
 
@@ -130,10 +132,12 @@ openclaw config set session.compactionStrategy truncate
 ```
 
 **Ventajas**:
+
 - Rápido y simple
 - Sin costo adicional
 
 **Desventajas**:
+
 - Pérdida completa de contexto antiguo
 - Puede confundir al agente
 
@@ -146,10 +150,12 @@ openclaw config set session.compactionStrategy prioritize
 ```
 
 **Ventajas**:
+
 - Preserva mensajes críticos
 - Balance entre resumen y truncamiento
 
 **Desventajas**:
+
 - Requiere lógica para determinar importancia
 - Puede aún perder contexto útil
 
@@ -173,7 +179,7 @@ openclaw session pin <session-id> <message-id>
 O programáticamente:
 
 ```typescript
-await session.pinMessage(messageId)
+await session.pinMessage(messageId);
 ```
 
 ## Monitoreo de compactación
@@ -185,6 +191,7 @@ openclaw session show <session-id> --compactions
 ```
 
 Salida:
+
 ```
 Compaction History:
 - 2024-02-15 10:30: Compacted 50 messages → 1 summary (45,000 → 12,000 tokens)

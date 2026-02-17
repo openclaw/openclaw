@@ -19,22 +19,22 @@ OpenClaw usa TypeBox para herramientas porque:
 Una herramienta simple que lee archivos:
 
 ```typescript
-import { Type } from '@sinclair/typebox'
-import { tool } from 'openclaw/plugin-sdk'
+import { Type } from "@sinclair/typebox";
+import { tool } from "openclaw/plugin-sdk";
 
 export const readFile = tool({
-  name: 'read_file',
-  description: 'Lee el contenido de un archivo',
+  name: "read_file",
+  description: "Lee el contenido de un archivo",
   input: Type.Object({
     path: Type.String({
-      description: 'Ruta al archivo a leer',
+      description: "Ruta al archivo a leer",
     }),
   }),
   async execute({ path }) {
     // path es inferido como string
-    return await fs.readFile(path, 'utf-8')
+    return await fs.readFile(path, "utf-8");
   },
-})
+});
 ```
 
 TypeBox genera:
@@ -48,24 +48,24 @@ TypeBox genera:
 ### Primitivos
 
 ```typescript
-Type.String()        // string
-Type.Number()        // number
-Type.Integer()       // entero
-Type.Boolean()       // boolean
-Type.Null()          // null
+Type.String(); // string
+Type.Number(); // number
+Type.Integer(); // entero
+Type.Boolean(); // boolean
+Type.Null(); // null
 ```
 
 ### Arrays
 
 ```typescript
 // Array de strings
-Type.Array(Type.String())
+Type.Array(Type.String());
 
 // Array con límites de longitud
 Type.Array(Type.String(), {
   minItems: 1,
   maxItems: 10,
-})
+});
 ```
 
 ### Objetos
@@ -75,27 +75,23 @@ Type.Array(Type.String(), {
 Type.Object({
   name: Type.String(),
   age: Type.Number(),
-})
+});
 
 // Propiedades opcionales
 Type.Object({
   name: Type.String(),
   nickname: Type.Optional(Type.String()),
-})
+});
 ```
 
 ### Unions
 
 ```typescript
 // String o número
-Type.Union([Type.String(), Type.Number()])
+Type.Union([Type.String(), Type.Number()]);
 
 // Literal string union (enum)
-Type.Union([
-  Type.Literal('red'),
-  Type.Literal('green'),
-  Type.Literal('blue'),
-])
+Type.Union([Type.Literal("red"), Type.Literal("green"), Type.Literal("blue")]);
 ```
 
 ### Enums
@@ -103,16 +99,12 @@ Type.Union([
 Para enum-like strings, usa union de literales:
 
 ```typescript
-const Color = Type.Union([
-  Type.Literal('red'),
-  Type.Literal('green'),
-  Type.Literal('blue'),
-])
+const Color = Type.Union([Type.Literal("red"), Type.Literal("green"), Type.Literal("blue")]);
 
 // En una herramienta
 Type.Object({
   color: Color,
-})
+});
 ```
 
 ## Descripciones
@@ -122,13 +114,15 @@ Añade descripciones para ayudar al LLM a entender parámetros:
 ```typescript
 Type.Object({
   path: Type.String({
-    description: 'Ruta al archivo a leer (relativa o absoluta)',
+    description: "Ruta al archivo a leer (relativa o absoluta)",
   }),
-  encoding: Type.Optional(Type.String({
-    description: 'Codificación del archivo (predeterminado: utf-8)',
-    default: 'utf-8',
-  })),
-})
+  encoding: Type.Optional(
+    Type.String({
+      description: "Codificación del archivo (predeterminado: utf-8)",
+      default: "utf-8",
+    }),
+  ),
+});
 ```
 
 Las descripciones aparecen en el esquema JSON enviado al modelo.
@@ -140,15 +134,23 @@ TypeBox valida automáticamente entradas:
 ```typescript
 const schema = Type.Object({
   count: Type.Integer({ minimum: 1, maximum: 100 }),
-})
+});
 
 // Pasa validación
-{ count: 50 }
+{
+  count: 50;
+}
 
 // Falla validación
-{ count: 0 }      // menor que el mínimo
-{ count: 3.5 }    // no es un entero
-{ count: "50" }   // tipo incorrecto
+{
+  count: 0;
+} // menor que el mínimo
+{
+  count: 3.5;
+} // no es un entero
+{
+  count: "50";
+} // tipo incorrecto
 ```
 
 Si la validación falla, el agente recibe un error y puede corregir la entrada.
@@ -160,13 +162,17 @@ Especifica valores predeterminados para parámetros opcionales:
 ```typescript
 Type.Object({
   path: Type.String(),
-  encoding: Type.Optional(Type.String({
-    default: 'utf-8',
-  })),
-  maxSize: Type.Optional(Type.Integer({
-    default: 1048576, // 1MB
-  })),
-})
+  encoding: Type.Optional(
+    Type.String({
+      default: "utf-8",
+    }),
+  ),
+  maxSize: Type.Optional(
+    Type.Integer({
+      default: 1048576, // 1MB
+    }),
+  ),
+});
 ```
 
 Si el modelo omite un parámetro, se usa el valor predeterminado.
@@ -182,13 +188,10 @@ Type.Object({
     email: Type.String(),
   }),
   settings: Type.Object({
-    theme: Type.Union([
-      Type.Literal('light'),
-      Type.Literal('dark'),
-    ]),
+    theme: Type.Union([Type.Literal("light"), Type.Literal("dark")]),
     notifications: Type.Boolean(),
   }),
-})
+});
 ```
 
 ### Arrays de Objetos
@@ -198,8 +201,8 @@ Type.Array(
   Type.Object({
     id: Type.String(),
     name: Type.String(),
-  })
-)
+  }),
+);
 ```
 
 ### Propiedades Adicionales
@@ -211,8 +214,8 @@ Type.Object(
   {
     name: Type.String(),
   },
-  { additionalProperties: true }
-)
+  { additionalProperties: true },
+);
 ```
 
 ### Patrones
@@ -221,9 +224,9 @@ Valida strings contra regex:
 
 ```typescript
 Type.String({
-  pattern: '^[a-z0-9-]+$',
-  description: 'Slug (solo minúsculas, números, guiones)',
-})
+  pattern: "^[a-z0-9-]+$",
+  description: "Slug (solo minúsculas, números, guiones)",
+});
 ```
 
 ## Inferencia de Tipos
@@ -234,9 +237,9 @@ TypeBox infiere automáticamente tipos TypeScript:
 const schema = Type.Object({
   name: Type.String(),
   age: Type.Number(),
-})
+});
 
-type Person = Static<typeof schema>
+type Person = Static<typeof schema>;
 // Inferido: { name: string; age: number }
 ```
 
@@ -252,7 +255,7 @@ export const myTool = tool({
     // query: string
     // limit: number | undefined
   },
-})
+});
 ```
 
 ## Reutilización de Esquemas
@@ -264,7 +267,7 @@ Define esquemas reutilizables:
 const FileOptions = Type.Object({
   encoding: Type.Optional(Type.String()),
   maxSize: Type.Optional(Type.Integer()),
-})
+});
 
 // Usa en múltiples herramientas
 export const readFile = tool({
@@ -273,7 +276,7 @@ export const readFile = tool({
     options: Type.Optional(FileOptions),
   }),
   // ...
-})
+});
 
 export const writeFile = tool({
   input: Type.Object({
@@ -282,7 +285,7 @@ export const writeFile = tool({
     options: Type.Optional(FileOptions),
   }),
   // ...
-})
+});
 ```
 
 ## Esquemas Condicionales
@@ -291,13 +294,10 @@ TypeBox soporta lógica condicional:
 
 ```typescript
 Type.Object({
-  type: Type.Union([
-    Type.Literal('file'),
-    Type.Literal('directory'),
-  ]),
+  type: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
   // Si type=file, path requerido
   path: Type.String(),
-})
+});
 ```
 
 Para lógica más compleja, usa validación personalizada en `execute()`.
@@ -308,12 +308,12 @@ Personaliza mensajes de error de validación:
 
 ```typescript
 Type.String({
-  description: 'Dirección de correo electrónico',
-  pattern: '^[^@]+@[^@]+\\.[^@]+$',
+  description: "Dirección de correo electrónico",
+  pattern: "^[^@]+@[^@]+\\.[^@]+$",
   errorMessage: {
-    pattern: 'Debe ser una dirección de correo electrónico válida',
+    pattern: "Debe ser una dirección de correo electrónico válida",
   },
-})
+});
 ```
 
 El modelo ve estos errores y puede corregir la entrada.
@@ -362,46 +362,46 @@ TypeBox compila esquemas a validadores JavaScript rápidos:
 
 ```typescript
 const Status = Type.Union([
-  Type.Literal('pending'),
-  Type.Literal('active'),
-  Type.Literal('complete'),
-])
+  Type.Literal("pending"),
+  Type.Literal("active"),
+  Type.Literal("complete"),
+]);
 ```
 
 ### Ruta de Archivo
 
 ```typescript
 Type.String({
-  description: 'Ruta al archivo (relativa o absoluta)',
-  pattern: '^[^\\0]+$', // sin caracteres null
-})
+  description: "Ruta al archivo (relativa o absoluta)",
+  pattern: "^[^\\0]+$", // sin caracteres null
+});
 ```
 
 ### Dirección de Email
 
 ```typescript
 Type.String({
-  description: 'Dirección de correo electrónico',
-  pattern: '^[^@]+@[^@]+\\.[^@]+$',
-})
+  description: "Dirección de correo electrónico",
+  pattern: "^[^@]+@[^@]+\\.[^@]+$",
+});
 ```
 
 ### URL
 
 ```typescript
 Type.String({
-  description: 'URL (http o https)',
-  pattern: '^https?://',
-})
+  description: "URL (http o https)",
+  pattern: "^https?://",
+});
 ```
 
 ### Fecha ISO
 
 ```typescript
 Type.String({
-  description: 'Fecha en formato ISO 8601 (YYYY-MM-DD)',
-  pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-})
+  description: "Fecha en formato ISO 8601 (YYYY-MM-DD)",
+  pattern: "^\\d{4}-\\d{2}-\\d{2}$",
+});
 ```
 
 ### Entero Positivo
@@ -409,8 +409,8 @@ Type.String({
 ```typescript
 Type.Integer({
   minimum: 1,
-  description: 'Entero positivo',
-})
+  description: "Entero positivo",
+});
 ```
 
 ### Array No Vacío
@@ -418,8 +418,8 @@ Type.Integer({
 ```typescript
 Type.Array(Type.String(), {
   minItems: 1,
-  description: 'Array de strings (al menos uno)',
-})
+  description: "Array de strings (al menos uno)",
+});
 ```
 
 ## Limitaciones
@@ -443,14 +443,14 @@ export const myTool = tool({
   }),
   async execute({ startDate, endDate }) {
     // Validación personalizada
-    const start = new Date(startDate)
-    const end = new Date(endDate)
+    const start = new Date(startDate);
+    const end = new Date(endDate);
     if (end < start) {
-      throw new Error('endDate debe ser después de startDate')
+      throw new Error("endDate debe ser después de startDate");
     }
     // ...
   },
-})
+});
 ```
 
 ## Documentación de TypeBox

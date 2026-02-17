@@ -131,13 +131,13 @@ openclaw config set channels.irc.commandPrefix "!"
 
 ### Servidores Populares de IRC
 
-| Red           | Servidor             | Puerto SSL | Notas                    |
-| ------------- | -------------------- | ---------- | ------------------------ |
-| Libera.Chat   | irc.libera.chat      | 6697       | Ex-Freenode, FOSS        |
-| OFTC          | irc.oftc.net         | 6697       | Comunidad de software libre |
-| EFnet         | irc.efnet.org        | 6697       | Red original de IRC      |
-| DALnet        | irc.dal.net          | 6697       | Red de chat general      |
-| QuakeNet      | irc.quakenet.org     | 6697       | Comunidad de juegos      |
+| Red         | Servidor         | Puerto SSL | Notas                       |
+| ----------- | ---------------- | ---------- | --------------------------- |
+| Libera.Chat | irc.libera.chat  | 6697       | Ex-Freenode, FOSS           |
+| OFTC        | irc.oftc.net     | 6697       | Comunidad de software libre |
+| EFnet       | irc.efnet.org    | 6697       | Red original de IRC         |
+| DALnet      | irc.dal.net      | 6697       | Red de chat general         |
+| QuakeNet    | irc.quakenet.org | 6697       | Comunidad de juegos         |
 
 ## Uso
 
@@ -242,16 +242,16 @@ Gestiona canales mediante comandos:
 
 ```typescript
 // Unirse a un canal
-await ircBot.join('#nuevo-canal');
+await ircBot.join("#nuevo-canal");
 
 // Salir de un canal
-await ircBot.part('#canal', 'Adiós!');
+await ircBot.part("#canal", "Adiós!");
 
 // Cambiar tópico
-await ircBot.setTopic('#canal', 'Nuevo tópico');
+await ircBot.setTopic("#canal", "Nuevo tópico");
 
 // Patear usuario (requiere op)
-await ircBot.kick('#canal', 'usuario', 'Razón');
+await ircBot.kick("#canal", "usuario", "Razón");
 ```
 
 ### Modos de Usuario
@@ -271,17 +271,20 @@ Solicita modos desde NickServ u operadores de canal.
 Si el bot no se conecta:
 
 1. Verifica el servidor y puerto:
+
    ```bash
    openclaw config get channels.irc.server
    openclaw config get channels.irc.port
    ```
 
 2. Prueba la conectividad:
+
    ```bash
    telnet irc.libera.chat 6667
    ```
 
 3. Verifica configuración SSL:
+
    ```bash
    openclaw config get channels.irc.ssl
    ```
@@ -296,6 +299,7 @@ Si el bot no se conecta:
 Si tu nick ya está en uso:
 
 1. Configura un nick alternativo:
+
    ```bash
    openclaw config set channels.irc.nick "OpenClawBot2"
    ```
@@ -312,6 +316,7 @@ Si el bot no puede unirse a canales:
 1. Verifica que el canal exista y sea público
 
 2. Comprueba si necesitas estar registrado:
+
    ```bash
    openclaw config set channels.irc.password "tu_contraseña"
    ```
@@ -328,6 +333,7 @@ Si el bot no puede unirse a canales:
 Si la autenticación falla:
 
 1. Verifica credenciales SASL:
+
    ```bash
    openclaw config get channels.irc.saslUsername
    ```
@@ -345,19 +351,19 @@ Si la autenticación falla:
 ### Bot Básico de IRC
 
 ```typescript
-import { IRCChannel } from '@openclaw/irc';
+import { IRCChannel } from "@openclaw/irc";
 
 const irc = new IRCChannel({
-  server: 'irc.libera.chat',
-  nick: 'OpenClawBot',
-  channels: ['#openclaw'],
-  ssl: true
+  server: "irc.libera.chat",
+  nick: "OpenClawBot",
+  channels: ["#openclaw"],
+  ssl: true,
 });
 
 await irc.connect();
 
-irc.on('message', async (event) => {
-  if (event.message.startsWith('!hello')) {
+irc.on("message", async (event) => {
+  if (event.message.startsWith("!hello")) {
     await irc.say(event.target, `Hola ${event.nick}!`);
   }
 });
@@ -366,39 +372,39 @@ irc.on('message', async (event) => {
 ### Bot con Autenticación
 
 ```typescript
-import { IRCChannel } from '@openclaw/irc';
+import { IRCChannel } from "@openclaw/irc";
 
 const irc = new IRCChannel({
-  server: 'irc.libera.chat',
-  nick: 'OpenClawBot',
+  server: "irc.libera.chat",
+  nick: "OpenClawBot",
   password: process.env.IRC_PASSWORD, // Contraseña NickServ
-  channels: ['#openclaw'],
-  ssl: true
+  channels: ["#openclaw"],
+  ssl: true,
 });
 
 await irc.connect();
 
-irc.on('registered', () => {
-  console.log('Conectado y autenticado!');
+irc.on("registered", () => {
+  console.log("Conectado y autenticado!");
 });
 ```
 
 ### Bot con Comandos
 
 ```typescript
-import { IRCChannel } from '@openclaw/irc';
+import { IRCChannel } from "@openclaw/irc";
 
 const irc = new IRCChannel({
-  server: 'irc.libera.chat',
-  nick: 'OpenClawBot',
-  channels: ['#openclaw'],
+  server: "irc.libera.chat",
+  nick: "OpenClawBot",
+  channels: ["#openclaw"],
   ssl: true,
-  commandPrefix: '!'
+  commandPrefix: "!",
 });
 
 await irc.connect();
 
-irc.command('info', async (ctx) => {
+irc.command("info", async (ctx) => {
   await ctx.reply(`
 Canal: ${ctx.channel}
 Nick: ${ctx.nick}
@@ -406,9 +412,9 @@ Servidor: ${irc.server}
   `);
 });
 
-irc.command('join', async (ctx, args) => {
+irc.command("join", async (ctx, args) => {
   const channel = args[0];
-  if (channel && channel.startsWith('#')) {
+  if (channel && channel.startsWith("#")) {
     await irc.join(channel);
     await ctx.reply(`Uniéndome a ${channel}...`);
   }

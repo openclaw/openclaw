@@ -22,10 +22,10 @@ El sistema de detección de bucles:
 
 ```typescript
 // Bucle detectado: la misma herramienta llamada repetidamente
-await tool.execute({ action: 'fetch' });
-await tool.execute({ action: 'fetch' });
-await tool.execute({ action: 'fetch' });
-await tool.execute({ action: 'fetch' });
+await tool.execute({ action: "fetch" });
+await tool.execute({ action: "fetch" });
+await tool.execute({ action: "fetch" });
+await tool.execute({ action: "fetch" });
 // → Bucle detectado, ejecución detenida
 ```
 
@@ -76,12 +76,12 @@ openclaw config set loopDetection.autoStop true
 
 ## Parámetros de Configuración
 
-| Parámetro | Tipo | Predeterminado | Descripción |
-|-----------|------|----------------|-------------|
-| `enabled` | boolean | true | Habilitar/deshabilitar detección de bucles |
-| `threshold` | number | 5 | Número de repeticiones antes de detectar un bucle |
-| `windowSize` | number | 10 | Número de llamadas de herramientas a analizar |
-| `autoStop` | boolean | true | Detener automáticamente la ejecución cuando se detecta un bucle |
+| Parámetro    | Tipo    | Predeterminado | Descripción                                                     |
+| ------------ | ------- | -------------- | --------------------------------------------------------------- |
+| `enabled`    | boolean | true           | Habilitar/deshabilitar detección de bucles                      |
+| `threshold`  | number  | 5              | Número de repeticiones antes de detectar un bucle               |
+| `windowSize` | number  | 10             | Número de llamadas de herramientas a analizar                   |
+| `autoStop`   | boolean | true           | Detener automáticamente la ejecución cuando se detecta un bucle |
 
 ## Manejo de Bucles
 
@@ -101,8 +101,8 @@ Para operaciones que necesitan legítimamente repetirse:
 ```typescript
 // Marcar operación como no-bucle
 await tool.execute({
-  action: 'poll',
-  loopDetection: { ignore: true }
+  action: "poll",
+  loopDetection: { ignore: true },
 });
 ```
 
@@ -112,9 +112,9 @@ await tool.execute({
 // Procesamiento por lotes no se considera un bucle
 for (const item of items) {
   await tool.execute({
-    action: 'process',
+    action: "process",
     data: item,
-    loopDetection: { batch: true }
+    loopDetection: { batch: true },
   });
 }
 ```
@@ -200,12 +200,12 @@ openclaw config set loopDetection.patterns '[
 
 ```typescript
 // Integrar con sistema de monitoreo
-openclaw.on('loopDetected', (event) => {
+openclaw.on("loopDetected", (event) => {
   monitoring.alert({
-    type: 'loop_detected',
+    type: "loop_detected",
     pattern: event.pattern,
     duration: event.duration,
-    context: event.context
+    context: event.context,
   });
 });
 ```

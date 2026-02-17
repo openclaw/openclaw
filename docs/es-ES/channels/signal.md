@@ -45,11 +45,11 @@ Configuración mínima:
 
 Referencia de campos:
 
-| Campo       | Descripción                                           |
-| ----------- | ----------------------------------------------------- |
-| `account`   | Número del bot en formato E.164 (`+15551234567`)      |
-| `cliPath`   | Ruta a `signal-cli` (`signal-cli` si está en `PATH`)  |
-| `dmPolicy`  | Política de acceso MD (`pairing` recomendada)         |
+| Campo       | Descripción                                                  |
+| ----------- | ------------------------------------------------------------ |
+| `account`   | Número del bot en formato E.164 (`+15551234567`)             |
+| `cliPath`   | Ruta a `signal-cli` (`signal-cli` si está en `PATH`)         |
+| `dmPolicy`  | Política de acceso MD (`pairing` recomendada)                |
 | `allowFrom` | Números de teléfono o valores `uuid:<id>` permitidos para MD |
 
 ## Qué es

@@ -37,15 +37,19 @@ El archivo `SKILL.md` contiene las instrucciones y documentación de la habilida
 # Mi Habilidad Personalizada
 
 ## Descripción
+
 [Breve descripción de lo que hace tu habilidad]
 
 ## Cuándo Usar
+
 [Describe cuándo debe activarse esta habilidad]
 
 ## Instrucciones
+
 [Instrucciones detalladas paso a paso para el agente]
 
 ## Ejemplos
+
 [Ejemplos de uso de la habilidad]
 ```
 
@@ -67,12 +71,15 @@ El archivo `SKILL.md` contiene las instrucciones y documentación de la habilida
 # Habilidad de Revisión de Código
 
 ## Descripción
+
 Realiza revisiones exhaustivas de código verificando mejores prácticas, problemas de seguridad y calidad del código.
 
 ## Cuándo Usar
+
 Activar cuando se pida revisar código, o cuando se envíe código para revisión.
 
 ## Instrucciones
+
 1. Leer todo el código cuidadosamente
 2. Verificar lo siguiente:
    - Seguridad de tipos (TypeScript)
@@ -84,6 +91,7 @@ Activar cuando se pida revisar código, o cuando se envíe código para revisió
 4. Sugerir mejoras específicas con ejemplos
 
 ## Ejemplos
+
 - "Por favor revisa este componente React"
 - "Verifica este módulo de API en busca de problemas"
 ```

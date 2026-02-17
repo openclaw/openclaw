@@ -59,15 +59,15 @@ openclaw hub outdated
 
 Las herramientas de ClawHub están organizadas en categorías:
 
-| Categoría | Descripción | Ejemplos |
-|-----------|-------------|----------|
-| **Browser** | Automatización del navegador | playwright-browser, puppeteer-tools |
-| **Web Scraping** | Extracción de datos web | firecrawl-scraper, beautiful-soup |
-| **APIs** | Integraciones de APIs | github-api, slack-api |
-| **Data Processing** | Procesamiento de datos | csv-parser, json-tools |
-| **AI/ML** | Herramientas de IA/ML | openai-tools, huggingface |
-| **DevOps** | Herramientas de DevOps | docker-tools, kubernetes |
-| **Communication** | Mensajería y notificaciones | email-sender, sms-tools |
+| Categoría           | Descripción                  | Ejemplos                            |
+| ------------------- | ---------------------------- | ----------------------------------- |
+| **Browser**         | Automatización del navegador | playwright-browser, puppeteer-tools |
+| **Web Scraping**    | Extracción de datos web      | firecrawl-scraper, beautiful-soup   |
+| **APIs**            | Integraciones de APIs        | github-api, slack-api               |
+| **Data Processing** | Procesamiento de datos       | csv-parser, json-tools              |
+| **AI/ML**           | Herramientas de IA/ML        | openai-tools, huggingface           |
+| **DevOps**          | Herramientas de DevOps       | docker-tools, kubernetes            |
+| **Communication**   | Mensajería y notificaciones  | email-sender, sms-tools             |
 
 ### Herramientas Populares
 
@@ -80,6 +80,7 @@ openclaw hub install playwright-browser
 ```
 
 **Características**:
+
 - Control de múltiples navegadores (Chrome, Firefox, Safari)
 - Modo headless y modo con cabeza
 - Capturas de pantalla y grabación de video
@@ -94,6 +95,7 @@ openclaw hub install firecrawl-scraper
 ```
 
 **Características**:
+
 - Scraping inteligente de páginas
 - Extracción automática de esquema
 - Manejo de JavaScript
@@ -108,6 +110,7 @@ openclaw hub install github-api
 ```
 
 **Características**:
+
 - Gestión de repositorios
 - Gestión de problemas y PRs
 - Integración de GitHub Actions
@@ -128,45 +131,52 @@ Para publicar una herramienta en ClawHub, debe:
 ### Proceso de Publicación
 
 1. **Crear tu herramienta**:
+
    ```bash
    openclaw create-tool mi-herramienta-increible
    cd mi-herramienta-increible
    ```
 
 2. **Desarrollar y probar**:
+
    ```typescript
    // src/index.ts
    export default {
-     name: 'mi-herramienta-increible',
-     description: 'Hace algo increíble',
-     version: '1.0.0',
-     
+     name: "mi-herramienta-increible",
+     description: "Hace algo increíble",
+     version: "1.0.0",
+
      async execute(params) {
        // Tu lógica de herramienta aquí
        return { success: true };
-     }
+     },
    };
    ```
 
 3. **Agregar documentación**:
+
    ```markdown
    # Mi Herramienta Increíble
-   
+
    ## Descripción
+
    Esta herramienta hace algo increíble...
-   
+
    ## Uso
+
    ...
-   
+
    ## Ejemplos
+
    ...
    ```
 
 4. **Publicar en ClawHub**:
+
    ```bash
    # Iniciar sesión en ClawHub
    openclaw hub login
-   
+
    # Publicar tu herramienta
    openclaw hub publish
    ```
@@ -196,20 +206,25 @@ Proporciona documentación clara y completa:
 # Tu Herramienta
 
 ## Instalación
+
 \`\`\`bash
 openclaw hub install tu-herramienta
 \`\`\`
 
 ## Inicio Rápido
+
 [Ejemplo mínimo funcional]
 
 ## Referencia de la API
+
 [Parámetros detallados y valores de retorno]
 
 ## Ejemplos
+
 [Casos de uso del mundo real]
 
 ## Solución de Problemas
+
 [Problemas comunes y soluciones]
 ```
 
@@ -219,19 +234,17 @@ Asegura una cobertura de pruebas completa:
 
 ```typescript
 // tests/index.test.ts
-import { describe, it, expect } from 'vitest';
-import myTool from '../src';
+import { describe, it, expect } from "vitest";
+import myTool from "../src";
 
-describe('Mi Herramienta', () => {
-  it('debería hacer algo increíble', async () => {
-    const result = await myTool.execute({ input: 'test' });
+describe("Mi Herramienta", () => {
+  it("debería hacer algo increíble", async () => {
+    const result = await myTool.execute({ input: "test" });
     expect(result.success).toBe(true);
   });
-  
-  it('debería manejar errores correctamente', async () => {
-    await expect(
-      myTool.execute({ invalid: 'params' })
-    ).rejects.toThrow();
+
+  it("debería manejar errores correctamente", async () => {
+    await expect(myTool.execute({ invalid: "params" })).rejects.toThrow();
   });
 });
 ```
@@ -247,17 +260,17 @@ Sigue las mejores prácticas de seguridad:
 
 ```typescript
 // Validación de entrada
-import { z } from 'zod';
+import { z } from "zod";
 
 const paramsSchema = z.object({
   url: z.string().url(),
-  apiKey: z.string().min(1)
+  apiKey: z.string().min(1),
 });
 
 export async function execute(params: unknown) {
   // Validar entradas
   const validated = paramsSchema.parse(params);
-  
+
   // Usar entradas validadas
   return await processData(validated);
 }

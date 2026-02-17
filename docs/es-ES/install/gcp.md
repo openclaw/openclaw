@@ -114,9 +114,9 @@ gcloud services enable compute.googleapis.com
 
 **Tipos de máquina:**
 
-| Tipo     | Especificaciones         | Costo                  | Notas                     |
-| -------- | ------------------------ | ---------------------- | ------------------------- |
-| e2-small | 2 vCPU, 2GB RAM          | ~$12/mes               | Recomendado               |
+| Tipo     | Especificaciones             | Costo                  | Notas                      |
+| -------- | ---------------------------- | ---------------------- | -------------------------- |
+| e2-small | 2 vCPU, 2GB RAM              | ~$12/mes               | Recomendado                |
 | e2-micro | 2 vCPU (compartido), 1GB RAM | Elegible tier gratuito | Puede tener OOM bajo carga |
 
 **CLI:**
@@ -403,18 +403,18 @@ Pega tu token del gateway.
 OpenClaw se ejecuta en Docker, pero Docker no es la fuente de verdad.
 Todo el estado de larga duración debe sobrevivir a reinicios, reconstrucciones y reinicios del sistema.
 
-| Componente               | Ubicación                         | Mecanismo de persistencia | Notas                                |
-| ------------------------ | --------------------------------- | ------------------------- | ------------------------------------ |
-| Configuración del Gateway | `/home/node/.openclaw/`          | Montaje de volumen host   | Incluye `openclaw.json`, tokens      |
-| Perfiles de autenticación de modelo | `/home/node/.openclaw/` | Montaje de volumen host   | Tokens OAuth, claves API             |
-| Configuraciones de skills | `/home/node/.openclaw/skills/`   | Montaje de volumen host   | Estado a nivel de skill              |
-| Workspace del agente     | `/home/node/.openclaw/workspace/` | Montaje de volumen host   | Código y artefactos del agente       |
-| Sesión de WhatsApp       | `/home/node/.openclaw/`          | Montaje de volumen host   | Preserva login QR                    |
-| Keyring de Gmail         | `/home/node/.openclaw/`          | Montaje de volumen host + contraseña | Requiere `GOG_KEYRING_PASSWORD` |
-| Binarios externos        | `/usr/local/bin/`                | Imagen Docker             | Deben integrarse en tiempo de construcción |
-| Runtime de Node          | Sistema de archivos del contenedor | Imagen Docker            | Reconstruido cada build de imagen    |
-| Paquetes del OS          | Sistema de archivos del contenedor | Imagen Docker            | No instalar en runtime               |
-| Contenedor Docker        | Efímero                          | Reiniciable               | Seguro de destruir                   |
+| Componente                          | Ubicación                          | Mecanismo de persistencia            | Notas                                      |
+| ----------------------------------- | ---------------------------------- | ------------------------------------ | ------------------------------------------ |
+| Configuración del Gateway           | `/home/node/.openclaw/`            | Montaje de volumen host              | Incluye `openclaw.json`, tokens            |
+| Perfiles de autenticación de modelo | `/home/node/.openclaw/`            | Montaje de volumen host              | Tokens OAuth, claves API                   |
+| Configuraciones de skills           | `/home/node/.openclaw/skills/`     | Montaje de volumen host              | Estado a nivel de skill                    |
+| Workspace del agente                | `/home/node/.openclaw/workspace/`  | Montaje de volumen host              | Código y artefactos del agente             |
+| Sesión de WhatsApp                  | `/home/node/.openclaw/`            | Montaje de volumen host              | Preserva login QR                          |
+| Keyring de Gmail                    | `/home/node/.openclaw/`            | Montaje de volumen host + contraseña | Requiere `GOG_KEYRING_PASSWORD`            |
+| Binarios externos                   | `/usr/local/bin/`                  | Imagen Docker                        | Deben integrarse en tiempo de construcción |
+| Runtime de Node                     | Sistema de archivos del contenedor | Imagen Docker                        | Reconstruido cada build de imagen          |
+| Paquetes del OS                     | Sistema de archivos del contenedor | Imagen Docker                        | No instalar en runtime                     |
+| Contenedor Docker                   | Efímero                            | Reiniciable                          | Seguro de destruir                         |
 
 ---
 

@@ -336,19 +336,19 @@ Si los mensajes se procesan fuera de orden:
 OpenClaw proporciona APIs programáticas para gestión de cola:
 
 ```typescript
-import { QueueManager } from 'openclaw'
+import { QueueManager } from "openclaw";
 
 // Obtener tamaño de cola
-const size = await queue.size()
+const size = await queue.size();
 
 // Añadir mensaje a cola
-await queue.enqueue(message, { priority: 'high' })
+await queue.enqueue(message, { priority: "high" });
 
 // Procesar siguiente mensaje
-const message = await queue.dequeue()
+const message = await queue.dequeue();
 
 // Limpiar cola
-await queue.clear()
+await queue.clear();
 ```
 
 Consulta la [Referencia API](/es-ES/api/queue) para documentación completa.

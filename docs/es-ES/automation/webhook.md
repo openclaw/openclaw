@@ -29,14 +29,14 @@ automation:
   webhook:
     # URL de tu servidor donde se enviarán los webhooks
     url: https://tu-dominio.com/webhooks/openclaw
-    
+
     # Secreto opcional para verificar la autenticidad del webhook
     # Envía este valor en el encabezado X-OpenClaw-Signature
     secret: tu-secreto-seguro-aqui
-    
+
     # Opcional: tiempo de espera para solicitudes de webhook (predeterminado: 10s)
     timeout: 10s
-    
+
     # Opcional: número de reintentos en caso de fallo (predeterminado: 3)
     retries: 3
 ```
@@ -53,41 +53,41 @@ Tu servidor debe:
 Ejemplo de un endpoint de webhook simple en Node.js:
 
 ```javascript
-const express = require('express');
-const crypto = require('crypto');
+const express = require("express");
+const crypto = require("crypto");
 const app = express();
 
 app.use(express.json());
 
-const WEBHOOK_SECRET = 'tu-secreto-seguro-aqui';
+const WEBHOOK_SECRET = "tu-secreto-seguro-aqui";
 
-app.post('/webhooks/openclaw', (req, res) => {
+app.post("/webhooks/openclaw", (req, res) => {
   // Verificar firma si se configuró un secreto
   if (WEBHOOK_SECRET) {
-    const signature = req.headers['x-openclaw-signature'];
+    const signature = req.headers["x-openclaw-signature"];
     const expectedSignature = crypto
-      .createHmac('sha256', WEBHOOK_SECRET)
+      .createHmac("sha256", WEBHOOK_SECRET)
       .update(JSON.stringify(req.body))
-      .digest('hex');
-    
+      .digest("hex");
+
     if (signature !== expectedSignature) {
-      return res.status(401).send('Firma inválida');
+      return res.status(401).send("Firma inválida");
     }
   }
-  
+
   // Procesar el evento del webhook
   const { event, data } = req.body;
   console.log(`Evento recibido: ${event}`, data);
-  
+
   // Responder rápidamente
-  res.status(200).send('OK');
-  
+  res.status(200).send("OK");
+
   // Procesar el webhook de forma asíncrona
   processWebhookAsync(event, data);
 });
 
 app.listen(3000, () => {
-  console.log('Servidor de webhooks escuchando en el puerto 3000');
+  console.log("Servidor de webhooks escuchando en el puerto 3000");
 });
 ```
 
@@ -232,14 +232,14 @@ Si configuras un `secret`, OpenClaw firma cada payload del webhook usando HMAC-S
 #### Node.js
 
 ```javascript
-const crypto = require('crypto');
+const crypto = require("crypto");
 
 function verifyWebhookSignature(payload, signature, secret) {
   const expectedSignature = crypto
-    .createHmac('sha256', secret)
+    .createHmac("sha256", secret)
     .update(JSON.stringify(payload))
-    .digest('hex');
-  
+    .digest("hex");
+
   return signature === expectedSignature;
 }
 ```
@@ -257,7 +257,7 @@ def verify_webhook_signature(payload, signature, secret):
         json.dumps(payload).encode('utf-8'),
         hashlib.sha256
     ).hexdigest()
-    
+
     return signature == expected_signature
 ```
 
@@ -275,11 +275,11 @@ import (
 
 func verifyWebhookSignature(payload interface{}, signature, secret string) bool {
     payloadBytes, _ := json.Marshal(payload)
-    
+
     h := hmac.New(sha256.New, []byte(secret))
     h.Write(payloadBytes)
     expectedSignature := hex.EncodeToString(h.Sum(nil))
-    
+
     return signature == expectedSignature
 }
 ```
@@ -309,13 +309,13 @@ Los webhooks fallidos se registran en los registros del Gateway:
 Reconoce el webhook de inmediato con un `200 OK` y procesa el payload de forma asíncrona:
 
 ```javascript
-app.post('/webhooks/openclaw', async (req, res) => {
+app.post("/webhooks/openclaw", async (req, res) => {
   // Reconoce inmediatamente
-  res.status(200).send('OK');
-  
+  res.status(200).send("OK");
+
   // Procesa de forma asíncrona
-  processWebhookInBackground(req.body).catch(err => {
-    console.error('Error al procesar webhook:', err);
+  processWebhookInBackground(req.body).catch((err) => {
+    console.error("Error al procesar webhook:", err);
   });
 });
 ```
@@ -325,8 +325,8 @@ app.post('/webhooks/openclaw', async (req, res) => {
 Si configuras un secreto, siempre verifica la firma antes de procesar el payload:
 
 ```javascript
-if (!verifyWebhookSignature(req.body, req.headers['x-openclaw-signature'], SECRET)) {
-  return res.status(401).send('Firma inválida');
+if (!verifyWebhookSignature(req.body, req.headers["x-openclaw-signature"], SECRET)) {
+  return res.status(401).send("Firma inválida");
 }
 ```
 
@@ -339,12 +339,12 @@ const processedEvents = new Set();
 
 function processWebhook(event) {
   const eventId = event.data.message_id || `${event.event}-${event.timestamp}`;
-  
+
   if (processedEvents.has(eventId)) {
-    console.log('Evento duplicado ignorado:', eventId);
+    console.log("Evento duplicado ignorado:", eventId);
     return;
   }
-  
+
   processedEvents.add(eventId);
   // Procesar evento...
 }

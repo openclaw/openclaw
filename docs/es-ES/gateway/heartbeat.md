@@ -285,12 +285,12 @@ channels:
 
 ### Patrones comunes
 
-| Objetivo                                         | Configuración                                                                            |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Objetivo                                                           | Configuración                                                                            |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | Comportamiento predeterminado (OKs silenciosos, alertas activadas) | _(no se necesita configuración)_                                                         |
-| Completamente silencioso (sin mensajes, sin indicador) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| Solo indicador (sin mensajes)                   | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OKs solo en un canal                            | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| Completamente silencioso (sin mensajes, sin indicador)             | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
+| Solo indicador (sin mensajes)                                      | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| OKs solo en un canal                                               | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (opcional)
 

@@ -71,16 +71,16 @@ automation:
     pubsub:
       # Habilita notificaciones push de Gmail
       enabled: true
-      
+
       # ID del proyecto de Google Cloud
       project_id: tu-id-de-proyecto-gcp
-      
+
       # ID del tema de Pub/Sub (sin el prefijo projects/)
       topic_id: gmail-openclaw-notifications
-      
+
       # Opcional: puerto para el servidor de webhooks (predeterminado: 8080)
       webhook_port: 8080
-      
+
       # Opcional: ruta para el endpoint de webhook (predeterminado: /webhooks/gmail/pubsub)
       webhook_path: /webhooks/gmail/pubsub
 ```
@@ -94,6 +94,7 @@ openclaw gmail watch --email tu@email.com
 ```
 
 Este comando:
+
 - Registra tu dirección de correo electrónico con Gmail API para notificaciones push
 - Configura Gmail para publicar notificaciones en tu tema de Pub/Sub
 - La configuración del watch expira después de 7 días y debe renovarse
@@ -216,6 +217,7 @@ Ejecuta el Gateway en una red privada y usa Tailscale o una VPN para enrutar el 
 ### Las notificaciones push no llegan
 
 1. **Verifica el estado del watch:**
+
    ```bash
    openclaw gmail watch --email tu@email.com --status
    ```
@@ -228,6 +230,7 @@ Ejecuta el Gateway en una red privada y usa Tailscale o una VPN para enrutar el 
    - Verifica que el Gateway esté escuchando en el puerto configurado
 
 4. **Revisa los registros del Gateway:**
+
    ```bash
    tail -f ~/.openclaw/gateway.log
    ```
@@ -238,12 +241,14 @@ Ejecuta el Gateway en una red privada y usa Tailscale o una VPN para enrutar el 
 ### El watch expira demasiado rápido
 
 Los watches de Gmail expiran después de 7 días. Si se configuró correctamente:
+
 - Establece una tarea programada para renovar cada 6 días (ver más arriba)
 - Monitorea los registros del Gateway para advertencias sobre expiración de watch
 
 ### Error: "No se pudo verificar el token push"
 
 Si usas autenticación de Pub/Sub y ves este error:
+
 1. Verifica que la cuenta de servicio esté configurada correctamente
 2. Asegúrate de que OpenClaw tenga permisos para validar tokens JWT
 3. Revisa que el `project_id` en la configuración sea correcto
@@ -251,18 +256,19 @@ Si usas autenticación de Pub/Sub y ves este error:
 ### Los mensajes se procesan varias veces
 
 Pub/Sub garantiza entrega al menos una vez, por lo que es posible recibir notificaciones duplicadas:
+
 - OpenClaw deduplica automáticamente usando `historyId`
 - Si aún observas duplicados, revisa tu lógica de procesamiento de mensajes
 
 ## Sondeo vs. Push
 
-| Característica | Sondeo | Push (Pub/Sub) |
-|----------------|--------|----------------|
-| Latencia | 1-5 minutos | < 1 segundo |
-| Uso de API | Alto (sondeo constante) | Bajo (solo cuando llegan mensajes) |
-| Eficiencia | Menor | Mayor |
-| Complejidad de configuración | Baja | Media |
-| Costo | Cuota de API de Gmail | Cuota de API de Gmail + costo de Pub/Sub |
+| Característica               | Sondeo                  | Push (Pub/Sub)                           |
+| ---------------------------- | ----------------------- | ---------------------------------------- |
+| Latencia                     | 1-5 minutos             | < 1 segundo                              |
+| Uso de API                   | Alto (sondeo constante) | Bajo (solo cuando llegan mensajes)       |
+| Eficiencia                   | Menor                   | Mayor                                    |
+| Complejidad de configuración | Baja                    | Media                                    |
+| Costo                        | Cuota de API de Gmail   | Cuota de API de Gmail + costo de Pub/Sub |
 
 <Note>
 Google Cloud Pub/Sub ofrece [10 GB de datos gratis por mes](https://cloud.google.com/pubsub/pricing), lo cual es más que suficiente para la mayoría de los casos de uso de notificaciones de Gmail.

@@ -31,6 +31,7 @@ Un gateway remoto simple accesible desde cualquier lugar:
 ```
 
 **Notas clave:**
+
 - `mode: "remote"` permite conexiones de agentes remotos
 - `bind: "0.0.0.0"` escucha en todas las interfaces de red
 - `allowedAgents` restringe qué agentes pueden conectarse
@@ -68,6 +69,7 @@ Un gateway local que ejecuta tanto Telegram como Discord:
 ```
 
 **Notas clave:**
+
 - `mode: "local"` significa que el agente se ejecuta en la misma máquina
 - `bind: "127.0.0.1"` restringe las conexiones a localhost solamente
 - Cada canal tiene su propia lista `allowedUserIds`
@@ -102,6 +104,7 @@ Usando un modelo local a través de Ollama:
 ```
 
 **Notas clave:**
+
 - `provider: "ollama"` usa Ollama para modelos locales
 - `baseURL` apunta a tu instancia de Ollama
 - `thinkingBudget: "low"` ayuda a gestionar el rendimiento del modelo local
@@ -147,6 +150,7 @@ Configuración con seguridad maximizada:
 ```
 
 **Notas clave:**
+
 - `bind: "127.0.0.1"` con `mode: "remote"` requiere túnel (por ejemplo, Tailscale)
 - Autenticación de portador añade capa adicional de seguridad
 - `requireApproval: true` requiere confirmación del usuario
@@ -207,6 +211,7 @@ Soportando múltiples agentes con diferentes configuraciones:
 ```
 
 **Notas clave:**
+
 - `agents` objeto define múltiples configuraciones de agentes
 - `routing.rules` dirige usuarios/canales específicos a agentes específicos
 - `routing.defaultAgent` proporciona fallback
@@ -243,6 +248,7 @@ Acceso seguro remoto a través de Tailscale:
 ```
 
 **Notas clave:**
+
 - `bind` establece a tu IP de Tailscale
 - `tailscale.enabled: true` habilita la integración de Tailscale
 - Proporciona acceso remoto seguro sin exponer puertos públicos
@@ -278,6 +284,7 @@ Gateway detrás de un proxy inverso:
 ```
 
 **Notas clave:**
+
 - `trustedProxy.enabled: true` confía en encabezados de proxy
 - `trustedProxy.ips` lista IPs de proxy de confianza
 - `trustedProxy.headers` especifica qué encabezados confiar
@@ -325,6 +332,7 @@ Configuración optimizada para desarrollo:
 ```
 
 **Notas clave:**
+
 - `logging.level: "debug"` para salida verbosa
 - `autoApprove: true` acelera pruebas
 - `sandbox.mode: "permissive"` permite más experimentación
@@ -401,6 +409,7 @@ Configuración robusta lista para producción:
 ```
 
 **Notas clave:**
+
 - `healthCheck` permite monitoreo
 - `logging.file` con rotación para gestión de logs
 - `logging.sentry` para rastreo de errores
@@ -462,6 +471,7 @@ Usando diferentes proveedores de IA para diferentes propósitos:
 ```
 
 **Notas clave:**
+
 - Múltiples agentes con diferentes proveedores
 - `routing.rules` usa patrones para dirigir a agentes específicos
 - Cada proveedor puede tener su propia `baseURL`
@@ -511,6 +521,7 @@ Gateway con habilidades/extensiones personalizadas:
 ```
 
 **Notas clave:**
+
 - `skills.enabled: true` activa sistema de habilidades
 - `skills.paths` lista archivos de habilidades personalizadas
 - `skills.config` proporciona configuración por habilidad
@@ -552,6 +563,7 @@ Implementando límites de tasa:
 ```
 
 **Notas clave:**
+
 - `gateway.rateLimit` establece límites globales
 - `channels.telegram.rateLimit` establece límites por canal
 - `windowMs` define ventana de tiempo en milisegundos
@@ -595,6 +607,7 @@ Mejorando rendimiento con caché:
 ```
 
 **Notas clave:**
+
 - `cache.enabled: true` activa caché de respuestas
 - `cache.type: "redis"` usa Redis para almacenamiento
 - `cache.config.ttl` establece tiempo de expiración de caché
@@ -628,6 +641,7 @@ Usando webhooks en lugar de bots:
 ```
 
 **Notas clave:**
+
 - `mode: "webhook"` usa webhooks de Discord en lugar de bot
 - Requiere `webhookUrl`, `webhookId`, y `webhookToken`
 - Más simple que configuración completa de bot
@@ -657,23 +671,37 @@ Organiza configuraciones complejas en secciones lógicas:
 ```json5
 {
   // Configuración de Gateway
-  gateway: { /* ... */ },
-  
+  gateway: {
+    /* ... */
+  },
+
   // Configuración de Canales
-  channels: { /* ... */ },
-  
+  channels: {
+    /* ... */
+  },
+
   // Configuración de Agente
-  agent: { /* ... */ },
-  
+  agent: {
+    /* ... */
+  },
+
   // Características y Comportamiento
-  features: { /* ... */ },
-  
+  features: {
+    /* ... */
+  },
+
   // Seguridad
-  sandbox: { /* ... */ },
-  
+  sandbox: {
+    /* ... */
+  },
+
   // Observabilidad
-  logging: { /* ... */ },
-  monitoring: { /* ... */ },
+  logging: {
+    /* ... */
+  },
+  monitoring: {
+    /* ... */
+  },
 }
 ```
 
@@ -701,10 +729,10 @@ Agrega comentarios en JSON5 para explicar decisiones:
   gateway: {
     // Modo remoto permite conectar desde móvil
     mode: "remote",
-    
+
     // Vincular a Tailscale IP para acceso seguro
     bind: "100.64.0.1",
-    
+
     // Puerto estándar del gateway
     port: 18789,
   },

@@ -17,19 +17,19 @@ La herramienta `apply-patch` permite a los agentes aplicar parches de formato un
 ```typescript
 // Aplicar un archivo de parche
 await applyPatch({
-  patchFile: '/path/to/changes.patch',
-  targetDir: '/path/to/project'
+  patchFile: "/path/to/changes.patch",
+  targetDir: "/path/to/project",
 });
 ```
 
 ## Parámetros
 
-| Parámetro | Tipo | Requerido | Descripción |
-|-----------|------|-----------|-------------|
-| `patchFile` | string | Sí | Ruta al archivo de parche unificado |
-| `targetDir` | string | No | Directorio donde aplicar el parche (por defecto: directorio actual) |
-| `dryRun` | boolean | No | Si es true, muestra qué cambiaría sin aplicar realmente el parche |
-| `reverse` | boolean | No | Aplica el parche en reversa |
+| Parámetro   | Tipo    | Requerido | Descripción                                                         |
+| ----------- | ------- | --------- | ------------------------------------------------------------------- |
+| `patchFile` | string  | Sí        | Ruta al archivo de parche unificado                                 |
+| `targetDir` | string  | No        | Directorio donde aplicar el parche (por defecto: directorio actual) |
+| `dryRun`    | boolean | No        | Si es true, muestra qué cambiaría sin aplicar realmente el parche   |
+| `reverse`   | boolean | No        | Aplica el parche en reversa                                         |
 
 ## Ejemplo
 

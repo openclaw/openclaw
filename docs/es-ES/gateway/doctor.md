@@ -127,7 +127,7 @@ Migraciones actuales:
 
 ### 2b) Anulaciones de proveedor OpenCode Zen
 
-Si has agregado `models.providers.opencode` (o `opencode-zen`) manualmente, 
+Si has agregado `models.providers.opencode` (o `opencode-zen`) manualmente,
 anula el catálogo integrado de OpenCode Zen de `@mariozechner/pi-ai`. Eso puede
 forzar cada modelo a una sola API o poner los costos a cero. Doctor advierte para que puedas
 eliminar la anulación y restaurar el enrutamiento de API por modelo + costos.

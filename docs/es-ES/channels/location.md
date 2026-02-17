@@ -42,7 +42,7 @@ Los datos de ubicación se entregan como parte del objeto del mensaje:
 Verifica si un mensaje contiene datos de ubicación:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.location) {
     const { latitude, longitude } = message.location;
     console.log(`Recibida ubicación: ${latitude}, ${longitude}`);
@@ -55,15 +55,15 @@ agent.on('message', async (message) => {
 Extrae información de ubicación:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.location) {
     const { latitude, longitude, name, address } = message.location;
-    
+
     await message.reply(`
 **Ubicación Recibida**
 Coordenadas: ${latitude}, ${longitude}
-${name ? `Lugar: ${name}` : ''}
-${address ? `Dirección: ${address}` : ''}
+${name ? `Lugar: ${name}` : ""}
+${address ? `Dirección: ${address}` : ""}
     `);
   }
 });
@@ -77,13 +77,13 @@ Envía una ubicación estática:
 
 ```typescript
 await agent.sendMessage({
-  to: 'usuario_id',
+  to: "usuario_id",
   location: {
     latitude: 37.7749,
     longitude: -122.4194,
-    name: 'San Francisco',
-    address: '123 Main St, San Francisco, CA 94102'
-  }
+    name: "San Francisco",
+    address: "123 Main St, San Francisco, CA 94102",
+  },
 });
 ```
 
@@ -93,12 +93,12 @@ Telegram soporta compartir ubicación en tiempo real:
 
 ```typescript
 await agent.sendMessage({
-  to: 'usuario_id',
+  to: "usuario_id",
   location: {
     latitude: 37.7749,
     longitude: -122.4194,
-    livePeriod: 900 // Compartir durante 15 minutos
-  }
+    livePeriod: 900, // Compartir durante 15 minutos
+  },
 });
 ```
 
@@ -109,17 +109,17 @@ await agent.sendMessage({
 Encuentra lugares cercanos basados en la ubicación del usuario:
 
 ```typescript
-import { findNearbyPlaces } from './services/places';
+import { findNearbyPlaces } from "./services/places";
 
-agent.on('message', async (message) => {
-  if (message.body === '!nearby' && message.location) {
+agent.on("message", async (message) => {
+  if (message.body === "!nearby" && message.location) {
     const places = await findNearbyPlaces(
       message.location.latitude,
       message.location.longitude,
-      'restaurante'
+      "restaurante",
     );
-    
-    await message.reply(`Restaurantes cercanos:\n${places.map(p => `• ${p.name}`).join('\n')}`);
+
+    await message.reply(`Restaurantes cercanos:\n${places.map((p) => `• ${p.name}`).join("\n")}`);
   }
 });
 ```
@@ -129,15 +129,12 @@ agent.on('message', async (message) => {
 Proporciona información meteorológica basada en la ubicación:
 
 ```typescript
-import { getWeather } from './services/weather';
+import { getWeather } from "./services/weather";
 
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.location) {
-    const weather = await getWeather(
-      message.location.latitude,
-      message.location.longitude
-    );
-    
+    const weather = await getWeather(message.location.latitude, message.location.longitude);
+
     await message.reply(`
 **Clima Actual**
 Temperatura: ${weather.temp}°C
@@ -153,16 +150,16 @@ Humedad: ${weather.humidity}%
 Rastrea entregas basadas en la ubicación:
 
 ```typescript
-agent.on('message', async (message) => {
-  if (message.location && message.body.startsWith('!track')) {
-    const orderId = message.body.split(' ')[1];
-    
+agent.on("message", async (message) => {
+  if (message.location && message.body.startsWith("!track")) {
+    const orderId = message.body.split(" ")[1];
+
     await updateDeliveryLocation(orderId, {
       latitude: message.location.latitude,
       longitude: message.location.longitude,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
-    
+
     await message.reply(`Ubicación de entrega actualizada para orden ${orderId}`);
   }
 });
@@ -173,16 +170,16 @@ agent.on('message', async (message) => {
 Implementa sistema de check-in:
 
 ```typescript
-agent.on('message', async (message) => {
-  if (message.location && message.body === '!checkin') {
+agent.on("message", async (message) => {
+  if (message.location && message.body === "!checkin") {
     await recordCheckin({
       userId: message.from,
       latitude: message.location.latitude,
       longitude: message.location.longitude,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
-    
-    await message.reply('✅ Check-in registrado!');
+
+    await message.reply("✅ Check-in registrado!");
   }
 });
 ```
@@ -196,27 +193,29 @@ Calcula distancia entre dos puntos:
 ```typescript
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371; // Radio de la Tierra en km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Distancia en km
 }
 
 // Uso
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.location) {
     const storeLocation = { lat: 37.7749, lon: -122.4194 };
     const distance = calculateDistance(
       message.location.latitude,
       message.location.longitude,
       storeLocation.lat,
-      storeLocation.lon
+      storeLocation.lon,
     );
-    
+
     await message.reply(`Estás a ${distance.toFixed(2)} km de nuestra tienda.`);
   }
 });
@@ -227,15 +226,12 @@ agent.on('message', async (message) => {
 Convierte coordenadas a dirección:
 
 ```typescript
-import { reverseGeocode } from './services/geocoding';
+import { reverseGeocode } from "./services/geocoding";
 
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.location && !message.location.address) {
-    const address = await reverseGeocode(
-      message.location.latitude,
-      message.location.longitude
-    );
-    
+    const address = await reverseGeocode(message.location.latitude, message.location.longitude);
+
     await message.reply(`Ubicación: ${address}`);
   }
 });
@@ -255,18 +251,20 @@ agent.on('message', async (message) => {
 
 ```typescript
 // Solicita permiso antes de usar la ubicación
-agent.on('message', async (message) => {
-  if (message.body === '!weather') {
-    await message.reply('Por favor comparte tu ubicación para obtener información meteorológica local.');
-    
+agent.on("message", async (message) => {
+  if (message.body === "!weather") {
+    await message.reply(
+      "Por favor comparte tu ubicación para obtener información meteorológica local.",
+    );
+
     // Espera respuesta de ubicación
-    agent.once('location', async (locationMessage) => {
+    agent.once("location", async (locationMessage) => {
       if (locationMessage.from === message.from) {
         const weather = await getWeather(
           locationMessage.location.latitude,
-          locationMessage.location.longitude
+          locationMessage.location.longitude,
         );
-        
+
         await locationMessage.reply(`Clima: ${weather.description}`);
       }
     });
@@ -281,6 +279,7 @@ agent.on('message', async (message) => {
 Si los datos de ubicación no llegan:
 
 1. Verifica que el canal soporte ubicación:
+
    ```bash
    openclaw channels status
    ```
@@ -305,25 +304,22 @@ Si la precisión de ubicación es baja:
 ### Bot de Clima
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
-import { getWeather } from './services/weather';
+import { OpenClawAgent } from "openclaw";
+import { getWeather } from "./services/weather";
 
 const agent = new OpenClawAgent({
-  name: 'weather-bot'
+  name: "weather-bot",
 });
 
-agent.on('message', async (message) => {
-  if (message.body === '!weather') {
-    await message.reply('Por favor comparte tu ubicación.');
+agent.on("message", async (message) => {
+  if (message.body === "!weather") {
+    await message.reply("Por favor comparte tu ubicación.");
   } else if (message.location) {
-    const weather = await getWeather(
-      message.location.latitude,
-      message.location.longitude
-    );
-    
+    const weather = await getWeather(message.location.latitude, message.location.longitude);
+
     await message.reply(`
 🌤️ **Clima Actual**
-📍 ${message.location.name || 'Tu ubicación'}
+📍 ${message.location.name || "Tu ubicación"}
 🌡️ ${weather.temp}°C
 💧 ${weather.humidity}% humedad
     `);
@@ -336,30 +332,33 @@ await agent.start();
 ### Bot de Lugares Cercanos
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
-import { findNearbyPlaces } from './services/places';
+import { OpenClawAgent } from "openclaw";
+import { findNearbyPlaces } from "./services/places";
 
 const agent = new OpenClawAgent({
-  name: 'places-bot'
+  name: "places-bot",
 });
 
-agent.command('nearby', async (ctx, args) => {
-  const category = args.join(' ') || 'restaurante';
+agent.command("nearby", async (ctx, args) => {
+  const category = args.join(" ") || "restaurante";
   await ctx.reply(`Por favor comparte tu ubicación para encontrar ${category}s cercanos.`);
 });
 
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.location) {
     const places = await findNearbyPlaces(
       message.location.latitude,
       message.location.longitude,
-      'restaurante',
-      5000 // 5km de radio
+      "restaurante",
+      5000, // 5km de radio
     );
-    
+
     await message.reply(`
 📍 **Lugares Cercanos**
-${places.slice(0, 5).map((p, i) => `${i + 1}. ${p.name} (${p.distance}m)`).join('\n')}
+${places
+  .slice(0, 5)
+  .map((p, i) => `${i + 1}. ${p.name} (${p.distance}m)`)
+  .join("\n")}
     `);
   }
 });

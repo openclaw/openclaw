@@ -12,18 +12,18 @@ La herramienta `elevated` permite a los agentes ejecutar comandos que requieren 
 ```typescript
 // Ejecutar un comando con privilegios elevados
 await elevated.exec({
-  command: 'apt-get update',
-  reason: 'Actualizar la lista de paquetes del sistema'
+  command: "apt-get update",
+  reason: "Actualizar la lista de paquetes del sistema",
 });
 ```
 
 ## Parámetros
 
-| Parámetro | Tipo | Requerido | Descripción |
-|-----------|------|-----------|-------------|
-| `command` | string | Sí | El comando a ejecutar con privilegios elevados |
-| `reason` | string | Sí | Explicación del por qué se necesitan privilegios elevados |
-| `timeout` | number | No | Tiempo de espera en milisegundos (por defecto: 30000) |
+| Parámetro | Tipo   | Requerido | Descripción                                               |
+| --------- | ------ | --------- | --------------------------------------------------------- |
+| `command` | string | Sí        | El comando a ejecutar con privilegios elevados            |
+| `reason`  | string | Sí        | Explicación del por qué se necesitan privilegios elevados |
+| `timeout` | number | No        | Tiempo de espera en milisegundos (por defecto: 30000)     |
 
 ## Flujo de Seguridad
 
@@ -38,8 +38,8 @@ await elevated.exec({
 
 ```typescript
 await elevated.exec({
-  command: 'apt-get install -y docker.io',
-  reason: 'Instalar Docker para herramientas de contenedorización'
+  command: "apt-get install -y docker.io",
+  reason: "Instalar Docker para herramientas de contenedorización",
 });
 ```
 
@@ -48,7 +48,7 @@ await elevated.exec({
 ```typescript
 await elevated.exec({
   command: 'echo "127.0.0.1 test.local" >> /etc/hosts',
-  reason: 'Agregar entrada al archivo hosts para pruebas locales'
+  reason: "Agregar entrada al archivo hosts para pruebas locales",
 });
 ```
 
@@ -56,8 +56,8 @@ await elevated.exec({
 
 ```typescript
 await elevated.exec({
-  command: 'systemctl restart nginx',
-  reason: 'Aplicar cambios de configuración de Nginx'
+  command: "systemctl restart nginx",
+  reason: "Aplicar cambios de configuración de Nginx",
 });
 ```
 
@@ -103,8 +103,8 @@ Para comandos de larga duración:
 
 ```typescript
 await elevated.exec({
-  command: 'apt-get upgrade -y',
-  reason: 'Actualizar todos los paquetes del sistema',
-  timeout: 300000 // 5 minutos
+  command: "apt-get upgrade -y",
+  reason: "Actualizar todos los paquetes del sistema",
+  timeout: 300000, // 5 minutos
 });
 ```

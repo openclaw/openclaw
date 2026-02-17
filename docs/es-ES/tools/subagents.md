@@ -30,11 +30,13 @@ El agente puede lanzar un subagente tipo `explore` para buscar en el código.
 ### Agente Explore
 
 Usa `explore` cuando necesites:
+
 - Encontrar archivos rápidamente por patrones
 - Buscar código por palabras clave
 - Responder preguntas sobre la base de código
 
 **Niveles de minuciosidad**:
+
 - `"quick"` – búsquedas básicas
 - `"medium"` – exploración moderada
 - `"very thorough"` – análisis exhaustivo a través de múltiples ubicaciones y convenciones de nombres
@@ -54,11 +56,13 @@ Usa `explore` cuando necesites:
 ## Cuándo usar Subagentes
 
 ✅ **Usar Subagentes para:**
+
 - Tareas de múltiples pasos que requieren autonomía
 - Exploración de código cuando no conoces rutas de archivo específicas
 - Delegación paralela (múltiples investigaciones a la vez)
 
 ❌ **No usar Subagentes para:**
+
 - Leer una ruta de archivo específica (usa `Read` directamente)
 - Buscar una clase específica (usa `Glob` directamente)
 - Buscar dentro de 2-3 archivos conocidos (usa `Read` directamente)

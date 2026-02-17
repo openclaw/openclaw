@@ -24,6 +24,7 @@ La Extensión de Chrome de OpenClaw te permite interactuar con OpenClaw directam
 ### Instalación Manual (Desarrollo)
 
 1. Descarga el código fuente de la extensión:
+
    ```bash
    git clone https://github.com/openclaw/chrome-extension
    cd chrome-extension
@@ -93,12 +94,12 @@ La extensión comparte automáticamente el contexto del navegador con OpenClaw:
 
 La extensión requiere los siguientes permisos:
 
-| Permiso | Propósito |
-|---------|-----------|
-| `activeTab` | Acceder al contenido de la pestaña actual |
-| `storage` | Guardar configuración de la extensión |
+| Permiso        | Propósito                                             |
+| -------------- | ----------------------------------------------------- |
+| `activeTab`    | Acceder al contenido de la pestaña actual             |
+| `storage`      | Guardar configuración de la extensión                 |
 | `contextMenus` | Agregar elementos de menú de contexto de clic derecho |
-| `<all_urls>` | Conectarse a tu Gateway de OpenClaw |
+| `<all_urls>`   | Conectarse a tu Gateway de OpenClaw                   |
 
 ## Privacidad
 
@@ -112,6 +113,7 @@ La extensión requiere los siguientes permisos:
 ### La Extensión No Se Conecta al Gateway
 
 1. Verifica que tu Gateway de OpenClaw esté en ejecución:
+
    ```bash
    openclaw gateway status
    ```

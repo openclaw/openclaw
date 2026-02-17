@@ -68,9 +68,9 @@ Los mensajes grupales incluyen metadatos adicionales:
 Detecta cuándo el bot es mencionado:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup && message.mentions?.includes(agent.phoneNumber)) {
-    await message.reply('¿Me mencionaste?');
+    await message.reply("¿Me mencionaste?");
   }
 });
 ```
@@ -89,8 +89,8 @@ En código:
 
 ```typescript
 await agent.sendMessage({
-  to: 'grupo@g.us',
-  body: 'Hola grupo!'
+  to: "grupo@g.us",
+  body: "Hola grupo!",
 });
 ```
 
@@ -100,9 +100,9 @@ Menciona participantes específicos:
 
 ```typescript
 await agent.sendMessage({
-  to: 'grupo@g.us',
-  body: '@1234567890 por favor revisa esto',
-  mentions: ['1234567890@s.whatsapp.net']
+  to: "grupo@g.us",
+  body: "@1234567890 por favor revisa esto",
+  mentions: ["1234567890@s.whatsapp.net"],
 });
 ```
 
@@ -112,9 +112,9 @@ Responde a un mensaje específico:
 
 ```typescript
 await agent.sendMessage({
-  to: 'grupo@g.us',
-  body: 'Respondiendo a tu mensaje',
-  quoted: messageId
+  to: "grupo@g.us",
+  body: "Respondiendo a tu mensaje",
+  quoted: messageId,
 });
 ```
 
@@ -125,7 +125,7 @@ await agent.sendMessage({
 Recupera información del grupo:
 
 ```typescript
-const groupInfo = await agent.getGroupMetadata('grupo@g.us');
+const groupInfo = await agent.getGroupMetadata("grupo@g.us");
 
 console.log(groupInfo.subject); // Nombre del grupo
 console.log(groupInfo.participants); // Lista de miembros
@@ -168,15 +168,15 @@ Evita que el bot haga spam en el grupo:
 ```typescript
 const rateLimiter = new Map();
 
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     const lastReply = rateLimiter.get(message.groupId);
-    
+
     if (lastReply && Date.now() - lastReply < 60000) {
       // Omitir - respondido hace menos de 1 minuto
       return;
     }
-    
+
     // Procesar mensaje...
     rateLimiter.set(message.groupId, Date.now());
   }
@@ -188,9 +188,9 @@ agent.on('message', async (message) => {
 Redirige consultas sensibles a DMs:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup && isSensitive(message.body)) {
-    await message.reply('Por favor envíame un DM para consultas sensibles.');
+    await message.reply("Por favor envíame un DM para consultas sensibles.");
   }
 });
 ```
@@ -202,11 +202,13 @@ agent.on('message', async (message) => {
 Si el bot no ve mensajes de grupo:
 
 1. Verifica que el bot esté en el grupo:
+
    ```bash
    openclaw channels status --deep
    ```
 
 2. Comprueba la configuración de comportamiento de grupo:
+
    ```bash
    openclaw config get channels.whatsapp.groupBehavior
    ```
@@ -241,17 +243,17 @@ Si los mensajes al grupo no se envían:
 ### Bot de Grupo Básico
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const agent = new OpenClawAgent({
-  name: 'whatsapp-group-bot'
+  name: "whatsapp-group-bot",
 });
 
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     // Responde solo a menciones
     if (message.mentions?.includes(agent.phoneNumber)) {
-      await message.reply('¿Cómo puedo ayudarte?');
+      await message.reply("¿Cómo puedo ayudarte?");
     }
   }
 });
@@ -262,10 +264,10 @@ await agent.start();
 ### Bot con Información del Grupo
 
 ```typescript
-agent.on('message', async (message) => {
-  if (message.isGroup && message.body === '!info') {
+agent.on("message", async (message) => {
+  if (message.isGroup && message.body === "!info") {
     const groupInfo = await agent.getGroupMetadata(message.groupId);
-    
+
     await message.reply(`
 **${groupInfo.subject}**
 Miembros: ${groupInfo.participants.length}

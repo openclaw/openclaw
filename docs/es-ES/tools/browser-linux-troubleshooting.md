@@ -141,11 +141,13 @@ ENV OPENCLAW_BROWSER_NO_SANDBOX=1
 Si continúas experimentando problemas:
 
 1. Ejecuta el diagnóstico de OpenClaw:
+
    ```bash
    openclaw doctor
    ```
 
 2. Verifica los logs del navegador:
+
    ```bash
    cat ~/.openclaw/logs/browser.log
    ```

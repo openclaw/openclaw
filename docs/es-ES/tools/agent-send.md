@@ -17,22 +17,22 @@ La herramienta `agent-send` permite a los agentes enviar mensajes a otros agente
 ```typescript
 // Enviar un mensaje a otro agente
 await agentSend({
-  agentId: 'agent-123',
-  message: 'Por favor procesa este archivo de datos',
+  agentId: "agent-123",
+  message: "Por favor procesa este archivo de datos",
   metadata: {
-    priority: 'high',
-    taskType: 'data-processing'
-  }
+    priority: "high",
+    taskType: "data-processing",
+  },
 });
 ```
 
 ## Parámetros
 
-| Parámetro | Tipo | Requerido | Descripción |
-|-----------|------|-----------|-------------|
-| `agentId` | string | Sí | El ID del agente objetivo |
-| `message` | string | Sí | El contenido del mensaje a enviar |
-| `metadata` | object | No | Metadatos adicionales para adjuntar al mensaje |
+| Parámetro  | Tipo   | Requerido | Descripción                                    |
+| ---------- | ------ | --------- | ---------------------------------------------- |
+| `agentId`  | string | Sí        | El ID del agente objetivo                      |
+| `message`  | string | Sí        | El contenido del mensaje a enviar              |
+| `metadata` | object | No        | Metadatos adicionales para adjuntar al mensaje |
 
 ## Casos de Uso Comunes
 
@@ -41,12 +41,12 @@ await agentSend({
 ```typescript
 // Delegar trabajo de procesamiento de datos a un agente especializado
 await agentSend({
-  agentId: 'data-processor-agent',
-  message: 'Analiza el dataset adjunto y genera un informe',
+  agentId: "data-processor-agent",
+  message: "Analiza el dataset adjunto y genera un informe",
   metadata: {
-    datasetPath: '/data/sales-q4.csv',
-    reportFormat: 'pdf'
-  }
+    datasetPath: "/data/sales-q4.csv",
+    reportFormat: "pdf",
+  },
 });
 ```
 
@@ -55,12 +55,12 @@ await agentSend({
 ```typescript
 // Notificar al coordinador sobre la finalización de la tarea
 await agentSend({
-  agentId: 'coordinator-agent',
-  message: 'Tarea completada exitosamente',
+  agentId: "coordinator-agent",
+  message: "Tarea completada exitosamente",
   metadata: {
-    taskId: 'task-456',
-    status: 'completed',
-    duration: '2m 15s'
-  }
+    taskId: "task-456",
+    status: "completed",
+    duration: "2m 15s",
+  },
 });
 ```

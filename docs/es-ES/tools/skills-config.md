@@ -34,25 +34,25 @@ Las Habilidades de Agente OpenClaw pueden definir **configuración estructurada*
 
 ## Ejemplo
 
-```markdown
+````markdown
 # Mi Habilidad de API
 
 Esta Habilidad llama a una API personalizada.
 
 \```config-schema
 {
-  "type": "object",
-  "properties": {
-    "token": { "type": "string" }
-  },
-  "required": ["token"]
+"type": "object",
+"properties": {
+"token": { "type": "string" }
+},
+"required": ["token"]
 }
 \```
 
 \```tools
 ./scripts/call-api.sh
 \```
-```
+````
 
 **`config.json`:**
 

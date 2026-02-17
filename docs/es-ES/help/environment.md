@@ -76,11 +76,11 @@ Ver [Configuración: Sustitución de variables de entorno](/es-ES/gateway/config
 
 ## Variables de entorno relacionadas con rutas
 
-| Variable               | Propósito                                                                                                                                                                                       |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Variable               | Propósito                                                                                                                                                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_HOME`        | Sobrescribe el directorio home usado para toda resolución de rutas internas (`~/.openclaw/`, directorios de agentes, sesiones, credenciales). Útil al ejecutar OpenClaw como usuario de servicio dedicado. |
-| `OPENCLAW_STATE_DIR`   | Sobrescribe el directorio de estado (por defecto `~/.openclaw`).                                                                                                                                |
-| `OPENCLAW_CONFIG_PATH` | Sobrescribe la ruta del archivo de configuración (por defecto `~/.openclaw/openclaw.json`).                                                                                                      |
+| `OPENCLAW_STATE_DIR`   | Sobrescribe el directorio de estado (por defecto `~/.openclaw`).                                                                                                                                           |
+| `OPENCLAW_CONFIG_PATH` | Sobrescribe la ruta del archivo de configuración (por defecto `~/.openclaw/openclaw.json`).                                                                                                                |
 
 ### `OPENCLAW_HOME`
 

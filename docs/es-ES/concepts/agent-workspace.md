@@ -90,25 +90,25 @@ Compartir espacios de trabajo entre agentes puede llevar a condiciones de carrer
 Al construir herramientas o extensiones personalizadas, puedes acceder al espacio de trabajo del agente a través del objeto de contexto:
 
 ```typescript
-import { Agent } from 'openclaw/plugin-sdk'
+import { Agent } from "openclaw/plugin-sdk";
 
 const myTool = {
-  name: 'my-tool',
+  name: "my-tool",
   async execute(context: Agent.Context) {
-    const workspace = context.workspace
-    
+    const workspace = context.workspace;
+
     // Leer archivo desde el espacio de trabajo
-    const content = await workspace.readFile('data.json')
-    
+    const content = await workspace.readFile("data.json");
+
     // Escribir archivo al espacio de trabajo
-    await workspace.writeFile('output.txt', 'Hello World')
-    
+    await workspace.writeFile("output.txt", "Hello World");
+
     // Listar archivos en el espacio de trabajo
-    const files = await workspace.listFiles()
-    
-    return { success: true }
-  }
-}
+    const files = await workspace.listFiles();
+
+    return { success: true };
+  },
+};
 ```
 
 ## Limpieza del espacio de trabajo
@@ -152,6 +152,7 @@ Por defecto, los agentes **solo** pueden acceder a archivos dentro de su espacio
 Si necesitas que un agente acceda a archivos fuera de su espacio de trabajo, puedes:
 
 1. **Montar directorios adicionales**:
+
    ```bash
    openclaw agent run --mount /path/to/data:/data
    ```

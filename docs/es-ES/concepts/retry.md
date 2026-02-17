@@ -284,7 +284,7 @@ Si los reintentos no funcionan:
 OpenClaw proporciona APIs programáticas para retry:
 
 ```typescript
-import { RetryManager } from 'openclaw'
+import { RetryManager } from "openclaw";
 
 // Configurar retry
 const retry = new RetryManager({
@@ -292,12 +292,12 @@ const retry = new RetryManager({
   retryDelay: 1000,
   retryBackoff: 2,
   maxRetryDelay: 60000,
-})
+});
 
 // Ejecutar con retry
 const result = await retry.execute(async () => {
-  return await model.generate(prompt)
-})
+  return await model.generate(prompt);
+});
 ```
 
 Consulta la [Referencia API](/es-ES/api/retry) para documentación completa.

@@ -17,13 +17,13 @@ La herramienta `browser-login` permite a los agentes gestionar autenticación y 
 ```typescript
 // Guardar el estado de inicio de sesión actual
 await browserLogin.save({
-  name: 'github-session',
-  url: 'https://github.com'
+  name: "github-session",
+  url: "https://github.com",
 });
 
 // Restaurar una sesión guardada
 await browserLogin.restore({
-  name: 'github-session'
+  name: "github-session",
 });
 
 // Listar sesiones guardadas
@@ -34,16 +34,16 @@ const sessions = await browserLogin.list();
 
 ### Guardar Sesión
 
-| Parámetro | Tipo | Requerido | Descripción |
-|-----------|------|-----------|-------------|
-| `name` | string | Sí | Identificador único para esta sesión |
-| `url` | string | No | URL para asociar con esta sesión |
+| Parámetro | Tipo   | Requerido | Descripción                          |
+| --------- | ------ | --------- | ------------------------------------ |
+| `name`    | string | Sí        | Identificador único para esta sesión |
+| `url`     | string | No        | URL para asociar con esta sesión     |
 
 ### Restaurar Sesión
 
-| Parámetro | Tipo | Requerido | Descripción |
-|-----------|------|-----------|-------------|
-| `name` | string | Sí | Nombre de la sesión a restaurar |
+| Parámetro | Tipo   | Requerido | Descripción                     |
+| --------- | ------ | --------- | ------------------------------- |
+| `name`    | string | Sí        | Nombre de la sesión a restaurar |
 
 ## Ejemplos
 
@@ -51,20 +51,20 @@ const sessions = await browserLogin.list();
 
 ```typescript
 // Navega a la página de inicio de sesión
-await browser.navigate('https://example.com/login');
+await browser.navigate("https://example.com/login");
 
 // Realiza el inicio de sesión
-await browser.type('#username', 'mi-usuario');
-await browser.type('#password', 'mi-contraseña');
-await browser.click('#login-button');
+await browser.type("#username", "mi-usuario");
+await browser.type("#password", "mi-contraseña");
+await browser.click("#login-button");
 
 // Espera a que el inicio de sesión se complete
-await browser.waitFor({ text: 'Panel de Control' });
+await browser.waitFor({ text: "Panel de Control" });
 
 // Guarda el estado de inicio de sesión
 await browserLogin.save({
-  name: 'example-session',
-  url: 'https://example.com'
+  name: "example-session",
+  url: "https://example.com",
 });
 ```
 
@@ -73,11 +73,11 @@ await browserLogin.save({
 ```typescript
 // Restaurar sesión previamente guardada
 await browserLogin.restore({
-  name: 'example-session'
+  name: "example-session",
 });
 
 // Ahora estás iniciado sesión y puedes continuar
-await browser.navigate('https://example.com/dashboard');
+await browser.navigate("https://example.com/dashboard");
 ```
 
 ## Notas de Seguridad

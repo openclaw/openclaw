@@ -4,6 +4,7 @@ description: Buscar y obtener contenido web en conversaciones de agentes
 ---
 
 La **herramienta Web** permite que los agentes OpenClaw:
+
 - **Busquen** en la web con múltiples motores
 - **Obtengan** contenido de página en Markdown, texto o HTML
 - Accedan a **conocimiento actualizado** más allá de su fecha límite de entrenamiento
@@ -53,11 +54,11 @@ Los agentes pueden obtener contenido de cualquier URL.
 
 ### Formato de Contenido
 
-| Formato | Descripción |
-|---------|-------------|
+| Formato    | Descripción                                                       |
+| ---------- | ----------------------------------------------------------------- |
 | `markdown` | Contenido limpio de página convertido a Markdown (predeterminado) |
-| `text` | Texto sin formato sin formato |
-| `html` | HTML en bruto |
+| `text`     | Texto sin formato sin formato                                     |
+| `html`     | HTML en bruto                                                     |
 
 ### Ejemplo de Obtención
 
@@ -181,6 +182,7 @@ Para agregar cabeceras HTTP personalizadas a las obtenciones, usa la herramienta
 ## Integración de API
 
 Los proveedores de búsqueda exponen sus propias API:
+
 - [Perplexity API](https://docs.perplexity.ai)
 - [Tavily API](https://tavily.com)
 - [Brave Search API](https://brave.com/search/api/)
@@ -190,6 +192,7 @@ OpenClaw usa estas API bajo el capó, por lo que te beneficias de sus caracterí
 ## Límites de Tasa
 
 Cada proveedor de búsqueda tiene sus propios límites de tasa:
+
 - **Perplexity**: varía por plan
 - **Tavily**: varía por plan
 - **Brave**: 1 solicitud/segundo (nivel gratuito)

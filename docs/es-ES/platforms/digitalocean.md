@@ -16,13 +16,13 @@ Si quieres una opción de $0/mes y no te importa ARM + configuración específic
 
 ## Comparación de Costos (2026)
 
-| Proveedor    | Plan            | Especificaciones       | Precio/mes   | Notas                                                      |
-| ------------ | --------------- | ---------------------- | ------------ | ---------------------------------------------------------- |
-| Oracle Cloud | Always Free ARM | hasta 4 OCPU, 24GB RAM | $0           | ARM, capacidad limitada / peculiaridades de registro       |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | €3.79 (~$4)  | Opción paga más barata                                     |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6           | UI fácil, buena documentación                              |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6           | Muchas ubicaciones                                         |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5           | Ahora parte de Akamai                                      |
+| Proveedor    | Plan            | Especificaciones       | Precio/mes  | Notas                                                |
+| ------------ | --------------- | ---------------------- | ----------- | ---------------------------------------------------- |
+| Oracle Cloud | Always Free ARM | hasta 4 OCPU, 24GB RAM | $0          | ARM, capacidad limitada / peculiaridades de registro |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | €3.79 (~$4) | Opción paga más barata                               |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6          | UI fácil, buena documentación                        |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6          | Muchas ubicaciones                                   |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5          | Ahora parte de Akamai                                |
 
 **Eligiendo un proveedor:**
 
@@ -209,12 +209,12 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 Oracle Cloud ofrece instancias ARM **Always Free** que son significativamente más potentes que cualquier opción paga aquí — por $0/mes.
 
-| Lo que obtienes   | Especificaciones       |
-| ----------------- | ---------------------- |
-| **4 OCPUs**       | ARM Ampere A1          |
-| **24GB RAM**      | Más que suficiente     |
-| **200GB storage** | Volumen de bloque      |
-| **Gratis forever**| Sin cargos de tarjeta  |
+| Lo que obtienes    | Especificaciones      |
+| ------------------ | --------------------- |
+| **4 OCPUs**        | ARM Ampere A1         |
+| **24GB RAM**       | Más que suficiente    |
+| **200GB storage**  | Volumen de bloque     |
+| **Gratis forever** | Sin cargos de tarjeta |
 
 **Advertencias:**
 

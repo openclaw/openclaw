@@ -58,11 +58,11 @@ openclaw config set channels.matrix.password "tu_contraseña"
 <Accordion title="Usando un Token de Acceso en lugar de Contraseña">
   Para mayor seguridad, puedes usar un token de acceso en lugar de tu contraseña:
 
-  ```bash
-  openclaw config set channels.matrix.accessToken "tu_token_de_acceso"
-  ```
+```bash
+openclaw config set channels.matrix.accessToken "tu_token_de_acceso"
+```
 
-  Obtén un token de acceso desde la configuración de tu cliente Matrix o directamente desde la API.
+Obtén un token de acceso desde la configuración de tu cliente Matrix o directamente desde la API.
 </Accordion>
 
 ### 3. Habilitar el Canal
@@ -194,11 +194,13 @@ openclaw config set channels.matrix.commandPrefix "/"
 Para unirse a una sala cifrada:
 
 1. Asegúrate de que E2EE esté habilitado:
+
    ```bash
    openclaw config get channels.matrix.encryption.enabled
    ```
 
 2. Acepta la invitación a la sala (o habilita auto-aceptar):
+
    ```bash
    openclaw config set channels.matrix.autoAcceptInvites true
    ```
@@ -254,22 +256,22 @@ openclaw config set agents.bot2.channels.matrix.password "contraseña2"
 Enruta mensajes según la sala:
 
 ```typescript
-import { MatrixChannel } from '@openclaw/matrix';
+import { MatrixChannel } from "@openclaw/matrix";
 
 const matrix = new MatrixChannel({
-  homeserverUrl: 'https://matrix.org',
-  userId: '@bot:matrix.org',
-  accessToken: 'tu_token'
+  homeserverUrl: "https://matrix.org",
+  userId: "@bot:matrix.org",
+  accessToken: "tu_token",
 });
 
-matrix.on('message', async (event) => {
+matrix.on("message", async (event) => {
   const roomId = event.roomId;
-  
+
   // Enruta según la sala
-  if (roomId === '!soporte:matrix.org') {
+  if (roomId === "!soporte:matrix.org") {
     // Maneja mensajes de soporte
     await handleSupportMessage(event);
-  } else if (roomId === '!general:matrix.org') {
+  } else if (roomId === "!general:matrix.org") {
     // Maneja chat general
     await handleGeneralMessage(event);
   }
@@ -283,22 +285,22 @@ Envía tipos de mensajes personalizados:
 ```typescript
 // Enviar un mensaje de aviso
 await matrix.sendMessage(roomId, {
-  msgtype: 'm.notice',
-  body: 'Este es un aviso del sistema'
+  msgtype: "m.notice",
+  body: "Este es un aviso del sistema",
 });
 
 // Enviar mensaje con formato HTML
 await matrix.sendMessage(roomId, {
-  msgtype: 'm.text',
-  body: 'Texto plano alternativo',
-  format: 'org.matrix.custom.html',
-  formatted_body: '<strong>Texto en negrita</strong> y <em>cursiva</em>'
+  msgtype: "m.text",
+  body: "Texto plano alternativo",
+  format: "org.matrix.custom.html",
+  formatted_body: "<strong>Texto en negrita</strong> y <em>cursiva</em>",
 });
 
 // Enviar un archivo
 await matrix.sendFile(roomId, {
-  file: '/ruta/a/archivo.pdf',
-  msgtype: 'm.file'
+  file: "/ruta/a/archivo.pdf",
+  msgtype: "m.file",
 });
 ```
 
@@ -308,21 +310,21 @@ Escucha y responde a eventos de sala:
 
 ```typescript
 // Evento de miembro (alguien se une/sale)
-matrix.on('room.member', async (event) => {
-  if (event.membership === 'join') {
+matrix.on("room.member", async (event) => {
+  if (event.membership === "join") {
     console.log(`${event.sender} se unió a ${event.roomId}`);
-  } else if (event.membership === 'leave') {
+  } else if (event.membership === "leave") {
     console.log(`${event.sender} salió de ${event.roomId}`);
   }
 });
 
 // Evento de nombre de sala
-matrix.on('room.name', async (event) => {
+matrix.on("room.name", async (event) => {
   console.log(`Sala ${event.roomId} renombrada a ${event.name}`);
 });
 
 // Cambio de nivel de poder
-matrix.on('room.power_levels', async (event) => {
+matrix.on("room.power_levels", async (event) => {
   console.log(`Niveles de poder actualizados en ${event.roomId}`);
 });
 ```
@@ -334,16 +336,19 @@ matrix.on('room.power_levels', async (event) => {
 Si el bot no se conecta:
 
 1. Verifica la URL del homeserver:
+
    ```bash
    openclaw config get channels.matrix.homeserverUrl
    ```
 
 2. Prueba la conectividad:
+
    ```bash
    curl -I https://matrix.org
    ```
 
 3. Verifica las credenciales:
+
    ```bash
    openclaw config get channels.matrix.userId
    ```
@@ -358,16 +363,19 @@ Si el bot no se conecta:
 Si tienes problemas con salas cifradas:
 
 1. Verifica que E2EE esté habilitado:
+
    ```bash
    openclaw config get channels.matrix.encryption.enabled
    ```
 
 2. Comprueba que el almacenamiento de cifrado es accesible:
+
    ```bash
    ls -la ~/.openclaw/matrix/crypto
    ```
 
 3. Reinicia el bot para reinicializar el cifrado:
+
    ```bash
    openclaw gateway restart
    ```
@@ -382,11 +390,13 @@ Si tienes problemas con salas cifradas:
 Si no recibes mensajes:
 
 1. Verifica que el bot esté en la sala:
+
    ```bash
    openclaw channels status matrix
    ```
 
 2. Comprueba las listas permitidas:
+
    ```bash
    openclaw config get channels.matrix.allowedRooms
    openclaw config get channels.matrix.allowedUsers
@@ -419,23 +429,23 @@ openclaw config set channels.matrix.presence false
 ### Bot Básico de Matrix
 
 ```typescript
-import { MatrixChannel } from '@openclaw/matrix';
+import { MatrixChannel } from "@openclaw/matrix";
 
 const matrix = new MatrixChannel({
-  homeserverUrl: 'https://matrix.org',
-  userId: '@bot:matrix.org',
-  accessToken: process.env.MATRIX_ACCESS_TOKEN
+  homeserverUrl: "https://matrix.org",
+  userId: "@bot:matrix.org",
+  accessToken: process.env.MATRIX_ACCESS_TOKEN,
 });
 
 await matrix.connect();
 
-matrix.on('message', async (event) => {
+matrix.on("message", async (event) => {
   const { roomId, sender, body } = event;
-  
-  if (body.startsWith('!hello')) {
+
+  if (body.startsWith("!hello")) {
     await matrix.sendMessage(roomId, {
-      msgtype: 'm.text',
-      body: `Hola ${sender}!`
+      msgtype: "m.text",
+      body: `Hola ${sender}!`,
     });
   }
 });
@@ -444,21 +454,21 @@ matrix.on('message', async (event) => {
 ### Bot con E2EE
 
 ```typescript
-import { MatrixChannel } from '@openclaw/matrix';
+import { MatrixChannel } from "@openclaw/matrix";
 
 const matrix = new MatrixChannel({
-  homeserverUrl: 'https://matrix.org',
-  userId: '@bot:matrix.org',
+  homeserverUrl: "https://matrix.org",
+  userId: "@bot:matrix.org",
   accessToken: process.env.MATRIX_ACCESS_TOKEN,
   encryption: {
     enabled: true,
-    storePath: '~/.openclaw/matrix/crypto'
-  }
+    storePath: "~/.openclaw/matrix/crypto",
+  },
 });
 
 await matrix.connect();
 
-matrix.on('message', async (event) => {
+matrix.on("message", async (event) => {
   // Maneja mensajes cifrados automáticamente
   console.log(`Mensaje de ${event.sender}: ${event.body}`);
 });
@@ -467,27 +477,27 @@ matrix.on('message', async (event) => {
 ### Bot con Auto-Unión a Salas
 
 ```typescript
-import { MatrixChannel } from '@openclaw/matrix';
+import { MatrixChannel } from "@openclaw/matrix";
 
 const matrix = new MatrixChannel({
-  homeserverUrl: 'https://matrix.org',
-  userId: '@bot:matrix.org',
+  homeserverUrl: "https://matrix.org",
+  userId: "@bot:matrix.org",
   accessToken: process.env.MATRIX_ACCESS_TOKEN,
-  autoAcceptInvites: true
+  autoAcceptInvites: true,
 });
 
 await matrix.connect();
 
-matrix.on('room.invite', async (invite) => {
+matrix.on("room.invite", async (invite) => {
   console.log(`Invitado a sala: ${invite.roomId}`);
   // Automáticamente acepta todas las invitaciones
 });
 
-matrix.on('room.join', async (event) => {
+matrix.on("room.join", async (event) => {
   const { roomId } = event;
   await matrix.sendMessage(roomId, {
-    msgtype: 'm.text',
-    body: '¡Hola! Gracias por invitarme.'
+    msgtype: "m.text",
+    body: "¡Hola! Gracias por invitarme.",
   });
 });
 ```

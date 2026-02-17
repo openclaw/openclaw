@@ -13,14 +13,14 @@ Tanto los heartbeats como las tareas programadas te permiten ejecutar tareas en 
 
 ## Guía de decisión rápida
 
-| Caso de uso                              | Recomendado         | Por qué                                      |
-| ---------------------------------------- | ------------------- | -------------------------------------------- |
-| Revisar bandeja de entrada cada 30 min  | Heartbeat           | Agrupa con otras verificaciones, consciente del contexto |
-| Enviar informe diario a las 9am exactas  | Cron (aislado)      | Se necesita tiempo exacto                    |
-| Monitorear calendario para eventos próximos | Heartbeat        | Encaja naturalmente para conciencia periódica |
-| Ejecutar análisis profundo semanal       | Cron (aislado)      | Tarea independiente, puede usar diferente modelo |
-| Recuérdame en 20 minutos                 | Cron (main, `--at`) | Una sola vez con tiempo preciso              |
-| Verificación de salud de proyecto en segundo plano | Heartbeat | Se aprovecha del ciclo existente    |
+| Caso de uso                                        | Recomendado         | Por qué                                                  |
+| -------------------------------------------------- | ------------------- | -------------------------------------------------------- |
+| Revisar bandeja de entrada cada 30 min             | Heartbeat           | Agrupa con otras verificaciones, consciente del contexto |
+| Enviar informe diario a las 9am exactas            | Cron (aislado)      | Se necesita tiempo exacto                                |
+| Monitorear calendario para eventos próximos        | Heartbeat           | Encaja naturalmente para conciencia periódica            |
+| Ejecutar análisis profundo semanal                 | Cron (aislado)      | Tarea independiente, puede usar diferente modelo         |
+| Recuérdame en 20 minutos                           | Cron (main, `--at`) | Una sola vez con tiempo preciso                          |
+| Verificación de salud de proyecto en segundo plano | Heartbeat           | Se aprovecha del ciclo existente                         |
 
 ## Heartbeat: Conciencia periódica
 
@@ -215,13 +215,13 @@ Ver [Lobster](/es-ES/tools/lobster) para uso completo y ejemplos.
 
 Tanto heartbeat como cron pueden interactuar con la sesión principal, pero de manera diferente:
 
-|         | Heartbeat                       | Cron (main)              | Cron (aislado)             |
-| ------- | ------------------------------- | ------------------------ | -------------------------- |
-| Sesión  | Principal                       | Principal (via evento del sistema) | `cron:<jobId>`             |
-| Historial | Compartido                    | Compartido               | Nuevo cada ejecución       |
-| Contexto | Completo                       | Completo                 | Ninguno (comienza limpio)  |
-| Modelo  | Modelo de sesión principal      | Modelo de sesión principal | Puede anular             |
-| Salida  | Entregado si no es `HEARTBEAT_OK` | Prompt de heartbeat + evento | Resumen de announce (por defecto) |
+|           | Heartbeat                         | Cron (main)                        | Cron (aislado)                    |
+| --------- | --------------------------------- | ---------------------------------- | --------------------------------- |
+| Sesión    | Principal                         | Principal (via evento del sistema) | `cron:<jobId>`                    |
+| Historial | Compartido                        | Compartido                         | Nuevo cada ejecución              |
+| Contexto  | Completo                          | Completo                           | Ninguno (comienza limpio)         |
+| Modelo    | Modelo de sesión principal        | Modelo de sesión principal         | Puede anular                      |
+| Salida    | Entregado si no es `HEARTBEAT_OK` | Prompt de heartbeat + evento       | Resumen de announce (por defecto) |
 
 ### Cuándo usar cron de sesión principal
 
@@ -262,11 +262,11 @@ openclaw cron add \
 
 ## Consideraciones de costo
 
-| Mecanismo       | Perfil de costo                                         |
-| --------------- | ------------------------------------------------------- |
-| Heartbeat       | Un turno cada N minutos; escala con tamaño de HEARTBEAT.md |
-| Cron (main)     | Agrega evento al próximo heartbeat (sin turno aislado)  |
-| Cron (aislado)  | Turno de agente completo por trabajo; puede usar modelo más barato |
+| Mecanismo      | Perfil de costo                                                    |
+| -------------- | ------------------------------------------------------------------ |
+| Heartbeat      | Un turno cada N minutos; escala con tamaño de HEARTBEAT.md         |
+| Cron (main)    | Agrega evento al próximo heartbeat (sin turno aislado)             |
+| Cron (aislado) | Turno de agente completo por trabajo; puede usar modelo más barato |
 
 **Consejos**:
 

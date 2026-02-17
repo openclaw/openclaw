@@ -56,13 +56,14 @@ openclaw config set channels.nextcloudTalk.password "tu_contraseña"
 <Accordion title="Usando Token de Aplicación en lugar de Contraseña">
   Para mayor seguridad, puedes usar un token de aplicación en lugar de tu contraseña:
 
-  1. Ve a Configuración de Nextcloud → Seguridad
-  2. Crea un nuevo token de aplicación
-  3. Usa el token como contraseña:
+1. Ve a Configuración de Nextcloud → Seguridad
+2. Crea un nuevo token de aplicación
+3. Usa el token como contraseña:
 
-  ```bash
-  openclaw config set channels.nextcloudTalk.password "tu_token_de_aplicacion"
-  ```
+```bash
+openclaw config set channels.nextcloudTalk.password "tu_token_de_aplicacion"
+```
+
 </Accordion>
 
 ### 3. Configurar Webhook
@@ -235,6 +236,7 @@ Si el bot no recibe mensajes:
 Si ves errores de autenticación:
 
 1. Verifica nombre de usuario y contraseña/token:
+
    ```bash
    openclaw config get channels.nextcloudTalk.username
    ```
@@ -248,6 +250,7 @@ Si ves errores de autenticación:
 Si Nextcloud no puede alcanzar el webhook:
 
 1. Verifica que el puerto esté abierto:
+
    ```bash
    netstat -an | grep 3979
    ```
@@ -268,19 +271,19 @@ Si Nextcloud no puede alcanzar el webhook:
 ### Bot Básico de Nextcloud Talk
 
 ```typescript
-import { NextcloudTalkChannel } from '@openclaw/nextcloud-talk';
+import { NextcloudTalkChannel } from "@openclaw/nextcloud-talk";
 
 const talk = new NextcloudTalkChannel({
-  serverUrl: 'https://cloud.example.com',
-  username: 'bot',
-  password: process.env.NEXTCLOUD_PASSWORD
+  serverUrl: "https://cloud.example.com",
+  username: "bot",
+  password: process.env.NEXTCLOUD_PASSWORD,
 });
 
 await talk.connect();
 
-talk.on('message', async (event) => {
-  if (event.message.startsWith('!hello')) {
-    await talk.sendMessage(event.roomToken, 'Hola!');
+talk.on("message", async (event) => {
+  if (event.message.startsWith("!hello")) {
+    await talk.sendMessage(event.roomToken, "Hola!");
   }
 });
 ```
@@ -288,18 +291,18 @@ talk.on('message', async (event) => {
 ### Bot con Comandos
 
 ```typescript
-import { NextcloudTalkChannel } from '@openclaw/nextcloud-talk';
+import { NextcloudTalkChannel } from "@openclaw/nextcloud-talk";
 
 const talk = new NextcloudTalkChannel({
-  serverUrl: 'https://cloud.example.com',
-  username: 'bot',
+  serverUrl: "https://cloud.example.com",
+  username: "bot",
   password: process.env.NEXTCLOUD_PASSWORD,
-  commandPrefix: '!'
+  commandPrefix: "!",
 });
 
 await talk.connect();
 
-talk.command('info', async (ctx) => {
+talk.command("info", async (ctx) => {
   await ctx.reply(`
 **Información de Sala**
 Token de sala: ${ctx.roomToken}

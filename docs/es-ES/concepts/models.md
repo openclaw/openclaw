@@ -120,14 +120,14 @@ openclaw config set agent.models '[
 
 El **límite de contexto** (también llamado "ventana de contexto") es el número máximo de tokens que un modelo puede procesar en una sola solicitud.
 
-| Modelo | Límite de Contexto |
-|-------|----------------|
-| Claude 3.5 Sonnet | 200K tokens |
-| Claude 3.5 Haiku | 200K tokens |
-| GPT-4o | 128K tokens |
-| Gemini 1.5 Pro | 2M tokens |
-| Gemini 1.5 Flash | 1M tokens |
-| Llama 3.1 405B | 128K tokens |
+| Modelo            | Límite de Contexto |
+| ----------------- | ------------------ |
+| Claude 3.5 Sonnet | 200K tokens        |
+| Claude 3.5 Haiku  | 200K tokens        |
+| GPT-4o            | 128K tokens        |
+| Gemini 1.5 Pro    | 2M tokens          |
+| Gemini 1.5 Flash  | 1M tokens          |
+| Llama 3.1 405B    | 128K tokens        |
 
 OpenClaw compacta automáticamente sesiones largas para ajustarse dentro del límite de contexto del modelo.
 
@@ -135,14 +135,14 @@ OpenClaw compacta automáticamente sesiones largas para ajustarse dentro del lí
 
 El **límite de salida** es el número máximo de tokens que un modelo puede generar en una sola respuesta.
 
-| Modelo | Límite de Salida |
-|-------|--------------|
-| Claude 3.5 Sonnet | 8K tokens |
-| Claude 3.5 Haiku | 8K tokens |
-| GPT-4o | 16K tokens |
-| Gemini 1.5 Pro | 8K tokens |
-| Gemini 1.5 Flash | 8K tokens |
-| Llama 3.1 405B | 4K tokens |
+| Modelo            | Límite de Salida |
+| ----------------- | ---------------- |
+| Claude 3.5 Sonnet | 8K tokens        |
+| Claude 3.5 Haiku  | 8K tokens        |
+| GPT-4o            | 16K tokens       |
+| Gemini 1.5 Pro    | 8K tokens        |
+| Gemini 1.5 Flash  | 8K tokens        |
+| Llama 3.1 405B    | 4K tokens        |
 
 OpenClaw permite al modelo continuar si una respuesta se trunca.
 
@@ -315,13 +315,13 @@ Consulta [Usage Tracking](/es-ES/concepts/usage-tracking) para más detalles.
 
 Los proveedores imponen **límites de tasa** para prevenir abuso:
 
-| Proveedor | Límites Típicos |
-|----------|---------------|
-| Anthropic | 50 solicitudes/min |
-| OpenAI | 500 solicitudes/min |
-| Google | 2-1000 solicitudes/min |
-| Ollama | Sin límites (local) |
-| Groq | 30 solicitudes/min |
+| Proveedor | Límites Típicos        |
+| --------- | ---------------------- |
+| Anthropic | 50 solicitudes/min     |
+| OpenAI    | 500 solicitudes/min    |
+| Google    | 2-1000 solicitudes/min |
+| Ollama    | Sin límites (local)    |
+| Groq      | 30 solicitudes/min     |
 
 OpenClaw maneja automáticamente límites de tasa con reintentos exponenciales.
 

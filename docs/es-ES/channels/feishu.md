@@ -364,23 +364,23 @@ openclaw pairing list feishu
 
 ## Comandos comunes
 
-| Comando   | Descripción              |
-| --------- | ------------------------ |
-| `/status` | Mostrar estado del bot   |
-| `/reset`  | Restablecer la sesión    |
-| `/model`  | Mostrar/cambiar modelo   |
+| Comando   | Descripción            |
+| --------- | ---------------------- |
+| `/status` | Mostrar estado del bot |
+| `/reset`  | Restablecer la sesión  |
+| `/model`  | Mostrar/cambiar modelo |
 
 > Nota: Feishu aún no admite menús de comandos nativos, por lo que los comandos deben enviarse como texto.
 
 ## Comandos de gestión del gateway
 
-| Comando                    | Descripción               |
-| -------------------------- | ------------------------- |
-| `openclaw gateway status`  | Mostrar estado del gateway|
-| `openclaw gateway install` | Instalar/iniciar servicio |
-| `openclaw gateway stop`    | Detener servicio          |
-| `openclaw gateway restart` | Reiniciar servicio        |
-| `openclaw logs --follow`   | Seguir logs del gateway   |
+| Comando                    | Descripción                |
+| -------------------------- | -------------------------- |
+| `openclaw gateway status`  | Mostrar estado del gateway |
+| `openclaw gateway install` | Instalar/iniciar servicio  |
+| `openclaw gateway stop`    | Detener servicio           |
+| `openclaw gateway restart` | Reiniciar servicio         |
+| `openclaw logs --follow`   | Seguir logs del gateway    |
 
 ---
 
@@ -527,34 +527,34 @@ Configuración completa: [Configuración del gateway](/es-ES/gateway/configurati
 
 Opciones clave:
 
-| Configuración                                     | Descripción                       | Predeterminado |
-| ------------------------------------------------- | --------------------------------- | -------------- |
-| `channels.feishu.enabled`                         | Habilitar/deshabilitar canal      | `true`         |
-| `channels.feishu.domain`                          | Dominio API (`feishu` o `lark`)   | `feishu`       |
-| `channels.feishu.accounts.<id>.appId`             | App ID                            | -              |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                        | -              |
-| `channels.feishu.accounts.<id>.domain`            | Anulación de dominio API por cuenta| `feishu`      |
-| `channels.feishu.dmPolicy`                        | Política de mensajes directos     | `pairing`      |
-| `channels.feishu.allowFrom`                       | Lista de permitidos DM (lista open_id)| -          |
-| `channels.feishu.groupPolicy`                     | Política de grupo                 | `open`         |
-| `channels.feishu.groupAllowFrom`                  | Lista de permitidos de grupo      | -              |
-| `channels.feishu.groups.<chat_id>.requireMention` | Requiere @mención                 | `true`         |
-| `channels.feishu.groups.<chat_id>.enabled`        | Habilitar grupo                   | `true`         |
-| `channels.feishu.textChunkLimit`                  | Tamaño de fragmento de mensaje    | `2000`         |
-| `channels.feishu.mediaMaxMb`                      | Límite de tamaño de medios        | `30`           |
-| `channels.feishu.streaming`                       | Habilitar salida de tarjeta en streaming| `true`   |
-| `channels.feishu.blockStreaming`                  | Habilitar streaming de bloques    | `true`         |
+| Configuración                                     | Descripción                              | Predeterminado |
+| ------------------------------------------------- | ---------------------------------------- | -------------- |
+| `channels.feishu.enabled`                         | Habilitar/deshabilitar canal             | `true`         |
+| `channels.feishu.domain`                          | Dominio API (`feishu` o `lark`)          | `feishu`       |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                   | -              |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                               | -              |
+| `channels.feishu.accounts.<id>.domain`            | Anulación de dominio API por cuenta      | `feishu`       |
+| `channels.feishu.dmPolicy`                        | Política de mensajes directos            | `pairing`      |
+| `channels.feishu.allowFrom`                       | Lista de permitidos DM (lista open_id)   | -              |
+| `channels.feishu.groupPolicy`                     | Política de grupo                        | `open`         |
+| `channels.feishu.groupAllowFrom`                  | Lista de permitidos de grupo             | -              |
+| `channels.feishu.groups.<chat_id>.requireMention` | Requiere @mención                        | `true`         |
+| `channels.feishu.groups.<chat_id>.enabled`        | Habilitar grupo                          | `true`         |
+| `channels.feishu.textChunkLimit`                  | Tamaño de fragmento de mensaje           | `2000`         |
+| `channels.feishu.mediaMaxMb`                      | Límite de tamaño de medios               | `30`           |
+| `channels.feishu.streaming`                       | Habilitar salida de tarjeta en streaming | `true`         |
+| `channels.feishu.blockStreaming`                  | Habilitar streaming de bloques           | `true`         |
 
 ---
 
 ## Referencia dmPolicy
 
-| Valor         | Comportamiento                                                     |
-| ------------- | ------------------------------------------------------------------ |
+| Valor         | Comportamiento                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
 | `"pairing"`   | **Predeterminado.** Los usuarios desconocidos obtienen un código de emparejamiento; deben ser aprobados |
-| `"allowlist"` | Solo los usuarios en `allowFrom` pueden chatear                    |
-| `"open"`      | Permitir todos los usuarios (requiere `"*"` en allowFrom)          |
-| `"disabled"`  | Deshabilitar mensajes directos                                     |
+| `"allowlist"` | Solo los usuarios en `allowFrom` pueden chatear                                                         |
+| `"open"`      | Permitir todos los usuarios (requiere `"*"` en allowFrom)                                               |
+| `"disabled"`  | Deshabilitar mensajes directos                                                                          |
 
 ---
 

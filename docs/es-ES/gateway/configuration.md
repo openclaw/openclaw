@@ -333,12 +333,12 @@ El Gateway observa `~/.openclaw/openclaw.json` y aplica los cambios automáticam
 
 ### Modos de recarga
 
-| Modo                   | Comportamiento                                                                                |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| **`hybrid`** (predeterminado) | Aplica cambios seguros en caliente instantáneamente. Reinicia automáticamente para los críticos. |
-| **`hot`**              | Aplica solo cambios seguros en caliente. Registra una advertencia cuando se necesita un reinicio — tú lo manejas. |
-| **`restart`**          | Reinicia el Gateway con cualquier cambio de configuración, seguro o no.                       |
-| **`off`**              | Deshabilita la observación de archivos. Los cambios tienen efecto en el próximo reinicio manual. |
+| Modo                          | Comportamiento                                                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **`hybrid`** (predeterminado) | Aplica cambios seguros en caliente instantáneamente. Reinicia automáticamente para los críticos.                  |
+| **`hot`**                     | Aplica solo cambios seguros en caliente. Registra una advertencia cuando se necesita un reinicio — tú lo manejas. |
+| **`restart`**                 | Reinicia el Gateway con cualquier cambio de configuración, seguro o no.                                           |
+| **`off`**                     | Deshabilita la observación de archivos. Los cambios tienen efecto en el próximo reinicio manual.                  |
 
 ```json5
 {
@@ -352,16 +352,16 @@ El Gateway observa `~/.openclaw/openclaw.json` y aplica los cambios automáticam
 
 La mayoría de los campos se aplican en caliente sin tiempo de inactividad. En modo `hybrid`, los cambios que requieren reinicio se manejan automáticamente.
 
-| Categoría            | Campos                                                               | ¿Reinicio necesario? |
-| -------------------- | -------------------------------------------------------------------- | -------------------- |
-| Canales              | `channels.*`, `web` (WhatsApp) — todos los canales integrados y de extensión | No                   |
-| Agente y modelos     | `agent`, `agents`, `models`, `routing`                               | No                   |
-| Automatización       | `hooks`, `cron`, `agent.heartbeat`                                   | No                   |
-| Sesiones y mensajes  | `session`, `messages`                                                | No                   |
-| Herramientas y medios| `tools`, `browser`, `skills`, `audio`, `talk`                        | No                   |
-| UI y varios          | `ui`, `logging`, `identity`, `bindings`                              | No                   |
-| Servidor Gateway     | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)                 | **Sí**               |
-| Infraestructura      | `discovery`, `canvasHost`, `plugins`                                 | **Sí**               |
+| Categoría             | Campos                                                                       | ¿Reinicio necesario? |
+| --------------------- | ---------------------------------------------------------------------------- | -------------------- |
+| Canales               | `channels.*`, `web` (WhatsApp) — todos los canales integrados y de extensión | No                   |
+| Agente y modelos      | `agent`, `agents`, `models`, `routing`                                       | No                   |
+| Automatización        | `hooks`, `cron`, `agent.heartbeat`                                           | No                   |
+| Sesiones y mensajes   | `session`, `messages`                                                        | No                   |
+| Herramientas y medios | `tools`, `browser`, `skills`, `audio`, `talk`                                | No                   |
+| UI y varios           | `ui`, `logging`, `identity`, `bindings`                                      | No                   |
+| Servidor Gateway      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)                         | **Sí**               |
+| Infraestructura       | `discovery`, `canvasHost`, `plugins`                                         | **Sí**               |
 
 <Note>
 `gateway.reload` y `gateway.remote` son excepciones — cambiarlos **no** activa un reinicio.

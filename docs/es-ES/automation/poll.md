@@ -8,6 +8,7 @@ El sondeo permite que tu Gateway OpenClaw verifique periódicamente recursos ext
 ## Descripción general
 
 Los trabajos de sondeo son scripts o comandos que:
+
 - Se ejecutan en un horario regular
 - Verifican el estado de un recurso externo
 - Activan acciones cuando se detectan cambios
@@ -40,12 +41,12 @@ Crea un script que consulte una API y active acciones según la respuesta:
 
 ```javascript
 // poll-api.js
-const fetch = require('node-fetch');
+const fetch = require("node-fetch");
 
 async function checkAPI() {
-  const response = await fetch('https://api.ejemplo.com/status');
+  const response = await fetch("https://api.ejemplo.com/status");
   const data = await response.json();
-  
+
   if (data.newItems > 0) {
     console.log(`Encontrados ${data.newItems} elementos nuevos`);
     // Activar una acción (enviar mensaje, webhook, etc.)
@@ -80,7 +81,7 @@ fi
 if [ "$CURRENT" != "$PREVIOUS" ]; then
   echo "Archivo cambiado. Activando acción..."
   # Tu lógica de acción aquí
-  
+
   # Guardar nuevo checksum
   echo "$CURRENT" > "$CHECKSUM_FILE"
 fi
@@ -93,12 +94,12 @@ fi
 Guarda el estado (última ID verificada, checksums, timestamps) para rastrear cambios:
 
 ```javascript
-const fs = require('fs');
-const STATE_FILE = '/tmp/poll-state.json';
+const fs = require("fs");
+const STATE_FILE = "/tmp/poll-state.json";
 
 function loadState() {
   if (fs.existsSync(STATE_FILE)) {
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
   }
   return { lastId: 0 };
 }
@@ -123,7 +124,7 @@ async function poll() {
   try {
     // Tu lógica de sondeo
   } catch (error) {
-    console.error('Error al sondear:', error);
+    console.error("Error al sondear:", error);
     // Opcionalmente notificar sobre el error
   }
 }
@@ -132,6 +133,7 @@ async function poll() {
 ### 3. Limitar la frecuencia de sondeo
 
 Evita sobrecargar servicios externos:
+
 - Usa intervalos razonables (minutos, no segundos)
 - Implementa retroceso exponencial en errores
 - Respeta límites de tasa de APIs

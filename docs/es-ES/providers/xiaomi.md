@@ -26,10 +26,10 @@ openclaw config set model.default=xiaomi-model
 
 ## Configuración
 
-| Clave | Descripción | Valor predeterminado |
-|-------|-------------|----------------------|
-| `xiaomi.apiKey` | Clave API de Xiaomi | - |
-| `xiaomi.baseURL` | URL base de la API | `https://api.moonshot.cn/v1` |
+| Clave            | Descripción         | Valor predeterminado         |
+| ---------------- | ------------------- | ---------------------------- |
+| `xiaomi.apiKey`  | Clave API de Xiaomi | -                            |
+| `xiaomi.baseURL` | URL base de la API  | `https://api.moonshot.cn/v1` |
 
 ## Modelos
 

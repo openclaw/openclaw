@@ -254,19 +254,19 @@ Si los tiempos son incorrectos alrededor de transiciones de horario de verano:
 OpenClaw proporciona APIs programáticas para manejo de zonas horarias:
 
 ```typescript
-import { TimezoneManager } from 'openclaw'
+import { TimezoneManager } from "openclaw";
 
 // Obtener zona horaria del usuario
-const timezone = await tz.getUserTimezone(userId)
+const timezone = await tz.getUserTimezone(userId);
 
 // Formatear tiempo en zona del usuario
-const formatted = tz.format(timestamp, timezone, { format: '12h' })
+const formatted = tz.format(timestamp, timezone, { format: "12h" });
 
 // Analizar tiempo relativo
-const date = tz.parseRelative('mañana', timezone)
+const date = tz.parseRelative("mañana", timezone);
 
 // Convertir entre zonas horarias
-const converted = tz.convert(timestamp, 'America/Los_Angeles', 'Europe/London')
+const converted = tz.convert(timestamp, "America/Los_Angeles", "Europe/London");
 ```
 
 Consulta la [Referencia API](/es-ES/api/timezone) para documentación completa.

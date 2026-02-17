@@ -27,11 +27,11 @@ openclaw config set model.default=abab6.5-chat
 
 ## Configuración
 
-| Clave | Descripción | Valor predeterminado |
-|-------|-------------|----------------------|
-| `minimax.apiKey` | Clave API de MiniMax | - |
-| `minimax.groupId` | ID de grupo de MiniMax | - |
-| `minimax.baseURL` | URL base de la API | `https://api.minimax.chat/v1` |
+| Clave             | Descripción            | Valor predeterminado          |
+| ----------------- | ---------------------- | ----------------------------- |
+| `minimax.apiKey`  | Clave API de MiniMax   | -                             |
+| `minimax.groupId` | ID de grupo de MiniMax | -                             |
+| `minimax.baseURL` | URL base de la API     | `https://api.minimax.chat/v1` |
 
 ## Modelos
 
@@ -46,6 +46,7 @@ MiniMax proporciona varios modelos con diferentes capacidades:
 ### Características del modelo
 
 Todos los modelos de MiniMax soportan:
+
 - Conversaciones de chat
 - Respuestas en streaming
 - Llamadas a funciones
@@ -90,19 +91,20 @@ openclaw message send "Tu prompt aquí" \
 
 ## Parámetros del modelo
 
-| Parámetro | Descripción | Rango | Predeterminado |
-|-----------|-------------|-------|----------------|
-| `temperature` | Controla la aleatoriedad | 0.0 - 1.0 | 0.9 |
-| `top_p` | Muestreo nucleus | 0.0 - 1.0 | 0.95 |
-| `max_tokens` | Longitud máxima de respuesta | 1 - 8192 | 2048 |
-| `presence_penalty` | Penaliza tokens repetidos | -2.0 - 2.0 | 0.0 |
-| `frequency_penalty` | Penaliza frecuencia de tokens | -2.0 - 2.0 | 0.0 |
+| Parámetro           | Descripción                   | Rango      | Predeterminado |
+| ------------------- | ----------------------------- | ---------- | -------------- |
+| `temperature`       | Controla la aleatoriedad      | 0.0 - 1.0  | 0.9            |
+| `top_p`             | Muestreo nucleus              | 0.0 - 1.0  | 0.95           |
+| `max_tokens`        | Longitud máxima de respuesta  | 1 - 8192   | 2048           |
+| `presence_penalty`  | Penaliza tokens repetidos     | -2.0 - 2.0 | 0.0            |
+| `frequency_penalty` | Penaliza frecuencia de tokens | -2.0 - 2.0 | 0.0            |
 
 ## Solución de problemas
 
 ### Error de autenticación
 
 Si ves errores de autenticación, verifica que:
+
 - Tu clave API sea válida
 - Tu ID de grupo sea correcto
 - Tu cuenta tenga suficiente crédito
@@ -110,6 +112,7 @@ Si ves errores de autenticación, verifica que:
 ### Errores de límite de tasa
 
 MiniMax aplica límites de tasa. Si los alcanzas:
+
 - Espera antes de reintentar
 - Considera actualizar tu plan
 - Implementa lógica de reintento con backoff exponencial
@@ -117,6 +120,7 @@ MiniMax aplica límites de tasa. Si los alcanzas:
 ### Errores del modelo
 
 Si un modelo no está disponible:
+
 - Verifica que el nombre del modelo sea correcto
 - Asegúrate de que tu cuenta tenga acceso a ese modelo
 - Intenta con un modelo diferente

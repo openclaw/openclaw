@@ -240,20 +240,20 @@ Consulta la [Guía del Desarrollador](/es-ES/development/oauth) para más detall
 OpenClaw proporciona APIs programáticas para OAuth:
 
 ```typescript
-import { OAuthClient } from 'openclaw'
+import { OAuthClient } from "openclaw";
 
 // Iniciar flujo OAuth
-const client = new OAuthClient('slack')
-const authUrl = await client.getAuthorizationUrl()
+const client = new OAuthClient("slack");
+const authUrl = await client.getAuthorizationUrl();
 
 // Manejar callback
-await client.handleCallback(code)
+await client.handleCallback(code);
 
 // Obtener token de acceso
-const token = await client.getAccessToken()
+const token = await client.getAccessToken();
 
 // Actualizar token
-const newToken = await client.refreshToken()
+const newToken = await client.refreshToken();
 ```
 
 Consulta la [Referencia API](/es-ES/api/oauth) para documentación completa.

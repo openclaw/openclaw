@@ -68,6 +68,7 @@ openclaw config set channels.discord.groupBehavior "mention"
 En WhatsApp, puedes unirte a grupos de dos maneras:
 
 1. **Ser añadido por un participante existente**
+
    ```bash
    # No se requiere configuración - solo haz que alguien te añada al grupo
    ```
@@ -92,11 +93,13 @@ openclaw group info <group_id>
 Para grupos de Telegram:
 
 1. **Ser añadido al grupo**
+
    ```bash
    # Haz que un administrador te añada al grupo
    ```
 
 2. **Unirse vía enlace de invitación**
+
    ```bash
    # Haz clic en un enlace t.me/joinchat/...
    ```
@@ -111,16 +114,16 @@ Para grupos de Telegram:
 Para servidores de Discord:
 
 1. **Invitar el bot al servidor**
+
    ```bash
    openclaw channel discord invite
    ```
-   
+
    Esto generará un enlace de invitación OAuth2.
 
 2. **Seleccionar canales**
-   
+
    Por defecto, el bot puede ver todos los canales. Restringe el acceso mediante permisos de Discord:
-   
    - Ve a Configuración del Servidor → Roles
    - Edita el rol del bot
    - Deshabilita "Ver Canales" para canales específicos
@@ -130,6 +133,7 @@ Para servidores de Discord:
 Para espacios de trabajo de Slack:
 
 1. **Instalar la aplicación**
+
    ```bash
    openclaw channel slack install
    ```
@@ -190,19 +194,19 @@ OpenClaw proporciona comandos incorporados de grupo:
 Define comandos personalizados para tu agente:
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const agent = new OpenClawAgent({
-  name: 'mybot',
-  commandPrefix: '!'
+  name: "mybot",
+  commandPrefix: "!",
 });
 
-agent.command('hello', async (ctx) => {
-  await ctx.reply('¡Hola! ¿Cómo puedo ayudarte?');
+agent.command("hello", async (ctx) => {
+  await ctx.reply("¡Hola! ¿Cómo puedo ayudarte?");
 });
 
-agent.command('echo', async (ctx, args) => {
-  await ctx.reply(args.join(' '));
+agent.command("echo", async (ctx, args) => {
+  await ctx.reply(args.join(" "));
 });
 ```
 
@@ -256,11 +260,11 @@ openclaw config set agents.default.historyMaxAge 24
 El agente puede mencionar a usuarios en sus respuestas:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     // Menciona al remitente
     await message.reply(`Hola @${message.sender.name}!`);
-    
+
     // Menciona a múltiples usuarios
     await message.reply(`@${user1.name} y @${user2.name}, por favor revisen esto.`);
   }
@@ -280,11 +284,11 @@ La sintaxis de mención específica depende del canal:
 Responde a mensajes específicos (si el canal lo soporta):
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     // Responde directamente al mensaje del usuario
-    await message.reply('Respondiendo a tu pregunta...', {
-      replyTo: message.id
+    await message.reply("Respondiendo a tu pregunta...", {
+      replyTo: message.id,
     });
   }
 });
@@ -332,19 +336,19 @@ openclaw config set channels.discord.requiredRoles '["Admin", "Moderador"]'
 Implementa filtrado de contenido en grupos:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     // Filtra spam
     if (isSpam(message.content)) {
       await message.delete();
-      await group.warn(message.sender, 'No se permite spam');
+      await group.warn(message.sender, "No se permite spam");
       return;
     }
-    
+
     // Filtra contenido inapropiado
     if (hasInappropriateContent(message.content)) {
       await message.delete();
-      await group.mute(message.sender, '1h');
+      await group.mute(message.sender, "1h");
       return;
     }
   }
@@ -358,14 +362,14 @@ agent.on('message', async (message) => {
 Algunos canales soportan hilos (Discord, Slack, Matrix):
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup && message.thread) {
     // Este mensaje es parte de un hilo
     console.log(`Hilo: ${message.thread.id}`);
-    
+
     // Responde en el hilo
-    await message.reply('Respondiendo en hilo', {
-      threadId: message.thread.id
+    await message.reply("Respondiendo en hilo", {
+      threadId: message.thread.id,
     });
   }
 });
@@ -376,15 +380,15 @@ agent.on('message', async (message) => {
 Crea encuestas en grupos:
 
 ```typescript
-agent.command('poll', async (ctx, args) => {
+agent.command("poll", async (ctx, args) => {
   const question = args[0];
   const options = args.slice(1);
-  
+
   await ctx.createPoll({
     question,
     options,
     allowMultipleAnswers: false,
-    isAnonymous: true
+    isAnonymous: true,
   });
 });
 ```
@@ -400,10 +404,10 @@ Uso:
 Ancla mensajes importantes (requiere permisos de admin):
 
 ```typescript
-agent.command('pin', async (ctx) => {
+agent.command("pin", async (ctx) => {
   if (ctx.message.replyTo) {
     await ctx.group.pinMessage(ctx.message.replyTo.id);
-    await ctx.reply('Mensaje anclado!');
+    await ctx.reply("Mensaje anclado!");
   }
 });
 ```
@@ -413,14 +417,14 @@ agent.command('pin', async (ctx) => {
 Obtén información sobre el grupo:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     const group = await message.getGroup();
-    
+
     console.log(`Nombre del grupo: ${group.name}`);
     console.log(`Descripción: ${group.description}`);
     console.log(`Conteo de miembros: ${group.memberCount}`);
-    console.log(`Administradores: ${group.admins.map(a => a.name).join(', ')}`);
+    console.log(`Administradores: ${group.admins.map((a) => a.name).join(", ")}`);
   }
 });
 ```
@@ -444,16 +448,16 @@ Prevén que el bot haga spam en el grupo:
 ```typescript
 const rateLimiter = new RateLimiter({
   maxMessages: 10,
-  perMinutes: 1
+  perMinutes: 1,
 });
 
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     if (!rateLimiter.allow(message.group.id)) {
       // Omitir este mensaje - límite de tasa excedido
       return;
     }
-    
+
     // Procesar mensaje...
   }
 });
@@ -464,7 +468,7 @@ agent.on('message', async (message) => {
 Haz que los usuarios sepan cómo interactuar con el bot:
 
 ```typescript
-agent.command('help', async (ctx) => {
+agent.command("help", async (ctx) => {
   await ctx.reply(`
 **Comandos del Bot**
 • !help - Mostrar esta ayuda
@@ -482,9 +486,9 @@ Mencióname (@bot) o usa un comando para interactuar conmigo.
 Redirige consultas sensibles a DMs:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup && containsSensitiveInfo(message.content)) {
-    await message.reply('Por favor envíame un DM para consultas sensibles.');
+    await message.reply("Por favor envíame un DM para consultas sensibles.");
     return;
   }
 });
@@ -495,12 +499,12 @@ agent.on('message', async (message) => {
 Mantén registros de interacciones grupales para depuración:
 
 ```typescript
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
-    logger.info('Mensaje de grupo', {
+    logger.info("Mensaje de grupo", {
       group: message.group.name,
       sender: message.sender.name,
-      content: message.content.substring(0, 100)
+      content: message.content.substring(0, 100),
     });
   }
 });
@@ -513,11 +517,13 @@ agent.on('message', async (message) => {
 Si el bot no responde en grupos:
 
 1. Verifica el comportamiento de grupo:
+
    ```bash
    openclaw config get channels.groupBehavior
    ```
 
 2. Asegúrate de que el bot esté en el grupo:
+
    ```bash
    openclaw channels status --deep
    ```
@@ -538,6 +544,7 @@ Si el bot no responde en grupos:
 Si el bot hace spam en el grupo:
 
 1. Cambia a comportamiento de solo-mención:
+
    ```bash
    openclaw config set channels.groupBehavior "mention"
    ```
@@ -578,18 +585,18 @@ Si las menciones no funcionan:
 ### Bot Básico de Grupo
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const agent = new OpenClawAgent({
-  name: 'groupbot',
-  commandPrefix: '!'
+  name: "groupbot",
+  commandPrefix: "!",
 });
 
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup) {
     // Responde solo a menciones
     if (message.mentions?.includes(agent.id)) {
-      await message.reply('¿Cómo puedo ayudarte?');
+      await message.reply("¿Cómo puedo ayudarte?");
     }
   }
 });
@@ -600,18 +607,18 @@ await agent.start();
 ### Bot con Comandos
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const agent = new OpenClawAgent({
-  name: 'commandbot',
-  commandPrefix: '!'
+  name: "commandbot",
+  commandPrefix: "!",
 });
 
-agent.command('hello', async (ctx) => {
+agent.command("hello", async (ctx) => {
   await ctx.reply(`¡Hola @${ctx.sender.name}!`);
 });
 
-agent.command('info', async (ctx) => {
+agent.command("info", async (ctx) => {
   const group = await ctx.getGroup();
   await ctx.reply(`
 **Información del Grupo**
@@ -626,15 +633,15 @@ await agent.start();
 ### Bot Moderador
 
 ```typescript
-import { OpenClawAgent } from 'openclaw';
+import { OpenClawAgent } from "openclaw";
 
 const agent = new OpenClawAgent({
-  name: 'modbot',
-  commandPrefix: '!'
+  name: "modbot",
+  commandPrefix: "!",
 });
 
 // Auto-moderar spam
-agent.on('message', async (message) => {
+agent.on("message", async (message) => {
   if (message.isGroup && isSpam(message.content)) {
     await message.delete();
     await message.reply(`@${message.sender.name}, por favor no hagas spam.`);
@@ -642,12 +649,12 @@ agent.on('message', async (message) => {
 });
 
 // Comando de patear (solo admin)
-agent.command('kick', async (ctx, args) => {
+agent.command("kick", async (ctx, args) => {
   if (!ctx.sender.isAdmin) {
-    await ctx.reply('Solo administradores pueden patear usuarios.');
+    await ctx.reply("Solo administradores pueden patear usuarios.");
     return;
   }
-  
+
   const userId = args[0];
   await ctx.group.kick(userId);
   await ctx.reply(`Usuario pateado.`);

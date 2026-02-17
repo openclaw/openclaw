@@ -18,6 +18,7 @@ El icono de la app de macOS de OpenClaw aparece en múltiples ubicaciones:
 Ubicación: `apps/macos/Sources/OpenClaw/Resources/Assets.xcassets/AppIcon.appiconset/`
 
 Tamaños requeridos:
+
 - 16x16, 32x32, 64x64, 128x128, 256x256, 512x512, 1024x1024
 - Variantes @1x y @2x para la mayoría de tamaños
 
@@ -26,6 +27,7 @@ Tamaños requeridos:
 Ubicación: `apps/macos/Sources/OpenClaw/Resources/Assets.xcassets/MenuBarIcon.imageset/`
 
 Especificaciones:
+
 - Plantilla monocromática (se adapta al tema del sistema)
 - Tamaños: 16x16@1x, 32x32@2x
 - Formato: PDF o PNG con canal alfa

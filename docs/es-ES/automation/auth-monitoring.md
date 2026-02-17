@@ -8,6 +8,7 @@ El monitoreo de autenticación detecta automáticamente cuándo los canales pier
 ## Cómo funciona
 
 OpenClaw verifica periódicamente el estado de autenticación de los canales configurados y:
+
 - Registra eventos de desconexión
 - Activa webhooks cuando cambia el estado del canal
 - Puede ejecutar hooks personalizados en eventos de autenticación

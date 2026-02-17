@@ -23,9 +23,9 @@ Venice AI proporciona inferencia de IA enfocada en privacidad con soporte para m
 
 Venice ofrece dos niveles de privacidad: entender esto es clave para elegir tu modelo:
 
-| Modo           | Descripción                                                                                                          | Modelos                                         |
-| -------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| **Privado**    | Completamente privado. Los prompts/respuestas **nunca se almacenan ni registran**. Efímero.                          | Llama, Qwen, DeepSeek, Venice Uncensored, etc. |
+| Modo            | Descripción                                                                                                                 | Modelos                                        |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Privado**     | Completamente privado. Los prompts/respuestas **nunca se almacenan ni registran**. Efímero.                                 | Llama, Qwen, DeepSeek, Venice Uncensored, etc. |
 | **Anonimizado** | Proxy a través de Venice con metadatos eliminados. El proveedor subyacente (OpenAI, Anthropic) ve solicitudes anonimizadas. | Claude, GPT, Gemini, Grok, Kimi, MiniMax       |
 
 ## Características
@@ -112,53 +112,53 @@ openclaw models list | grep venice
 
 ## ¿Qué modelo debería usar?
 
-| Caso de uso                  | Modelo recomendado               | Por qué                                       |
-| ---------------------------- | -------------------------------- | --------------------------------------------- |
-| **Chat general**             | `llama-3.3-70b`                  | Buen rendimiento general, completamente privado |
-| **Mejor calidad general**    | `claude-opus-45`                 | Opus sigue siendo el más potente para tareas difíciles |
-| **Privacidad + calidad Claude** | `claude-opus-45`              | Mejor razonamiento mediante proxy anonimizado |
-| **Codificación**             | `qwen3-coder-480b-a35b-instruct` | Optimizado para código, contexto de 262k     |
-| **Tareas de visión**         | `qwen3-vl-235b-a22b`             | Mejor modelo de visión privado                |
-| **Sin censura**              | `venice-uncensored`              | Sin restricciones de contenido                |
-| **Rápido + económico**       | `qwen3-4b`                       | Ligero, pero capaz                            |
-| **Razonamiento complejo**    | `deepseek-v3.2`                  | Razonamiento fuerte, privado                  |
+| Caso de uso                     | Modelo recomendado               | Por qué                                                |
+| ------------------------------- | -------------------------------- | ------------------------------------------------------ |
+| **Chat general**                | `llama-3.3-70b`                  | Buen rendimiento general, completamente privado        |
+| **Mejor calidad general**       | `claude-opus-45`                 | Opus sigue siendo el más potente para tareas difíciles |
+| **Privacidad + calidad Claude** | `claude-opus-45`                 | Mejor razonamiento mediante proxy anonimizado          |
+| **Codificación**                | `qwen3-coder-480b-a35b-instruct` | Optimizado para código, contexto de 262k               |
+| **Tareas de visión**            | `qwen3-vl-235b-a22b`             | Mejor modelo de visión privado                         |
+| **Sin censura**                 | `venice-uncensored`              | Sin restricciones de contenido                         |
+| **Rápido + económico**          | `qwen3-4b`                       | Ligero, pero capaz                                     |
+| **Razonamiento complejo**       | `deepseek-v3.2`                  | Razonamiento fuerte, privado                           |
 
 ## Modelos disponibles (25 en total)
 
 ### Modelos privados (15) — Completamente privados, sin registro
 
-| ID del modelo                    | Nombre                  | Contexto (tokens) | Características         |
-| -------------------------------- | ----------------------- | ----------------- | ----------------------- |
-| `llama-3.3-70b`                  | Llama 3.3 70B           | 131k              | General                 |
-| `llama-3.2-3b`                   | Llama 3.2 3B            | 131k              | Rápido, ligero          |
-| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B | 131k              | Tareas complejas        |
-| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking     | 131k              | Razonamiento            |
-| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct     | 131k              | General                 |
-| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B        | 262k              | Código                  |
-| `qwen3-next-80b`                 | Qwen3 Next 80B          | 262k              | General                 |
-| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B           | 262k              | Visión                  |
-| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k               | Rápido, razonamiento    |
-| `deepseek-v3.2`                  | DeepSeek V3.2           | 163k              | Razonamiento            |
-| `venice-uncensored`              | Venice Uncensored       | 32k               | Sin censura             |
-| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k              | Visión                  |
-| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct    | 202k              | Visión                  |
-| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B     | 131k              | General                 |
+| ID del modelo                    | Nombre                  | Contexto (tokens) | Características           |
+| -------------------------------- | ----------------------- | ----------------- | ------------------------- |
+| `llama-3.3-70b`                  | Llama 3.3 70B           | 131k              | General                   |
+| `llama-3.2-3b`                   | Llama 3.2 3B            | 131k              | Rápido, ligero            |
+| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B | 131k              | Tareas complejas          |
+| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking     | 131k              | Razonamiento              |
+| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct     | 131k              | General                   |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B        | 262k              | Código                    |
+| `qwen3-next-80b`                 | Qwen3 Next 80B          | 262k              | General                   |
+| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B           | 262k              | Visión                    |
+| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k               | Rápido, razonamiento      |
+| `deepseek-v3.2`                  | DeepSeek V3.2           | 163k              | Razonamiento              |
+| `venice-uncensored`              | Venice Uncensored       | 32k               | Sin censura               |
+| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k              | Visión                    |
+| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct    | 202k              | Visión                    |
+| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B     | 131k              | General                   |
 | `zai-org-glm-4.7`                | GLM 4.7                 | 202k              | Razonamiento, multilingüe |
 
 ### Modelos anonimizados (10) — Mediante proxy de Venice
 
-| ID del modelo            | Original              | Contexto (tokens) | Características       |
-| ------------------------ | --------------------- | ----------------- | --------------------- |
-| `claude-opus-45`         | Claude Opus 4.5       | 202k              | Razonamiento, visión  |
-| `claude-sonnet-45`       | Claude Sonnet 4.5     | 202k              | Razonamiento, visión  |
-| `openai-gpt-52`          | GPT-5.2               | 262k              | Razonamiento          |
-| `openai-gpt-52-codex`    | GPT-5.2 Codex         | 262k              | Razonamiento, visión  |
-| `gemini-3-pro-preview`   | Gemini 3 Pro          | 202k              | Razonamiento, visión  |
-| `gemini-3-flash-preview` | Gemini 3 Flash        | 262k              | Razonamiento, visión  |
-| `grok-41-fast`           | Grok 4.1 Fast         | 262k              | Razonamiento, visión  |
-| `grok-code-fast-1`       | Grok Code Fast 1      | 262k              | Razonamiento, código  |
-| `kimi-k2-thinking`       | Kimi K2 Thinking      | 262k              | Razonamiento          |
-| `minimax-m21`            | MiniMax M2.1          | 202k              | Razonamiento          |
+| ID del modelo            | Original          | Contexto (tokens) | Características      |
+| ------------------------ | ----------------- | ----------------- | -------------------- |
+| `claude-opus-45`         | Claude Opus 4.5   | 202k              | Razonamiento, visión |
+| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k              | Razonamiento, visión |
+| `openai-gpt-52`          | GPT-5.2           | 262k              | Razonamiento         |
+| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k              | Razonamiento, visión |
+| `gemini-3-pro-preview`   | Gemini 3 Pro      | 202k              | Razonamiento, visión |
+| `gemini-3-flash-preview` | Gemini 3 Flash    | 262k              | Razonamiento, visión |
+| `grok-41-fast`           | Grok 4.1 Fast     | 262k              | Razonamiento, visión |
+| `grok-code-fast-1`       | Grok Code Fast 1  | 262k              | Razonamiento, código |
+| `kimi-k2-thinking`       | Kimi K2 Thinking  | 262k              | Razonamiento         |
+| `minimax-m21`            | MiniMax M2.1      | 202k              | Razonamiento         |
 
 ## Descubrimiento de modelos
 
@@ -168,12 +168,12 @@ El endpoint `/models` es público (no requiere autenticación para listar), pero
 
 ## Soporte de streaming y herramientas
 
-| Característica       | Soporte                                                 |
-| -------------------- | ------------------------------------------------------- |
-| **Streaming**        | ✅ Todos los modelos                                    |
+| Característica          | Soporte                                                              |
+| ----------------------- | -------------------------------------------------------------------- |
+| **Streaming**           | ✅ Todos los modelos                                                 |
 | **Llamada a funciones** | ✅ La mayoría de modelos (verifica `supportsFunctionCalling` en API) |
-| **Visión/Imágenes**  | ✅ Modelos marcados con característica "Visión"         |
-| **Modo JSON**        | ✅ Soportado mediante `response_format`                 |
+| **Visión/Imágenes**     | ✅ Modelos marcados con característica "Visión"                      |
+| **Modo JSON**           | ✅ Soportado mediante `response_format`                              |
 
 ## Precios
 
@@ -184,12 +184,12 @@ Venice usa un sistema basado en créditos. Consulta [venice.ai/pricing](https://
 
 ## Comparación: Venice vs API directa
 
-| Aspecto      | Venice (Anonimizado)          | API directa         |
-| ------------ | ----------------------------- | ------------------- |
-| **Privacidad** | Metadatos eliminados, anonimizado | Tu cuenta vinculada |
-| **Latencia** | +10-50ms (proxy)              | Directa             |
+| Aspecto             | Venice (Anonimizado)                  | API directa               |
+| ------------------- | ------------------------------------- | ------------------------- |
+| **Privacidad**      | Metadatos eliminados, anonimizado     | Tu cuenta vinculada       |
+| **Latencia**        | +10-50ms (proxy)                      | Directa                   |
 | **Características** | Mayoría de características soportadas | Características completas |
-| **Facturación** | Créditos de Venice            | Facturación del proveedor |
+| **Facturación**     | Créditos de Venice                    | Facturación del proveedor |
 
 ## Ejemplos de uso
 

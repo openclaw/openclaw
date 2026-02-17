@@ -100,17 +100,17 @@ Las referencias de modelo usan la forma `huggingface/<org>/<model>` (IDs estilo 
 **IDs de ejemplo (desde el endpoint de inferencia):**
 
 | Modelo                 | Referencia (prefijo con `huggingface/`) |
-| ---------------------- | ----------------------------------- |
-| DeepSeek R1            | `deepseek-ai/DeepSeek-R1`           |
-| DeepSeek V3.2          | `deepseek-ai/DeepSeek-V3.2`         |
-| Qwen3 8B               | `Qwen/Qwen3-8B`                     |
-| Qwen2.5 7B Instruct    | `Qwen/Qwen2.5-7B-Instruct`          |
-| Qwen3 32B              | `Qwen/Qwen3-32B`                    |
-| Llama 3.3 70B Instruct | `meta-llama/Llama-3.3-70B-Instruct` |
-| Llama 3.1 8B Instruct  | `meta-llama/Llama-3.1-8B-Instruct`  |
-| GPT-OSS 120B           | `openai/gpt-oss-120b`               |
-| GLM 4.7                | `zai-org/GLM-4.7`                   |
-| Kimi K2.5              | `moonshotai/Kimi-K2.5`              |
+| ---------------------- | --------------------------------------- |
+| DeepSeek R1            | `deepseek-ai/DeepSeek-R1`               |
+| DeepSeek V3.2          | `deepseek-ai/DeepSeek-V3.2`             |
+| Qwen3 8B               | `Qwen/Qwen3-8B`                         |
+| Qwen2.5 7B Instruct    | `Qwen/Qwen2.5-7B-Instruct`              |
+| Qwen3 32B              | `Qwen/Qwen3-32B`                        |
+| Llama 3.3 70B Instruct | `meta-llama/Llama-3.3-70B-Instruct`     |
+| Llama 3.1 8B Instruct  | `meta-llama/Llama-3.1-8B-Instruct`      |
+| GPT-OSS 120B           | `openai/gpt-oss-120b`                   |
+| GLM 4.7                | `zai-org/GLM-4.7`                       |
+| Kimi K2.5              | `moonshotai/Kimi-K2.5`                  |
 
 Puedes agregar `:fastest`, `:cheapest`, o `:provider` (ej. `:together`, `:sambanova`) al id del modelo. Establece tu orden predeterminado en [Inference Provider settings](https://hf.co/settings/inference-providers); consulta [Inference Providers](https://huggingface.co/docs/inference-providers) y **GET** `https://router.huggingface.co/v1/models` para la lista completa.
 

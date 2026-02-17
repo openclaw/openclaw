@@ -25,7 +25,7 @@ openclaw config set model.defaultProvider=zai
 
 ## Configuración
 
-| Clave | Descripción | Valor predeterminado |
-|-------|-------------|----------------------|
-| `zai.apiKey` | Clave API de Zai | - |
+| Clave         | Descripción        | Valor predeterminado         |
+| ------------- | ------------------ | ---------------------------- |
+| `zai.apiKey`  | Clave API de Zai   | -                            |
 | `zai.baseURL` | URL base de la API | `https://api.zaidata.com/v1` |

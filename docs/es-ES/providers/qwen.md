@@ -26,10 +26,10 @@ openclaw config set model.default=qwen-plus
 
 ## Configuración
 
-| Clave | Descripción | Valor predeterminado |
-|-------|-------------|----------------------|
-| `qwen.apiKey` | Clave API de Alibaba Cloud | - |
-| `qwen.baseURL` | URL base de la API | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Clave          | Descripción                | Valor predeterminado                                |
+| -------------- | -------------------------- | --------------------------------------------------- |
+| `qwen.apiKey`  | Clave API de Alibaba Cloud | -                                                   |
+| `qwen.baseURL` | URL base de la API         | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 
 ## Modelos
 

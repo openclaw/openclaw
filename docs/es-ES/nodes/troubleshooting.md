@@ -50,12 +50,12 @@ Si ves `NODE_BACKGROUND_UNAVAILABLE`, trae la aplicación del nodo al primer pla
 
 ## Matriz de permisos
 
-| Capacidad                    | iOS                                     | Android                                      | Aplicación nodo macOS         | Código de fallo típico         |
-| ---------------------------- | --------------------------------------- | -------------------------------------------- | ----------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | Cámara (+ micrófono para audio de clip) | Cámara (+ micrófono para audio de clip)      | Cámara (+ micrófono para audio de clip) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Grabación de pantalla (+ micrófono opcional) | Aviso de captura de pantalla (+ micrófono opcional) | Grabación de pantalla         | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Mientras se usa o Siempre (depende del modo) | Ubicación en primer plano/segundo plano según modo | Permiso de ubicación          | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (ruta de host de nodo)              | n/a (ruta de host de nodo)                   | Aprobaciones exec requeridas  | `SYSTEM_RUN_DENIED`            |
+| Capacidad                    | iOS                                          | Android                                             | Aplicación nodo macOS                   | Código de fallo típico         |
+| ---------------------------- | -------------------------------------------- | --------------------------------------------------- | --------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | Cámara (+ micrófono para audio de clip)      | Cámara (+ micrófono para audio de clip)             | Cámara (+ micrófono para audio de clip) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Grabación de pantalla (+ micrófono opcional) | Aviso de captura de pantalla (+ micrófono opcional) | Grabación de pantalla                   | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Mientras se usa o Siempre (depende del modo) | Ubicación en primer plano/segundo plano según modo  | Permiso de ubicación                    | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (ruta de host de nodo)                   | n/a (ruta de host de nodo)                          | Aprobaciones exec requeridas            | `SYSTEM_RUN_DENIED`            |
 
 ## Emparejamiento versus aprobaciones
 

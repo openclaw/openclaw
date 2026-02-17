@@ -20,13 +20,13 @@ El nivel gratuito de Oracle puede ser una excelente opción para OpenClaw (espec
 
 ## Comparación de Costos (2026)
 
-| Proveedor    | Plan            | Especificaciones       | Precio/mes | Notas                        |
-| ------------ | --------------- | ---------------------- | ---------- | ---------------------------- |
-| Oracle Cloud | Always Free ARM | hasta 4 OCPU, 24GB RAM | $0         | ARM, capacidad limitada      |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4       | Opción paga más barata       |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6         | UI fácil, buena documentación|
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6         | Muchas ubicaciones           |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5         | Ahora parte de Akamai        |
+| Proveedor    | Plan            | Especificaciones       | Precio/mes | Notas                         |
+| ------------ | --------------- | ---------------------- | ---------- | ----------------------------- |
+| Oracle Cloud | Always Free ARM | hasta 4 OCPU, 24GB RAM | $0         | ARM, capacidad limitada       |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4       | Opción paga más barata        |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6         | UI fácil, buena documentación |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6         | Muchas ubicaciones            |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5         | Ahora parte de Akamai         |
 
 ---
 
@@ -182,13 +182,13 @@ Esta configuración a menudo elimina la _necesidad_ de reglas de firewall adicio
 
 ### Lo que Ya Está Protegido
 
-| Paso Tradicional           | ¿Necesario? | Por qué                                                                 |
-| -------------------------- | ----------- | ----------------------------------------------------------------------- |
-| Firewall UFW               | No          | VCN bloquea antes de que el tráfico alcance la instancia               |
-| fail2ban                   | No          | Sin fuerza bruta si el puerto 22 está bloqueado en VCN                 |
-| Endurecimiento sshd        | No          | Tailscale SSH no usa sshd                                               |
-| Deshabilitar login root    | No          | Tailscale usa identidad Tailscale, no usuarios del sistema             |
-| Autenticación solo SSH key | No          | Tailscale autentica vía tu tailnet                                      |
+| Paso Tradicional           | ¿Necesario?   | Por qué                                                                     |
+| -------------------------- | ------------- | --------------------------------------------------------------------------- |
+| Firewall UFW               | No            | VCN bloquea antes de que el tráfico alcance la instancia                    |
+| fail2ban                   | No            | Sin fuerza bruta si el puerto 22 está bloqueado en VCN                      |
+| Endurecimiento sshd        | No            | Tailscale SSH no usa sshd                                                   |
+| Deshabilitar login root    | No            | Tailscale usa identidad Tailscale, no usuarios del sistema                  |
+| Autenticación solo SSH key | No            | Tailscale autentica vía tu tailnet                                          |
 | Endurecimiento IPv6        | Usualmente no | Depende de tu configuración VCN/subnet; verifica qué está asignado/expuesto |
 
 ### Aún Recomendado

@@ -20,6 +20,7 @@ OpenClaw ofrece tres **canales de lanzamiento**:
     O usa el instalador de [openclaw.ai/install](https://openclaw.ai/install).
 
     **Cuándo usar**: Producción, uso diario, máxima estabilidad.
+
   </Tab>
 
   <Tab title="beta">
@@ -32,6 +33,7 @@ OpenClaw ofrece tres **canales de lanzamiento**:
     <Note>
     Las versiones beta pueden no incluir builds de la aplicación macOS hasta el lanzamiento stable.
     </Note>
+
   </Tab>
 
   <Tab title="dev">
@@ -47,6 +49,7 @@ OpenClaw ofrece tres **canales de lanzamiento**:
     <Warning>
     El canal dev puede contener características inestables. Úsalo solo si estás dispuesto a depurar y reportar problemas.
     </Warning>
+
   </Tab>
 </Tabs>
 

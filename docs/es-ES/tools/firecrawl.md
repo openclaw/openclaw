@@ -24,8 +24,8 @@ openclaw hub install firecrawl-scraper
 ```typescript
 // Extraer datos de una URL
 const data = await firecrawl.scrape({
-  url: 'https://example.com',
-  format: 'markdown'
+  url: "https://example.com",
+  format: "markdown",
 });
 
 console.log(data.content);
@@ -33,13 +33,13 @@ console.log(data.content);
 
 ## Parámetros
 
-| Parámetro | Tipo | Requerido | Descripción |
-|-----------|------|-----------|-------------|
-| `url` | string | Sí | URL a extraer |
-| `format` | string | No | Formato de salida: 'markdown', 'html', 'text', 'json' |
-| `waitFor` | string | No | Selector CSS a esperar antes de extraer |
-| `excludeSelectors` | string[] | No | Selectores CSS a excluir de la extracción |
-| `includeSelectors` | string[] | No | Solo incluir contenido que coincida con estos selectores |
+| Parámetro          | Tipo     | Requerido | Descripción                                              |
+| ------------------ | -------- | --------- | -------------------------------------------------------- |
+| `url`              | string   | Sí        | URL a extraer                                            |
+| `format`           | string   | No        | Formato de salida: 'markdown', 'html', 'text', 'json'    |
+| `waitFor`          | string   | No        | Selector CSS a esperar antes de extraer                  |
+| `excludeSelectors` | string[] | No        | Selectores CSS a excluir de la extracción                |
+| `includeSelectors` | string[] | No        | Solo incluir contenido que coincida con estos selectores |
 
 ## Ejemplos
 
@@ -48,8 +48,8 @@ console.log(data.content);
 ```typescript
 // Extraer contenido de una página
 const content = await firecrawl.scrape({
-  url: 'https://blog.example.com/post-1',
-  format: 'markdown'
+  url: "https://blog.example.com/post-1",
+  format: "markdown",
 });
 ```
 
@@ -58,9 +58,9 @@ const content = await firecrawl.scrape({
 ```typescript
 // Esperar a que se cargue contenido renderizado por JavaScript
 const data = await firecrawl.scrape({
-  url: 'https://spa-app.com',
-  waitFor: '.content-loaded',
-  format: 'html'
+  url: "https://spa-app.com",
+  waitFor: ".content-loaded",
+  format: "html",
 });
 ```
 
@@ -69,10 +69,10 @@ const data = await firecrawl.scrape({
 ```typescript
 // Extraer solo contenido específico
 const article = await firecrawl.scrape({
-  url: 'https://news.example.com/article',
-  includeSelectors: ['.article-content', '.article-title'],
-  excludeSelectors: ['.ads', '.comments'],
-  format: 'markdown'
+  url: "https://news.example.com/article",
+  includeSelectors: [".article-content", ".article-title"],
+  excludeSelectors: [".ads", ".comments"],
+  format: "markdown",
 });
 ```
 
