@@ -1,4 +1,5 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -55,15 +56,34 @@ export async function resolveDeliveryTarget(
     } catch {
       fallbackChannel = preliminary.lastChannel ?? DEFAULT_CHAT_CHANNEL;
     }
+  } else if (requestedChannel === "last") {
+    // When channel "last" resolved from session history, verify it's actually
+    // configured. If not (e.g. whatsapp removed but session still references
+    // it), fall back to a configured channel so cron delivery can proceed.
+    try {
+      const selection = await resolveMessageChannelSelection({ cfg });
+      if (!selection.configured.includes(preliminary.channel)) {
+        fallbackChannel = selection.channel;
+      }
+    } catch {
+      // resolveMessageChannelSelection failed (e.g. no configured accounts).
+      // Check plugin registry directly — if the session channel has no
+      // registered plugin, fall back to the first available outbound plugin.
+      if (!getChannelPlugin(preliminary.channel)) {
+        const alt = listChannelPlugins().find((p) => p.outbound);
+        if (alt) {
+          fallbackChannel = alt.id as Exclude<OutboundChannel, "none">;
+        }
+      }
+    }
   }
 
   const resolved = fallbackChannel
     ? resolveSessionDeliveryTarget({
         entry: main,
-        requestedChannel,
+        requestedChannel: fallbackChannel,
         explicitTo,
         fallbackChannel,
-        allowMismatchedLastTo,
         mode: preliminary.mode,
       })
     : preliminary;
