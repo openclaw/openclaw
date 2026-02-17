@@ -39,7 +39,8 @@ export type SpawnSubagentContext = {
   requesterAgentIdOverride?: string;
 };
 
-export const SUBAGENT_SPAWN_ACCEPTED_NOTE = "auto-announces on completion, do not poll";
+export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
+  "auto-announces on completion, do not poll/sleep. The response will be sent back as a user message.";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
