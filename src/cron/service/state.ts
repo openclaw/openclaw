@@ -20,6 +20,7 @@ export type CronEvent = {
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
+  delivered?: boolean;
   nextRunAtMs?: number;
 } & CronRunTelemetry;
 

@@ -43,6 +43,13 @@ export type CronRunOutcome = {
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
+  /**
+   * Whether the run's output was actually delivered to the target channel.
+   * `true`  — at least one outbound send reached the target.
+   * `false` — delivery was attempted but failed (best-effort swallowed the error).
+   * `undefined` — delivery was not requested or not applicable.
+   */
+  delivered?: boolean;
 };
 
 export type CronPayload =
@@ -83,6 +90,13 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  /**
+   * Whether the last run's output was actually delivered to the target channel.
+   * `true`  — at least one outbound send reached the target.
+   * `false` — delivery was attempted but failed (best-effort swallowed the error).
+   * `undefined` — delivery was not requested or not applicable (e.g. systemEvent payload).
+   */
+  lastDelivered?: boolean;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
