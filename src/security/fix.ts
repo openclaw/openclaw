@@ -461,6 +461,27 @@ export async function fixSecurityFootguns(opts?: {
     errors.push(`chmodCredentialsAndAgentState failed: ${String(err)}`);
   });
 
+  // Secure cron/, browser/, and settings/ subdirectories.
+  // cron/jobs.json may contain scheduled task payloads; browser/ holds
+  // session state and cookies; settings/ stores UI preferences.
+  for (const subdir of ["cron", "browser", "settings"]) {
+    const dirPath = path.join(stateDir, subdir);
+    // eslint-disable-next-line no-await-in-loop
+    actions.push(await applyPerms({ path: dirPath, mode: 0o700, require: "dir" }));
+  }
+
+  // Secure individual files inside cron/ (jobs.json, jobs.json.bak, etc.)
+  const cronDir = path.join(stateDir, "cron");
+  const cronEntries = await fs.readdir(cronDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of cronEntries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const p = path.join(cronDir, entry.name);
+    // eslint-disable-next-line no-await-in-loop
+    actions.push(await applyPerms({ path: p, mode: 0o600, require: "file" }));
+  }
+
   return {
     ok: errors.length === 0,
     stateDir,

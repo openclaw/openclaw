@@ -18,6 +18,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security: `doctor --fix` now secures `cron/`, `browser/`, and `settings/` subdirectories (700 for dirs, 600 for files inside `cron/`) that were previously left world-readable. (#18866)
+
 - Voice-call: auto-end calls when media streams disconnect to prevent stuck active calls. (#18435) Thanks @JayMishra-source.
 - Gateway/Channels: wire `gateway.channelHealthCheckMinutes` into strict config validation, treat implicit account status as managed for health checks, and harden channel auto-restart flow (preserve restart-attempt caps across crash loops, propagate enabled/configured runtime flags, and stop pending restart backoff after manual stop). Thanks @steipete.
 - Gateway/WebChat: hard-cap `chat.history` oversized payloads by truncating high-cost fields and replacing over-budget entries with placeholders, so history fetches stay within configured byte limits and avoid chat UI freezes. (#18505)
