@@ -186,7 +186,6 @@ export function logMessageProcessed(params: {
     reason: params.reason,
     error: params.error,
     traceId: state.traceId,
-    parentSpanId: spanId,
   });
   markActivity();
 }

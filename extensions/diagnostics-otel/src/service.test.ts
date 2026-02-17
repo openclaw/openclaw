@@ -277,7 +277,8 @@ describe("diagnostics-otel service", () => {
     expect(modelCall).toBeDefined();
     expect(modelCall![0]).toBe("chat claude-opus-4-6");
 
-    const spanAttrs = modelCall![1]?.attributes as Record<string, string | number>;
+    const spanAttrs = (modelCall![1] as { attributes?: Record<string, string | number> })
+      ?.attributes;
     // GenAI convention attributes
     expect(spanAttrs["gen_ai.operation.name"]).toBe("chat");
     expect(spanAttrs["gen_ai.system"]).toBe("anthropic");
@@ -342,23 +343,23 @@ describe("diagnostics-otel service", () => {
       parentSpanId,
     });
 
-    const spanCalls = telemetryState.tracer.startSpan.mock.calls;
+    const spanCalls = telemetryState.tracer.startSpan.mock.calls as [
+      string,
+      unknown,
+      { __parentSpanContext?: { traceId: string } | undefined },
+    ][];
 
-    // message.processed span should have parent context (3rd arg)
+    // message.processed span should NOT have parent context (it should be a root span)
     const msgCall = spanCalls.find((call) => call[0] === "openclaw.message.processed");
     expect(msgCall).toBeDefined();
-    expect(msgCall![2]).toBeDefined();
-    expect(
-      (msgCall![2] as { __parentSpanContext?: { traceId: string } }).__parentSpanContext?.traceId,
-    ).toBe(traceId);
+    // message.processed should be a root span (no parentSpanId in the event)
+    expect(msgCall![2]).toBeUndefined();
 
     // model.usage span should have parent context
     const modelCall = spanCalls.find((call) => String(call[0]).startsWith("chat "));
     expect(modelCall).toBeDefined();
     expect(modelCall![2]).toBeDefined();
-    expect(
-      (modelCall![2] as { __parentSpanContext?: { traceId: string } }).__parentSpanContext?.traceId,
-    ).toBe(traceId);
+    expect(modelCall![2].__parentSpanContext?.traceId).toBe(traceId);
 
     await service.stop?.(ctx);
   });
@@ -398,12 +399,15 @@ describe("diagnostics-otel service", () => {
       durationMs: 500,
     });
 
-    const spanCalls = telemetryState.tracer.startSpan.mock.calls;
+    const spanCalls = telemetryState.tracer.startSpan.mock.calls as [
+      string,
+      unknown,
+      { __parentSpanContext?: { traceId: string } | undefined },
+    ][];
     const modelCall = spanCalls.find((call) => String(call[0]).startsWith("chat "));
     expect(modelCall).toBeDefined();
     // 3rd arg should be the default context.active() (empty object), not a linked context
-    const ctxArg = modelCall![2] as Record<string, unknown>;
-    expect(ctxArg.__parentSpanContext).toBeUndefined();
+    expect(modelCall![2]?.__parentSpanContext).toBeUndefined();
 
     await service.stop?.(ctx);
   });
