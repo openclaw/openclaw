@@ -112,6 +112,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("sessions")
     .description("List stored conversation sessions")
     .option("--json", "Output as JSON", false)
+    .option(
+      "--json-debug",
+      "Include per-session debug fields in JSON output (implies --json)",
+      false,
+    )
     .option("--verbose", "Verbose logging", false)
     .option("--store <path>", "Path to session store (default: resolved from config)")
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
@@ -122,6 +127,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions", "List all sessions."],
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --json", "Machine-readable output."],
+          [
+            "openclaw sessions --json-debug",
+            "Machine-readable output with per-session debug fields.",
+          ],
           ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
         ])}\n\n${theme.muted(
           "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to cap the window and show %.",
@@ -136,7 +145,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       setVerbose(Boolean(opts.verbose));
       await sessionsCommand(
         {
-          json: Boolean(opts.json),
+          json: Boolean(opts.json || opts.jsonDebug),
+          jsonDebug: Boolean(opts.jsonDebug),
           store: opts.store as string | undefined,
           active: opts.active as string | undefined,
         },
