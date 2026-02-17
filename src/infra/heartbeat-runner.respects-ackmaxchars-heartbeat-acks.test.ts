@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
+import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -86,51 +84,6 @@ describe("resolveHeartbeatIntervalMs", () => {
     } satisfies HeartbeatDeps;
   }
 
-  async function seedSessionStore(
-    storePath: string,
-    sessionKey: string,
-    session: {
-      sessionId?: string;
-      updatedAt?: number;
-      lastChannel: string;
-      lastProvider: string;
-      lastTo: string;
-    },
-  ) {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: session.sessionId ?? "sid",
-            updatedAt: session.updatedAt ?? Date.now(),
-            ...session,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-  }
-
-  async function withTempHeartbeatSandbox<T>(
-    fn: (ctx: {
-      tmpDir: string;
-      storePath: string;
-      replySpy: ReturnType<typeof vi.spyOn>;
-    }) => Promise<T>,
-  ) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
-      return await fn({ tmpDir, storePath, replySpy });
-    } finally {
-      replySpy.mockRestore();
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  }
-
   async function withTempTelegramHeartbeatSandbox<T>(
     fn: (ctx: {
       tmpDir: string;
@@ -138,17 +91,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       replySpy: ReturnType<typeof vi.spyOn>;
     }) => Promise<T>,
   ) {
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
-      return await withTempHeartbeatSandbox(fn);
-    } finally {
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-    }
+    return withTempHeartbeatSandbox(fn, { unsetEnvVars: ["TELEGRAM_BOT_TOKEN"] });
   }
 
   it("respects ackMaxChars for heartbeat acks", async () => {
