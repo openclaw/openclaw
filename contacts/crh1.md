@@ -1,35 +1,16 @@
-# OpenClaw Agent: Contact Hunter
+# Contact Entry
 
-## Purpose
-This agent searches for OpenClaw‑relevant **people, projects, communities, and organizations**.
+## Name
+(Write the name here)
 
-## What it hunts
-- Developers and contributors  
-- GitHub repos  
-- Maintainers and educators  
-- Discords, forums, groups  
-- Companies or teams using OpenClaw  
+## Type
+Person / Project / Community / Organization
 
-## What it stores
-Each contact entry includes:
-- Name  
-- Type (person, project, community, org)  
-- Link(s)  
-- Tags  
-- Notes  
+## Links
+- 
 
-## Where it saves results
-/contacts/people  
-/contacts/projects  
-/contacts/communities  
-/contacts/orgs  
+## Tags
+- 
 
-## How you use it today
-Paste any link or name into this page or into the contacts folders.  
-Ask the agent to classify, summarize, or format it.
-
-## Future automation
-- Scrape profiles  
-- Auto‑tag contacts  
-- Build a network map  
-- Track updates  
+## Notes
+(Why this contact matters, what they do, how they relate to OpenClaw)
