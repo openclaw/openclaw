@@ -27,6 +27,70 @@ async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
   return (buffer) => sharp(buffer, { failOnError: false });
 }
 
+// Pillow fallback for systems where Sharp doesn't work
+let pillowAvailable: boolean | null = null;
+
+async function isPillowAvailable(): Promise<boolean> {
+  if (pillowAvailable !== null) {
+    return pillowAvailable;
+  }
+  try {
+    await runExec("python3", ["-c", "from PIL import Image; print('ok')"]);
+    pillowAvailable = true;
+    return true;
+  } catch {
+    pillowAvailable = false;
+    return false;
+  }
+}
+
+async function pillowResizeToJpeg(params: {
+  buffer: Buffer;
+  maxSide: number;
+  quality: number;
+}): Promise<Buffer> {
+  const tempIn = path.join(os.tmpdir(), `openclaw-img-in-${Date.now()}.bin`);
+  const tempOut = path.join(os.tmpdir(), `openclaw-img-out-${Date.now()}.jpg`);
+
+  try {
+    await fs.writeFile(tempIn, params.buffer);
+
+    const script = `
+from PIL import Image
+import sys
+try:
+    img = Image.open('${tempIn}')
+    if img.mode in ('RGBA', 'LA', 'P'):
+        img = img.convert('RGB')
+    elif img.mode != 'RGB':
+        img = img.convert('RGB')
+
+    width, height = img.size
+    ratio = min(${params.maxSide} / width, ${params.maxSide} / height, 1.0)
+    if ratio < 1.0:
+        new_size = (int(width * ratio), int(height * ratio))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+    img.save('${tempOut}', 'JPEG', quality=${params.quality}, optimize=True)
+    print('success')
+except Exception as e:
+    print(f'error: {e}', file=sys.stderr)
+    sys.exit(1)
+`;
+
+    await runExec("python3", ["-c", script]);
+    const result = await fs.readFile(tempOut);
+    return result;
+  } finally {
+    try {
+      await fs.unlink(tempIn);
+    } catch {}
+    try {
+      await fs.unlink(tempOut);
+    } catch {}
+  }
+}
+
 /**
  * Reads EXIF orientation from JPEG buffer.
  * Returns orientation value 1-8, or null if not found/not JPEG.
@@ -332,18 +396,33 @@ export async function resizeToJpeg(params: {
     });
   }
 
-  const sharp = await loadSharp();
-  // Use .rotate() BEFORE .resize() to auto-rotate based on EXIF orientation
-  return await sharp(params.buffer)
-    .rotate() // Auto-rotate based on EXIF before resizing
-    .resize({
-      width: params.maxSide,
-      height: params.maxSide,
-      fit: "inside",
-      withoutEnlargement: params.withoutEnlargement !== false,
-    })
-    .jpeg({ quality: params.quality, mozjpeg: true })
-    .toBuffer();
+  try {
+    const sharp = await loadSharp();
+    return await sharp(params.buffer)
+      .rotate()
+      .resize({
+        width: params.maxSide,
+        height: params.maxSide,
+        fit: "inside",
+        withoutEnlargement: params.withoutEnlargement !== false,
+      })
+      .jpeg({ quality: params.quality, mozjpeg: true })
+      .toBuffer();
+  } catch (sharpError) {
+    if (await isPillowAvailable()) {
+      try {
+        return await pillowResizeToJpeg(params);
+      } catch (pillowError) {
+        const sharpMsg = sharpError instanceof Error ? sharpError.message : String(sharpError);
+        const pillowMsg = pillowError instanceof Error ? pillowError.message : String(pillowError);
+        throw new Error(
+          `Image resize failed: Sharp error: ${sharpMsg}, Pillow error: ${pillowMsg}`,
+          { cause: pillowError },
+        );
+      }
+    }
+    throw sharpError;
+  }
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
