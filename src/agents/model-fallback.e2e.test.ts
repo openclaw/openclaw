@@ -119,6 +119,56 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back when a run returns raw failover text payloads", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        payloads: [
+          {
+            text: "402 This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 3186.",
+          },
+        ],
+        meta: { stopReason: "completed" },
+      })
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
+  it("does not treat instructional rate-limit text as a failover payload", async () => {
+    const cfg = makeCfg();
+    const firstResult = {
+      payloads: [
+        {
+          text: "A 429 response can happen when the API rate limit is exceeded; retry with backoff.",
+        },
+      ],
+      meta: { stopReason: "completed" },
+    };
+    const run = vi.fn().mockResolvedValueOnce(firstResult);
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe(firstResult);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back on credential validation errors", async () => {
     await expectFallsBackToHaiku({
       provider: "anthropic",

@@ -20,8 +20,12 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import {
+  classifyFailoverReason,
+  isLikelyContextOverflowError,
+  isRawApiErrorPayload,
+  type FailoverReason,
+} from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -63,6 +67,70 @@ function isFallbackAbortError(err: unknown): boolean {
 
 function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
+}
+
+type EmbeddedRunPayloadLike = {
+  text?: unknown;
+  isError?: unknown;
+};
+
+type EmbeddedRunResultLike = {
+  payloads?: unknown;
+  meta?: { stopReason?: unknown };
+};
+
+const RAW_FAILOVER_PAYLOAD_HEAD_RE =
+  /^(?:\s*(?:http\s*)?\d{3}\b|\s*(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)\b)/i;
+
+/**
+ * Some providers can return transport/billing failures as "successful" runs
+ * containing only error text payloads. Detect those so fallback still advances.
+ */
+function resolveFailoverPayloadMessage(result: unknown): string | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const payloads = (result as EmbeddedRunResultLike).payloads;
+  if (!Array.isArray(payloads) || payloads.length === 0) {
+    return null;
+  }
+
+  const stopReasonRaw = (result as EmbeddedRunResultLike).meta?.stopReason;
+  const runStoppedWithError =
+    typeof stopReasonRaw === "string" && stopReasonRaw.trim().toLowerCase() === "error";
+
+  let hasText = false;
+  let hasNonFailoverText = false;
+  let firstFailoverMessage: string | null = null;
+
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      continue;
+    }
+    const record = payload as EmbeddedRunPayloadLike;
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    if (!text) {
+      continue;
+    }
+    hasText = true;
+
+    const reason = classifyFailoverReason(text);
+    const looksLikeRawFailoverText =
+      RAW_FAILOVER_PAYLOAD_HEAD_RE.test(text) || isRawApiErrorPayload(text);
+    const isFailoverText = Boolean(
+      reason && (record.isError === true || runStoppedWithError || looksLikeRawFailoverText),
+    );
+    if (isFailoverText) {
+      firstFailoverMessage ??= text;
+      continue;
+    }
+    hasNonFailoverText = true;
+  }
+
+  if (!hasText || !firstFailoverMessage || hasNonFailoverText) {
+    return null;
+  }
+  return firstFailoverMessage;
 }
 
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
@@ -354,6 +422,10 @@ export async function runWithModelFallback<T>(params: {
         isPrimary: i === 0,
         hasFallbackCandidates,
       });
+      const payloadFailoverMessage = resolveFailoverPayloadMessage(result);
+      if (payloadFailoverMessage) {
+        throw new Error(payloadFailoverMessage);
+      }
       return {
         result,
         provider: candidate.provider,
