@@ -395,6 +395,26 @@ export async function runReplyAgent(params: {
       cliSessionId,
     });
 
+    // Post-flight quota deduction — deduct actual tokens used
+    if (cfg?.quota?.enabled && usage) {
+      const totalTokens = (usage.input ?? 0) + (usage.output ?? 0);
+      if (totalTokens > 0) {
+        try {
+          const { deductQuota, resolveCustomerId } = await import("../../quota/index.js");
+          const customerId = resolveCustomerId({
+            config: cfg,
+            senderId: sessionCtx.SenderId ?? undefined,
+            sessionKey,
+          });
+          if (customerId) {
+            await deductQuota(customerId, totalTokens, cfg);
+          }
+        } catch (err) {
+          defaultRuntime.error(`Quota deduction failed: ${String(err)}`);
+        }
+      }
+    }
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.

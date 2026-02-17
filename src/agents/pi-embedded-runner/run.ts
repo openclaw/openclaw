@@ -388,6 +388,26 @@ export async function runEmbeddedPiAgent(
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let autoCompactionCount = 0;
+
+      // Pre-flight quota check — block AI calls if quota exceeded
+      if (params.config?.quota?.enabled) {
+        const { checkQuota, resolveCustomerId } = await import("../../quota/index.js");
+        const customerId = resolveCustomerId({
+          config: params.config,
+          senderId: params.senderId,
+          sessionKey: params.sessionKey,
+        });
+        if (customerId) {
+          const status = await checkQuota(customerId, params.config);
+          if (status?.exceeded) {
+            const msg =
+              params.config.quota?.quotaExceededMessage ??
+              "You've used all your available tokens. Please upgrade your plan to continue.";
+            throw new Error(msg);
+          }
+        }
+      }
+
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);

@@ -5,6 +5,7 @@ import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
+import { QuotaSchema } from "./zod-schema.quota.js";
 import {
   CommandsSchema,
   MessagesSchema,
@@ -597,6 +598,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    quota: QuotaSchema,
   })
   .strict()
   .superRefine((cfg, ctx) => {
