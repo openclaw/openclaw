@@ -25,6 +25,19 @@ const hookMocks = vi.hoisted(() => ({
     runMessageReceived: vi.fn(async () => {}),
   },
 }));
+const internalHookMocks = vi.hoisted(() => ({
+  createInternalHookEvent: vi.fn(
+    (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
+      type,
+      action,
+      sessionKey,
+      context,
+      timestamp: new Date(),
+      messages: [],
+    }),
+  ),
+  triggerInternalHook: vi.fn(async () => {}),
+}));
 
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
@@ -54,6 +67,10 @@ vi.mock("../../logging/diagnostic.js", () => ({
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
+}));
+vi.mock("../../hooks/internal-hooks.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -104,6 +121,8 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.hasHooks.mockReset();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageReceived.mockReset();
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.triggerInternalHook.mockClear();
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
@@ -421,6 +440,53 @@ describe("dispatchReplyFromConfig", () => {
         conversationId: "telegram:999",
       }),
     );
+  });
+
+  it("emits internal message:received hook when a session key is available", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+      MessageSid: "msg-42",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "agent:main:main",
+      expect.objectContaining({
+        from: ctx.From,
+        content: "/help",
+        channelId: "telegram",
+        messageId: "msg-42",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips internal message:received hook when session key is unavailable", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandBody: "/help",
+    });
+    (ctx as MsgContext).SessionKey = undefined;
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
   it("emits diagnostics when enabled", async () => {
