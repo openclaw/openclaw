@@ -113,6 +113,7 @@ export const dispatchTelegramMessage = async ({
     draftStream && streamMode === "block"
       ? resolveTelegramDraftStreamingChunking(cfg, route.accountId)
       : undefined;
+  const shouldSplitPreviewMessages = streamMode === "block";
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   let lastPartialText = "";
@@ -424,13 +425,12 @@ export const dispatchTelegramMessage = async ({
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
           ? () => {
-              // When a new assistant message starts (e.g., after tool call),
-              // force a new Telegram message if we have previous content.
-              // Only force once per response to avoid excessive splitting.
+              // Only split preview bubbles in block mode. In partial mode, keep
+              // editing one preview message to avoid flooding the chat.
               logVerbose(
                 `telegram: onAssistantMessageStart called, hasStreamedMessage=${hasStreamedMessage}`,
               );
-              if (hasStreamedMessage) {
+              if (shouldSplitPreviewMessages && hasStreamedMessage) {
                 logVerbose(`telegram: calling forceNewMessage()`);
                 draftStream.forceNewMessage();
               }
@@ -441,13 +441,13 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onReasoningEnd: draftStream
           ? () => {
-              // When a thinking block ends, force a new Telegram message for the next text output.
-              if (hasStreamedMessage) {
+              // Same policy as assistant-message boundaries: split only in block mode.
+              if (shouldSplitPreviewMessages && hasStreamedMessage) {
                 draftStream.forceNewMessage();
-                lastPartialText = "";
-                draftText = "";
-                draftChunker?.reset();
               }
+              lastPartialText = "";
+              draftText = "";
+              draftChunker?.reset();
             }
           : undefined,
         onModelSelected,
