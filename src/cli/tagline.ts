@@ -81,7 +81,6 @@ const TAGLINES: string[] = [
   "Meta wishes they shipped this fast.",
   "Because the right answer is usually a script.",
   "Your messages, your servers, your control.",
-  "OpenAI-compatible, not OpenAI-dependent.",
   "iMessage green bubble energy, but for everyone.",
   "Siri's competent cousin.",
   "Works on Android. Crazy concept, we know.",
