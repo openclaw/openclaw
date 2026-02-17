@@ -102,10 +102,8 @@ export function detectRuntimeShell(): string | undefined {
   }
 
   if (process.platform === "win32") {
-    if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
-      return "pwsh";
-    }
-    return "powershell";
+    const resolved = resolvePowerShellPath();
+    return path.basename(resolved).toLowerCase() === "pwsh.exe" ? "pwsh" : "powershell";
   }
 
   const envShell = process.env.SHELL?.trim();
