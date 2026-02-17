@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import { execSync } from "node:child_process";
+import crypto from "node:crypto";
 import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -94,7 +94,6 @@ export type SendBlueBubblesAttachmentResult = {
   messageId: string;
 };
 
-
 /**
  * Convert MP3 buffer to Opus CAF format for iMessage voice memos.
  * iMessage requires Opus@24000Hz mono in CAF container.
@@ -115,9 +114,15 @@ function convertMp3ToOpusCaf(mp3Buffer: Uint8Array): Uint8Array {
     });
     return new Uint8Array(readFileSync(cafPath));
   } finally {
-    try { unlinkSync(mp3Path); } catch {}
-    try { unlinkSync(cafPath); } catch {}
-    try { rmdirSync(tempDir); } catch {}
+    try {
+      unlinkSync(mp3Path);
+    } catch {}
+    try {
+      unlinkSync(cafPath);
+    } catch {}
+    try {
+      rmdirSync(tempDir);
+    } catch {}
   }
 }
 
