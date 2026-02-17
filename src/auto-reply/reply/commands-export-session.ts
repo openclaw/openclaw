@@ -1,18 +1,17 @@
+import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { ReplyPayload } from "../types.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
 } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { resolveUserPath } from "../../utils.js";
-import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
-import type { HandleCommandsParams } from "./commands-types.js";
 
 // Export HTML templates are bundled with this module
 const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
@@ -170,7 +169,11 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
   const outputPath = args.outputPath
-    ? resolveUserPath(args.outputPath)
+    ? path.resolve(
+        args.outputPath.startsWith("~")
+          ? args.outputPath.replace("~", process.env.HOME ?? "")
+          : args.outputPath,
+      )
     : path.join(params.workspaceDir, defaultFileName);
 
   // Ensure directory exists

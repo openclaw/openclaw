@@ -8,14 +8,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { HookHandler } from "../../hooks.js";
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { resolveHookConfig } from "../../config.js";
-import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
@@ -107,6 +107,65 @@ async function getRecentSessionContentWithResetFallback(
   }
 }
 
+function stripResetSuffix(fileName: string): string {
+  const resetIndex = fileName.indexOf(".reset.");
+  return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
+}
+
+async function findPreviousSessionFile(params: {
+  sessionsDir: string;
+  currentSessionFile?: string;
+  sessionId?: string;
+}): Promise<string | undefined> {
+  try {
+    const files = await fs.readdir(params.sessionsDir);
+    const fileSet = new Set(files);
+
+    const baseFromReset = params.currentSessionFile
+      ? stripResetSuffix(path.basename(params.currentSessionFile))
+      : undefined;
+    if (baseFromReset && fileSet.has(baseFromReset)) {
+      return path.join(params.sessionsDir, baseFromReset);
+    }
+
+    const trimmedSessionId = params.sessionId?.trim();
+    if (trimmedSessionId) {
+      const canonicalFile = `${trimmedSessionId}.jsonl`;
+      if (fileSet.has(canonicalFile)) {
+        return path.join(params.sessionsDir, canonicalFile);
+      }
+
+      const topicVariants = files
+        .filter(
+          (name) =>
+            name.startsWith(`${trimmedSessionId}-topic-`) &&
+            name.endsWith(".jsonl") &&
+            !name.includes(".reset."),
+        )
+        .toSorted()
+        .toReversed();
+      if (topicVariants.length > 0) {
+        return path.join(params.sessionsDir, topicVariants[0]);
+      }
+    }
+
+    if (!params.currentSessionFile) {
+      return undefined;
+    }
+
+    const nonResetJsonl = files
+      .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
+      .toSorted()
+      .toReversed();
+    if (nonResetJsonl.length > 0) {
+      return path.join(params.sessionsDir, nonResetJsonl[0]);
+    }
+  } catch {
+    // Ignore directory read errors.
+  }
+  return undefined;
+}
+
 /**
  * Save session context to memory when /new command is triggered
  */
@@ -138,30 +197,31 @@ const saveSessionToMemory: HookHandler = async (event) => {
       string,
       unknown
     >;
+    const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file
+    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
     if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-      // Look for previous session file in the sessions directory
-      const sessionsDir = path.dirname(currentSessionFile || "");
-      if (sessionsDir) {
-        try {
-          const files = await fs.readdir(sessionsDir);
-          const sessionFiles = files
-            .filter((f) => f.endsWith(".jsonl") && !f.includes(".reset."))
-            .toSorted()
-            .toReversed();
-          if (sessionFiles.length > 0) {
-            currentSessionFile = path.join(sessionsDir, sessionFiles[0]);
-            log.debug("Found previous session file", { file: currentSessionFile });
-          }
-        } catch {
-          // Ignore errors reading directory
+      const sessionsDirs = new Set<string>();
+      if (currentSessionFile) {
+        sessionsDirs.add(path.dirname(currentSessionFile));
+      }
+      sessionsDirs.add(path.join(workspaceDir, "sessions"));
+
+      for (const sessionsDir of sessionsDirs) {
+        const recoveredSessionFile = await findPreviousSessionFile({
+          sessionsDir,
+          currentSessionFile,
+          sessionId: currentSessionId,
+        });
+        if (!recoveredSessionFile) {
+          continue;
         }
+        currentSessionFile = recoveredSessionFile;
+        log.debug("Found previous session file", { file: currentSessionFile });
+        break;
       }
     }
-
-    const currentSessionId = sessionEntry.sessionId as string;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,

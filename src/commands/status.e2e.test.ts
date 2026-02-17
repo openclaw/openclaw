@@ -1,3 +1,4 @@
+import type { Mock } from "vitest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -323,10 +324,12 @@ const runtime = {
   exit: vi.fn(),
 };
 
+const runtimeLogMock = runtime.log as Mock<(...args: unknown[]) => void>;
+
 describe("statusCommand", () => {
   it("prints JSON when requested", async () => {
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls[0][0]);
+    const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
     expect(payload.linkChannel.linked).toBe(true);
     expect(payload.memory.agentId).toBe("main");
     expect(payload.memoryPlugin.enabled).toBe(true);
@@ -348,9 +351,9 @@ describe("statusCommand", () => {
 
   it("surfaces unknown usage when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
-      (runtime.log as vi.Mock).mockClear();
+      runtimeLogMock.mockClear();
       await statusCommand({ json: true }, runtime as never);
-      const payload = JSON.parse((runtime.log as vi.Mock).mock.calls.at(-1)?.[0]);
+      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
       expect(payload.sessions.recent[0].totalTokens).toBeNull();
       expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
       expect(payload.sessions.recent[0].percentUsed).toBeNull();
@@ -360,37 +363,37 @@ describe("statusCommand", () => {
 
   it("prints unknown usage in formatted output when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
-      (runtime.log as vi.Mock).mockClear();
+      runtimeLogMock.mockClear();
       await statusCommand({}, runtime as never);
-      const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+      const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
       expect(logs.some((line) => line.includes("unknown/") && line.includes("(?%)"))).toBe(true);
     });
   });
 
   it("prints formatted lines otherwise", async () => {
-    (runtime.log as vi.Mock).mockClear();
+    runtimeLogMock.mockClear();
     await statusCommand({}, runtime as never);
-    const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
-    expect(logs.some((l) => l.includes("OpenClaw status"))).toBe(true);
-    expect(logs.some((l) => l.includes("Overview"))).toBe(true);
-    expect(logs.some((l) => l.includes("Security audit"))).toBe(true);
-    expect(logs.some((l) => l.includes("Summary:"))).toBe(true);
-    expect(logs.some((l) => l.includes("CRITICAL"))).toBe(true);
-    expect(logs.some((l) => l.includes("Dashboard"))).toBe(true);
-    expect(logs.some((l) => l.includes("macos 14.0 (arm64)"))).toBe(true);
-    expect(logs.some((l) => l.includes("Memory"))).toBe(true);
-    expect(logs.some((l) => l.includes("Channels"))).toBe(true);
-    expect(logs.some((l) => l.includes("WhatsApp"))).toBe(true);
-    expect(logs.some((l) => l.includes("Sessions"))).toBe(true);
-    expect(logs.some((l) => l.includes("+1000"))).toBe(true);
-    expect(logs.some((l) => l.includes("50%"))).toBe(true);
-    expect(logs.some((l) => l.includes("LaunchAgent"))).toBe(true);
-    expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
-    expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
-    expect(logs.some((l) => l.includes("Next steps:"))).toBe(true);
+    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(logs.some((l: string) => l.includes("OpenClaw status"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Overview"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Security audit"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Summary:"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("CRITICAL"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Dashboard"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("macos 14.0 (arm64)"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Memory"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Channels"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("WhatsApp"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Sessions"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("+1000"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("50%"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("LaunchAgent"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("FAQ:"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Troubleshooting:"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("Next steps:"))).toBe(true);
     expect(
       logs.some(
-        (l) =>
+        (l: string) =>
           l.includes("openclaw status --all") ||
           l.includes("openclaw --profile isolated status --all") ||
           l.includes("openclaw status --all") ||
@@ -414,10 +417,10 @@ describe("statusCommand", () => {
         presence: [],
         configSnapshot: null,
       });
-      (runtime.log as vi.Mock).mockClear();
+      runtimeLogMock.mockClear();
       await statusCommand({}, runtime as never);
-      const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
-      expect(logs.some((l) => l.includes("auth token"))).toBe(true);
+      const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(logs.some((l: string) => l.includes("auth token"))).toBe(true);
     } finally {
       if (prevToken === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -462,9 +465,9 @@ describe("statusCommand", () => {
       },
     });
 
-    (runtime.log as vi.Mock).mockClear();
+    runtimeLogMock.mockClear();
     await statusCommand({}, runtime as never);
-    const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
     expect(logs.join("\n")).toMatch(/Signal/i);
     expect(logs.join("\n")).toMatch(/iMessage/i);
     expect(logs.join("\n")).toMatch(/gateway:/i);
@@ -507,7 +510,7 @@ describe("statusCommand", () => {
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls.at(-1)?.[0]);
+    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);
     expect(

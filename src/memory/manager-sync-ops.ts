@@ -392,7 +392,7 @@ export abstract class MemoryManagerSyncOps {
     this.watcher.on("unlink", markDirty);
   }
 
-  private ensureSessionListener() {
+  protected ensureSessionListener() {
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
@@ -827,7 +827,7 @@ export abstract class MemoryManagerSyncOps {
     return state;
   }
 
-  private async runSync(params?: {
+  protected async runSync(params?: {
     reason?: string;
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
