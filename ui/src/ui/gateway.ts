@@ -145,6 +145,9 @@ export class GatewayBrowserClient {
       }
       if (Date.now() - this.lastTick > this.tickIntervalMs * 2) {
         console.warn("[gateway] tick timeout - forcing reconnect");
+        // Make timeout handling idempotent: stop watching and ignore further ticks
+        this.lastTick = null;
+        this.stopTickWatch();
         this.ws?.close(4000, "tick timeout");
       }
     }, interval);
@@ -257,8 +260,19 @@ export class GatewayBrowserClient {
           });
         }
         this.backoffMs = 800;
-        // Extract tick interval from server policy and start heartbeat monitoring
-        this.tickIntervalMs = hello?.policy?.tickIntervalMs ?? 30_000;
+        // Extract tick interval from server policy and start heartbeat monitoring.
+        // Only accept a finite, positive number; otherwise fall back to 30_000 ms,
+        // and clamp to a minimum of 1_000 ms.
+        const policyTickIntervalMs = hello?.policy?.tickIntervalMs;
+        if (
+          typeof policyTickIntervalMs === "number" &&
+          Number.isFinite(policyTickIntervalMs) &&
+          policyTickIntervalMs > 0
+        ) {
+          this.tickIntervalMs = Math.max(policyTickIntervalMs, 1_000);
+        } else {
+          this.tickIntervalMs = 30_000;
+        }
         this.lastTick = Date.now();
         this.startTickWatch();
         this.opts.onHello?.(hello);
