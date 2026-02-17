@@ -74,4 +74,51 @@ describe("runSilentMessageIngest", () => {
 
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("keeps inflight slot until timed-out hook actually settles", async () => {
+    let release = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const runMessageIngest = vi.fn(async () => blocked);
+    const runner = {
+      hasHooks: vi.fn(() => true),
+      runMessageIngest,
+    } as unknown as HookRunner;
+    const log = vi.fn();
+
+    const first = runSilentMessageIngest({
+      enabled: true,
+      event: { from: "x", content: "hello" },
+      ctx: { channelId: "signal", conversationId: "g1" },
+      hookRunner: runner,
+      timeoutMs: 1,
+      maxInflight: 1,
+      log,
+      logPrefix: "signal",
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    const second = await runSilentMessageIngest({
+      enabled: true,
+      event: { from: "y", content: "hello" },
+      ctx: { channelId: "signal", conversationId: "g1" },
+      hookRunner: runner,
+      timeoutMs: 1,
+      maxInflight: 1,
+      log,
+      logPrefix: "signal",
+    });
+
+    expect(await first).toBe(false);
+    expect(second).toBe(false);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("ingest skipped (too many inflight hooks in conversation"),
+    );
+
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+  });
 });

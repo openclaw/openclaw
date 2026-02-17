@@ -484,38 +484,40 @@ export const buildTelegramMessageContext = async ({
 
       // Silent ingest: run hooks on non-mentioned messages
       const ingestEnabled = topicConfig?.ingest ?? groupConfig?.ingest;
-      const senderLabelForHook = buildSenderLabel(msg, senderId || chatId);
-      const messageIdForHook =
-        typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
-      const ingestConversationId =
-        resolvedThreadId != null ? `${String(chatId)}:${resolvedThreadId}` : String(chatId);
-      void runSilentMessageIngest({
-        enabled: Boolean(ingestEnabled),
-        event: {
-          from: senderLabelForHook,
-          content: bodyText,
-          timestamp: msg.date ? msg.date * 1000 : undefined,
-          metadata: {
-            to: String(chatId),
-            provider: "telegram",
-            surface: "telegram",
-            threadId: resolvedThreadId,
-            originatingChannel: "telegram",
-            originatingTo: String(chatId),
-            messageId: messageIdForHook,
-            senderId: senderId || undefined,
-            senderName: buildSenderName(msg),
-            senderUsername,
+      if (ingestEnabled) {
+        const senderLabelForHook = buildSenderLabel(msg, senderId || chatId);
+        const messageIdForHook =
+          typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
+        const ingestConversationId =
+          resolvedThreadId != null ? `${String(chatId)}:${resolvedThreadId}` : String(chatId);
+        void runSilentMessageIngest({
+          enabled: true,
+          event: {
+            from: senderLabelForHook,
+            content: bodyText,
+            timestamp: msg.date ? msg.date * 1000 : undefined,
+            metadata: {
+              to: String(chatId),
+              provider: "telegram",
+              surface: "telegram",
+              threadId: resolvedThreadId,
+              originatingChannel: "telegram",
+              originatingTo: String(chatId),
+              messageId: messageIdForHook,
+              senderId: senderId || undefined,
+              senderName: buildSenderName(msg),
+              senderUsername,
+            },
           },
-        },
-        ctx: {
-          channelId: "telegram",
-          accountId: route.accountId,
-          conversationId: ingestConversationId,
-        },
-        log: logVerbose,
-        logPrefix: "telegram",
-      });
+          ctx: {
+            channelId: "telegram",
+            accountId: route.accountId,
+            conversationId: ingestConversationId,
+          },
+          log: logVerbose,
+          logPrefix: "telegram",
+        });
+      }
 
       return null;
     }

@@ -641,35 +641,37 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         accountId: deps.accountId,
       });
-      const timestamp =
-        typeof envelope.timestamp === "number" && envelope.timestamp > 0
-          ? envelope.timestamp
-          : undefined;
-      const messageIdForHook = timestamp ? String(timestamp) : undefined;
-      void runSilentMessageIngest({
-        enabled: Boolean(ingestEnabled && groupId),
-        event: {
-          from: senderDisplay,
-          content: pendingBodyText,
-          timestamp,
-          metadata: {
-            to: groupId,
-            provider: "signal",
-            surface: "signal",
-            messageId: messageIdForHook,
-            originatingChannel: "signal",
-            originatingTo: groupId,
-            senderName: senderDisplay,
+      if (ingestEnabled && groupId) {
+        const timestamp =
+          typeof envelope.timestamp === "number" && envelope.timestamp > 0
+            ? envelope.timestamp
+            : undefined;
+        const messageIdForHook = timestamp ? String(timestamp) : undefined;
+        void runSilentMessageIngest({
+          enabled: true,
+          event: {
+            from: senderDisplay,
+            content: pendingBodyText,
+            timestamp,
+            metadata: {
+              to: groupId,
+              provider: "signal",
+              surface: "signal",
+              messageId: messageIdForHook,
+              originatingChannel: "signal",
+              originatingTo: groupId,
+              senderName: senderDisplay,
+            },
           },
-        },
-        ctx: {
-          channelId: "signal",
-          accountId: deps.accountId,
-          conversationId: groupId ?? "unknown",
-        },
-        log: logVerbose,
-        logPrefix: "signal",
-      });
+          ctx: {
+            channelId: "signal",
+            accountId: deps.accountId,
+            conversationId: groupId,
+          },
+          log: logVerbose,
+          logPrefix: "signal",
+        });
+      }
 
       return;
     }
