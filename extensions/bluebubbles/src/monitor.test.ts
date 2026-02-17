@@ -240,7 +240,6 @@ function createMockRuntime(): PluginRuntime {
       },
       discord: {} as PluginRuntime["channel"]["discord"],
       activity: {} as PluginRuntime["channel"]["activity"],
-      linq: {} as PluginRuntime["channel"]["linq"],
       line: {} as PluginRuntime["channel"]["line"],
       slack: {} as PluginRuntime["channel"]["slack"],
       telegram: {} as PluginRuntime["channel"]["telegram"],
