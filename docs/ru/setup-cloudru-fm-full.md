@@ -340,16 +340,73 @@ pnpm openclaw channels status
 
 ## Диагностика
 
-| Проблема                             | Причина                             | Решение                                                   |
-| ------------------------------------ | ----------------------------------- | --------------------------------------------------------- |
-| Proxy не запускается                 | Docker не установлен или не запущен | `docker ps` — проверить Docker                            |
-| "Cloud.ru FM proxy is not reachable" | Контейнер упал                      | `docker compose -f docker-compose.cloudru-proxy.yml logs` |
-| 401 Unauthorized                     | Неверный API-ключ                   | Проверить `CLOUDRU_API_KEY`                               |
-| MCP серверы не найдены               | Неверный Project ID                 | Проверить ID в консоли Cloud.ru                           |
-| Telegram бот не отвечает             | Неверный токен или allowFrom        | Проверить токен через @BotFather                          |
-| MAX бот не отвечает                  | Неверный токен                      | Проверить токен на dev.max.ru                             |
-| "missing_brave_api_key"              | Не настроен Brave Search            | `openclaw configure --section web`                        |
-| Ошибки tool calling                  | Нестабильность модели               | Переключиться на `cloudru-fm-flash`                       |
+| Проблема                             | Причина                              | Решение                                                   |
+| ------------------------------------ | ------------------------------------ | --------------------------------------------------------- |
+| Proxy не запускается                 | Docker не установлен или не запущен  | `docker ps` — проверить Docker                            |
+| "Cloud.ru FM proxy is not reachable" | Контейнер упал                       | `docker compose -f docker-compose.cloudru-proxy.yml logs` |
+| 401 Unauthorized                     | Неверный API-ключ                    | Проверить `CLOUDRU_API_KEY`                               |
+| MCP серверы не найдены               | Неверный Project ID                  | Проверить ID в консоли Cloud.ru                           |
+| Telegram бот не отвечает             | Неверный токен или allowFrom         | Проверить токен через @BotFather                          |
+| Telegram бот не отвечает (dev)       | Плагин отключён или каналы пропущены | См. раздел «Особенности dev-режима» ниже                  |
+| MAX бот не отвечает                  | Неверный токен                       | Проверить токен на dev.max.ru                             |
+| "missing_brave_api_key"              | Не настроен Brave Search             | `openclaw configure --section web`                        |
+| Ошибки tool calling                  | Нестабильность модели                | Переключиться на `cloudru-fm-flash`                       |
+
+### Особенности dev-режима
+
+Dev-режим (`pnpm gateway:dev` / `node scripts/run-node.mjs --dev gateway`) использует отдельный конфиг `~/.openclaw-dev/openclaw.json` и имеет два подводных камня:
+
+**1. `OPENCLAW_SKIP_CHANNELS=1`**
+
+Скрипт `pnpm gateway:dev` по умолчанию запускается с `OPENCLAW_SKIP_CHANNELS=1`, что полностью пропускает загрузку каналов. Для запуска с каналами используйте прямой вызов:
+
+```bash
+node scripts/run-node.mjs --dev gateway
+```
+
+**2. Telegram-плагин отключён**
+
+При первом старте gateway может создать `plugins.entries.telegram.enabled: false` в конфиге. Убедитесь, что в `~/.openclaw-dev/openclaw.json` присутствуют оба блока:
+
+```json5
+{
+  // Конфигурация канала
+  channels: {
+    telegram: {
+      enabled: true,
+      botToken: "YOUR_BOT_TOKEN",
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+      streamMode: "partial",
+    },
+  },
+
+  // Плагин должен быть включён
+  plugins: {
+    entries: {
+      telegram: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+**3. Бот был подключён к другому инстансу**
+
+Если бот ранее использовался с другим OpenClaw (или другим фреймворком) в режиме webhook, старый webhook может оставаться зарегистрированным на серверах Telegram. Polling не будет работать, пока webhook активен. Удалите его:
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/deleteWebhook?drop_pending_updates=true"
+# Ожидаемый ответ: {"ok":true,"result":true}
+```
+
+Проверить текущее состояние:
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getWebhookInfo"
+# url должен быть пустым: "url": ""
+```
 
 ### Логи
 
