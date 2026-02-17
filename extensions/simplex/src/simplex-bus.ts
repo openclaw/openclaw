@@ -13,6 +13,12 @@
 
 import WebSocket from "ws";
 
+/** Safe display name pattern — alphanumeric, underscores, dots, hyphens only. */
+const SAFE_DISPLAY_NAME = /^[\w.-]+$/;
+
+/** Max reconnect delay: 5 minutes */
+const MAX_RECONNECT_MS = 300_000;
+
 export type SimplexMessage = {
   contactId: string;
   contactName: string;
@@ -49,7 +55,8 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
   let connected = false;
   let shouldReconnect = true;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  const reconnectMs = options.reconnectMs ?? 5000;
+  let reconnectAttempts = 0;
+  const baseReconnectMs = options.reconnectMs ?? 5000;
 
   // Pending command responses
   const pendingCommands = new Map<
@@ -58,12 +65,20 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
   >();
   let commandCounter = 0;
 
+  function getReconnectDelay(): number {
+    // Exponential backoff: base * 2^attempts, capped at MAX_RECONNECT_MS
+    const delay = Math.min(baseReconnectMs * Math.pow(2, reconnectAttempts), MAX_RECONNECT_MS);
+    reconnectAttempts++;
+    return delay;
+  }
+
   function connect() {
     try {
       ws = new WebSocket(options.wsUrl);
 
       ws.on("open", () => {
         connected = true;
+        reconnectAttempts = 0; // Reset on successful connection
         options.onConnect();
       });
 
@@ -80,7 +95,8 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
         connected = false;
         options.onDisconnect(code, reason.toString());
         if (shouldReconnect) {
-          reconnectTimer = setTimeout(connect, reconnectMs);
+          const delay = getReconnectDelay();
+          reconnectTimer = setTimeout(connect, delay);
         }
       });
 
@@ -90,7 +106,8 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
     } catch (err) {
       options.onError(err instanceof Error ? err : new Error(String(err)), "connect");
       if (shouldReconnect) {
-        reconnectTimer = setTimeout(connect, reconnectMs);
+        const delay = getReconnectDelay();
+        reconnectTimer = setTimeout(connect, delay);
       }
     }
   }
@@ -132,8 +149,8 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
           if (dir?.type !== "directRcv") continue;
 
           const content = chatItem?.content;
-          if (content?.type !== "sndMsgContent" && content?.type !== "rcvMsgContent") {
-            // Also handle text messages
+          if (content?.type !== "rcvMsgContent") {
+            // Also handle text messages with msgContent.type
             if (content?.msgContent?.type !== "text" && !content?.text) continue;
           }
 
@@ -161,7 +178,8 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       if (parsed.resp?.type === "contactRequest" || parsed.resp?.type === "contactConnecting") {
         // Auto-accept contact requests (pairing is handled at OpenClaw level)
         const contactReq = parsed.resp?.contactRequest;
-        if (contactReq) {
+        // Validate display name to prevent command injection via crafted names
+        if (contactReq?.localDisplayName && SAFE_DISPLAY_NAME.test(contactReq.localDisplayName)) {
           sendCommand(`/ac ${contactReq.localDisplayName}`).catch(() => {});
         }
       }

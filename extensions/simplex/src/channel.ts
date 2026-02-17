@@ -1,12 +1,11 @@
 import {
-  buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
-import { SimplexConfigSchema } from "./config-schema.js";
+import { simplexChannelConfigSchema } from "./config-schema.js";
 import { startSimplexBus, type SimplexBusHandle } from "./simplex-bus.js";
 import { getSimplexRuntime } from "./runtime.js";
 import {
@@ -38,7 +37,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
     polls: false,
   },
   reload: { configPrefixes: ["channels.simplex"] },
-  configSchema: buildChannelConfigSchema(SimplexConfigSchema),
+  configSchema: simplexChannelConfigSchema,
 
   config: {
     listAccountIds: (cfg) => listSimplexAccountIds(cfg),
