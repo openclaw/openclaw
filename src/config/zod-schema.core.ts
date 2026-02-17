@@ -499,6 +499,14 @@ export const ToolsLinksSchema = z
     maxLinks: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     models: z.array(LinkModelSchema).optional(),
+    searchFallback: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxResults: z.number().int().positive().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
