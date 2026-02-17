@@ -96,7 +96,7 @@ export function filterResultsByAllowlist(
       const hostname = new URL(result.url).hostname;
       return matchesHostnameAllowlist(hostname, normalizedAllowlist);
     } catch {
-      return true; // Keep entries with invalid URLs (let them pass through)
+      return false; // Block entries with unparseable URLs (safe default for restrictive environments)
     }
   });
 }
