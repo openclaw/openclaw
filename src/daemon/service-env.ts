@@ -24,6 +24,28 @@ type BuildServicePathOptions = MinimalServicePathOptions & {
   env?: Record<string, string | undefined>;
 };
 
+function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
+  if (dir) {
+    dirs.push(dir);
+  }
+}
+
+function appendSubdir(base: string | undefined, subdir: string): string | undefined {
+  if (!base) {
+    return undefined;
+  }
+  return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
+}
+
+function addCommonUserBinDirs(dirs: string[], home: string): void {
+  dirs.push(`${home}/.local/bin`);
+  dirs.push(`${home}/.npm-global/bin`);
+  dirs.push(`${home}/bin`);
+  dirs.push(`${home}/.volta/bin`);
+  dirs.push(`${home}/.asdf/shims`);
+  dirs.push(`${home}/.bun/bin`);
+}
+
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
     return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
@@ -52,49 +74,32 @@ export function resolveDarwinUserBinDirs(
 
   const dirs: string[] = [];
 
-  const add = (dir: string | undefined) => {
-    if (dir) {
-      dirs.push(dir);
-    }
-  };
-  const appendSubdir = (base: string | undefined, subdir: string) => {
-    if (!base) {
-      return undefined;
-    }
-    return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
-  };
-
   // Env-configured bin roots (override defaults when present).
   // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
   // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
-  add(env?.PNPM_HOME);
-  add(appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
-  add(appendSubdir(env?.BUN_INSTALL, "bin"));
-  add(appendSubdir(env?.VOLTA_HOME, "bin"));
-  add(appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+  addNonEmptyDir(dirs, env?.PNPM_HOME);
+  addNonEmptyDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
   // nvm: no stable default path, relies on env or user's shell config
   // User must set NVM_DIR and source nvm.sh for it to work
-  add(env?.NVM_DIR);
+  addNonEmptyDir(dirs, env?.NVM_DIR);
   // fnm: use aliases/default (not current)
-  add(appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
   // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
 
   // Common user bin directories
-  dirs.push(`${home}/.local/bin`); // XDG standard, pip, etc.
-  dirs.push(`${home}/.npm-global/bin`); // npm custom prefix
-  dirs.push(`${home}/bin`); // User's personal bin
+  addCommonUserBinDirs(dirs, home);
 
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
   // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
   dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
   dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
-  dirs.push(`${home}/.volta/bin`); // Volta (same on all platforms)
-  dirs.push(`${home}/.asdf/shims`); // asdf (same on all platforms)
   // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
   dirs.push(`${home}/Library/pnpm`); // pnpm default
   dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
-  dirs.push(`${home}/.bun/bin`); // Bun (same on all platforms)
 
   return dirs;
 }
@@ -113,39 +118,22 @@ export function resolveLinuxUserBinDirs(
 
   const dirs: string[] = [];
 
-  const add = (dir: string | undefined) => {
-    if (dir) {
-      dirs.push(dir);
-    }
-  };
-  const appendSubdir = (base: string | undefined, subdir: string) => {
-    if (!base) {
-      return undefined;
-    }
-    return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
-  };
-
   // Env-configured bin roots (override defaults when present).
-  add(env?.PNPM_HOME);
-  add(appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
-  add(appendSubdir(env?.BUN_INSTALL, "bin"));
-  add(appendSubdir(env?.VOLTA_HOME, "bin"));
-  add(appendSubdir(env?.ASDF_DATA_DIR, "shims"));
-  add(appendSubdir(env?.NVM_DIR, "current/bin"));
-  add(appendSubdir(env?.FNM_DIR, "current/bin"));
+  addNonEmptyDir(dirs, env?.PNPM_HOME);
+  addNonEmptyDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+  addNonEmptyDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
-  dirs.push(`${home}/.local/bin`); // XDG standard, pip, etc.
-  dirs.push(`${home}/.npm-global/bin`); // npm custom prefix (recommended for non-root)
-  dirs.push(`${home}/bin`); // User's personal bin
+  addCommonUserBinDirs(dirs, home);
 
   // Node version managers
   dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
   dirs.push(`${home}/.fnm/current/bin`); // fnm
-  dirs.push(`${home}/.volta/bin`); // Volta
-  dirs.push(`${home}/.asdf/shims`); // asdf
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
-  dirs.push(`${home}/.bun/bin`); // Bun
 
   return dirs;
 }

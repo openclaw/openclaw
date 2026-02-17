@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
-import type { CommandHandler } from "./commands-types.js";
 import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   clearSubagentRunSteerRestart,
   listSubagentRunsForRequester,
@@ -36,6 +35,7 @@ import {
 } from "../../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { stopSubagentsForRequester } from "./abort.js";
+import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 import { formatRunLabel, formatRunStatus, sortSubagentRuns } from "./subagents-utils.js";
 
@@ -681,6 +681,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         agentAccountId: params.ctx.AccountId,
         agentTo: params.command.to,
         agentThreadId: params.ctx.MessageThreadId,
+        agentGroupId: params.sessionEntry?.groupId ?? null,
+        agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
+        agentGroupSpace: params.sessionEntry?.space ?? null,
       },
     );
     if (result.status === "accepted") {

@@ -123,10 +123,13 @@ async function sendRawConnectReq(
       },
     }),
   );
-  return onceMessage<{ ok: boolean; payload?: unknown; error?: { message?: string } }>(
-    ws,
-    isConnectResMessage(params.id),
-  );
+  return onceMessage<{
+    type?: string;
+    id?: string;
+    ok?: boolean;
+    payload?: Record<string, unknown> | null;
+    error?: { message?: string };
+  }>(ws, isConnectResMessage(params.id));
 }
 
 async function startRateLimitedTokenServerWithPairedDeviceToken() {
@@ -350,10 +353,11 @@ describe("gateway server auth/connect", () => {
 
     test("sends connect challenge on open", async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-      const evtPromise = onceMessage<{ payload?: unknown }>(
-        ws,
-        (o) => o.type === "event" && o.event === "connect.challenge",
-      );
+      const evtPromise = onceMessage<{
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown> | null;
+      }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
       await new Promise<void>((resolve) => ws.once("open", resolve));
       const evt = await evtPromise;
       const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
@@ -378,7 +382,7 @@ describe("gateway server auth/connect", () => {
     test("rejects non-connect first request", async () => {
       const ws = await openWs(port);
       ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
-      const res = await onceMessage<{ ok: boolean; error?: unknown }>(
+      const res = await onceMessage<{ type?: string; id?: string; ok?: boolean; error?: unknown }>(
         ws,
         (o) => o.type === "res" && o.id === "h1",
       );
@@ -627,10 +631,11 @@ describe("gateway server auth/connect", () => {
             "x-forwarded-for": "203.0.113.10",
           },
         });
-        const challengePromise = onceMessage<{ payload?: unknown }>(
-          ws,
-          (o) => o.type === "event" && o.event === "connect.challenge",
-        );
+        const challengePromise = onceMessage<{
+          type?: string;
+          event?: string;
+          payload?: Record<string, unknown> | null;
+        }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
         await new Promise<void>((resolve) => ws.once("open", resolve));
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;

@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
@@ -73,7 +73,8 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
 }
 
 function readAgentCommandCall(fromEnd = 1) {
-  return vi.mocked(agentCommand).mock.calls.at(-fromEnd)?.[0] as Record<string, unknown>;
+  const calls = vi.mocked(agentCommand).mock.calls as unknown[][];
+  return (calls.at(-fromEnd)?.[0] ?? {}) as Record<string, unknown>;
 }
 
 function expectAgentRoutingCall(params: {
@@ -272,7 +273,8 @@ describe("gateway server agent", () => {
   test("agent routes bare /new through session reset before running greeting prompt", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
     const spy = vi.mocked(agentCommand);
-    const callsBefore = spy.mock.calls.length;
+    const calls = spy.mock.calls as unknown[][];
+    const callsBefore = calls.length;
     const res = await rpcReq(ws, "agent", {
       message: "/new",
       sessionKey: "main",
@@ -280,8 +282,8 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    await vi.waitFor(() => expect(spy.mock.calls.length).toBeGreaterThan(callsBefore));
-    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
+    const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
     expect(call.message).toBe(BARE_SESSION_RESET_PROMPT);
     expect(typeof call.sessionId).toBe("string");
     expect(call.sessionId).not.toBe("sess-main-before-reset");
@@ -304,9 +306,14 @@ describe("gateway server agent", () => {
 
     const ack = await ackP;
     const final = await finalP;
-    expect(ack.payload.runId).toBeDefined();
-    expect(final.payload.runId).toBe(ack.payload.runId);
-    expect(final.payload.status).toBe("ok");
+    const ackPayload = ack.payload;
+    const finalPayload = final.payload;
+    if (!ackPayload || !finalPayload) {
+      throw new Error("missing websocket payload");
+    }
+    expect(ackPayload.runId).toBeDefined();
+    expect(finalPayload.runId).toBe(ackPayload.runId);
+    expect(finalPayload.status).toBe("ok");
   });
 
   test("agent dedupes by idempotencyKey after completion", async () => {
@@ -399,10 +406,7 @@ describe("gateway server agent", () => {
     });
 
     const evt = await finalChatP;
-    const payload =
-      evt.payload && typeof evt.payload === "object"
-        ? (evt.payload as Record<string, unknown>)
-        : {};
+    const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
     expect(payload.sessionKey).toBe("main");
     expect(payload.runId).toBe("run-auto-1");
 

@@ -1,6 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ChannelManager } from "./server-channels.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ChannelManager } from "./server-channels.js";
 
 const log = createSubsystemLogger("gateway/health-monitor");
 
@@ -28,13 +28,17 @@ type RestartRecord = {
   restartsThisHour: { at: number }[];
 };
 
+function isManagedAccount(snapshot: { enabled?: boolean; configured?: boolean }): boolean {
+  return snapshot.enabled !== false && snapshot.configured !== false;
+}
+
 function isChannelHealthy(snapshot: {
   running?: boolean;
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
 }): boolean {
-  if (!snapshot.enabled || !snapshot.configured) {
+  if (!isManagedAccount(snapshot)) {
     return true;
   }
   if (!snapshot.running) {
@@ -88,7 +92,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         if (!status) {
           continue;
         }
-        if (!status.enabled || !status.configured) {
+        if (!isManagedAccount(status)) {
           continue;
         }
         if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {

@@ -27,6 +27,7 @@ describe("resolveDiscordRestFetch", () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
+      exit: vi.fn(),
     } as const;
     undiciFetchMock.mockReset().mockResolvedValue(new Response("ok", { status: 200 }));
     proxyAgentSpy.mockReset();
@@ -51,6 +52,7 @@ describe("resolveDiscordRestFetch", () => {
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
+      exit: vi.fn(),
     } as const;
     const { __testing } = await import("./provider.js");
 

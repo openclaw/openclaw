@@ -228,6 +228,40 @@ describe("registerSlackInteractionEvents", () => {
     );
   });
 
+  it("ignores malformed action payloads after ack and logs warning", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, app, getHandler, runtimeLog } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U666" },
+        channel: { id: "C1" },
+        message: {
+          ts: "777.888",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "verify_block",
+              elements: [{ type: "button", action_id: "openclaw:verify" }],
+            },
+          ],
+        },
+      },
+      action: "not-an-action-object" as unknown as Record<string, unknown>,
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("slack:interaction malformed"));
+  });
+
   it("escapes mrkdwn characters in confirmation labels", async () => {
     enqueueSystemEventMock.mockReset();
     const { ctx, app, getHandler } = createContext();
@@ -683,9 +717,17 @@ describe("registerSlackInteractionEvents", () => {
               },
             },
           },
+        } as unknown as {
+          id?: string;
+          callback_id?: string;
+          root_view_id?: string;
+          previous_view_id?: string;
+          external_id?: string;
+          hash?: string;
+          state?: { values: Record<string, unknown> };
         },
       },
-    });
+    } as never);
 
     expect(ack).toHaveBeenCalled();
     expect(resolveSessionKey).toHaveBeenCalledWith({

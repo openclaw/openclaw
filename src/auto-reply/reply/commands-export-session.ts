@@ -1,30 +1,17 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { ReplyPayload } from "../types.js";
-import type { HandleCommandsParams } from "./commands-types.js";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
-import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
-import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
+import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
 } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { buildTtsSystemPromptHint } from "../../tts/tts.js";
-import { resolveUserPath } from "../../utils.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { ReplyPayload } from "../types.js";
+import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 
 // Export HTML templates are bundled with this module
 const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
@@ -97,10 +84,10 @@ function generateHtml(sessionData: SessionData): string {
 
   // Build CSS with theme variables
   const css = templateCss
-    .replace("{{THEME_VARS}}", themeVars)
-    .replace("{{BODY_BG}}", bodyBg)
-    .replace("{{CONTAINER_BG}}", containerBg)
-    .replace("{{INFO_BG}}", infoBg);
+    .replace("/* {{THEME_VARS}} */", themeVars.trim())
+    .replace("/* {{BODY_BG_DECL}} */", `--body-bg: ${bodyBg};`)
+    .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
+    .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
 
   return template
     .replace("{{CSS}}", css)
@@ -108,115 +95,6 @@ function generateHtml(sessionData: SessionData): string {
     .replace("{{SESSION_DATA}}", sessionDataBase64)
     .replace("{{MARKED_JS}}", markedJs)
     .replace("{{HIGHLIGHT_JS}}", hljsJs);
-}
-
-async function resolveFullSystemPrompt(params: HandleCommandsParams): Promise<{
-  systemPrompt: string;
-  tools: AgentTool[];
-}> {
-  const workspaceDir = params.workspaceDir;
-  const { contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
-    workspaceDir,
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionEntry?.sessionId,
-  });
-  const skillsSnapshot = (() => {
-    try {
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: params.cfg,
-        eligibility: { remote: getRemoteSkillEligibility() },
-        snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
-      });
-    } catch {
-      return { prompt: "", skills: [], resolvedSkills: [] };
-    }
-  })();
-  const skillsPrompt = skillsSnapshot.prompt ?? "";
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: params.ctx.SessionKey ?? params.sessionKey,
-  });
-  const tools = (() => {
-    try {
-      return createOpenClawCodingTools({
-        config: params.cfg,
-        workspaceDir,
-        sessionKey: params.sessionKey,
-        messageProvider: params.command.channel,
-        groupId: params.sessionEntry?.groupId ?? undefined,
-        groupChannel: params.sessionEntry?.groupChannel ?? undefined,
-        groupSpace: params.sessionEntry?.space ?? undefined,
-        spawnedBy: params.sessionEntry?.spawnedBy ?? undefined,
-        senderIsOwner: params.command.senderIsOwner,
-        modelProvider: params.provider,
-        modelId: params.model,
-      });
-    } catch {
-      return [];
-    }
-  })();
-  const toolSummaries = buildToolSummaryMap(tools);
-  const toolNames = tools.map((t) => t.name);
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const defaultModelRef = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: sessionAgentId,
-  });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
-    config: params.cfg,
-    agentId: sessionAgentId,
-    workspaceDir,
-    cwd: process.cwd(),
-    runtime: {
-      host: "unknown",
-      os: "unknown",
-      arch: "unknown",
-      node: process.version,
-      model: `${params.provider}/${params.model}`,
-      defaultModel: defaultModelLabel,
-    },
-  });
-  const sandboxInfo = sandboxRuntime.sandboxed
-    ? {
-        enabled: true,
-        workspaceDir,
-        workspaceAccess: "rw" as const,
-        elevated: {
-          allowed: params.elevated.allowed,
-          defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
-        },
-      }
-    : { enabled: false };
-  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
-
-  const systemPrompt = buildAgentSystemPrompt({
-    workspaceDir,
-    defaultThinkLevel: params.resolvedThinkLevel,
-    reasoningLevel: params.resolvedReasoningLevel,
-    extraSystemPrompt: undefined,
-    ownerNumbers: undefined,
-    reasoningTagHint: false,
-    toolNames,
-    toolSummaries,
-    modelAliasLines: [],
-    userTimezone,
-    userTime,
-    userTimeFormat,
-    contextFiles: injectedFiles,
-    skillsPrompt,
-    heartbeatPrompt: undefined,
-    ttsHint,
-    runtimeInfo,
-    sandboxInfo,
-    memoryCitationsMode: params.cfg?.memory?.citations,
-  });
-
-  return { systemPrompt, tools };
 }
 
 function parseExportArgs(commandBodyNormalized: string): { outputPath?: string } {
@@ -234,7 +112,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const args = parseExportArgs(params.command.commandBodyNormalized);
 
   // 1. Resolve session file
-  const sessionEntry = params.sessionEntry as SessionEntry | undefined;
+  const sessionEntry = params.sessionEntry;
   if (!sessionEntry?.sessionId) {
     return { text: "❌ No active session found." };
   }
@@ -269,7 +147,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const leafId = sessionManager.getLeafId();
 
   // 3. Build full system prompt
-  const { systemPrompt, tools } = await resolveFullSystemPrompt(params);
+  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle(params);
 
   // 4. Prepare session data
   const sessionData: SessionData = {
@@ -291,7 +169,11 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
   const outputPath = args.outputPath
-    ? resolveUserPath(args.outputPath)
+    ? path.resolve(
+        args.outputPath.startsWith("~")
+          ? args.outputPath.replace("~", process.env.HOME ?? "")
+          : args.outputPath,
+      )
     : path.join(params.workspaceDir, defaultFileName);
 
   // Ensure directory exists

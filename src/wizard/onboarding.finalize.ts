@@ -1,10 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
-import type { WizardPrompter } from "./prompts.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -18,23 +13,25 @@ import {
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
-  buildWebchatUrl,
   detectBrowserOpenSupport,
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
-  resolveCanonicalMainSessionKey,
   waitForGatewayReachable,
   resolveControlUiLinks,
-  resolveLocalBrowserControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
+import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
+import type { WizardPrompter } from "./prompts.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -253,22 +250,10 @@ export async function finalizeOnboardingWizard(
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
   });
-  const localBrowserLinks = resolveLocalBrowserControlUiLinks({
-    bind: settings.bind,
-    port: settings.port,
-    customBindHost: settings.customBindHost,
-    basePath: controlUiBasePath,
-  });
-  const canonicalSessionKey = resolveCanonicalMainSessionKey(nextConfig);
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
-      ? `${localBrowserLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-      : localBrowserLinks.httpUrl;
-  const webchatUrl = buildWebchatUrl({
-    httpUrl: localBrowserLinks.httpUrl,
-    sessionKey: canonicalSessionKey,
-    token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-  });
+      ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
+      : links.httpUrl;
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -288,11 +273,10 @@ export async function finalizeOnboardingWizard(
 
   await prompter.note(
     [
-      `Web UI: ${localBrowserLinks.httpUrl}`,
+      `Web UI: ${links.httpUrl}`,
       settings.authMode === "token" && settings.gatewayToken
         ? `Web UI (with token): ${authedUrl}`
         : undefined,
-      `WebChat: ${webchatUrl}`,
       `Gateway WS: ${links.wsUrl}`,
       gatewayStatusLine,
       "Docs: https://docs.openclaw.ai/web/control-ui",
@@ -358,7 +342,7 @@ export async function finalizeOnboardingWizard(
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
-        controlUiOpened = await openUrl(webchatUrl);
+        controlUiOpened = await openUrl(authedUrl);
         if (!controlUiOpened) {
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
@@ -375,7 +359,7 @@ export async function finalizeOnboardingWizard(
       }
       await prompter.note(
         [
-          `WebChat link: ${webchatUrl}`,
+          `Dashboard link (with token): ${authedUrl}`,
           controlUiOpened
             ? "Opened in your browser. Keep that tab to control OpenClaw."
             : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
@@ -418,7 +402,7 @@ export async function finalizeOnboardingWizard(
   if (shouldOpenControlUi) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      controlUiOpened = await openUrl(webchatUrl);
+      controlUiOpened = await openUrl(authedUrl);
       if (!controlUiOpened) {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
@@ -436,7 +420,7 @@ export async function finalizeOnboardingWizard(
 
     await prompter.note(
       [
-        `WebChat link: ${webchatUrl}`,
+        `Dashboard link (with token): ${authedUrl}`,
         controlUiOpened
           ? "Opened in your browser. Keep that tab to control OpenClaw."
           : "Copy/paste this URL in a browser on this machine to control OpenClaw.",

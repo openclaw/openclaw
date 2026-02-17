@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
 type LockFilePayload = {
   pid?: number;
@@ -37,6 +38,8 @@ const WATCHDOG_STATE_KEY = Symbol.for("openclaw.sessionWriteLockWatchdogState");
 const DEFAULT_STALE_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
+const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
+const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
   registered: boolean;
@@ -49,17 +52,7 @@ type WatchdogState = {
   timer?: NodeJS.Timeout;
 };
 
-function resolveHeldLocks(): Map<string, HeldLock> {
-  const proc = process as NodeJS.Process & {
-    [HELD_LOCKS_KEY]?: Map<string, HeldLock>;
-  };
-  if (!proc[HELD_LOCKS_KEY]) {
-    proc[HELD_LOCKS_KEY] = new Map<string, HeldLock>();
-  }
-  return proc[HELD_LOCKS_KEY];
-}
-
-const HELD_LOCKS = resolveHeldLocks();
+const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
 
 function resolveCleanupState(): CleanupState {
   const proc = process as NodeJS.Process & {
@@ -102,6 +95,20 @@ function resolvePositiveMs(
     return fallback;
   }
   return value;
+}
+
+export function resolveSessionLockMaxHoldFromTimeout(params: {
+  timeoutMs: number;
+  graceMs?: number;
+  minMs?: number;
+}): number {
+  const minMs = resolvePositiveMs(params.minMs, DEFAULT_MAX_HOLD_MS);
+  const timeoutMs = resolvePositiveMs(params.timeoutMs, minMs, { allowInfinity: true });
+  if (timeoutMs === Number.POSITIVE_INFINITY) {
+    return MAX_LOCK_HOLD_MS;
+  }
+  const graceMs = resolvePositiveMs(params.graceMs, DEFAULT_TIMEOUT_GRACE_MS);
+  return Math.min(MAX_LOCK_HOLD_MS, Math.max(minMs, timeoutMs + graceMs));
 }
 
 async function releaseHeldLock(

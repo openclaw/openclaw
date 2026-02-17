@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
 function installMockFetch(payload: unknown) {
-  const mockFetch = vi.fn(() =>
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
     Promise.resolve({
       ok: true,
       json: () => Promise.resolve(payload),
     } as Response),
   );
-  // @ts-expect-error mock fetch
-  global.fetch = mockFetch;
+  global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
 }
 
@@ -55,7 +55,7 @@ async function executePerplexitySearch(
   const mockFetch = installPerplexitySuccessFetch();
   const tool = createPerplexitySearchTool(options?.perplexityConfig);
   await tool?.execute?.(
-    1,
+    "call-1",
     options?.freshness ? { query, freshness: options.freshness } : { query },
   );
   return mockFetch;
@@ -90,7 +90,6 @@ describe("web_search country and language parameters", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -105,7 +104,7 @@ describe("web_search country and language parameters", () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
     expect(tool).not.toBeNull();
-    await tool?.execute?.(1, { query: "test", ...params });
+    await tool?.execute?.("call-1", { query: "test", ...params });
     expect(mockFetch).toHaveBeenCalled();
     return new URL(mockFetch.mock.calls[0][0] as string);
   }
@@ -123,7 +122,7 @@ describe("web_search country and language parameters", () => {
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "test", freshness: "yesterday" });
+    const result = await tool?.execute?.("call-1", { query: "test", freshness: "yesterday" });
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ error: "invalid_freshness" });
@@ -135,7 +134,6 @@ describe("web_search perplexity baseUrl defaults", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -213,7 +211,6 @@ describe("web_search external content wrapping", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -236,11 +233,10 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "test" });
+    const result = await tool?.execute?.("call-1", { query: "test" });
     const details = result?.details as {
       externalContent?: { untrusted?: boolean; source?: string; wrapped?: boolean };
       results?: Array<{ description?: string }>;
@@ -275,11 +271,10 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "unique-test-url-not-wrapped" });
+    const result = await tool?.execute?.("call-1", { query: "unique-test-url-not-wrapped" });
     const details = result?.details as { results?: Array<{ url?: string }> };
 
     // URL should NOT be wrapped - kept raw for tool chaining (e.g., web_fetch)
@@ -306,11 +301,10 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "unique-test-site-name-wrapping" });
+    const result = await tool?.execute?.("call-1", { query: "unique-test-site-name-wrapping" });
     const details = result?.details as { results?: Array<{ siteName?: string }> };
 
     expect(details.results?.[0]?.siteName).toBe("example.com");
@@ -337,11 +331,12 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "unique-test-brave-published-wrapping" });
+    const result = await tool?.execute?.("call-1", {
+      query: "unique-test-brave-published-wrapping",
+    });
     const details = result?.details as { results?: Array<{ published?: string }> };
 
     expect(details.results?.[0]?.published).toBe("2 days ago");
@@ -360,14 +355,13 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "perplexity" } } } },
       sandboxed: true,
     });
-    const result = await tool?.execute?.(1, { query: "test" });
+    const result = await tool?.execute?.("call-1", { query: "test" });
     const details = result?.details as { content?: string };
 
     expect(details.content).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
@@ -377,7 +371,7 @@ describe("web_search external content wrapping", () => {
   it("does not wrap Perplexity citations (raw for tool chaining)", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const citation = "https://example.com/some-article";
-    const mockFetch = vi.fn(() =>
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -387,14 +381,15 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "perplexity" } } } },
       sandboxed: true,
     });
-    const result = await tool?.execute?.(1, { query: "unique-test-perplexity-citations-raw" });
+    const result = await tool?.execute?.("call-1", {
+      query: "unique-test-perplexity-citations-raw",
+    });
     const details = result?.details as { citations?: string[] };
 
     // Citations are URLs - should NOT be wrapped for tool chaining

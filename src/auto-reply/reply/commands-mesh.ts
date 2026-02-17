@@ -1,7 +1,7 @@
-import type { CommandHandler } from "./commands-types.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import type { CommandHandler } from "./commands-types.js";
 
 type MeshPlanShape = {
   planId: string;
@@ -21,17 +21,13 @@ type ParsedMeshCommand =
 
 const meshPlanCache = new Map<string, CachedMeshPlan>();
 const MAX_CACHED_MESH_PLANS = 200;
-const MESH_PLAN_CALL_TIMEOUT_MS = 120_000;
-const MESH_RUN_CALL_TIMEOUT_MS = 15 * 60_000;
-const MESH_STATUS_CALL_TIMEOUT_MS = 15_000;
-const MESH_RETRY_CALL_TIMEOUT_MS = 15 * 60_000;
 
 function trimMeshPlanCache() {
   if (meshPlanCache.size <= MAX_CACHED_MESH_PLANS) {
     return;
   }
   const oldest = [...meshPlanCache.entries()]
-    .sort((a, b) => a[1].createdAt - b[1].createdAt)
+    .toSorted((a, b) => a[1].createdAt - b[1].createdAt)
     .slice(0, meshPlanCache.size - MAX_CACHED_MESH_PLANS);
   for (const [key] of oldest) {
     meshPlanCache.delete(key);
@@ -110,7 +106,10 @@ function putCachedPlan(params: Parameters<CommandHandler>[0], plan: MeshPlanShap
   trimMeshPlanCache();
 }
 
-function getCachedPlan(params: Parameters<CommandHandler>[0], planId: string): MeshPlanShape | null {
+function getCachedPlan(
+  params: Parameters<CommandHandler>[0],
+  planId: string,
+): MeshPlanShape | null {
   return meshPlanCache.get(cacheKeyForPlan(params, planId))?.plan ?? null;
 }
 
@@ -190,7 +189,9 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
     return null;
   }
   if (!params.command.isAuthorizedSender) {
-    logVerbose(`Ignoring /mesh from unauthorized sender: ${params.command.senderId || "<unknown>"}`);
+    logVerbose(
+      `Ignoring /mesh from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
     return { shouldContinue: false };
   }
   if (!parsed.ok) {
@@ -220,7 +221,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
           agentId: params.agentId ?? "main",
         },
         ...commonGateway,
-        timeoutMs: MESH_PLAN_CALL_TIMEOUT_MS,
       });
       putCachedPlan(params, planResp.plan);
       const sourceLine = planResp.source ? `\nPlanner source: ${planResp.source}` : "";
@@ -257,7 +257,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
             agentId: params.agentId ?? "main",
           },
           ...commonGateway,
-          timeoutMs: MESH_PLAN_CALL_TIMEOUT_MS,
         });
         putCachedPlan(params, planResp.plan);
         runPlan = planResp.plan;
@@ -280,7 +279,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
           plan: runPlan,
         },
         ...commonGateway,
-        timeoutMs: MESH_RUN_CALL_TIMEOUT_MS,
       });
 
       return {
@@ -307,7 +305,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
         method: "mesh.status",
         params: { runId: parsed.runId },
         ...commonGateway,
-        timeoutMs: MESH_STATUS_CALL_TIMEOUT_MS,
       });
       return {
         shouldContinue: false,
@@ -334,7 +331,6 @@ export const handleMeshCommand: CommandHandler = async (params, allowTextCommand
           ...(parsed.stepIds && parsed.stepIds.length > 0 ? { stepIds: parsed.stepIds } : {}),
         },
         ...commonGateway,
-        timeoutMs: MESH_RETRY_CALL_TIMEOUT_MS,
       });
       return {
         shouldContinue: false,

@@ -8,10 +8,7 @@ vi.mock("../../config/sessions.js", () => ({
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
-import {
-  loadSessionStore,
-  evaluateSessionFreshness,
-} from "../../config/sessions.js";
+import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
 describe("resolveCronSession", () => {
@@ -109,6 +106,9 @@ describe("resolveCronSession", () => {
           sessionId: "old-session-id",
           updatedAt: Date.now() - 86400000, // 1 day ago
           systemSent: true,
+          modelOverride: "gpt-4.1-mini",
+          providerOverride: "openai",
+          sendPolicy: "allow",
         },
       });
       vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: false });
@@ -123,6 +123,9 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
       expect(result.isNewSession).toBe(true);
       expect(result.systemSent).toBe(false);
+      expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
+      expect(result.sessionEntry.providerOverride).toBe("openai");
+      expect(result.sessionEntry.sendPolicy).toBe("allow");
     });
 
     it("creates new sessionId when forceNew is true", () => {
@@ -131,6 +134,8 @@ describe("resolveCronSession", () => {
           sessionId: "existing-session-id-456",
           updatedAt: Date.now() - 1000,
           systemSent: true,
+          modelOverride: "sonnet-4",
+          providerOverride: "anthropic",
         },
       });
       vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
@@ -146,6 +151,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
       expect(result.isNewSession).toBe(true);
       expect(result.systemSent).toBe(false);
+      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
+      expect(result.sessionEntry.providerOverride).toBe("anthropic");
     });
 
     it("creates new sessionId when entry exists but has no sessionId", () => {
@@ -153,8 +160,8 @@ describe("resolveCronSession", () => {
         "webhook:stable-key": {
           updatedAt: Date.now() - 1000,
           modelOverride: "some-model",
-        } as any,
-      });
+        },
+      } as unknown as ReturnType<typeof loadSessionStore>);
       vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
 
       const result = resolveCronSession({

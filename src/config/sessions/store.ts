@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { MsgContext } from "../../auto-reply/templating.js";
-import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import {
+  archiveSessionTranscripts,
+  cleanupArchivedSessionTranscripts,
+} from "../../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   deliveryContextFromSession,
@@ -17,6 +19,7 @@ import {
 } from "../../utils/delivery-context.js";
 import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { loadConfig } from "../config.js";
+import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
@@ -119,10 +122,7 @@ export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
   for (const queue of LOCK_QUEUES.values()) {
     for (const task of queue.pending) {
-      task.timedOut = true;
-      if (task.timer) {
-        clearTimeout(task.timer);
-      }
+      task.reject(new Error("session store queue cleared for test"));
     }
   }
   LOCK_QUEUES.clear();
@@ -171,10 +171,7 @@ export function loadSessionStore(
   let store: Record<string, SessionEntry> = {};
   let mtimeMs = getFileMtimeMs(storePath);
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
-  const retryBuf =
-    maxReadAttempts > 1
-      ? new Int32Array(new SharedArrayBuffer(4))
-      : undefined;
+  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
     try {
       const raw = fs.readFileSync(storePath, "utf-8");
@@ -544,11 +541,22 @@ async function saveSessionStoreUnlocked(
         },
       });
       capEntryCount(store, maintenance.maxEntries);
+      const archivedDirs = new Set<string>();
       for (const [sessionId, sessionFile] of prunedSessionFiles) {
-        archiveSessionTranscripts({
+        const archived = archiveSessionTranscripts({
           sessionId,
           storePath,
           sessionFile,
+          reason: "deleted",
+        });
+        for (const archivedPath of archived) {
+          archivedDirs.add(path.dirname(archivedPath));
+        }
+      }
+      if (archivedDirs.size > 0) {
+        await cleanupArchivedSessionTranscripts({
+          directories: [...archivedDirs],
+          olderThanMs: maintenance.pruneAfterMs,
           reason: "deleted",
         });
       }
@@ -587,9 +595,7 @@ async function saveSessionStoreUnlocked(
           // Final attempt failed — skip this save.  The write lock ensures
           // the next save will retry with fresh data.  Log for diagnostics.
           if (i === 4) {
-            console.warn(
-              `[session-store] rename failed after 5 attempts: ${storePath}`,
-            );
+            console.warn(`[session-store] rename failed after 5 attempts: ${storePath}`);
           }
         }
       }
@@ -680,11 +686,8 @@ type SessionStoreLockTask = {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
-  timeoutAt?: number;
+  timeoutMs?: number;
   staleMs: number;
-  timer?: ReturnType<typeof setTimeout>;
-  started: boolean;
-  timedOut: boolean;
 };
 
 type SessionStoreLockQueue = {
@@ -708,13 +711,6 @@ function getOrCreateLockQueue(storePath: string): SessionStoreLockQueue {
   return created;
 }
 
-function removePendingTask(queue: SessionStoreLockQueue, task: SessionStoreLockTask): void {
-  const idx = queue.pending.indexOf(task);
-  if (idx >= 0) {
-    queue.pending.splice(idx, 1);
-  }
-}
-
 async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
   const queue = LOCK_QUEUES.get(storePath);
   if (!queue || queue.running) {
@@ -724,21 +720,12 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
   try {
     while (queue.pending.length > 0) {
       const task = queue.pending.shift();
-      if (!task || task.timedOut) {
+      if (!task) {
         continue;
       }
 
-      if (task.timer) {
-        clearTimeout(task.timer);
-      }
-      task.started = true;
-
-      const remainingTimeoutMs =
-        task.timeoutAt != null
-          ? Math.max(0, task.timeoutAt - Date.now())
-          : Number.POSITIVE_INFINITY;
-      if (task.timeoutAt != null && remainingTimeoutMs <= 0) {
-        task.timedOut = true;
+      const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
+      if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
         task.reject(lockTimeoutError(storePath));
         continue;
       }
@@ -794,7 +781,6 @@ async function withSessionStoreLock<T>(
   void opts.pollIntervalMs;
 
   const hasTimeout = timeoutMs > 0 && Number.isFinite(timeoutMs);
-  const timeoutAt = hasTimeout ? Date.now() + timeoutMs : undefined;
   const queue = getOrCreateLockQueue(storePath);
 
   const promise = new Promise<T>((resolve, reject) => {
@@ -802,22 +788,9 @@ async function withSessionStoreLock<T>(
       fn: async () => await fn(),
       resolve: (value) => resolve(value as T),
       reject,
-      timeoutAt,
+      timeoutMs: hasTimeout ? timeoutMs : undefined,
       staleMs,
-      started: false,
-      timedOut: false,
     };
-
-    if (hasTimeout) {
-      task.timer = setTimeout(() => {
-        if (task.started || task.timedOut) {
-          return;
-        }
-        task.timedOut = true;
-        removePendingTask(queue, task);
-        reject(lockTimeoutError(storePath));
-      }, timeoutMs);
-    }
 
     queue.pending.push(task);
     void drainSessionStoreLockQueue(storePath);

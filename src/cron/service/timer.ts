@@ -1,9 +1,8 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import type { CronJob } from "../types.js";
-import type { CronEvent, CronServiceState } from "./state.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
+import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -11,6 +10,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -30,6 +30,13 @@ const MIN_REFIRE_GAP_MS = 2_000;
  * from wedging the entire cron lane.
  */
 const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
+
+type TimedCronRunOutcome = CronRunOutcome &
+  CronRunTelemetry & {
+    jobId: string;
+    startedAt: number;
+    endedAt: number;
+  };
 
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
@@ -57,7 +64,7 @@ function applyJobResult(
   state: CronServiceState,
   job: CronJob,
   result: {
-    status: "ok" | "error" | "skipped";
+    status: CronRunStatus;
     error?: string;
     startedAt: number;
     endedAt: number;
@@ -229,25 +236,7 @@ export async function onTimer(state: CronServiceState) {
       }));
     });
 
-    const results: Array<{
-      jobId: string;
-      status: "ok" | "error" | "skipped";
-      error?: string;
-      summary?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      model?: string;
-      provider?: string;
-      usage?: {
-        input_tokens?: number;
-        output_tokens?: number;
-        total_tokens?: number;
-        cache_read_tokens?: number;
-        cache_write_tokens?: number;
-      };
-      startedAt: number;
-      endedAt: number;
-    }> = [];
+    const results: TimedCronRunOutcome[] = [];
 
     for (const { id, job } of dueJobs) {
       const startedAt = state.deps.nowMs();
@@ -449,22 +438,7 @@ export async function runDueJobs(state: CronServiceState) {
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
-): Promise<{
-  status: "ok" | "error" | "skipped";
-  error?: string;
-  summary?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  model?: string;
-  provider?: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    cache_read_tokens?: number;
-    cache_write_tokens?: number;
-  };
-}> {
+): Promise<CronRunOutcome & CronRunTelemetry> {
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
@@ -479,6 +453,7 @@ async function executeJobCore(
     }
     state.deps.enqueueSystemEvent(text, {
       agentId: job.agentId,
+      sessionKey: job.sessionKey,
       contextKey: `cron:${job.id}`,
     });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
@@ -490,7 +465,11 @@ async function executeJobCore(
 
       let heartbeatResult: HeartbeatRunResult;
       for (;;) {
-        heartbeatResult = await state.deps.runHeartbeatOnce({ reason, agentId: job.agentId });
+        heartbeatResult = await state.deps.runHeartbeatOnce({
+          reason,
+          agentId: job.agentId,
+          sessionKey: job.sessionKey,
+        });
         if (
           heartbeatResult.status !== "skipped" ||
           heartbeatResult.reason !== "requests-in-flight"
@@ -498,7 +477,11 @@ async function executeJobCore(
           break;
         }
         if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
-          state.deps.requestHeartbeatNow({ reason });
+          state.deps.requestHeartbeatNow({
+            reason,
+            agentId: job.agentId,
+            sessionKey: job.sessionKey,
+          });
           return { status: "ok", summary: text };
         }
         await delay(retryDelayMs);
@@ -512,7 +495,11 @@ async function executeJobCore(
         return { status: "error", error: heartbeatResult.reason, summary: text };
       }
     } else {
-      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+      state.deps.requestHeartbeatNow({
+        reason: `cron:${job.id}`,
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+      });
       return { status: "ok", summary: text };
     }
   }
@@ -540,10 +527,15 @@ async function executeJobCore(
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
     state.deps.enqueueSystemEvent(label, {
       agentId: job.agentId,
+      sessionKey: job.sessionKey,
       contextKey: `cron:${job.id}`,
     });
     if (job.wakeMode === "now") {
-      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+      state.deps.requestHeartbeatNow({
+        reason: `cron:${job.id}`,
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+      });
     }
   }
 
@@ -578,21 +570,9 @@ export async function executeJob(
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
   let coreResult: {
-    status: "ok" | "error" | "skipped";
-    error?: string;
-    summary?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    model?: string;
-    provider?: string;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      total_tokens?: number;
-      cache_read_tokens?: number;
-      cache_write_tokens?: number;
-    };
-  };
+    status: CronRunStatus;
+  } & CronRunOutcome &
+    CronRunTelemetry;
   try {
     coreResult = await executeJobCore(state, job);
   } catch (err) {
@@ -619,21 +599,9 @@ function emitJobFinished(
   state: CronServiceState,
   job: CronJob,
   result: {
-    status: "ok" | "error" | "skipped";
-    error?: string;
-    summary?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    model?: string;
-    provider?: string;
-    usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      total_tokens?: number;
-      cache_read_tokens?: number;
-      cache_write_tokens?: number;
-    };
-  },
+    status: CronRunStatus;
+  } & CronRunOutcome &
+    CronRunTelemetry,
   runAtMs: number,
 ) {
   emit(state, {

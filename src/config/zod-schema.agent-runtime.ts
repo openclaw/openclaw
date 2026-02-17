@@ -267,7 +267,6 @@ export const ToolsWebFetchSchema = z
 
 export const ToolsWebSchema = z
   .object({
-    urlAllowlist: z.array(z.string()).optional(),
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
   })
@@ -358,6 +357,52 @@ const ToolFsSchema = z
   .strict()
   .optional();
 
+const ToolLoopDetectionDetectorSchema = z
+  .object({
+    genericRepeat: z.boolean().optional(),
+    knownPollNoProgress: z.boolean().optional(),
+    pingPong: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolLoopDetectionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    historySize: z.number().int().positive().optional(),
+    warningThreshold: z.number().int().positive().optional(),
+    criticalThreshold: z.number().int().positive().optional(),
+    globalCircuitBreakerThreshold: z.number().int().positive().optional(),
+    detectors: ToolLoopDetectionDetectorSchema,
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.warningThreshold !== undefined &&
+      value.criticalThreshold !== undefined &&
+      value.warningThreshold >= value.criticalThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["criticalThreshold"],
+        message: "tools.loopDetection.warningThreshold must be lower than criticalThreshold.",
+      });
+    }
+    if (
+      value.criticalThreshold !== undefined &&
+      value.globalCircuitBreakerThreshold !== undefined &&
+      value.criticalThreshold >= value.globalCircuitBreakerThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["globalCircuitBreakerThreshold"],
+        message:
+          "tools.loopDetection.criticalThreshold must be lower than globalCircuitBreakerThreshold.",
+      });
+    }
+  })
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
@@ -389,6 +434,7 @@ export const AgentToolsSchema = z
       .optional(),
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
+    loopDetection: ToolLoopDetectionSchema,
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -587,6 +633,7 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    loopDetection: ToolLoopDetectionSchema,
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

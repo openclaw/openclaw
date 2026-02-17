@@ -1,13 +1,12 @@
-import type { ZodIssue } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
+import type { ZodIssue } from "zod";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
 } from "../channels/telegram/allow-from.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   OpenClawSchema,
   CONFIG_PATH,
@@ -19,6 +18,7 @@ import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/acco
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {
@@ -571,34 +571,81 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   const next = structuredClone(cfg);
   const changes: string[] = [];
 
-  const ensureWildcard = (account: Record<string, unknown>, prefix: string) => {
+  type OpenPolicyAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
+
+  const resolveAllowFromMode = (channelName: string): OpenPolicyAllowFromMode => {
+    if (channelName === "googlechat") {
+      return "nestedOnly";
+    }
+    if (channelName === "discord" || channelName === "slack") {
+      return "topOrNested";
+    }
+    return "topOnly";
+  };
+
+  const hasWildcard = (list?: Array<string | number>) =>
+    list?.some((v) => String(v).trim() === "*") ?? false;
+
+  const ensureWildcard = (
+    account: Record<string, unknown>,
+    prefix: string,
+    mode: OpenPolicyAllowFromMode,
+  ) => {
+    const dmEntry = account.dm;
+    const dm =
+      dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
+        ? (dmEntry as Record<string, unknown>)
+        : undefined;
     const dmPolicy =
-      (account.dmPolicy as string | undefined) ??
-      ((account.dm as Record<string, unknown> | undefined)?.policy as string | undefined);
+      (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined) ?? undefined;
 
     if (dmPolicy !== "open") {
       return;
     }
 
-    // Check top-level allowFrom first, then nested dm.allowFrom
     const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
-    const dm = account.dm as Record<string, unknown> | undefined;
     const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
 
-    const hasWildcard = (list?: Array<string | number>) =>
-      list?.some((v) => String(v).trim() === "*") ?? false;
-
-    if (hasWildcard(topAllowFrom) || hasWildcard(nestedAllowFrom)) {
+    if (mode === "nestedOnly") {
+      if (hasWildcard(nestedAllowFrom)) {
+        return;
+      }
+      if (Array.isArray(nestedAllowFrom)) {
+        nestedAllowFrom.push("*");
+        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
+        return;
+      }
+      const nextDm = dm ?? {};
+      nextDm.allowFrom = ["*"];
+      account.dm = nextDm;
+      changes.push(`- ${prefix}.dm.allowFrom: set to ["*"] (required by dmPolicy="open")`);
       return;
     }
 
-    // Prefer setting top-level allowFrom (it takes precedence)
+    if (mode === "topOrNested") {
+      if (hasWildcard(topAllowFrom) || hasWildcard(nestedAllowFrom)) {
+        return;
+      }
+
+      if (Array.isArray(topAllowFrom)) {
+        topAllowFrom.push("*");
+        changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
+      } else if (Array.isArray(nestedAllowFrom)) {
+        nestedAllowFrom.push("*");
+        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
+      } else {
+        account.allowFrom = ["*"];
+        changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
+      }
+      return;
+    }
+
+    if (hasWildcard(topAllowFrom)) {
+      return;
+    }
     if (Array.isArray(topAllowFrom)) {
-      (account.allowFrom as Array<string | number>).push("*");
+      topAllowFrom.push("*");
       changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
-    } else if (Array.isArray(nestedAllowFrom)) {
-      (dm!.allowFrom as Array<string | number>).push("*");
-      changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
     } else {
       account.allowFrom = ["*"];
       changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
@@ -611,15 +658,21 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
       continue;
     }
 
+    const allowFromMode = resolveAllowFromMode(channelName);
+
     // Check the top-level channel config
-    ensureWildcard(channelConfig, `channels.${channelName}`);
+    ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
 
     // Check per-account configs (e.g. channels.discord.accounts.mybot)
     const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
     if (accounts && typeof accounts === "object") {
       for (const [accountName, accountConfig] of Object.entries(accounts)) {
         if (accountConfig && typeof accountConfig === "object") {
-          ensureWildcard(accountConfig, `channels.${channelName}.accounts.${accountName}`);
+          ensureWildcard(
+            accountConfig,
+            `channels.${channelName}.accounts.${accountName}`,
+            allowFromMode,
+          );
         }
       }
     }

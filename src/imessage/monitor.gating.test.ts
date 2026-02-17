@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { IMessagePayload } from "./monitor/types.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
+import type { IMessagePayload } from "./monitor/types.js";
 
 function baseCfg(): OpenClawConfig {
   return {
@@ -56,8 +56,8 @@ function buildDispatchContextPayload(params: { cfg: OpenClawConfig; message: IMe
     accountId: "default",
     message,
     opts: {},
-    messageText: message.text,
-    bodyText: message.text,
+    messageText: message.text ?? "",
+    bodyText: message.text ?? "",
     allowFrom: ["*"],
     groupAllowFrom: [],
     groupPolicy: "open",
@@ -67,6 +67,9 @@ function buildDispatchContextPayload(params: { cfg: OpenClawConfig; message: IMe
     groupHistories,
   });
   expect(decision.kind).toBe("dispatch");
+  if (decision.kind !== "dispatch") {
+    throw new Error("expected dispatch decision");
+  }
 
   const { ctxPayload } = buildIMessageInboundContext({
     cfg,
@@ -169,8 +172,8 @@ describe("imessage monitor gating + envelope builders", () => {
       accountId: "default",
       message,
       opts: {},
-      messageText: message.text,
-      bodyText: message.text,
+      messageText: message.text ?? "",
+      bodyText: message.text ?? "",
       allowFrom: ["*"],
       groupAllowFrom: [],
       groupPolicy: "open",
@@ -180,6 +183,9 @@ describe("imessage monitor gating + envelope builders", () => {
       groupHistories,
     });
     expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      throw new Error("expected dispatch decision");
+    }
     expect(decision.isGroup).toBe(true);
     expect(decision.route.sessionKey).toBe("agent:main:imessage:group:2");
   });

@@ -1,14 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
 
-let capturedCtx: MsgContext | undefined;
+type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
+  Body?: string;
+  WasMentioned?: boolean;
+};
+
+let capturedCtx: SignalMsgContext | undefined;
+
+function getCapturedCtx() {
+  return capturedCtx as SignalMsgContext;
+}
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
   return buildDispatchInboundCaptureMock(actual, (ctx) => {
-    capturedCtx = ctx as MsgContext;
+    capturedCtx = ctx as SignalMsgContext;
   });
 });
 
@@ -51,15 +61,26 @@ function createMentionGatedHistoryHandler() {
   const groupHistories = new Map();
   const handler = createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
-      cfg: {
-        messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-        channels: { signal: { groups: { "*": { requireMention: true } } } },
-      },
+      cfg: createSignalConfig({ requireMention: true }),
       historyLimit: 5,
       groupHistories,
     }),
   );
   return { handler, groupHistories };
+}
+
+function createSignalConfig(params: { requireMention: boolean; mentionPattern?: string }) {
+  return {
+    messages: {
+      inbound: { debounceMs: 0 },
+      groupChat: { mentionPatterns: [params.mentionPattern ?? "@bot"] },
+    },
+    channels: {
+      signal: {
+        groups: { "*": { requireMention: params.requireMention } },
+      },
+    },
+  } as unknown as OpenClawConfig;
 }
 
 async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: string) {
@@ -78,10 +99,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true }),
       }),
     );
 
@@ -93,32 +111,26 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true }),
       }),
     );
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
     expect(capturedCtx).toBeTruthy();
-    expect(capturedCtx?.WasMentioned).toBe(true);
+    expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: false } } } },
-        },
+        cfg: createSignalConfig({ requireMention: false }),
       }),
     );
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(capturedCtx).toBeTruthy();
-    expect(capturedCtx?.WasMentioned).toBe(false);
+    expect(getCapturedCtx()?.WasMentioned).toBe(false);
   });
 
   it("records pending history for skipped group messages", async () => {
@@ -147,10 +159,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true }),
       }),
     );
 
@@ -162,10 +171,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
-          channels: { signal: { groups: { "*": { requireMention: false } } } },
-        },
+        cfg: createSignalConfig({ requireMention: false }),
       }),
     );
 
@@ -185,7 +191,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    const body = String(capturedCtx?.Body ?? "");
+    const body = String(getCapturedCtx()?.Body ?? "");
     expect(body).toContain("@123e4567 hi @+15550002222");
     expect(body).not.toContain(placeholder);
   });
@@ -194,10 +200,7 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: {
-          messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@123e4567"] } },
-          channels: { signal: { groups: { "*": { requireMention: true } } } },
-        },
+        cfg: createSignalConfig({ requireMention: true, mentionPattern: "@123e4567" }),
       }),
     );
 
@@ -213,8 +216,8 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    expect(String(capturedCtx?.Body ?? "")).toContain("@123e4567");
-    expect(capturedCtx?.WasMentioned).toBe(true);
+    expect(String(getCapturedCtx()?.Body ?? "")).toContain("@123e4567");
+    expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
 });
 

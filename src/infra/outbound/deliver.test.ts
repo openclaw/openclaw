@@ -1,9 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
@@ -54,7 +54,9 @@ const whatsappChunkConfig: OpenClawConfig = {
 };
 
 async function deliverWhatsAppPayload(params: {
-  sendWhatsApp: ReturnType<typeof vi.fn>;
+  sendWhatsApp: NonNullable<
+    NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["sendWhatsApp"]
+  >;
   payload: { text: string; mediaUrl?: string };
   cfg?: OpenClawConfig;
 }) {
@@ -517,7 +519,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("emits message_sent success for text-only deliveries", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
 
     await deliverOutboundPayloads({
@@ -537,7 +539,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     const sendText = vi.fn();
     const sendMedia = vi.fn();
@@ -570,7 +572,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("emits message_sent failure when delivery errors", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("downstream failed"));
 
     await expect(

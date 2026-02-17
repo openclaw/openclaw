@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.js";
+import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -53,7 +54,7 @@ function forbiddenResult(error: string): SpawnSubagentResult {
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-};
+} satisfies OpenClawConfig;
 
 describe("/subagents spawn command", () => {
   beforeEach(() => {
@@ -124,6 +125,28 @@ describe("/subagents spawn command", () => {
     const [spawnParams] = spawnSubagentDirectMock.mock.calls[0];
     expect(spawnParams.thinking).toBe("high");
     expect(spawnParams.task).toBe("do the thing");
+  });
+
+  it("passes group context from session entry to spawnSubagentDirect", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg);
+    params.sessionEntry = {
+      sessionId: "session-main",
+      updatedAt: Date.now(),
+      groupId: "group-1",
+      groupChannel: "#group-channel",
+      space: "workspace-1",
+    };
+    const result = await handleSubagentsCommand(params, true);
+    expect(result).not.toBeNull();
+    expect(result?.reply?.text).toContain("Spawned subagent beta");
+
+    const [, spawnCtx] = spawnSubagentDirectMock.mock.calls[0];
+    expect(spawnCtx).toMatchObject({
+      agentGroupId: "group-1",
+      agentGroupChannel: "#group-channel",
+      agentGroupSpace: "workspace-1",
+    });
   });
 
   it("returns forbidden for unauthorized cross-agent spawn", async () => {

@@ -6,9 +6,13 @@ import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 type AssistantThinking = { type?: string; thinking?: string; thinkingSignature?: string };
 
 function getAssistantMessage(out: AgentMessage[]) {
-  return out.find((msg) => (msg as { role?: string }).role === "assistant") as
+  const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as
     | { content?: AssistantThinking[] }
     | undefined;
+  if (!assistant) {
+    throw new Error("Expected assistant message in sanitized history");
+  }
+  return assistant;
 }
 
 async function sanitizeGoogleAssistantWithContent(content: unknown[]) {
@@ -22,7 +26,7 @@ async function sanitizeGoogleAssistantWithContent(content: unknown[]) {
       role: "assistant",
       content,
     },
-  ] satisfies AgentMessage[];
+  ] as unknown as AgentMessage[];
 
   const out = await sanitizeSessionHistory({
     messages: input,
@@ -71,7 +75,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -96,7 +100,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning", signature: "c2ln" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -129,7 +133,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
           { type: "text", text: "world" },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -173,7 +177,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
           },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -225,7 +229,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
           { type: "thinking", thinking: "unsigned" },
         ],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -253,7 +257,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "   " }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -279,7 +283,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,
@@ -308,7 +312,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionHistory({
       messages: input,

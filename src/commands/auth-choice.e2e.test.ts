@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoice } from "./onboard-types.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
+import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
   createAuthTestLifecycle,
@@ -366,7 +366,7 @@ describe("applyAuthChoice", () => {
       if (previousIsTTYDescriptor) {
         Object.defineProperty(stdin, "isTTY", previousIsTTYDescriptor);
       } else if (!hadOwnIsTTY) {
-        delete stdin.isTTY;
+        delete (stdin as { isTTY?: boolean }).isTTY;
       }
     }
   });
@@ -653,7 +653,8 @@ describe("applyAuthChoice", () => {
     const runtime = createExitThrowingRuntime();
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Paste the redirect URL") {
-        const lastLog = runtime.log.mock.calls.at(-1)?.[0];
+        const runtimeLog = runtime.log as ReturnType<typeof vi.fn>;
+        const lastLog = runtimeLog.mock.calls.at(-1)?.[0];
         const urlLine = typeof lastLog === "string" ? lastLog : String(lastLog ?? "");
         const urlMatch = urlLine.match(/https?:\/\/\S+/)?.[0] ?? "";
         const state = urlMatch ? new URL(urlMatch).searchParams.get("state") : null;
@@ -734,7 +735,7 @@ describe("applyAuthChoice", () => {
           },
         ],
       },
-    ]);
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -806,7 +807,7 @@ describe("applyAuthChoice", () => {
           },
         ],
       },
-    ]);
+    ] as never);
 
     const prompter = createPrompter({
       select: vi.fn(async () => "oauth" as never) as WizardPrompter["select"],

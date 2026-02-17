@@ -1,9 +1,9 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
@@ -147,23 +147,6 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
-function buildLlmsTxtSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
-  if (params.isMinimal) {
-    return [];
-  }
-  if (!params.availableTools.has("web_fetch")) {
-    return [];
-  }
-  return [
-    "## llms.txt Discovery",
-    "When exploring a new domain or website (via web_fetch or browser), check for an llms.txt file that describes how AI agents should interact with the site:",
-    "- Try `/llms.txt` or `/.well-known/llms.txt` at the domain root",
-    "- If found, follow its guidance for interacting with that site's content and APIs",
-    "- llms.txt is an emerging standard (like robots.txt for AI) — not all sites have one, so don't warn if missing",
-    "",
-  ];
-}
-
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) {
@@ -265,10 +248,6 @@ export function buildAgentSystemPrompt(params: {
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    architect_pipeline:
-      "Manage Architect CEO orchestration state and audit decision gates for multi-agent build loops",
-    venture_studio:
-      "Capture web/forum pain-point research and generate monetized app plans + workflow documents; pair with web_search/web_fetch for source discovery",
     image: "Analyze an image with the configured image model",
   };
 
@@ -296,8 +275,6 @@ export function buildAgentSystemPrompt(params: {
     "sessions_send",
     "subagents",
     "session_status",
-    "architect_pipeline",
-    "venture_studio",
     "image",
   ];
 
@@ -563,7 +540,6 @@ export function buildAgentSystemPrompt(params: {
       messageToolHints: params.messageToolHints,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
-    ...buildLlmsTxtSection({ isMinimal, availableTools }),
   ];
 
   if (extraSystemPrompt) {

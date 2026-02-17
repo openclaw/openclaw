@@ -1,8 +1,4 @@
-// @ts-nocheck
-// oxlint-disable eslint/no-unused-vars, typescript/no-explicit-any
 import fs from "node:fs/promises";
-import type { SessionFileEntry } from "./session-files.js";
-import type { MemorySource } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
@@ -21,6 +17,9 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./internal.js";
+import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import type { SessionFileEntry } from "./session-files.js";
+import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -41,8 +40,12 @@ const vectorToBlob = (embedding: number[]): Buffer =>
 
 const log = createSubsystemLogger("memory");
 
-class MemoryManagerEmbeddingOps {
-  [key: string]: any;
+export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+  protected abstract batchFailureCount: number;
+  protected abstract batchFailureLastError?: string;
+  protected abstract batchFailureLastProvider?: string;
+  protected abstract batchFailureLock: Promise<void>;
+
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
@@ -143,7 +146,7 @@ class MemoryManagerEmbeddingOps {
     }
   }
 
-  private pruneEmbeddingCacheIfNeeded(): void {
+  protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
       return;
     }
@@ -201,7 +204,7 @@ class MemoryManagerEmbeddingOps {
     return embeddings;
   }
 
-  private computeProviderKey(): string {
+  protected computeProviderKey(): string {
     // FTS-only mode: no provider, use a constant key
     if (!this.provider) {
       return hashText(JSON.stringify({ provider: "none", model: "fts-only" }));
@@ -339,13 +342,13 @@ class MemoryManagerEmbeddingOps {
     chunks: MemoryChunk[];
     source: MemorySource;
   }): {
-    agentId: string | undefined;
+    agentId: string;
     requests: TRequest[];
     wait: boolean;
     concurrency: number;
     pollIntervalMs: number;
     timeoutMs: number;
-    debug: (message: string, data: Record<string, unknown>) => void;
+    debug: (message: string, data?: Record<string, unknown>) => void;
   } {
     const { requests, chunks, source } = params;
     return {
@@ -355,7 +358,11 @@ class MemoryManagerEmbeddingOps {
       concurrency: this.batch.concurrency,
       pollIntervalMs: this.batch.pollIntervalMs,
       timeoutMs: this.batch.timeoutMs,
-      debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+      debug: (message, data) =>
+        log.debug(
+          message,
+          data ? { ...data, source, chunks: chunks.length } : { source, chunks: chunks.length },
+        ),
     };
   }
 
@@ -492,7 +499,7 @@ class MemoryManagerEmbeddingOps {
     return embeddings;
   }
 
-  private async embedBatchWithRetry(texts: string[]): Promise<number[][]> {
+  protected async embedBatchWithRetry(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) {
       return [];
     }
@@ -545,7 +552,7 @@ class MemoryManagerEmbeddingOps {
     return isLocal ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
   }
 
-  private async embedQueryWithTimeout(text: string): Promise<number[]> {
+  protected async embedQueryWithTimeout(text: string): Promise<number[]> {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
@@ -558,7 +565,7 @@ class MemoryManagerEmbeddingOps {
     );
   }
 
-  private async withTimeout<T>(
+  protected async withTimeout<T>(
     promise: Promise<T>,
     timeoutMs: number,
     message: string,
@@ -686,11 +693,11 @@ class MemoryManagerEmbeddingOps {
     }
   }
 
-  private getIndexConcurrency(): number {
+  protected getIndexConcurrency(): number {
     return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
   }
 
-  private async indexFile(
+  protected async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
@@ -804,5 +811,3 @@ class MemoryManagerEmbeddingOps {
       .run(entry.path, options.source, entry.hash, entry.mtimeMs, entry.size);
   }
 }
-
-export const memoryManagerEmbeddingOps = MemoryManagerEmbeddingOps.prototype;

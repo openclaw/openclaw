@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
@@ -16,7 +17,7 @@ function redirectResponse(location: string): Response {
     status: 302,
     headers: makeHeaders({ location }),
     body: { cancel: vi.fn() },
-  } as Response;
+  } as unknown as Response;
 }
 
 function textResponse(body: string): Response {
@@ -25,12 +26,12 @@ function textResponse(body: string): Response {
     status: 200,
     headers: makeHeaders({ "content-type": "text/plain" }),
     text: async () => body,
-  } as Response;
+  } as unknown as Response;
 }
 
 function setMockFetch(impl?: (...args: unknown[]) => unknown) {
   const fetchSpy = vi.fn(impl);
-  global.fetch = fetchSpy as typeof fetch;
+  global.fetch = withFetchPreconnect(fetchSpy);
   return fetchSpy;
 }
 
@@ -62,7 +63,6 @@ describe("web_fetch SSRF protection", () => {
   });
 
   afterEach(() => {
-    // @ts-expect-error restore
     global.fetch = priorFetch;
     lookupMock.mockReset();
     vi.restoreAllMocks();

@@ -1,7 +1,7 @@
-import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
@@ -51,7 +51,7 @@ async function seedZipDownloadResponse() {
   zip.file("hello.txt", "hi");
   const buffer = await zip.generateAsync({ type: "nodebuffer" });
   fetchWithSsrFGuardMock.mockResolvedValue({
-    response: new Response(buffer, { status: 200 }),
+    response: new Response(new Uint8Array(buffer), { status: 200 }),
     release: async () => undefined,
   });
 }
@@ -107,7 +107,7 @@ describe("installSkill download extraction safety", () => {
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
 
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -150,7 +150,7 @@ describe("installSkill download extraction safety", () => {
 
       const buffer = await fs.readFile(archivePath);
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -182,7 +182,7 @@ describe("installSkill download extraction safety", () => {
       zip.file("package/hello.txt", "hi");
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -215,7 +215,7 @@ describe("installSkill download extraction safety", () => {
       zip.file("hello.txt", "hi");
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 

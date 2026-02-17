@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
@@ -18,6 +20,7 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
@@ -45,8 +48,7 @@ function stubMinimaxOkFetch() {
       base_resp: { status_code: 0, status_msg: "" },
     }),
   });
-  // @ts-expect-error partial global
-  global.fetch = fetch;
+  global.fetch = withFetchPreconnect(fetch);
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
   return fetch;
 }
@@ -59,6 +61,18 @@ function createMinimaxImageConfig(): OpenClawConfig {
         imageModel: { primary: "minimax/MiniMax-VL-01" },
       },
     },
+  };
+}
+
+function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
   };
 }
 
@@ -76,6 +90,25 @@ async function expectImageToolExecOk(
   ).resolves.toMatchObject({
     content: [{ type: "text", text: "ok" }],
   });
+}
+
+function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
+  if (Array.isArray(schema)) {
+    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${path}[${index}]`));
+  }
+  const record = schema as Record<string, unknown>;
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    const nextPath = `${path}.${key}`;
+    if (key === "anyOf" || key === "oneOf" || key === "allOf") {
+      out.push(nextPath);
+    }
+    out.push(...findSchemaUnionKeywords(value, nextPath));
+  }
+  return out;
 }
 
 describe("image tool implicit imageModel config", () => {
@@ -96,7 +129,6 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -152,9 +184,10 @@ describe("image tool implicit imageModel config", () => {
       models: {
         providers: {
           acme: {
+            baseUrl: "https://example.com",
             models: [
-              { id: "text-1", input: ["text"] },
-              { id: "vision-1", input: ["text", "image"] },
+              makeModelDefinition("text-1", ["text"]),
+              makeModelDefinition("vision-1", ["text", "image"]),
             ],
           },
         },
@@ -197,7 +230,8 @@ describe("image tool implicit imageModel config", () => {
       models: {
         providers: {
           acme: {
-            models: [{ id: "vision-1", input: ["text", "image"] }],
+            baseUrl: "https://example.com",
+            models: [makeModelDefinition("vision-1", ["text", "image"])],
           },
         },
       },
@@ -209,6 +243,66 @@ describe("image tool implicit imageModel config", () => {
     const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
     expect(tool).not.toBeNull();
     expect(tool?.description).toContain("Only use this tool when images were NOT already provided");
+  });
+
+  it("exposes an Anthropic-safe image schema without union keywords", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+    try {
+      const cfg = createMinimaxImageConfig();
+      const tool = createImageTool({ config: cfg, agentDir });
+      expect(tool).not.toBeNull();
+      if (!tool) {
+        throw new Error("expected image tool");
+      }
+
+      const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");
+      expect(violations).toEqual([]);
+
+      const schema = tool.parameters as {
+        properties?: Record<string, unknown>;
+      };
+      const imageSchema = schema.properties?.image as { type?: unknown } | undefined;
+      const imagesSchema = schema.properties?.images as
+        | { type?: unknown; items?: unknown }
+        | undefined;
+      const imageItems = imagesSchema?.items as { type?: unknown } | undefined;
+
+      expect(imageSchema?.type).toBe("string");
+      expect(imagesSchema?.type).toBe("array");
+      expect(imageItems?.type).toBe("string");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an Anthropic-safe image schema snapshot", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+    try {
+      const cfg = createMinimaxImageConfig();
+      const tool = createImageTool({ config: cfg, agentDir });
+      expect(tool).not.toBeNull();
+      if (!tool) {
+        throw new Error("expected image tool");
+      }
+
+      expect(JSON.parse(JSON.stringify(tool.parameters))).toEqual({
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          image: { description: "Single image path or URL.", type: "string" },
+          images: {
+            description: "Multiple image paths or URLs (up to maxImages, default 20).",
+            type: "array",
+            items: { type: "string" },
+          },
+          model: { type: "string" },
+          maxBytesMb: { type: "number" },
+          maxImages: { type: "number" },
+        },
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("allows workspace images outside default local media roots", async () => {
@@ -321,8 +415,7 @@ describe("image tool implicit imageModel config", () => {
         base_resp: { status_code: 0, status_msg: "" },
       }),
     });
-    // @ts-expect-error partial global
-    global.fetch = fetch;
+    global.fetch = withFetchPreconnect(fetch);
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
 
     const cfg: OpenClawConfig = {
@@ -381,7 +474,6 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -396,8 +488,7 @@ describe("image tool MiniMax VLM routing", () => {
         base_resp: baseResp,
       }),
     });
-    // @ts-expect-error partial global
-    global.fetch = fetch;
+    global.fetch = withFetchPreconnect(fetch);
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
@@ -412,7 +503,7 @@ describe("image tool MiniMax VLM routing", () => {
     return { fetch, tool };
   }
 
-  it("calls /v1/coding_plan/vlm for minimax image models", async () => {
+  it("accepts image for single-image requests and calls /v1/coding_plan/vlm", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
 
     const res = await tool.execute("t1", {
@@ -432,6 +523,59 @@ describe("image tool MiniMax VLM routing", () => {
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
+  });
+
+  it("accepts images[] for multi-image requests", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    const res = await tool.execute("t1", {
+      prompt: "Compare these images.",
+      images: [`data:image/png;base64,${pngB64}`, `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const details = res.details as
+      | {
+          images?: Array<{ image: string }>;
+        }
+      | undefined;
+    expect(details?.images).toHaveLength(2);
+  });
+
+  it("combines image + images with dedupe and enforces maxImages", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    const deduped = await tool.execute("t1", {
+      prompt: "Compare these images.",
+      image: `data:image/png;base64,${pngB64}`,
+      images: [
+        `data:image/png;base64,${pngB64}`,
+        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+        `data:image/gif;base64,${ONE_PIXEL_GIF_B64}`,
+      ],
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const dedupedDetails = deduped.details as
+      | {
+          images?: Array<{ image: string }>;
+        }
+      | undefined;
+    expect(dedupedDetails?.images).toHaveLength(2);
+
+    const tooMany = await tool.execute("t2", {
+      prompt: "Compare these images.",
+      image: `data:image/png;base64,${pngB64}`,
+      images: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
+      maxImages: 1,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(tooMany.details).toMatchObject({
+      error: "too_many_images",
+      count: 2,
+      max: 1,
+    });
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
