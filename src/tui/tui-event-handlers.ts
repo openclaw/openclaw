@@ -1,12 +1,17 @@
-import type { TUI } from "@mariozechner/pi-tui";
-import type { ChatLog } from "./components/chat-log.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type EventHandlerContext = {
-  chatLog: ChatLog;
-  tui: TUI;
+  chatLog: {
+    startTool: (...args: unknown[]) => void;
+    updateToolResult: (...args: unknown[]) => void;
+    addSystem: (...args: unknown[]) => void;
+    updateAssistant: (...args: unknown[]) => void;
+    finalizeAssistant: (...args: unknown[]) => void;
+    dropAssistant: (...args: unknown[]) => void;
+  };
+  tui: { requestRender: (...args: unknown[]) => void };
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
