@@ -20,7 +20,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       if (code !== undefined && code !== null) {
         exitCalls.push(code);
       }
-      throw new Error("process.exit");
+      return undefined as never;
     });
 
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
