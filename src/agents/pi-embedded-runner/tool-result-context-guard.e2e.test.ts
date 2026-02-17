@@ -25,6 +25,15 @@ function makeToolResult(id: string, text: string): AgentMessage {
   } as unknown as AgentMessage;
 }
 
+function makeLegacyToolResult(id: string, text: string): AgentMessage {
+  return {
+    role: "tool",
+    tool_call_id: id,
+    tool_name: "read",
+    content: text,
+  } as unknown as AgentMessage;
+}
+
 function getToolResultText(msg: AgentMessage): string {
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
@@ -191,5 +200,28 @@ describe("installToolResultContextGuard", () => {
     const transformedMessages = transformed as AgentMessage[];
     const oldResultText = getToolResultText(transformedMessages[1] as AgentMessage);
     expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  });
+
+  it("handles legacy role=tool string outputs when enforcing context budget", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(2_000)),
+      makeLegacyToolResult("call_old", "x".repeat(1_000)),
+      makeLegacyToolResult("call_new", "y".repeat(1_000)),
+    ];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    const oldResultText = (contextForNextCall[1] as { content?: unknown }).content;
+    const newResultText = (contextForNextCall[2] as { content?: unknown }).content;
+
+    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 });

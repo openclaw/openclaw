@@ -29,6 +29,21 @@ function isImageBlock(block: unknown): boolean {
   return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
 }
 
+function estimateUnknownChars(value: unknown): number {
+  if (typeof value === "string") {
+    return value.length;
+  }
+  if (value === undefined) {
+    return 0;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized.length : 0;
+  } catch {
+    return 256;
+  }
+}
+
 function isToolResultMessage(msg: AgentMessage): boolean {
   const role = (msg as { role?: unknown }).role;
   const type = (msg as { type?: unknown }).type;
@@ -74,6 +89,8 @@ function estimateMessageChars(msg: AgentMessage): number {
           chars += block.text.length;
         } else if (isImageBlock(block)) {
           chars += IMAGE_CHAR_ESTIMATE;
+        } else {
+          chars += estimateUnknownChars(block);
         }
       }
     }
@@ -104,6 +121,8 @@ function estimateMessageChars(msg: AgentMessage): number {
           } catch {
             chars += 128;
           }
+        } else {
+          chars += estimateUnknownChars(block);
         }
       }
     }
@@ -118,6 +137,8 @@ function estimateMessageChars(msg: AgentMessage): number {
         chars += block.text.length;
       } else if (isImageBlock(block)) {
         chars += IMAGE_CHAR_ESTIMATE;
+      } else {
+        chars += estimateUnknownChars(block);
       }
     }
     return chars;
@@ -171,13 +192,14 @@ function truncateToolResultToChars(msg: AgentMessage, maxChars: number): AgentMe
     return msg;
   }
 
-  const rawText = getToolResultText(msg);
-  if (!rawText) {
+  const estimatedChars = estimateMessageChars(msg);
+  if (estimatedChars <= maxChars) {
     return msg;
   }
 
-  if (rawText.length <= maxChars) {
-    return msg;
+  const rawText = getToolResultText(msg);
+  if (!rawText) {
+    return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
   }
 
   const truncatedText = truncateTextToBudget(rawText, maxChars);
@@ -200,12 +222,11 @@ function compactExistingToolResultsInPlace(params: {
       continue;
     }
 
-    const text = getToolResultText(msg);
-    if (!text || text === PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER) {
+    const before = estimateMessageChars(msg);
+    if (before <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
       continue;
     }
 
-    const before = estimateMessageChars(msg);
     const compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     applyMessageMutationInPlace(msg, compacted);
     const after = estimateMessageChars(msg);
