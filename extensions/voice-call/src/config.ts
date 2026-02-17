@@ -346,6 +346,19 @@ export const VoiceCallConfigSchema = z
 
     /** Timeout for response generation in ms (default 30s) */
     responseTimeoutMs: z.number().int().positive().default(30000),
+
+    /** Silence filler — plays ambient SFX while agent is working */
+    silenceFiller: z
+      .object({
+        /** Enable/disable silence filler (default: true when streaming enabled) */
+        enabled: z.boolean().optional(),
+        /** Milliseconds of silence before filler starts (default: 3500) */
+        thresholdMs: z.number().int().positive().optional(),
+        /** SFX set: "typing" (keyboard sounds) or "processing" (digital hum) */
+        sfxSet: z.enum(["typing", "processing"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
