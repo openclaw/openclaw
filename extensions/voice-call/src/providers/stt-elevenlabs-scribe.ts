@@ -198,6 +198,12 @@ class ElevenLabsScribeSTTSession implements RealtimeSTTSession {
 
       setTimeout(() => {
         if (!this.connected) {
+          // Clean up the WebSocket to avoid orphaned connections
+          try {
+            this.ws?.close();
+          } catch {
+            // ignore close errors during timeout cleanup
+          }
           reject(new Error("Scribe STT connection timeout"));
         }
       }, 10000);

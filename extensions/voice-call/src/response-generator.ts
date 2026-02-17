@@ -93,8 +93,12 @@ export async function generateVoiceResponse(
   // Use configured responseModel, then agent primary model, then built-in default
   const agents = coreConfig?.agents as Record<string, unknown> | undefined;
   const agentDefaults = (agents?.defaults ?? {}) as Record<string, unknown>;
-  const agentModel = (agentDefaults?.model ?? {}) as Record<string, unknown>;
-  const agentPrimary = agentModel?.primary as string | undefined;
+  const agentModelRaw = agentDefaults?.model;
+  // agents.defaults.model can be a string ("provider/model") or an object ({ primary: "..." })
+  const agentPrimary =
+    typeof agentModelRaw === "string"
+      ? agentModelRaw
+      : ((agentModelRaw as Record<string, unknown> | undefined)?.primary as string | undefined);
   const modelRef =
     voiceConfig.responseModel || agentPrimary || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
   const slashIndex = modelRef.indexOf("/");
