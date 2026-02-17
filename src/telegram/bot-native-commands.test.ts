@@ -149,6 +149,37 @@ describe("registerTelegramNativeCommands", () => {
     );
   });
 
+  it("normalizes hyphenated native command names for Telegram registration", async () => {
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const command = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command,
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalled();
+    });
+
+    const registeredCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
+    expect(registeredCommands.some((entry) => entry.command === "export-session")).toBe(false);
+
+    const registeredHandlers = command.mock.calls.map(([name]) => name);
+    expect(registeredHandlers).toContain("export_session");
+    expect(registeredHandlers).not.toContain("export-session");
+  });
+
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const sendMessage = vi.fn().mockResolvedValue(undefined);
