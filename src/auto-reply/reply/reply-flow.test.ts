@@ -612,7 +612,7 @@ let previousRuntimeError: typeof defaultRuntime.error;
 
 beforeAll(() => {
   previousRuntimeError = defaultRuntime.error;
-  defaultRuntime.error = undefined;
+  defaultRuntime.error = (() => {}) as typeof defaultRuntime.error;
 });
 
 afterAll(() => {
@@ -1160,7 +1160,8 @@ describe("createReplyDispatcher", () => {
   });
 
   it("fires onIdle when the queue drains", async () => {
-    const deliver = vi.fn(async () => await new Promise((resolve) => setTimeout(resolve, 5)));
+    const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
+      await new Promise((resolve) => setTimeout(resolve, 5));
     const onIdle = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onIdle });
 
