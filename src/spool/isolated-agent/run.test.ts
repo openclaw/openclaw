@@ -6,9 +6,9 @@ vi.mock("../../agents/isolated-turn/index.js", () => ({
   runIsolatedAgentTurn: vi.fn(),
 }));
 
+import { runIsolatedAgentTurn } from "../../agents/isolated-turn/index.js";
 import type { CliDeps } from "../../cli/deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { runIsolatedAgentTurn } from "../../agents/isolated-turn/index.js";
 import { runSpoolIsolatedAgentTurn } from "./run.js";
 
 describe("runSpoolIsolatedAgentTurn", () => {

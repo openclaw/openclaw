@@ -3,9 +3,9 @@
  */
 
 import fs from "node:fs/promises";
-import type { SpoolEvent } from "./types.js";
 import { resolveSpoolEventsDir, resolveSpoolEventPath, listJsonFileIds } from "./paths.js";
 import { validateSpoolEvent } from "./schema.js";
+import type { SpoolEvent } from "./types.js";
 
 export type ReadSpoolEventResult =
   | { success: true; event: SpoolEvent }

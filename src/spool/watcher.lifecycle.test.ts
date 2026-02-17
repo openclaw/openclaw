@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { SpoolDispatchResult } from "./types.js";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { createSpoolWatcher, type SpoolWatcherLogger } from "./watcher.js";
 import { buildSpoolEvent, writeSpoolEvent } from "./writer.js";
 

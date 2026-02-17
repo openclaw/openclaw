@@ -8,10 +8,10 @@
 import path from "node:path";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SpoolEvent, SpoolDispatchResult } from "./types.js";
 import { moveToDeadLetter } from "./dead-letter.js";
 import { runSpoolIsolatedAgentTurn } from "./isolated-agent/index.js";
 import { deleteSpoolEvent, readSpoolEventFile } from "./reader.js";
+import type { SpoolEvent, SpoolDispatchResult } from "./types.js";
 import { writeSpoolEvent } from "./writer.js";
 
 const DEFAULT_MAX_RETRIES = 3;

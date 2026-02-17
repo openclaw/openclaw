@@ -4,8 +4,8 @@
 
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { SpoolEvent, SpoolEventCreate } from "./types.js";
 import { resolveSpoolEventsDir, resolveSpoolEventPath } from "./paths.js";
+import type { SpoolEvent, SpoolEventCreate } from "./types.js";
 
 /**
  * Ensure the spool events directory exists.

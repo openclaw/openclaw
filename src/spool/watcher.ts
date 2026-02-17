@@ -4,14 +4,14 @@
  * Uses chokidar (like config-reload.ts) to watch for new event files.
  */
 
-import chokidar from "chokidar";
 import path from "node:path";
+import chokidar from "chokidar";
 import type { CliDeps } from "../cli/deps.js";
-import type { SpoolWatcherState, SpoolDispatchResult } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { dispatchSpoolEventFile } from "./dispatcher.js";
 import { resolveSpoolEventsDir, resolveSpoolDeadLetterDir } from "./paths.js";
 import { listSpoolEvents } from "./reader.js";
+import type { SpoolWatcherState, SpoolDispatchResult } from "./types.js";
 import { ensureSpoolEventsDir } from "./writer.js";
 
 export type SpoolWatcherLogger = {

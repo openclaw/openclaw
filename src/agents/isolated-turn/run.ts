@@ -11,17 +11,15 @@
  * - Delivery handling
  */
 
-import type { OpenClawConfig } from "../../config/config.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.js";
-import type { IsolatedAgentTurnParams, IsolatedAgentTurnResult } from "./types.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps } from "../../cli/outbound-send-deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -55,6 +53,7 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../model-selection.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { getSkillsSnapshotVersion } from "../skills/refresh.js";
@@ -71,6 +70,7 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveIsolatedSession } from "./session.js";
+import type { IsolatedAgentTurnParams, IsolatedAgentTurnResult } from "./types.js";
 
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,

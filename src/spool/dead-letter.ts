@@ -4,13 +4,13 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SpoolEvent } from "./types.js";
 import {
   resolveSpoolDeadLetterDir,
   resolveSpoolDeadLetterPath,
   resolveSpoolEventPath,
   listJsonFileIds,
 } from "./paths.js";
+import type { SpoolEvent } from "./types.js";
 
 /**
  * Ensure the dead-letter directory exists.

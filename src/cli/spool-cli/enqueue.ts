@@ -1,7 +1,5 @@
-import type { Command } from "commander";
 import fs from "node:fs/promises";
-import type { SpoolPriority } from "../../spool/types.js";
-import type { SpoolEvent } from "../../spool/types.js";
+import type { Command } from "commander";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -10,6 +8,8 @@ import {
   validateSpoolEventCreate,
   validateSpoolPayload,
 } from "../../spool/schema.js";
+import type { SpoolPriority } from "../../spool/types.js";
+import type { SpoolEvent } from "../../spool/types.js";
 import { createSpoolAgentTurn, createSpoolEvent, writeSpoolEvent } from "../../spool/writer.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 

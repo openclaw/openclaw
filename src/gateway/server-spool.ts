@@ -7,9 +7,9 @@
 
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SpoolDispatchResult } from "../spool/types.js";
 import { getChildLogger } from "../logging.js";
 import { resolveSpoolEventsDir } from "../spool/paths.js";
+import type { SpoolDispatchResult } from "../spool/types.js";
 import { createSpoolWatcher, type SpoolWatcher } from "../spool/watcher.js";
 
 export type GatewaySpoolState = {

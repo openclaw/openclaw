@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveIsolatedSession } from "./session.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {

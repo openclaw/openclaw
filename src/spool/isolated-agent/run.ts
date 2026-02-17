@@ -5,14 +5,14 @@
  * IsolatedAgentTurnParams and delegates to runIsolatedAgentTurn().
  */
 
-import type { CliDeps } from "../../cli/deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SpoolEvent } from "../types.js";
 import {
   runIsolatedAgentTurn,
   type IsolatedAgentTurnParams,
   type IsolatedAgentTurnResult,
 } from "../../agents/isolated-turn/index.js";
+import type { CliDeps } from "../../cli/deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SpoolEvent } from "../types.js";
 
 export type RunSpoolAgentTurnResult = IsolatedAgentTurnResult;
 
