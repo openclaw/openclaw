@@ -48,7 +48,8 @@ describe("debate_call tool", () => {
     });
 
     expect(callGatewayMock).toHaveBeenCalled();
-    expect(result.details).toMatchObject({ status: "error" });
+    const details = result.details as { status: string };
+    expect(details).toMatchObject({ status: "error" });
   });
 
   it("calls proposer, critics, and resolver in sequence", async () => {
@@ -150,13 +151,19 @@ describe("debate_call tool", () => {
       minConfidence: 0.9,
     });
 
-    expect(result.details).toMatchObject({
+    const resolvedDetails = result.details as {
+      status: string;
+      confidence: number;
+      rounds: unknown[];
+      confidenceHistory: number[];
+    };
+    expect(resolvedDetails).toMatchObject({
       status: "resolved",
       confidence: 0.9,
     });
-    expect(result.details.rounds).toHaveLength(1);
-    expect(result.details.confidenceHistory).toContain(0.6);
-    expect(result.details.confidenceHistory).toContain(0.85);
+    expect(resolvedDetails.rounds).toHaveLength(1);
+    expect(resolvedDetails.confidenceHistory).toContain(0.6);
+    expect(resolvedDetails.confidenceHistory).toContain(0.85);
   });
 
   it("stops early when confidence threshold reached", async () => {
@@ -216,11 +223,16 @@ describe("debate_call tool", () => {
       minConfidence: 0.95,
     });
 
+    const earlyStopDetails = result.details as {
+      status: string;
+      confidence: number;
+      rounds: unknown[];
+    };
     // Should not have called critics (early stop)
-    expect(result.details).toMatchObject({
+    expect(earlyStopDetails).toMatchObject({
       status: "resolved",
       confidence: 0.99,
     });
-    expect(result.details.rounds).toHaveLength(0); // No critique rounds
+    expect(earlyStopDetails.rounds).toHaveLength(0); // No critique rounds
   });
 });

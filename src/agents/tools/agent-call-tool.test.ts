@@ -135,26 +135,33 @@ describe("agent_call tool", () => {
     // Verify the agent call was made correctly
     const agentCall = callGatewayMock.mock.calls.find((c) => c[0]?.method === "agent");
     expect(agentCall).toBeDefined();
-    expect(agentCall[0].params.sessionKey).toBe("agent:rca-agent:main");
+    expect(agentCall![0].params.sessionKey).toBe("agent:rca-agent:main");
 
     // Parse the message to verify structure
-    const message = JSON.parse(agentCall[0].params.message);
+    const message = JSON.parse(agentCall![0].params.message);
     expect(message.kind).toBe("skill_invocation");
     expect(message.skill).toBe("propose_cause");
     expect(message.input.failure_event.equipment_id).toBe("PUMP-001");
 
-    // Verify result
-    expect(result.details).toMatchObject({
+    // Verify result - type assertion for details since it's unknown
+    const details = result.details as {
+      status: string;
+      confidence: number;
+      output: { root_cause: string; confidence_score: number; evidence: string[] };
+      assumptions: string[];
+      caveats: string[];
+    };
+    expect(details).toMatchObject({
       status: "completed",
       confidence: 0.87,
     });
-    expect(result.details.output).toEqual({
+    expect(details.output).toEqual({
       root_cause: "pump_impeller_wear",
       confidence_score: 0.87,
       evidence: ["vibration_data", "maintenance_history"],
     });
-    expect(result.details.assumptions).toContain("Sensor data is accurate");
-    expect(result.details.caveats).toContain("Limited runtime data available");
+    expect(details.assumptions).toContain("Sensor data is accurate");
+    expect(details.caveats).toContain("Limited runtime data available");
   });
 
   it("handles timeout with async task ID", async () => {
@@ -173,7 +180,8 @@ describe("agent_call tool", () => {
       timeoutSeconds: 5,
     });
 
-    expect(result.details).toMatchObject({
+    const timeoutDetails = result.details as { status: string; taskId: string };
+    expect(timeoutDetails).toMatchObject({
       status: "working",
       taskId: "run-timeout",
     });
@@ -195,7 +203,8 @@ describe("agent_call tool", () => {
       timeoutSeconds: 0,
     });
 
-    expect(result.details).toMatchObject({
+    const fireForgetDetails = result.details as { status: string; taskId: string };
+    expect(fireForgetDetails).toMatchObject({
       status: "working",
       taskId: expect.any(String),
     });
@@ -232,11 +241,12 @@ describe("agent_call tool", () => {
       input: {},
     });
 
-    expect(result.details).toMatchObject({
+    const textDetails = result.details as { status: string; confidence: number; output: string };
+    expect(textDetails).toMatchObject({
       status: "completed",
       confidence: 0.5, // Default for unstructured
     });
-    expect(result.details.output).toBe(
+    expect(textDetails.output).toBe(
       "The analysis suggests motor bearing failure as the most likely cause.",
     );
   });
@@ -255,7 +265,8 @@ describe("agent_call tool", () => {
       input: {},
     });
 
-    expect(result.details).toMatchObject({
+    const errorDetails = result.details as { status: string; error: string };
+    expect(errorDetails).toMatchObject({
       status: "error",
       error: "Agent not found",
     });
