@@ -279,17 +279,18 @@ describe("diagnostics-otel service", () => {
 
     const spanAttrs = (modelCall![1] as { attributes?: Record<string, string | number> })
       ?.attributes;
+    expect(spanAttrs).toBeDefined();
     // GenAI convention attributes
-    expect(spanAttrs["gen_ai.operation.name"]).toBe("chat");
-    expect(spanAttrs["gen_ai.system"]).toBe("anthropic");
-    expect(spanAttrs["gen_ai.request.model"]).toBe("claude-opus-4-6");
-    expect(spanAttrs["gen_ai.usage.input_tokens"]).toBe(500);
-    expect(spanAttrs["gen_ai.usage.output_tokens"]).toBe(200);
+    expect(spanAttrs!["gen_ai.operation.name"]).toBe("chat");
+    expect(spanAttrs!["gen_ai.system"]).toBe("anthropic");
+    expect(spanAttrs!["gen_ai.request.model"]).toBe("claude-opus-4-6");
+    expect(spanAttrs!["gen_ai.usage.input_tokens"]).toBe(500);
+    expect(spanAttrs!["gen_ai.usage.output_tokens"]).toBe(200);
     // Backwards-compatible openclaw.* attributes still present
-    expect(spanAttrs["openclaw.provider"]).toBe("anthropic");
-    expect(spanAttrs["openclaw.model"]).toBe("claude-opus-4-6");
-    expect(spanAttrs["openclaw.tokens.input"]).toBe(500);
-    expect(spanAttrs["openclaw.tokens.output"]).toBe(200);
+    expect(spanAttrs!["openclaw.provider"]).toBe("anthropic");
+    expect(spanAttrs!["openclaw.model"]).toBe("claude-opus-4-6");
+    expect(spanAttrs!["openclaw.tokens.input"]).toBe(500);
+    expect(spanAttrs!["openclaw.tokens.output"]).toBe(200);
 
     await service.stop?.(ctx);
   });
@@ -343,10 +344,10 @@ describe("diagnostics-otel service", () => {
       parentSpanId,
     });
 
-    const spanCalls = telemetryState.tracer.startSpan.mock.calls as [
+    const spanCalls = telemetryState.tracer.startSpan.mock.calls as unknown as [
       string,
       unknown,
-      { __parentSpanContext?: { traceId: string } | undefined },
+      { __parentSpanContext?: { traceId: string } | undefined } | undefined,
     ][];
 
     // message.processed span should NOT have parent context (it should be a root span)
@@ -399,10 +400,10 @@ describe("diagnostics-otel service", () => {
       durationMs: 500,
     });
 
-    const spanCalls = telemetryState.tracer.startSpan.mock.calls as [
+    const spanCalls = telemetryState.tracer.startSpan.mock.calls as unknown as [
       string,
       unknown,
-      { __parentSpanContext?: { traceId: string } | undefined },
+      { __parentSpanContext?: { traceId: string } | undefined } | undefined,
     ][];
     const modelCall = spanCalls.find((call) => String(call[0]).startsWith("chat "));
     expect(modelCall).toBeDefined();
