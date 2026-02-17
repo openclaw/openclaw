@@ -686,4 +686,61 @@ describe("handleTelegramAction per-account gating", () => {
       expect.objectContaining({ token: "tok-media" }),
     );
   });
+
+  it("inherits top-level reaction gate when account overrides sticker only", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          actions: { reactions: false },
+          accounts: {
+            media: { botToken: "tok-media", actions: { sticker: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleTelegramAction(
+        {
+          action: "react",
+          chatId: "123",
+          messageId: 1,
+          emoji: "👀",
+          accountId: "media",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/reactions are disabled via actions.reactions/i);
+  });
+
+  it("allows account to explicitly re-enable top-level disabled reaction gate", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          actions: { reactions: false },
+          accounts: {
+            media: { botToken: "tok-media", actions: { sticker: true, reactions: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: 1,
+        emoji: "👀",
+        accountId: "media",
+      },
+      cfg,
+    );
+
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      1,
+      "👀",
+      expect.objectContaining({ token: "tok-media", accountId: "media" }),
+    );
+  });
 });
