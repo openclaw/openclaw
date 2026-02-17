@@ -118,20 +118,27 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (!next) return current;
-  const shouldPersist =
-    next !== sessionEntry.authProfileOverride ||
-    sessionEntry.authProfileOverrideSource !== "auto" ||
-    sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
-  if (shouldPersist) {
-    sessionEntry.authProfileOverride = next;
-    sessionEntry.authProfileOverrideSource = "auto";
-    sessionEntry.authProfileOverrideCompactionCount = compactionCount;
-    sessionEntry.updatedAt = Date.now();
-    sessionStore[sessionKey] = sessionEntry;
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
-      });
+
+  // IMPORTANT: do not persist auto-selected auth profiles into sessions.json.
+  // Persisting this creates a “sticky provider” failure mode: if a session ever
+  // runs under Anthropic (e.g., fallback), we can accidentally pin it there.
+  // Only user-explicit overrides should be durable.
+  const shouldPersistUserOverride = sessionEntry.authProfileOverrideSource === "user";
+  if (shouldPersistUserOverride) {
+    const shouldPersist =
+      next !== sessionEntry.authProfileOverride ||
+      sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
+    if (shouldPersist) {
+      sessionEntry.authProfileOverride = next;
+      sessionEntry.authProfileOverrideSource = "user";
+      sessionEntry.authProfileOverrideCompactionCount = compactionCount;
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
+      }
     }
   }
 

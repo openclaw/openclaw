@@ -269,6 +269,21 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("authProfile" in patch) {
+    const raw = patch.authProfile;
+    if (raw === null) {
+      delete next.authProfileOverride;
+      delete next.authProfileOverrideSource;
+      delete next.authProfileOverrideCompactionCount;
+    } else if (raw !== undefined) {
+      const trimmed = String(raw).trim();
+      if (!trimmed) return invalid("invalid authProfile: empty");
+      next.authProfileOverride = trimmed;
+      next.authProfileOverrideSource = "user";
+      delete next.authProfileOverrideCompactionCount;
+    }
+  }
+
   if (next.thinkingLevel === "xhigh") {
     const resolvedDefault = resolveConfiguredModelRef({
       cfg,
