@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw Repository Stats</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 40px; background-color: #f4f4f4; color: #333; }
+        h1 { margin-bottom: 10px; color: #2c3e50; }
+        #loading { font-size: 18px; color: #e67e22; font-style: italic; }
+        .stat-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 400px; }
+        .stat { font-size: 20px; margin: 15px 0; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .stat b { color: #2980b9; }
+    </style>
+</head>
+<body>
+
+<div class="stat-container">
+    <h1>OpenClaw Repository Stats</h1>
+    <div id="loading">Loading live data...</div>
+
+    <div class="stat">Total folders: <b id="folderCount">0</b></div>
+    <div class="stat">Total files: <b id="fileCount">0</b></div>
+    <div class="stat">Unique file types: <b id="typeCount">0</b></div>
+</div>
+
+<script>
+async function fetchRepoTree() {
+    // Replace 'OWNER/REPO' with the actual path, e.g., 'OpenClaw/OpenClaw'
+    const url = "https://api.github.com/repos/OpenClaw/OpenClaw/git/trees/master?recursive=1";
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Network response was not ok');
+        const data = await response.json();
+        
+        let folders = 0;
+        let files = 0;
+        const types = new Set();
+
+        data.tree.forEach(item => {
+            if (item.type === "tree") {
+                folders++;
+            } else if (item.type === "blob") {
+                files++;
+                const parts = item.path.split('.');
+                if (parts.length > 1) {
+                    types.add(parts.pop().toLowerCase());
+                }
+            }
+        });
+
+        document.getElementById('folderCount').innerText = folders;
+        document.getElementById('fileCount').innerText = files;
+        document.getElementById('typeCount').innerText = types.size;
+        document.getElementById('loading').style.display = 'none';
+
+    } catch (error) {
+        document.getElementById('loading').innerText = "Error: Could not retrieve data (API limit or invalid repo).";
+        console.error("Fetch error:", error);
+    }
+}
+
+fetchRepoTree();
+</script>
+
+</body>
+</html>
