@@ -778,10 +778,15 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = params.request as Record<string, unknown> | undefined;
-          if (!request || typeof request !== "object") {
+          const requestBody = params.request as Record<string, unknown> | undefined;
+          if (!requestBody || typeof requestBody !== "object") {
             throw new Error("request required");
           }
+          // Merge top-level targetId into the request body
+          const request = {
+            ...requestBody,
+            targetId: params.targetId,
+          };
           try {
             const result = proxyRequest
               ? await proxyRequest({
