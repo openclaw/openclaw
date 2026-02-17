@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+if [[ -n "${OPENCLAW_CMD:-}" ]]; then
+  : # Keep explicit command override from OPENCLAW_CMD.
+elif command -v pnpm >/dev/null 2>&1; then
+  OPENCLAW_CMD="pnpm openclaw"
+elif command -v bun >/dev/null 2>&1; then
+  OPENCLAW_CMD="bun run openclaw"
+else
+  OPENCLAW_CMD="node scripts/run-node.mjs"
+fi
+
+: "${OPENCLAW_ONBOARD_HOME:=/tmp/openclaw-onboard-nostr}"
+OPENCLAW_ONBOARD_HOME="${OPENCLAW_ONBOARD_HOME%/}"
+if [[ -z "${OPENCLAW_ONBOARD_HOME}" ]]; then
+  OPENCLAW_ONBOARD_HOME="$(mktemp -d /tmp/openclaw-onboard-nostr.XXXXXX)"
+fi
+
+: "${OPENCLAW_NOSTR_PLUGIN_PATH:=extensions/nostr}"
+: "${OPENCLAW_NOSTR_RELAYS:=[\"wss://relay.damus.io\",\"wss://relay.primal.net\",\"wss://relay.wine\"]}"
+
+if [[ -z "${OPENCLAW_NOSTR_PRIVATE_KEY:-}" ]]; then
+  if command -v openssl >/dev/null 2>&1; then
+    OPENCLAW_NOSTR_PRIVATE_KEY="$(openssl rand -hex 32)"
+  else
+    if command -v node >/dev/null 2>&1; then
+      OPENCLAW_NOSTR_PRIVATE_KEY="$(node -e 'console.log(require(\"crypto\").randomBytes(32).toString(\"hex\"));')"
+    else
+      echo "No crypto source for key generation (need openssl or node)." >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [[ ! "$OPENCLAW_NOSTR_PRIVATE_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "Invalid OPENCLAW_NOSTR_PRIVATE_KEY. It must be 64 hex chars." >&2
+  exit 1
+fi
+
+OPENCLAW_NOSTR_PRIVATE_KEY="$(echo "$OPENCLAW_NOSTR_PRIVATE_KEY" | tr 'A-F' 'a-f')"
+OPENCLAW_NOSTR_PUBLIC_KEY=""
+
+NOSTR_TOOLS_PATH="$ROOT_DIR/extensions/nostr/node_modules/nostr-tools/lib/cjs/index.js"
+if [[ -f "$NOSTR_TOOLS_PATH" ]] && command -v node >/dev/null 2>&1; then
+  derived_public="$(
+    OPENCLAW_TOOLS_PATH="$NOSTR_TOOLS_PATH" \
+    OPENCLAW_NOSTR_PRIVATE_KEY="$OPENCLAW_NOSTR_PRIVATE_KEY" \
+      node -e 'const nt = require(process.env.OPENCLAW_TOOLS_PATH); const pub = nt.getPublicKey(nt.utils.hexToBytes(process.env.OPENCLAW_NOSTR_PRIVATE_KEY)); process.stdout.write(pub);'
+  )"
+  OPENCLAW_NOSTR_PUBLIC_KEY="${derived_public:-}"
+fi
+
+export OPENCLAW_ONBOARD_HOME
+export OPENCLAW_NOSTR_PLUGIN_PATH
+export OPENCLAW_NOSTR_RELAYS
+export OPENCLAW_NOSTR_PRIVATE_KEY
+export OPENCLAW_CMD
+if [[ -n "${OPENCLAW_NOSTR_PUBLIC_KEY}" ]]; then
+  export OPENCLAW_NOSTR_PUBLIC_KEY
+fi
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "For persistent values in your shell, run:"
+  echo "source scripts/dev/onboard-nostr-env.sh"
+  echo
+fi
+
+cat <<EOF
+OpenClaw Nostr onboarding defaults:
+  OPENCLAW_ONBOARD_HOME=$OPENCLAW_ONBOARD_HOME
+  OPENCLAW_NOSTR_PLUGIN_PATH=$OPENCLAW_NOSTR_PLUGIN_PATH
+  OPENCLAW_NOSTR_RELAYS=$OPENCLAW_NOSTR_RELAYS
+  OPENCLAW_NOSTR_PRIVATE_KEY=$OPENCLAW_NOSTR_PRIVATE_KEY
+  OPENCLAW_CMD=${OPENCLAW_CMD:-pnpm openclaw}
+
+Throwaway key pair (test only):
+  Private: $OPENCLAW_NOSTR_PRIVATE_KEY
+  Public: ${OPENCLAW_NOSTR_PUBLIC_KEY:-not available (install extension deps to derive)}
+
+Run:
+  source scripts/dev/onboard-nostr-env.sh && scripts/dev/onboard-session.sh nostr
+EOF
