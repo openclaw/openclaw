@@ -14,6 +14,12 @@ const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
 
+// Default instructions to preserve exact identifiers beyond just file paths, function names, and error messages.
+const DEFAULT_COMPACTION_PRESERVATION =
+  "Also preserve exact identifiers: UUIDs, IP addresses, URLs, commit SHAs, container hashes," +
+  " API paths with embedded IDs, connection strings, database row IDs, session tokens," +
+  " pod names, build IDs, version numbers, MAC addresses, and all other precise values.";
+
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
@@ -275,24 +281,30 @@ export async function summarizeInStages(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
+  // Always include preservation instructions for exact identifiers
+  const instructionsWithPreservation = params.customInstructions
+    ? `${DEFAULT_COMPACTION_PRESERVATION}\n\n${params.customInstructions}`
+    : DEFAULT_COMPACTION_PRESERVATION;
+  const paramsWithPreservation = { ...params, customInstructions: instructionsWithPreservation };
+
   const minMessagesForSplit = Math.max(2, params.minMessagesForSplit ?? 4);
   const parts = normalizeParts(params.parts ?? DEFAULT_PARTS, messages.length);
   const totalTokens = estimateMessagesTokens(messages);
 
   if (parts <= 1 || messages.length < minMessagesForSplit || totalTokens <= params.maxChunkTokens) {
-    return summarizeWithFallback(params);
+    return summarizeWithFallback(paramsWithPreservation);
   }
 
   const splits = splitMessagesByTokenShare(messages, parts).filter((chunk) => chunk.length > 0);
   if (splits.length <= 1) {
-    return summarizeWithFallback(params);
+    return summarizeWithFallback(paramsWithPreservation);
   }
 
   const partialSummaries: string[] = [];
   for (const chunk of splits) {
     partialSummaries.push(
       await summarizeWithFallback({
-        ...params,
+        ...paramsWithPreservation,
         messages: chunk,
         previousSummary: undefined,
       }),
@@ -309,12 +321,10 @@ export async function summarizeInStages(params: {
     timestamp: Date.now(),
   }));
 
-  const mergeInstructions = params.customInstructions
-    ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\nAdditional focus:\n${params.customInstructions}`
-    : MERGE_SUMMARIES_INSTRUCTIONS;
+  const mergeInstructions = `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${DEFAULT_COMPACTION_PRESERVATION}`;
 
   return summarizeWithFallback({
-    ...params,
+    ...paramsWithPreservation,
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
