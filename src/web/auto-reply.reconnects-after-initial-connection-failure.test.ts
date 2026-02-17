@@ -88,6 +88,10 @@ describe("web auto-reply", () => {
         close: vi.fn(),
         onClose,
         signalClose: (reason?: unknown) => resolveClose(reason),
+        sendMessage: vi.fn(),
+        sendPoll: vi.fn(),
+        sendReaction: vi.fn(),
+        sendComposingTo: vi.fn(),
       };
     });
     const runtime = {
