@@ -671,7 +671,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
   const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
     server.getMediaStreamHandler() as unknown as {
       config: {
-        onSpeechStart?: (providerCallId: string) => void;
+        onPartialTranscript?: (providerCallId: string, transcript: string) => void;
         onTranscript?: (providerCallId: string, transcript: string) => void;
       };
     };
@@ -730,9 +730,9 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
 
     try {
       const media = getMediaCallbacks(server);
-      media.config.onSpeechStart?.("CA-barge");
+      media.config.onPartialTranscript?.("CA-barge", "hel");
       media.config.onTranscript?.("CA-barge", "hello");
-      media.config.onSpeechStart?.("CA-barge");
+      media.config.onPartialTranscript?.("CA-barge", "hello ag");
       media.config.onTranscript?.("CA-barge", "hello again");
       expect(clearTtsQueue).not.toHaveBeenCalled();
       expect(handleInboundResponse).not.toHaveBeenCalled();
@@ -743,7 +743,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       }
       call.state = "listening";
 
-      media.config.onSpeechStart?.("CA-barge");
+      media.config.onPartialTranscript?.("CA-barge", "hello aft");
       media.config.onTranscript?.("CA-barge", "hello after greeting");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(handleInboundResponse).toHaveBeenCalledTimes(1);
@@ -793,7 +793,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
 
     try {
       const media = getMediaCallbacks(server);
-      media.config.onSpeechStart?.("CA-inbound");
+      media.config.onPartialTranscript?.("CA-inbound", "hel");
       media.config.onTranscript?.("CA-inbound", "hello");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
     } finally {

@@ -98,9 +98,27 @@ See the plugin docs for recommended ranges and production examples:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for
-streaming speech on calls. Override examples and provider caveats live here:
-`https://docs.openclaw.ai/plugins/voice-call#tts-for-calls`
+Voice Call uses **only** `plugins.entries.voice-call.config.tts` for call speech.
+It does **not** read or merge the core `messages.tts` configuration (which is intended
+for messaging-channel TTS).
+
+```json5
+{
+  tts: {
+    provider: "openai",
+    openai: {
+      voice: "alloy",
+      // apiKey can be set here, or via OPENAI_API_KEY
+    },
+  },
+}
+```
+
+Notes:
+
+- Edge TTS is ignored for voice calls (telephony audio needs PCM; Edge output is unreliable).
+- Telephony TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+- If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`.
 
 ## CLI
 

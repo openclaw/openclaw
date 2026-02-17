@@ -210,17 +210,27 @@ Example with a stable public host:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for
-streaming speech on calls. You can override it under the plugin config with the
-**same shape** — it deep‑merges with `messages.tts`.
+Voice Call uses **only** `plugins.entries.voice-call.config.tts` for call speech.
+It does **not** read or merge the core `messages.tts` configuration (which is intended for
+messaging-channel TTS).
+
+Example:
 
 ```json5
 {
-  tts: {
-    provider: "elevenlabs",
-    elevenlabs: {
-      voiceId: "pMsXgVXv3BLzUgSXRplE",
-      modelId: "eleven_multilingual_v2",
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tts: {
+            provider: "openai", // or "elevenlabs"
+            openai: {
+              voice: "alloy",
+              // apiKey can be set here, or via OPENAI_API_KEY
+            },
+          },
+        },
+      },
     },
   },
 }
@@ -228,68 +238,10 @@ streaming speech on calls. You can override it under the plugin config with the
 
 Notes:
 
-- **Microsoft speech is ignored for voice calls** (telephony audio needs PCM; the current Microsoft transport does not expose telephony PCM output).
-- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+- **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
+- Telephony TTS is used when **Twilio media streaming** is enabled; otherwise calls fall back to provider native voices.
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
-
-### More examples
-
-Use core TTS only (no override):
-
-```json5
-{
-  messages: {
-    tts: {
-      provider: "openai",
-      openai: { voice: "alloy" },
-    },
-  },
-}
-```
-
-Override to ElevenLabs just for calls (keep core default elsewhere):
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          tts: {
-            provider: "elevenlabs",
-            elevenlabs: {
-              apiKey: "elevenlabs_key",
-              voiceId: "pMsXgVXv3BLzUgSXRplE",
-              modelId: "eleven_multilingual_v2",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-Override only the OpenAI model for calls (deep‑merge example):
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          tts: {
-            openai: {
-              model: "gpt-4o-mini-tts",
-              voice: "marin",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
+- For **ElevenLabs streaming**, set `tts.elevenlabs.apiKey` + `tts.elevenlabs.voiceId`. (If you only set `ELEVENLABS_API_KEY`, the plugin may fall back to non-streaming synthesis.)
 
 ## Inbound calls
 

@@ -229,19 +229,22 @@ export class VoiceCallWebhookServer {
           });
         }
       },
-      onSpeechStart: (providerCallId) => {
-        if (this.provider.name !== "twilio") {
-          return;
-        }
-        const call = this.manager.getCallByProviderCallId(providerCallId);
-        if (this.shouldSuppressBargeInForInitialMessage(call)) {
-          return;
-        }
-        (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
+      onSpeechStart: (_providerCallId) => {
+        // VAD speech start — intentionally no barge-in here to avoid
+        // false triggers from background noise. Barge-in is handled
+        // in onPartialTranscript when actual speech is recognized.
       },
       onPartialTranscript: (callId, partial) => {
         const safePartial = sanitizeTranscriptForLog(partial);
         console.log(`[voice-call] Partial for ${callId}: ${safePartial} (chars=${partial.length})`);
+        // Barge-in: clear TTS when actual speech is recognized (not just VAD noise)
+        if (this.provider.name === "twilio") {
+          const call = this.manager.getCallByProviderCallId(callId);
+          if (this.shouldSuppressBargeInForInitialMessage(call)) {
+            return;
+          }
+          (this.provider as TwilioProvider).clearTtsQueue(callId);
+        }
       },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
