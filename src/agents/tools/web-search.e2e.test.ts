@@ -36,6 +36,12 @@ describe("web_search brave baseUrl", () => {
       "https://proxy.example/brave/res/v1/web/search",
     );
   });
+
+  it("falls back to default endpoint for invalid Brave baseUrl", () => {
+    expect(resolveBraveSearchEndpoint("res/v1/web/search")).toBe(
+      "https://api.search.brave.com/res/v1/web/search",
+    );
+  });
 });
 
 describe("web_search perplexity baseUrl defaults", () => {

@@ -191,7 +191,9 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
 
 function resolveBraveBaseUrl(search?: WebSearchConfig): string {
   const fromConfig =
-    search && "baseUrl" in search && typeof search.baseUrl === "string" ? search.baseUrl.trim() : "";
+    search && "baseUrl" in search && typeof search.baseUrl === "string"
+      ? search.baseUrl.trim()
+      : "";
   return fromConfig || DEFAULT_BRAVE_BASE_URL;
 }
 
@@ -200,10 +202,17 @@ function resolveBraveSearchEndpoint(baseUrl: string): string {
   if (!trimmed) {
     return `${DEFAULT_BRAVE_BASE_URL}/${BRAVE_SEARCH_PATH}`;
   }
-  if (trimmed.endsWith(`/${BRAVE_SEARCH_PATH}`) || trimmed === BRAVE_SEARCH_PATH) {
-    return trimmed;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return `${DEFAULT_BRAVE_BASE_URL}/${BRAVE_SEARCH_PATH}`;
   }
-  return `${trimmed}/${BRAVE_SEARCH_PATH}`;
+  const normalizedBase = parsed.toString().replace(/\/+$/, "");
+  if (normalizedBase.endsWith(`/${BRAVE_SEARCH_PATH}`)) {
+    return normalizedBase;
+  }
+  return `${normalizedBase}/${BRAVE_SEARCH_PATH}`;
 }
 
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
