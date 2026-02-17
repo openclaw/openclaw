@@ -254,6 +254,7 @@ mod tests {
     use serde::Deserialize;
     use serde_json::{json, Value};
     use tokio::net::TcpListener;
+    use tokio::time::{sleep, timeout, Duration};
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
     use crate::config::{
@@ -470,6 +471,171 @@ mod tests {
             cfg.runtime.session_queue_mode,
             cfg.runtime.group_activation_mode,
         );
+        bridge.run_once(evaluator).await?;
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mention_activation_ignores_non_mentioned_group_event() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let _connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "event",
+                        "event": "agent",
+                        "payload": {
+                            "id": "req-ignore",
+                            "sessionKey": "agent:main:discord:group:g1",
+                            "chatType": "group",
+                            "wasMentioned": false,
+                            "command": "git status"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "event",
+                        "event": "agent",
+                        "payload": {
+                            "id": "req-accept",
+                            "sessionKey": "agent:main:discord:group:g1",
+                            "chatType": "group",
+                            "wasMentioned": true,
+                            "command": "git status"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+
+            let decision = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for decision"))?
+                .ok_or_else(|| anyhow::anyhow!("decision stream ended"))??;
+            let decision_json: Value = serde_json::from_str(decision.to_text()?)?;
+            assert_eq!(
+                decision_json
+                    .pointer("/payload/requestId")
+                    .and_then(Value::as_str),
+                Some("req-accept")
+            );
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let bridge = GatewayBridge::new(
+            GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            "security.decision".to_owned(),
+            16,
+            SessionQueueMode::Followup,
+            GroupActivationMode::Mention,
+        );
+        let evaluator: Arc<dyn ActionEvaluator> = Arc::new(StubEvaluator);
+        bridge.run_once(evaluator).await?;
+        server.await??;
+        Ok(())
+    }
+
+    struct SlowEvaluator;
+
+    #[async_trait]
+    impl ActionEvaluator for SlowEvaluator {
+        async fn evaluate(&self, request: ActionRequest) -> Decision {
+            sleep(Duration::from_millis(120)).await;
+            Decision {
+                action: DecisionAction::Allow,
+                risk_score: 0,
+                reasons: vec![format!("ok:{}", request.id)],
+                tags: vec!["test".to_owned()],
+                source: "slow-stub".to_owned(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn steer_mode_keeps_latest_pending_at_bridge_level() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let _connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+
+            for req_id in ["req-1", "req-2", "req-3"] {
+                write
+                    .send(Message::Text(
+                        json!({
+                            "type": "event",
+                            "event": "agent",
+                            "payload": {
+                                "id": req_id,
+                                "sessionKey": "agent:main:discord:group:g1",
+                                "chatType": "group",
+                                "wasMentioned": true,
+                                "prompt": format!("hello-{req_id}")
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .await?;
+            }
+
+            let mut seen = Vec::new();
+            while seen.len() < 2 {
+                let decision = timeout(Duration::from_secs(3), read.next())
+                    .await
+                    .map_err(|_| anyhow::anyhow!("timed out waiting for decision"))?
+                    .ok_or_else(|| anyhow::anyhow!("decision stream ended"))??;
+                let decision_json: Value = serde_json::from_str(decision.to_text()?)?;
+                if let Some(req_id) = decision_json
+                    .pointer("/payload/requestId")
+                    .and_then(Value::as_str)
+                {
+                    seen.push(req_id.to_owned());
+                }
+            }
+
+            assert_eq!(seen, vec!["req-1".to_owned(), "req-3".to_owned()]);
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let bridge = GatewayBridge::new(
+            GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            "security.decision".to_owned(),
+            16,
+            SessionQueueMode::Steer,
+            GroupActivationMode::Always,
+        );
+        let evaluator: Arc<dyn ActionEvaluator> = Arc::new(SlowEvaluator);
         bridge.run_once(evaluator).await?;
         server.await??;
         Ok(())

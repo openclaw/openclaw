@@ -42,7 +42,7 @@ Status legend:
 | Channel driver abstraction | Channel-specific frame parsing adapters | `Partial` | Trait-based registry added with `whatsapp`, `telegram`, `slack`, `discord`, and generic drivers. |
 | Quarantine records | Persist blocked action payloads for forensics | `Implemented` | Append-only JSON files in configured quarantine directory. |
 | Backpressure + memory controls | Bounded worker concurrency, queue cap, eval timeout, memory metrics | `Implemented` | Semaphore + queue bounds + timeout + Linux RSS sampler. |
-| Test coverage (Rust) | Unit/integration validation for core safety/runtime behavior | `Partial` | Core security/bridge/channel adapters/replay harness covered; full end-to-end Gateway/channel matrix still pending. |
+| Test coverage (Rust) | Unit/integration validation for core safety/runtime behavior | `Partial` | Core security/bridge/channel adapters/replay harness covered, including bridge-level mention-activation and steer-queue semantics; full end-to-end Gateway/channel matrix still pending. |
 | Dockerized validation | Containerized CI-style runtime test matrix | `Not Started` | Docker Desktop installed on this machine but daemon not running yet. |
 
 ## Custom Defender Goal Coverage
