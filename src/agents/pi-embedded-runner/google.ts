@@ -16,6 +16,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
+  repairLoneSurrogates,
   sanitizeToolCallInputs,
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
@@ -443,7 +444,8 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  const repairedSurrogates = repairLoneSurrogates(sanitizedThinking);
+  const sanitizedToolCalls = sanitizeToolCallInputs(repairedSurrogates);
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;

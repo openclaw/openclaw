@@ -146,6 +146,55 @@ export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMes
   return repairToolUseResultPairing(messages).messages;
 }
 
+// Matches a high surrogate not followed by a low surrogate, or a low surrogate
+// not preceded by a high surrogate. These lone surrogates cause API rejections
+// ("no low surrogate in string") and are typically produced by streaming delta
+// assembly splitting supplementary plane characters.
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+function repairStringLoneSurrogates(value: string): string {
+  return value.replace(LONE_SURROGATE_RE, "\uFFFD");
+}
+
+function deepRepairSurrogates(value: unknown): unknown {
+  if (typeof value === "string") {
+    return repairStringLoneSurrogates(value);
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = value.map((item) => {
+      const repaired = deepRepairSurrogates(item);
+      if (repaired !== item) {
+        changed = true;
+      }
+      return repaired;
+    });
+    return changed ? out : value;
+  }
+  if (value && typeof value === "object") {
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      const repaired = deepRepairSurrogates(v);
+      if (repaired !== v) {
+        changed = true;
+      }
+      out[k] = repaired;
+    }
+    return changed ? out : value;
+  }
+  return value;
+}
+
+/**
+ * Replace lone surrogates in all string values of the given messages.
+ * This prevents 400 errors from LLM APIs that reject lone surrogates in
+ * tool_use arguments or other content (e.g. "no low surrogate in string").
+ */
+export function repairLoneSurrogates(messages: AgentMessage[]): AgentMessage[] {
+  return deepRepairSurrogates(messages) as AgentMessage[];
+}
+
 export type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
