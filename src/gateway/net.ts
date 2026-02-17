@@ -25,6 +25,28 @@ export function pickPrimaryLanIPv4(): string | undefined {
   return undefined;
 }
 
+/**
+ * Returns true when a custom bind host points to an IPv4 address currently
+ * present on a local network interface (or loopback).
+ */
+export function isCustomBindHostAvailableLocally(host: string | undefined): boolean {
+  const candidate = host?.trim();
+  if (!candidate || !isValidIPv4(candidate)) {
+    return false;
+  }
+  if (isLoopbackAddress(candidate)) {
+    return true;
+  }
+  const nets = os.networkInterfaces();
+  for (const list of Object.values(nets)) {
+    const entry = list?.find((n) => n.family === "IPv4" && n.address === candidate);
+    if (entry) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function normalizeHostHeader(hostHeader?: string): string {
   return (hostHeader ?? "").trim().toLowerCase();
 }
