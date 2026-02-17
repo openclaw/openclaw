@@ -1,5 +1,8 @@
+import type { ConfigValidationIssue } from "../config/types.js";
+import type { MemoryProviderStatus } from "../memory/types.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -7,9 +10,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import { pickGatewaySelfPresence, resolveGatewayProbeAuth } from "./status.gateway-probe.js";
@@ -40,6 +41,8 @@ function resolveMemoryPluginStatus(cfg: ReturnType<typeof loadConfig>): MemoryPl
 
 export type StatusScanResult = {
   cfg: ReturnType<typeof loadConfig>;
+  /** Warnings from config snapshot (e.g. disabled model providers due to invalid config). */
+  configWarnings: ConfigValidationIssue[];
   osSummary: ReturnType<typeof resolveOsSummary>;
   tailscaleMode: string;
   tailscaleDns: string | null;
@@ -75,7 +78,11 @@ export async function scanStatus(
     },
     async (progress) => {
       progress.setLabel("Loading config…");
-      const cfg = loadConfig();
+      const [cfg, snapshot] = await Promise.all([
+        Promise.resolve(loadConfig()),
+        readConfigFileSnapshot(),
+      ]);
+      const configWarnings = snapshot.valid ? snapshot.warnings : [];
       const osSummary = resolveOsSummary();
       progress.tick();
 
@@ -180,6 +187,7 @@ export async function scanStatus(
 
       return {
         cfg,
+        configWarnings,
         osSummary,
         tailscaleMode,
         tailscaleDns,

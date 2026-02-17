@@ -13,6 +13,17 @@ export const ModelApiSchema = z.union([
   z.literal("ollama"),
 ]);
 
+/** Supported model API types; useful for error messages when validation fails. */
+export const MODEL_API_VALUES: readonly string[] = [
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+  "github-copilot",
+  "bedrock-converse-stream",
+  "ollama",
+];
+
 export const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),

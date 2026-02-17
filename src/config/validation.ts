@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
@@ -12,7 +13,7 @@ import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
-import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import { MODEL_API_VALUES } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
@@ -132,6 +133,93 @@ export function validateConfigObjectRaw(
   };
 }
 
+const MODELS_PROVIDERS_PREFIX = "models.providers.";
+
+/**
+ * If path is "models.providers.X" or "models.providers.X.anything", returns "X"; otherwise null.
+ */
+function providerKeyFromIssuePath(path: string): string | null {
+  if (!path.startsWith(MODELS_PROVIDERS_PREFIX)) {
+    return null;
+  }
+  const rest = path.slice(MODELS_PROVIDERS_PREFIX.length);
+  const dot = rest.indexOf(".");
+  const key = dot >= 0 ? rest.slice(0, dot) : rest;
+  return key.length > 0 ? key : null;
+}
+
+/**
+ * Validates config; if the only errors are under models.providers.<key>, strips those
+ * providers and returns a valid config plus warnings so the gateway can start.
+ */
+export function tryValidateConfigRawWithLenientModelProviders(
+  raw: unknown,
+):
+  | { ok: true; config: OpenClawConfig; providerWarnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[] } {
+  const result = validateConfigObjectRaw(raw);
+  if (result.ok) {
+    return { ok: true, config: result.config, providerWarnings: [] };
+  }
+  const issues = result.issues;
+  const providerKeys = new Set<string>();
+  for (const iss of issues) {
+    const key = providerKeyFromIssuePath(iss.path);
+    if (key === null) {
+      return { ok: false, issues };
+    }
+    providerKeys.add(key);
+  }
+  if (providerKeys.size === 0) {
+    return { ok: false, issues };
+  }
+  let cloned: unknown;
+  try {
+    cloned =
+      typeof structuredClone === "function"
+        ? structuredClone(raw)
+        : JSON.parse(JSON.stringify(raw));
+  } catch {
+    return { ok: false, issues };
+  }
+  if (!isRecord(cloned)) {
+    return { ok: false, issues };
+  }
+  if (!isRecord(cloned.models)) {
+    cloned.models = {};
+  }
+  if (!isRecord(cloned.models.providers)) {
+    cloned.models.providers = {};
+  }
+  for (const key of providerKeys) {
+    delete cloned.models.providers[key];
+  }
+  const result2 = validateConfigObjectRaw(cloned);
+  if (!result2.ok) {
+    return { ok: false, issues };
+  }
+  const providerWarnings: ConfigValidationIssue[] = [];
+  for (const key of providerKeys) {
+    const first = issues.find(
+      (iss) =>
+        iss.path === `models.providers.${key}` || iss.path.startsWith(`models.providers.${key}.`),
+    );
+    let message = first?.message ?? "Invalid provider config";
+    if (first?.path.endsWith(".api")) {
+      message += ` Supported types: ${MODEL_API_VALUES.join(", ")}.`;
+    }
+    providerWarnings.push({
+      path: `models.providers.${key}`,
+      message: `Provider disabled: ${message}`,
+    });
+  }
+  return {
+    ok: true,
+    config: result2.config,
+    providerWarnings,
+  };
+}
+
 export function validateConfigObject(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
@@ -187,14 +275,15 @@ function validateConfigObjectWithPluginsBase(
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
     } {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
-  if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+  const lenient = tryValidateConfigRawWithLenientModelProviders(raw);
+  if (!lenient.ok) {
+    return { ok: false, issues: lenient.issues, warnings: [] };
   }
-
-  const config = base.config;
+  const config = opts.applyDefaults
+    ? applyModelDefaults(applyAgentDefaults(applySessionDefaults(lenient.config)))
+    : lenient.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...lenient.providerWarnings];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
