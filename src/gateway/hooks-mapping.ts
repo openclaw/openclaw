@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
@@ -27,6 +28,8 @@ export type HookMappingResolved = {
 export type HookMappingTransformResolved = {
   modulePath: string;
   exportName?: string;
+  /** The resolved transforms root directory for symlink containment checks. */
+  containingDir?: string;
 };
 
 export type HookMappingContext = {
@@ -195,6 +198,7 @@ function normalizeHookMapping(
     ? {
         modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
         exportName: mapping.transform.export?.trim() || undefined,
+        containingDir: transformsDir,
       }
     : undefined;
 
@@ -330,7 +334,33 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
   if (cached) {
     return cached;
   }
-  const url = pathToFileURL(transform.modulePath).href;
+
+  // Resolve symlinks to the real path and re-validate containment.
+  // This prevents symlink-based escapes where a link inside the transforms
+  // directory points to an arbitrary location on the filesystem.
+  let realModulePath: string;
+  try {
+    realModulePath = fs.realpathSync(transform.modulePath);
+  } catch {
+    throw new Error(`hook transform module not found: ${transform.modulePath}`);
+  }
+
+  if (transform.containingDir) {
+    let realContainingDir: string;
+    try {
+      realContainingDir = fs.realpathSync(transform.containingDir);
+    } catch {
+      throw new Error(`hook transforms directory not found: ${transform.containingDir}`);
+    }
+    const relative = path.relative(realContainingDir, realModulePath);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(
+        `hook transform module escapes transforms directory via symlink: ${transform.modulePath}`,
+      );
+    }
+  }
+
+  const url = pathToFileURL(realModulePath).href;
   const mod = (await import(url)) as Record<string, unknown>;
   const fn = resolveTransformFn(mod, transform.exportName);
   transformCache.set(cacheKey, fn);
