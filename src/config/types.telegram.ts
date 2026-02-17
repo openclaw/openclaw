@@ -146,6 +146,19 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** TOTP 2FA configuration for this Telegram account. */
+  totp?: TelegramTotpConfig;
+};
+
+export type TelegramTotpConfig = {
+  /** Enable TOTP verification for new sessions. */
+  enabled?: boolean;
+  /** How long a verified session stays valid (default: 86400 = 24h). */
+  sessionDurationSeconds?: number;
+  /** Max failed attempts before rate limiting (default: 5). */
+  maxAttempts?: number;
+  /** Rate limit window in seconds after max attempts (default: 300). */
+  rateLimitWindowSeconds?: number;
 };
 
 export type TelegramTopicConfig = {

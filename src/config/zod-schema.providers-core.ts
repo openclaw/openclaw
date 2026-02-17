@@ -151,6 +151,15 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    totp: z
+      .object({
+        enabled: z.boolean().optional(),
+        sessionDurationSeconds: z.number().int().positive().optional(),
+        maxAttempts: z.number().int().positive().optional(),
+        rateLimitWindowSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
