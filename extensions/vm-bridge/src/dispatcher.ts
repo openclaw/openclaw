@@ -41,7 +41,7 @@ Otherwise respond with:
   "project_id": "...",
   "intent": "Logically complete statement that an engineer could execute without referring back to the original email. Include names, emails, specific locations/brands, and what NOT to change. When parity is implied, state explicitly that the target must match the reference entity's existing state.",
   "qa_doc": [
-    {"id": "short_snake_id", "description": "what to verify", "nav": "URL, page, or database query location", "pass_if": "exact state assertion — not existence, but complete expected state"}
+    {"id": "short_snake_id", "description": "what to verify", "nav": "deployed application URL where the change is visible (e.g. https://app.example.com/settings)", "pass_if": "exact state assertion — not existence, but complete expected state as seen in the browser"}
   ],
   "confidence": 0.0-1.0,
   "reasoning": "one sentence"
@@ -59,8 +59,11 @@ For each entity, the check must specify its COMPLETE EXPECTED STATE after execut
 Do NOT write existence checks like "X is still present" or "X is listed as Active."
 DO write state checks like "X has the same total records at the same locations with the same attributes as before execution."
 
-Each check must be independently verifiable via Chrome browser or database query.
-Use specific URLs, page elements, or database values in nav and pass_if.`;
+Each check MUST be verifiable by navigating to the deployed application URL in Chrome.
+The "nav" field must be a real URL where the QA agent can see the result (not "Database: ..." references).
+The "pass_if" field must describe what the QA agent will see on that page (visible text, element state, counts displayed in UI).
+The QA agent runs in a Chrome browser pointed at the live application — it does not have direct database access.
+If the application has an admin panel or dashboard that shows the relevant data, use that URL.`;
 
 export async function dispatchMessage(
   senderEmail: string,

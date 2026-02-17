@@ -412,7 +412,8 @@ export function buildQaPrompt(contract: Contract): string {
 
   if (checklist) {
     const parts: string[] = [];
-    parts.push(`Verify ALL ${checklist.length} criteria below using the Chrome browser.`);
+    parts.push(`Verify ALL ${checklist.length} criteria below using the Chrome browser on the deployed application.`);
+    parts.push("Navigate to the URL in each check's 'nav' field and confirm the expected state is visible.");
     parts.push("Evaluate EACH check independently. Report per-check results.");
     parts.push("Only report overall PASS if ALL checks pass.");
 
