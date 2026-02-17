@@ -19,6 +19,7 @@ import {
   type EmbeddingProvider,
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type VertexEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import {
@@ -87,9 +88,10 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "google-vertex";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
+  protected vertex?: VertexEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
@@ -923,6 +925,7 @@ export abstract class MemoryManagerSyncOps {
       this.provider &&
       ((this.openAi && this.provider.id === "openai") ||
         (this.gemini && this.provider.id === "gemini") ||
+        (this.vertex && this.provider.id === "google-vertex") ||
         (this.voyage && this.provider.id === "voyage")),
     );
     return {
@@ -942,7 +945,12 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage";
+    const fallbackFrom = this.provider.id as
+      | "openai"
+      | "gemini"
+      | "local"
+      | "voyage"
+      | "google-vertex";
 
     const fallbackModel =
       fallback === "gemini"
@@ -968,6 +976,7 @@ export abstract class MemoryManagerSyncOps {
     this.provider = fallbackResult.provider;
     this.openAi = fallbackResult.openAi;
     this.gemini = fallbackResult.gemini;
+    this.vertex = fallbackResult.vertex;
     this.voyage = fallbackResult.voyage;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
