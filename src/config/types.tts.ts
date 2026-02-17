@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "cli";
 
 export type TtsMode = "final" | "all";
 
@@ -71,6 +71,19 @@ export type TtsConfig = {
     volume?: string;
     saveSubtitles?: boolean;
     proxy?: string;
+    timeoutMs?: number;
+  };
+  /** CLI command TTS configuration (e.g., Pocket TTS, Kokoro). */
+  cli?: {
+    /** Explicitly enable/disable CLI TTS. */
+    enabled?: boolean;
+    /** Command to execute (supports {{Text}} and {{OutputPath}} templates). */
+    command: string;
+    /** Arguments (supports {{Text}} and {{OutputPath}} templates). */
+    args?: string[];
+    /** Extra environment variables for the command. */
+    env?: Record<string, string>;
+    /** Timeout in milliseconds (default: 60000). */
     timeoutMs?: number;
   };
   /** Optional path for local TTS user preferences JSON. */

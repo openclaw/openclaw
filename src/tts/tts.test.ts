@@ -547,4 +547,119 @@ describe("tts", () => {
       });
     });
   });
+
+  describe("CLI TTS provider", () => {
+    const baseCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+    const cliCfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          cli: {
+            command: "/usr/local/bin/my-tts",
+            args: ["--text", "{{Text}}", "--output", "{{OutputPath}}"],
+            env: { LANG: "en_US.UTF-8" },
+            timeoutMs: 30000,
+          },
+        },
+      },
+    };
+
+    it("resolves CLI config defaults", () => {
+      const config = resolveTtsConfig(cliCfg);
+      expect(config.cli.enabled).toBe(true);
+      expect(config.cli.command).toBe("/usr/local/bin/my-tts");
+      expect(config.cli.args).toEqual(["--text", "{{Text}}", "--output", "{{OutputPath}}"]);
+      expect(config.cli.env).toEqual({ LANG: "en_US.UTF-8" });
+      expect(config.cli.timeoutMs).toBe(30000);
+    });
+
+    it("uses default timeout of 60s when not configured", () => {
+      const config = resolveTtsConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: { cli: { command: "tts-cmd" } } },
+      });
+      expect(config.cli.timeoutMs).toBe(60000);
+    });
+
+    it("resolves empty CLI config when not provided", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.cli.enabled).toBe(true);
+      expect(config.cli.command).toBe("");
+      expect(config.cli.args).toEqual([]);
+    });
+
+    it("detects CLI as configured when command is set", () => {
+      const config = resolveTtsConfig(cliCfg);
+      expect(tts.isTtsProviderConfigured(config, "cli")).toBe(true);
+    });
+
+    it("detects CLI as not configured when command is empty", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(tts.isTtsProviderConfigured(config, "cli")).toBe(false);
+    });
+
+    it("detects CLI as not configured when disabled", () => {
+      const config = resolveTtsConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: { cli: { enabled: false, command: "tts-cmd" } } },
+      });
+      expect(tts.isTtsProviderConfigured(config, "cli")).toBe(false);
+    });
+
+    it("includes cli in provider order", () => {
+      const order = tts.resolveTtsProviderOrder("cli");
+      expect(order[0]).toBe("cli");
+      expect(order).toContain("openai");
+      expect(order).toContain("elevenlabs");
+      expect(order).toContain("edge");
+    });
+
+    it("returns undefined API key for CLI provider", () => {
+      const config = resolveTtsConfig(cliCfg);
+      expect(tts.resolveTtsApiKey(config, "cli")).toBeUndefined();
+    });
+
+    it("replaces template variables in args", () => {
+      const { replaceCliTemplateVars } = _test;
+      const result = replaceCliTemplateVars("--text={{Text}} --out={{OutputPath}}", {
+        text: "Hello world",
+        outputPath: "/tmp/voice.wav",
+      });
+      expect(result).toBe("--text=Hello world --out=/tmp/voice.wav");
+    });
+
+    it("handles multiple template occurrences", () => {
+      const { replaceCliTemplateVars } = _test;
+      const result = replaceCliTemplateVars("{{Text}} then {{Text}}", {
+        text: "hi",
+        outputPath: "/out",
+      });
+      expect(result).toBe("hi then hi");
+    });
+
+    it("accepts cli as provider override in parseTtsDirectives", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:provider=cli]] world";
+      const result = parseTtsDirectives(input, policy);
+      expect(result.overrides.provider).toBe("cli");
+    });
+
+    it("prefers CLI over edge when configured and no API keys present", () => {
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+        },
+        () => {
+          const config = resolveTtsConfig(cliCfg);
+          const provider = getTtsProvider(config, `/tmp/tts-prefs-cli-${Date.now()}.json`);
+          expect(provider).toBe("cli");
+        },
+      );
+    });
+  });
 });

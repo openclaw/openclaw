@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -42,6 +43,7 @@ import {
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_CLI_TIMEOUT_MS = 60_000; // local inference can be slow
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
@@ -126,6 +128,13 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  cli: {
+    enabled: boolean;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+    timeoutMs: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -301,6 +310,13 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    cli: {
+      enabled: raw.cli?.enabled ?? true,
+      command: raw.cli?.command ?? "",
+      args: raw.cli?.args ?? [],
+      env: raw.cli?.env ?? {},
+      timeoutMs: raw.cli?.timeoutMs ?? DEFAULT_CLI_TIMEOUT_MS,
+    },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -439,6 +455,10 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  // CLI is preferred over edge when configured (no API key needed)
+  if (isTtsProviderConfigured(config, "cli")) {
+    return "cli";
+  }
   return "edge";
 }
 
@@ -503,10 +523,11 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  // cli and edge don't need API keys
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "cli", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -516,7 +537,100 @@ export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: Tts
   if (provider === "edge") {
     return config.edge.enabled;
   }
+  if (provider === "cli") {
+    return config.cli.enabled && Boolean(config.cli.command);
+  }
   return Boolean(resolveTtsApiKey(config, provider));
+}
+
+/** Replace {{Text}} and {{OutputPath}} template variables in a string. */
+export function replaceCliTemplateVars(
+  value: string,
+  vars: { text: string; outputPath: string },
+): string {
+  return value.replaceAll("{{Text}}", vars.text).replaceAll("{{OutputPath}}", vars.outputPath);
+}
+
+/** Check whether any args/command contain the {{OutputPath}} template. */
+function cliUsesOutputPath(command: string, args: string[]): boolean {
+  return command.includes("{{OutputPath}}") || args.some((a) => a.includes("{{OutputPath}}"));
+}
+
+/**
+ * Run a CLI command for TTS. If {{OutputPath}} is in command/args, the command
+ * is expected to write audio there. Otherwise stdout is captured and written.
+ */
+async function cliTTS(params: {
+  text: string;
+  config: ResolvedTtsConfig["cli"];
+}): Promise<string> {
+  const { text, config } = params;
+  const tempDir = mkdtempSync(path.join(tmpdir(), "tts-cli-"));
+  const outputPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+  const usesFile = cliUsesOutputPath(config.command, config.args);
+
+  const vars = { text, outputPath };
+  const command = replaceCliTemplateVars(config.command, vars);
+  const args = config.args.map((a) => replaceCliTemplateVars(a, vars));
+  const env = { ...process.env, ...config.env };
+
+  return new Promise<string>((resolve, reject) => {
+    const child = execFile(command, args, {
+      env,
+      timeout: config.timeoutMs,
+      maxBuffer: 50 * 1024 * 1024, // 50 MB for stdout capture
+      encoding: "buffer" as BufferEncoding,
+    });
+
+    const chunks: Buffer[] = [];
+    child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+    child.on("error", (err) => {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      reject(err);
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        try {
+          rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+        reject(new Error(`CLI TTS exited with code ${code}`));
+        return;
+      }
+
+      try {
+        if (usesFile) {
+          if (!existsSync(outputPath)) {
+            throw new Error(`CLI TTS did not create output file: ${outputPath}`);
+          }
+        } else {
+          // Command wrote to stdout; save it to the output file
+          const buf = Buffer.concat(chunks);
+          if (buf.length === 0) {
+            throw new Error("CLI TTS produced no output on stdout");
+          }
+          writeFileSync(outputPath, buf);
+        }
+
+        scheduleCleanup(tempDir);
+        resolve(outputPath);
+      } catch (err) {
+        try {
+          rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+        reject(err);
+      }
+    });
+  });
 }
 
 function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
@@ -556,6 +670,24 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
+      if (provider === "cli") {
+        if (!isTtsProviderConfigured(config, "cli")) {
+          errors.push("cli: not configured");
+          continue;
+        }
+
+        const audioPath = await cliTTS({ text: params.text, config: config.cli });
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+        return {
+          success: true,
+          audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: "wav",
+          voiceCompatible,
+        };
+      }
+
       if (provider === "edge") {
         if (!config.edge.enabled) {
           errors.push("edge: disabled");
@@ -716,8 +848,8 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      if (provider === "edge") {
-        errors.push("edge: unsupported for telephony");
+      if (provider === "edge" || provider === "cli") {
+        errors.push(`${provider}: unsupported for telephony`);
         continue;
       }
 
@@ -938,4 +1070,6 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  replaceCliTemplateVars,
+  cliTTS,
 };
