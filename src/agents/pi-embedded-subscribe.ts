@@ -177,8 +177,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
+    stopReason?: string;
   }) => {
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
+
+    // When the message ended with a tool call, the texts produced before the
+    // tool call were intermediate narration (e.g. "Lass mich nachschauen...").
+    // Discard them so only the final answer turn's texts are delivered.
+    // In verbose mode, keep everything for debugging.
+    const isVerbose = params.verboseLevel && params.verboseLevel !== "off";
+    if (args.stopReason === "toolUse" && params.suppressPreToolText && !isVerbose) {
+      assistantTexts.splice(state.assistantTextBaseline);
+    }
 
     // If we're not streaming block replies, ensure the final payload includes
     // the final text even when interim streaming was enabled.

@@ -499,6 +499,7 @@ export async function runMemoryFlushIfNeeded(params: {
             cfg: params.cfg,
           }),
           extraSystemPrompt: flushSystemPrompt,
+          suppressPreToolText: params.followupRun.run.suppressPreToolText,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],

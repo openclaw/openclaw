@@ -58,6 +58,7 @@ export type EmbeddedPiSubscribeState = {
   lastAssistantTextNormalized?: string;
   lastAssistantTextTrimmed?: string;
   assistantTextBaseline: number;
+  suppressPreToolText: boolean;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
 
@@ -113,6 +114,7 @@ export type EmbeddedPiSubscribeContext = {
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
+    stopReason?: string;
   }) => void;
   trimMessagingToolSent: () => void;
   ensureCompactionPromise: () => void;

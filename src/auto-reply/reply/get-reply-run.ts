@@ -523,6 +523,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
+      ...(agentCfg?.suppressPreToolText ? { suppressPreToolText: true } : {}),
     },
   };
 
