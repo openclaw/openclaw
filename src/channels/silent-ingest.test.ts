@@ -30,9 +30,10 @@ describe("runSilentMessageIngest", () => {
     });
 
     expect(runMessageIngest).toHaveBeenCalledTimes(1);
-    const [event] = runMessageIngest.mock.calls[0] as [{ from: string; content: string }];
-    expect(event.from).toBe("evilname");
-    expect(event.content).toBe("hello");
+    const firstCall = runMessageIngest.mock.calls[0];
+    const event = firstCall?.[0] as { from: string; content: string } | undefined;
+    expect(event?.from).toBe("evilname");
+    expect(event?.content).toBe("hello");
   });
 
   it("skips work when no message_ingest hooks are registered", async () => {
