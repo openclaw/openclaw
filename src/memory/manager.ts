@@ -47,12 +47,13 @@ export class MemoryIndexManager implements MemorySearchManager {
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
   private provider: EmbeddingProvider;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
-  private fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "ollama" | "auto";
+  private fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "ollama";
   private fallbackReason?: string;
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
   private voyage?: VoyageEmbeddingClient;
+  private ollama?: import("./embeddings-ollama.js").OllamaEmbeddingClient;
   private batch: {
     enabled: boolean;
     wait: boolean;
@@ -157,6 +158,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
+    this.ollama = params.providerResult.ollama;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
