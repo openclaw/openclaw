@@ -692,6 +692,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.toolSummaryById.clear();
     state.pendingMessagingTexts.clear();
     state.pendingMessagingTargets.clear();
+    state.pendingMessagingMediaUrls.clear();
     // Preserve messagingToolSent* state until attempt result is built (run/attempt.ts reads these after unsubscribe)
     // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
     // Only abort if compaction is actually running to avoid unnecessary work.

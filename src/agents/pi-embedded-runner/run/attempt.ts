@@ -929,6 +929,9 @@ export async function runEmbeddedAttempt(
           timedOutDuringCompaction = true;
         }
         if (timeout && subscription.isToolExecutionInFlight()) {
+          if (!toolStateSnapshot) {
+            toolStateSnapshot = subscription.getActiveToolExecutionState();
+          }
           timedOutDuringToolExecution = true;
         }
         abortRun(timeout, reason);
