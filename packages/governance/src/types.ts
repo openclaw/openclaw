@@ -67,7 +67,7 @@ export interface GrantConditions {
 }
 
 /**
- * A permission grant — assigns a role at a scope to a human agent.
+ * A permission grant — assigns a role at a scope to a human.
  *
  * Grants do NOT cascade by default. A tenant-scoped grant does not
  * automatically give access to project-scoped agents. Set `cascade: true`
@@ -106,7 +106,7 @@ export interface TOTPRegistration {
 }
 
 /**
- * An enrolled device bound to a human agent's identity.
+ * An enrolled device bound to a human's identity.
  *
  * Each device has its own Ed25519 keypair (DID) and an authentication
  * method. The device DID is linked to the human's root DID.
@@ -129,9 +129,9 @@ export interface DeviceEnrollment {
   status: "active" | "revoked";
 }
 
-// ── Human Agent ─────────────────────────────────────────────────────────────
+// ── Human ────────────────────────────────────────────────────────────────────
 
-/** Contact channels for a human operator. */
+/** Contact channels for a human. */
 export interface HumanContact {
   signal?: string;
   sms?: string;
@@ -148,7 +148,7 @@ export interface HumanContact {
  * All human actions are recorded on the ledger with full auth context:
  * device used, auth method, location, grant that authorized the action.
  */
-export interface HumanAgent {
+export interface Human {
   id: string;
   /** Root identity — did:key from primary Ed25519 keypair. */
   did: DID;
@@ -160,7 +160,7 @@ export interface HumanAgent {
   status: "active" | "suspended" | "inactive";
 }
 
-// ── Agent Worker ────────────────────────────────────────────────────────────
+// ── Agent ────────────────────────────────────────────────────────────────────
 
 /** Model assignment for an AI agent. */
 export interface ModelAssignment {
@@ -202,12 +202,14 @@ export interface AgentWorkspace {
 }
 
 /**
- * An AI agent that performs work within a project.
+ * An AI agent — an autonomous entity with its own cryptographic identity.
  *
- * Each agent has its own cryptographic identity (DID), a model assignment,
- * per-function maturity levels, and a workspace defining its persona.
+ * Agents have a DID, a model assignment, per-function maturity levels,
+ * and a workspace defining their persona. What an agent *does* (its role,
+ * its project assignment) is a relationship — the agent itself is just
+ * an identity with capabilities.
  */
-export interface AgentWorker {
+export interface Agent {
   id: string;
   /** Agent identity — did:key from Ed25519 keypair. */
   did: DID;
@@ -235,7 +237,7 @@ export interface Project {
   tenantId: string;
   name: string;
   description?: string;
-  agents: AgentWorker[];
+  agents: Agent[];
   /** ID of the ledger for this project (own ledger if hard-isolated). */
   ledgerId: string;
   status: "active" | "paused" | "archived";
@@ -271,7 +273,7 @@ export interface Tenant {
   isolation: TenantIsolation;
   defaultMaturity: MaturityConfig;
   projects: Project[];
-  humans: HumanAgent[];
+  humans: Human[];
   createdAt: string;
   updatedAt: string;
 }
