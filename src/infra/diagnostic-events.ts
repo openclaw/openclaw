@@ -168,7 +168,17 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     : never
   : never;
 let seq = 0;
-const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
+
+// Use globalThis to share the listener set across module boundaries.
+// The bundler emits separate chunks for the main app and plugin-sdk,
+// each with their own module-level state. Without this, jiti-loaded
+// extensions subscribe to a different Set than the one the main app
+// emits into, so diagnostic events silently vanish.
+const LISTENERS_KEY = Symbol.for("openclaw.diagnostic.listeners");
+const listeners: Set<(evt: DiagnosticEventPayload) => void> =
+  ((globalThis as Record<symbol, unknown>)[LISTENERS_KEY] as Set<
+    (evt: DiagnosticEventPayload) => void
+  >) ?? ((globalThis as Record<symbol, unknown>)[LISTENERS_KEY] = new Set());
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.enabled === true;
