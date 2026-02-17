@@ -5,11 +5,19 @@ import * as logging from "../logging.js";
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
   shutdown: vi.fn(),
+  getResponder: vi.fn(),
   registerUnhandledRejectionHandler: vi.fn(),
   logWarn: vi.fn(),
   logDebug: vi.fn(),
 }));
-const { createService, shutdown, registerUnhandledRejectionHandler, logWarn, logDebug } = mocks;
+const {
+  createService,
+  shutdown,
+  getResponder: getResponderMock,
+  registerUnhandledRejectionHandler,
+  logWarn,
+  logDebug,
+} = mocks;
 
 const asString = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
@@ -52,10 +60,13 @@ vi.mock("../logger.js", async () => {
 vi.mock("@homebridge/ciao", () => {
   return {
     Protocol: { TCP: "tcp" },
-    getResponder: () => ({
-      createService,
-      shutdown,
-    }),
+    getResponder: (...args: unknown[]) => {
+      getResponderMock(...args);
+      return {
+        createService,
+        shutdown,
+      };
+    },
   };
 });
 
@@ -96,6 +107,7 @@ describe("gateway bonjour advertiser", () => {
 
     createService.mockReset();
     shutdown.mockReset();
+    getResponderMock.mockReset();
     registerUnhandledRejectionHandler.mockReset();
     logWarn.mockReset();
     logDebug.mockReset();
@@ -322,6 +334,93 @@ describe("gateway bonjour advertiser", () => {
     expect(gatewayCall?.[0]?.domain).toBe("local");
     expect(gatewayCall?.[0]?.hostname).toBe("openclaw");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("openclaw.local");
+
+    await started.stop();
+  });
+
+  it("restricts mDNS responder to a single interface when networkInterface is set", async () => {
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+
+    vi.spyOn(os, "hostname").mockReturnValue("test-host");
+    process.env.OPENCLAW_MDNS_HOSTNAME = "test-host";
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    createService.mockImplementation((options: Record<string, unknown>) => ({
+      advertise,
+      destroy,
+      serviceState: "announced",
+      on: vi.fn(),
+      getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+      getHostname: () => asString(options.hostname, "unknown"),
+      getPort: () => Number(options.port ?? -1),
+    }));
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      networkInterface: "192.168.1.130",
+    });
+
+    expect(getResponderMock).toHaveBeenCalledWith({ interface: "192.168.1.130" });
+
+    await started.stop();
+  });
+
+  it("does not restrict mDNS interface when networkInterface is omitted", async () => {
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+
+    vi.spyOn(os, "hostname").mockReturnValue("test-host");
+    process.env.OPENCLAW_MDNS_HOSTNAME = "test-host";
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    createService.mockImplementation((options: Record<string, unknown>) => ({
+      advertise,
+      destroy,
+      serviceState: "announced",
+      on: vi.fn(),
+      getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+      getHostname: () => asString(options.hostname, "unknown"),
+      getPort: () => Number(options.port ?? -1),
+    }));
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+    });
+
+    expect(getResponderMock).toHaveBeenCalledWith(undefined);
+
+    await started.stop();
+  });
+
+  it("treats undefined networkInterface same as omitted", async () => {
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+
+    vi.spyOn(os, "hostname").mockReturnValue("test-host");
+    process.env.OPENCLAW_MDNS_HOSTNAME = "test-host";
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    createService.mockImplementation((options: Record<string, unknown>) => ({
+      advertise,
+      destroy,
+      serviceState: "announced",
+      on: vi.fn(),
+      getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+      getHostname: () => asString(options.hostname, "unknown"),
+      getPort: () => Number(options.port ?? -1),
+    }));
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      networkInterface: undefined,
+    });
+
+    // undefined should NOT produce { interface: undefined } — should pass undefined to getResponder
+    expect(getResponderMock).toHaveBeenCalledWith(undefined);
 
     await started.stop();
   });

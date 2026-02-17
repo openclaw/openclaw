@@ -1,6 +1,7 @@
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
+import { pickPrimaryLanIPv4 } from "./net.js";
 import {
   formatBonjourInstanceName,
   resolveBonjourCliPath,
@@ -38,6 +39,10 @@ export async function startGatewayDiscovery(params: {
   const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
+  // Pin mDNS to a single LAN interface to avoid floods on multi-NIC setups.
+  // undefined means "no preference" — ciao will bind all interfaces.
+  const mdnsInterface = pickPrimaryLanIPv4();
+
   if (bonjourEnabled) {
     try {
       const bonjour = await startGatewayBonjourAdvertiser({
@@ -50,6 +55,7 @@ export async function startGatewayDiscovery(params: {
         tailnetDns,
         cliPath,
         minimal: mdnsMinimal,
+        networkInterface: mdnsInterface,
       });
       bonjourStop = bonjour.stop;
     } catch (err) {
