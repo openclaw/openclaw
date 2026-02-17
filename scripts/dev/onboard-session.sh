@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if command -v git >/dev/null 2>&1; then
+  ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+if [[ -z "${ROOT_DIR:-}" ]]; then
+  SCRIPT_PATH="${BASH_SOURCE[0]-}"
+  if [[ -z "${SCRIPT_PATH}" ]]; then
+    SCRIPT_PATH="${0}"
+  fi
+  if [[ -f "$SCRIPT_PATH" ]]; then
+    ROOT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/../.." && pwd)"
+  else
+    ROOT_DIR="$(pwd)"
+  fi
+fi
 if [[ -n "${OPENCLAW_CMD:-}" ]]; then
   : # Keep explicit command override from OPENCLAW_CMD.
 elif command -v pnpm >/dev/null 2>&1; then
