@@ -254,7 +254,10 @@ export function buildEmbeddedRunPayloads(params: {
     const shouldShowToolError = shouldShowToolErrorWarning({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
-      suppressToolErrors: params.config?.messages?.suppressToolErrors === "all" ? "all" : Boolean(params.config?.messages?.suppressToolErrors),
+      suppressToolErrors:
+        params.config?.messages?.suppressToolErrors === "all"
+          ? "all"
+          : Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
     });
 
