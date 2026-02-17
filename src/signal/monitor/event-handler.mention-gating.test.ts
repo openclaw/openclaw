@@ -4,12 +4,16 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
 
-type SignalMsgContext = MsgContext & {
+type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
   WasMentioned?: boolean;
 };
 
 let capturedCtx: SignalMsgContext | undefined;
+
+function getCapturedCtx() {
+  return capturedCtx as SignalMsgContext;
+}
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
@@ -113,7 +117,7 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
     expect(capturedCtx).toBeTruthy();
-    expect(capturedCtx?.WasMentioned).toBe(true);
+    expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
@@ -126,7 +130,7 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "hello everyone" }));
     expect(capturedCtx).toBeTruthy();
-    expect(capturedCtx?.WasMentioned).toBe(false);
+    expect(getCapturedCtx()?.WasMentioned).toBe(false);
   });
 
   it("records pending history for skipped group messages", async () => {
@@ -187,7 +191,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    const body = String(capturedCtx?.Body ?? "");
+    const body = String(getCapturedCtx()?.Body ?? "");
     expect(body).toContain("@123e4567 hi @+15550002222");
     expect(body).not.toContain(placeholder);
   });
@@ -212,8 +216,8 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    expect(String(capturedCtx?.Body ?? "")).toContain("@123e4567");
-    expect(capturedCtx?.WasMentioned).toBe(true);
+    expect(String(getCapturedCtx()?.Body ?? "")).toContain("@123e4567");
+    expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
 });
 
