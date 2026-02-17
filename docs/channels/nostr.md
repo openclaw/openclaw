@@ -1,7 +1,7 @@
 ---
-summary: "Nostr DM channel via NIP-04 encrypted messages"
+summary: "Nostr AI agent messaging via NIP-63 and NIP-44 encryption"
 read_when:
-  - You want OpenClaw to receive DMs via Nostr
+  - You want OpenClaw to receive NIP-63 agent messages via Nostr
   - You're setting up decentralized messaging
 title: "Nostr"
 ---
@@ -10,7 +10,7 @@ title: "Nostr"
 
 **Status:** Optional plugin (disabled by default).
 
-Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted direct messages (DMs) via NIP-04.
+Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted NIP-63 agent messages via NIP-44.
 
 ## Install (on demand)
 
@@ -75,7 +75,7 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 | ------------ | -------- | ------------------------------------------- | ----------------------------------- |
 | `privateKey` | string   | required                                    | Private key in `nsec` or hex format |
 | `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URLs (WebSocket)              |
-| `dmPolicy`   | string   | `pairing`                                   | DM access policy                    |
+| `dmPolicy`   | string   | `pairing`                                   | Inbound message access policy       |
 | `allowFrom`  | string[] | `[]`                                        | Allowed sender pubkeys              |
 | `enabled`    | boolean  | `true`                                      | Enable/disable channel              |
 | `name`       | string   | -                                           | Display name                        |
@@ -114,12 +114,12 @@ Notes:
 
 ## Access control
 
-### DM policies
+### Inbound message policies
 
 - **pairing** (default): unknown senders get a pairing code.
-- **allowlist**: only pubkeys in `allowFrom` can DM.
-- **open**: public inbound DMs (requires `allowFrom: ["*"]`).
-- **disabled**: ignore inbound DMs.
+- **allowlist**: only pubkeys in `allowFrom` can message.
+- **open**: public inbound messages (requires `allowFrom: ["*"]`).
+- **disabled**: ignore inbound messages.
 
 ### Allowlist example
 
@@ -166,12 +166,23 @@ Tips:
 
 ## Protocol support
 
-| NIP    | Status    | Description                           |
-| ------ | --------- | ------------------------------------- |
-| NIP-01 | Supported | Basic event format + profile metadata |
-| NIP-04 | Supported | Encrypted DMs (`kind:4`)              |
-| NIP-17 | Planned   | Gift-wrapped DMs                      |
-| NIP-44 | Planned   | Versioned encryption                  |
+| NIP    | Status      | Description                                         |
+| ------ | ----------- | --------------------------------------------------- |
+| NIP-01 | Supported   | Basic event format + profile metadata               |
+| NIP-04 | Unsupported | Replaced by NIP-44 + NIP-63 in this release         |
+| NIP-44 | Supported   | Encrypted content and key exchange                  |
+| NIP-63 | Supported   | AI agent prompts and responses (`kind:25802/25803`) |
+| NIP-17 | Planned     | Gift-wrapped DMs                                    |
+
+Current behavior is NIP-63-only for agent messaging: NIP-04 encrypted DMs are no longer processed.
+
+## Session behavior
+
+OpenClaw uses these NIP-63 session rules:
+
+- If an incoming `25802` event has an `s` tag, that exact value becomes the conversation session.
+- If no `s` tag is present, OpenClaw falls back to `sender:<pubkey>`.
+- Replies include the same session via `s` tag when an explicit session is active.
 
 ## Testing
 
@@ -193,11 +204,32 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 }
 ```
 
+### Automated protocol loop with `nak`
+
+Use this loop script for protocol-accurate end-to-end checks:
+
+```bash
+NOSTR_BOT_SECRET=<bot_hex_or_nsec> \
+  NOSTR_SENDER_SECRET=<sender_hex_or_nsec> \
+  bash ./extensions/nostr/scripts/nip63-debug-loop.sh \
+    --iterations 5 \
+    --relay ws://localhost:7777 \
+    --timeout 30 \
+    --message "NIP-63 smoke {{i}}"
+```
+
+Each cycle validates:
+
+- Outbound prompt is `kind:25802` with `encryption=nip44`.
+- Response is `kind:25803` with `encryption=nip44`.
+- Response decrypts to JSON `{"ver":1,"text":"..."}` with non-empty `text`.
+- `s` and `e` tags match the request session and event id.
+
 ### Manual test
 
 1. Note the bot pubkey (npub) from logs.
 2. Open a Nostr client (Damus, Amethyst, etc.).
-3. DM the bot pubkey.
+3. Send a NIP-63 prompt to the bot pubkey.
 4. Verify the response.
 
 ## Troubleshooting
@@ -230,4 +262,4 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 - Direct messages only (no group chats).
 - No media attachments.
-- NIP-04 only (NIP-17 gift-wrap planned).
+- NIP-63 only (NIP-17 gift-wrap planned).

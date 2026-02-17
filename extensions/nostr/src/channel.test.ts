@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nostrPlugin } from "./channel.js";
+import { resolveNostrSessionId, resolveNostrTimestampMs, nostrPlugin } from "./channel.js";
 
 describe("nostrPlugin", () => {
   describe("meta", () => {
@@ -10,7 +10,7 @@ describe("nostrPlugin", () => {
     it("has required meta fields", () => {
       expect(nostrPlugin.meta.label).toBe("Nostr");
       expect(nostrPlugin.meta.docsPath).toBe("/channels/nostr");
-      expect(nostrPlugin.meta.blurb).toContain("NIP-04");
+      expect(nostrPlugin.meta.blurb).toContain("NIP-63");
     });
   });
 
@@ -51,6 +51,13 @@ describe("nostrPlugin", () => {
       };
       const ids = nostrPlugin.config.listAccountIds(cfg);
       expect(ids).toContain("default");
+    });
+  });
+
+  describe("onboarding", () => {
+    it("exposes onboarding adapter", () => {
+      expect(nostrPlugin.onboarding).toBeTypeOf("object");
+      expect(nostrPlugin.onboarding?.channel).toBe("nostr");
     });
   });
 
@@ -128,6 +135,36 @@ describe("nostrPlugin", () => {
   describe("security", () => {
     it("has resolveDmPolicy function", () => {
       expect(nostrPlugin.security?.resolveDmPolicy).toBeTypeOf("function");
+    });
+  });
+
+  describe("session helpers", () => {
+    it("uses explicit s-tag session id when provided", () => {
+      expect(resolveNostrSessionId("ab".repeat(32), "ticket-123")).toBe("ticket-123");
+    });
+
+    it("uses lowercase sender pubkey for implicit sender session", () => {
+      const uppercaseSender = "A".repeat(64);
+      expect(resolveNostrSessionId(uppercaseSender, undefined)).toBe(
+        `sender:${uppercaseSender.toLowerCase()}`,
+      );
+    });
+
+    it("falls back to implicit sender session when explicit session is blank after trim", () => {
+      expect(resolveNostrSessionId("a".repeat(64), "   ")).toBe(`sender:${"a".repeat(64)}`);
+    });
+
+    it("uses implicit sender session id when no s-tag is present", () => {
+      expect(resolveNostrSessionId("a".repeat(64), undefined)).toBe(`sender:${"a".repeat(64)}`);
+    });
+
+    it("ignores whitespace around explicit session id", () => {
+      expect(resolveNostrSessionId("a".repeat(64), "  ticket-123  ")).toBe("ticket-123");
+    });
+
+    it("normalizes Nostr created_at to milliseconds", () => {
+      expect(resolveNostrTimestampMs(1_700_000_000)).toBe(1_700_000_000_000);
+      expect(resolveNostrTimestampMs(0)).toBe(0);
     });
   });
 

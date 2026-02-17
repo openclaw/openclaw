@@ -28,7 +28,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [LINE](/channels/line) — LINE Messaging API bot (plugin, installed separately).
 - [Nextcloud Talk](/channels/nextcloud-talk) — Self-hosted chat via Nextcloud Talk (plugin, installed separately).
 - [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
-- [Nostr](/channels/nostr) — Decentralized DMs via NIP-04 (plugin, installed separately).
+- [Nostr](/channels/nostr) — Encrypted AI messages via NIP-63 and NIP-44 (plugin, installed separately).
 - [Tlon](/channels/tlon) — Urbit-based messenger (plugin, installed separately).
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).

@@ -7,14 +7,6 @@ import { getNostrRuntime } from "./runtime.js";
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
 
-type NostrBusStateV1 = {
-  version: 1;
-  /** Unix timestamp (seconds) of the last processed event */
-  lastProcessedAt: number | null;
-  /** Gateway startup timestamp (seconds) - events before this are old */
-  gatewayStartedAt: number | null;
-};
-
 type NostrBusState = {
   version: 2;
   /** Unix timestamp (seconds) of the last processed event */
@@ -61,7 +53,7 @@ function resolveNostrProfileStatePath(
 
 function safeParseState(raw: string): NostrBusState | null {
   try {
-    const parsed = JSON.parse(raw) as Partial<NostrBusState> & Partial<NostrBusStateV1>;
+    const parsed = JSON.parse(raw) as Partial<NostrBusState>;
 
     if (parsed?.version === 2) {
       return {
@@ -72,17 +64,6 @@ function safeParseState(raw: string): NostrBusState | null {
         recentEventIds: Array.isArray(parsed.recentEventIds)
           ? parsed.recentEventIds.filter((x): x is string => typeof x === "string")
           : [],
-      };
-    }
-
-    // Back-compat: v1 state files
-    if (parsed?.version === 1) {
-      return {
-        version: 2,
-        lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt:
-          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
-        recentEventIds: [],
       };
     }
 

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { nostrPlugin } from "../../extensions/nostr/src/channel.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -198,5 +201,55 @@ describe("setupChannels", () => {
 
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
     expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("configures nostr through its onboarding adapter", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "nostr",
+          plugin: nostrPlugin,
+          source: "test",
+        },
+      ]),
+    );
+
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Select channel (QuickStart)") {
+        return "nostr";
+      }
+      throw new Error(`unexpected select prompt: ${message}`);
+    });
+    const multiselect = vi.fn(async () => {
+      throw new Error("unexpected multiselect");
+    });
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      if (message.includes("Nostr private key")) {
+        return "nsec1abc";
+      }
+      if (message.includes("Nostr relay URLs")) {
+        return "wss://relay.damus.io, wss://relay.primal.net";
+      }
+      throw new Error(`unexpected text prompt: ${message}`);
+    });
+
+    const prompter = createPrompter({
+      select,
+      multiselect,
+      text: text as unknown as WizardPrompter["text"],
+    });
+
+    const runtime = createExitThrowingRuntime();
+    const result = await setupChannels({} as OpenClawConfig, runtime, prompter, {
+      skipConfirm: true,
+      quickstartDefaults: true,
+    });
+
+    expect(result.channels?.nostr?.privateKey).toBe("nsec1abc");
+    expect(result.channels?.nostr?.enabled).toBe(true);
+    expect(result.channels?.nostr?.relays).toEqual([
+      "wss://relay.damus.io",
+      "wss://relay.primal.net",
+    ]);
   });
 });

@@ -72,7 +72,7 @@ export const NostrConfigSchema = z.object({
   /** WebSocket relay URLs to connect to */
   relays: z.array(z.string()).optional(),
 
-  /** DM access policy: pairing, allowlist, open, or disabled */
+  /** Inbound message access policy: pairing, allowlist, open, or disabled */
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
 
   /** Allowed sender pubkeys (npub or hex format) */

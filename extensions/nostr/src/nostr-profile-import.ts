@@ -124,13 +124,11 @@ export async function importProfileFromRelays(
 
         const sub = pool.subscribeMany(
           [relay],
-          [
-            {
-              kinds: [0],
-              authors: [pubkey],
-              limit: 1,
-            },
-          ] as unknown as Parameters<typeof pool.subscribeMany>[1],
+          {
+            kinds: [0],
+            authors: [pubkey],
+            limit: 1,
+          },
           {
             onevent(event) {
               events.push({ event, relay });
