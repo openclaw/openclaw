@@ -10,15 +10,15 @@ export function sanitizeUserText(text: string | undefined, maxLength = 256): str
   // Remove control characters (including newlines, tabs, etc.)
   // Avoid regex here because lint rules flag control-character ranges.
   const chars: string[] = [];
-  let truncated = false;
+  // Bound intermediate memory while preserving predictable sanitize -> trim -> cap semantics.
+  const maxBufferLength = Math.max(maxLength + 1024, maxLength * 2);
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
     // C0 controls + DEL, plus C1 controls.
     if (code < 0x20 || (code >= 0x7f && code < 0xa0)) {
       continue;
     }
-    if (chars.length >= maxLength) {
-      truncated = true;
+    if (chars.length >= maxBufferLength) {
       break;
     }
     chars.push(text[i]);
@@ -30,5 +30,8 @@ export function sanitizeUserText(text: string | undefined, maxLength = 256): str
     return undefined;
   }
 
-  return truncated ? `${trimmed}...` : trimmed;
+  if (trimmed.length > maxLength) {
+    return `${trimmed.slice(0, maxLength)}...`;
+  }
+  return trimmed;
 }

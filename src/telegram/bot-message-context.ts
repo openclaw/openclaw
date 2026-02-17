@@ -28,6 +28,7 @@ import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
 import { runSilentMessageIngest } from "../channels/silent-ingest.js";
 import { loadConfig } from "../config/config.js";
+import { resolveChannelGroupIngest } from "../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -491,7 +492,14 @@ export const buildTelegramMessageContext = async ({
       });
 
       // Silent ingest: run hooks on non-mentioned messages
-      const ingestEnabled = topicConfig?.ingest ?? groupConfig?.ingest;
+      const baseIngestEnabled = resolveChannelGroupIngest({
+        cfg,
+        channel: "telegram",
+        groupId: String(chatId),
+        accountId: route.accountId,
+      });
+      const ingestEnabled =
+        typeof topicConfig?.ingest === "boolean" ? topicConfig.ingest : baseIngestEnabled;
       if (ingestEnabled) {
         const senderLabelForHook = buildSenderLabel(msg, senderId || chatId);
         const messageIdForHook =
