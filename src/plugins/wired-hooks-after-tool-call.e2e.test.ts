@@ -41,7 +41,7 @@ function createToolHandlerCtx(params: {
       lastToolError: undefined,
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingTargets: new Map<string, unknown>(),
-      pendingMessagingMediaUrls: new Map<string, string>(),
+      pendingMessagingMediaUrls: new Map<string, string[]>(),
       messagingToolSentTexts: [] as string[],
       messagingToolSentTextsNormalized: [] as string[],
       messagingToolSentMediaUrls: [] as string[],
