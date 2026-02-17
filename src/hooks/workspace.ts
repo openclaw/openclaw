@@ -10,6 +10,7 @@ import type {
   ParsedHookFrontmatter,
 } from "./types.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { isPathInside } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { shouldIncludeHook } from "./config.js";
@@ -52,11 +53,21 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
+function hasParentTraversalSegment(entry: string): boolean {
+  return entry.split(/[\\/]+/).some((segment) => segment === "..");
+}
+
 function resolveContainedDir(baseDir: string, targetDir: string): string | null {
+  if (
+    path.posix.isAbsolute(targetDir) ||
+    path.win32.isAbsolute(targetDir) ||
+    hasParentTraversalSegment(targetDir)
+  ) {
+    return null;
+  }
   const base = path.resolve(baseDir);
-  const resolved = path.resolve(baseDir, targetDir);
-  const relative = path.relative(base, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  const resolved = path.resolve(base, targetDir);
+  if (!isPathInside(base, resolved)) {
     return null;
   }
   return resolved;

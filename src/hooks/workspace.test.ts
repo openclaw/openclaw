@@ -66,4 +66,36 @@ describe("hooks workspace", () => {
     const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
     expect(entries.some((e) => e.hook.name === "nested")).toBe(true);
   });
+
+  it("ignores package.json Windows absolute hook paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-win-"));
+    const hooksRoot = path.join(root, "hooks");
+    fs.mkdirSync(hooksRoot, { recursive: true });
+
+    const pkgDir = path.join(hooksRoot, "pkg");
+    fs.mkdirSync(pkgDir, { recursive: true });
+
+    // POSIX allows backslashes in names, which lets us prove this entry is rejected explicitly.
+    const windowsLikeDir = path.join(pkgDir, "C:\\outside");
+    fs.mkdirSync(windowsLikeDir, { recursive: true });
+    fs.writeFileSync(path.join(windowsLikeDir, "HOOK.md"), "---\nname: outside\n---\n");
+    fs.writeFileSync(path.join(windowsLikeDir, "handler.js"), "export default async () => {};\n");
+
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "pkg",
+          [MANIFEST_KEY]: {
+            hooks: ["C:\\outside"],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
+  });
 });

@@ -13,6 +13,7 @@ import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { isPathInside } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -50,6 +51,18 @@ function validateHookId(hookId: string): string | null {
     return "invalid hook name: path separators not allowed";
   }
   return null;
+}
+
+function hasParentTraversalSegment(entry: string): boolean {
+  return entry.split(/[\\/]+/).some((segment) => segment === "..");
+}
+
+function isUnsafeHookManifestPath(entry: string): boolean {
+  return (
+    path.posix.isAbsolute(entry) ||
+    path.win32.isAbsolute(entry) ||
+    hasParentTraversalSegment(entry)
+  );
 }
 
 export function resolveHookInstallDir(hookId: string, hooksDir?: string): string {
@@ -210,9 +223,21 @@ async function installHookPackageFromDir(params: {
     return { ok: false, error: `hook pack already exists: ${targetDir} (delete it first)` };
   }
 
+  const packageDir = path.resolve(params.packageDir);
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
-    const hookDir = path.resolve(params.packageDir, entry);
+    if (isUnsafeHookManifestPath(entry)) {
+      return { ok: false, error: `invalid hook path in package.json openclaw.hooks[]: ${entry}` };
+    }
+
+    const hookDir = path.resolve(packageDir, entry);
+    if (!isPathInside(packageDir, hookDir)) {
+      return {
+        ok: false,
+        error: `hook path escapes package directory in package.json openclaw.hooks[]: ${entry}`,
+      };
+    }
+
     await validateHookDir(hookDir);
     const hookName = await resolveHookNameFromDir(hookDir);
     resolvedHooks.push(hookName);
