@@ -32,6 +32,11 @@ vi.mock("../daemon/service.js", () => ({
 }));
 
 const cleanupMocks = vi.hoisted(() => ({
+  buildCleanupPlan: vi.fn(() => ({
+    configInsideState: false,
+    oauthInsideState: false,
+    workspaceDirs: [],
+  })),
   collectWorkspaceDirs: vi.fn(() => [] as string[]),
   isPathWithin: vi.fn(() => false),
   removePath: vi.fn(async () => {}),

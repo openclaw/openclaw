@@ -90,11 +90,7 @@ async function writeCompletionCache(params: {
   }
 }
 
-function formatCompletionSourceLine(
-  shell: CompletionShell,
-  _binName: string,
-  cachePath: string,
-): string {
+function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): string {
   const escapedCachePath = cachePath.replaceAll('"', '\\"');
   if (shell === "fish") {
     return `test -r "${escapedCachePath}"; and source "${escapedCachePath}"`;
@@ -345,7 +341,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
   if (shell === "zsh") {
     profilePath = path.join(home, ".zshrc");
-    sourceLine = formatCompletionSourceLine("zsh", binName, cachePath);
+    sourceLine = formatCompletionSourceLine("zsh", cachePath);
   } else if (shell === "bash") {
     // Try .bashrc first, then .bash_profile
     profilePath = path.join(home, ".bashrc");
@@ -354,10 +350,10 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     } catch {
       profilePath = path.join(home, ".bash_profile");
     }
-    sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
+    sourceLine = formatCompletionSourceLine("bash", cachePath);
   } else if (shell === "fish") {
     profilePath = path.join(home, ".config", "fish", "config.fish");
-    sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
+    sourceLine = formatCompletionSourceLine("fish", cachePath);
   } else {
     console.error(`Automated installation not supported for ${shell} yet.`);
     return;
