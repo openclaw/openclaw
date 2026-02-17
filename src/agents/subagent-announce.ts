@@ -381,9 +381,27 @@ async function maybeQueueSubagentAnnounce(params: {
     }
   }
 
+  // collect mode always queues — batching should work even when the parent is
+  // idle (which is the typical state after spawning sub-agents).
+  if (queueSettings.mode === "collect") {
+    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    enqueueAnnounce({
+      key: canonicalKey,
+      item: {
+        prompt: params.triggerMessage,
+        summaryLine: params.summaryLine,
+        enqueuedAt: Date.now(),
+        sessionKey: canonicalKey,
+        origin,
+      },
+      settings: queueSettings,
+      send: sendAnnounce,
+    });
+    return "queued";
+  }
+
   const shouldFollowup =
     queueSettings.mode === "followup" ||
-    queueSettings.mode === "collect" ||
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {

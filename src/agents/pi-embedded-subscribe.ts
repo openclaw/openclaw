@@ -1,10 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { InlineCodeState } from "../markdown/code-spans.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeState,
+} from "./pi-embedded-subscribe.handlers.types.js";
+import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
@@ -12,11 +17,6 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import type {
-  EmbeddedPiSubscribeContext,
-  EmbeddedPiSubscribeState,
-} from "./pi-embedded-subscribe.handlers.types.js";
-import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
@@ -60,6 +60,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastAssistantTextNormalized: undefined,
     lastAssistantTextTrimmed: undefined,
     assistantTextBaseline: 0,
+    suppressPreToolText: params.suppressPreToolText ?? false,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
     compactionInFlight: false,
@@ -162,6 +163,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
+    stopReason?: string;
   }) => {
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
 
@@ -183,6 +185,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       // Non-streaming models (no text_delta): ensure assistantTexts gets the final
       // text when the chunker has nothing buffered to drain.
       pushAssistantText(text);
+    }
+
+    // When the message ended with a tool call, the texts produced before the
+    // tool call were intermediate narration (e.g. "Lass mich nachschauen...").
+    // Discard them so only the final answer turn's texts are delivered.
+    // In verbose mode, keep everything for debugging.
+    const isVerbose = params.verboseLevel && params.verboseLevel !== "off";
+    if (args.stopReason === "toolUse" && state.suppressPreToolText && !isVerbose) {
+      assistantTexts.splice(state.assistantTextBaseline);
     }
 
     state.assistantTextBaseline = assistantTexts.length;

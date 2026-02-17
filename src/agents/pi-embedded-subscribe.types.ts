@@ -37,6 +37,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Discard intermediate assistant texts from tool-use turns (e.g. "Let me check..."). */
+  suppressPreToolText?: boolean;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
