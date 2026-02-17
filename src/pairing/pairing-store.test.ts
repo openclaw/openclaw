@@ -98,7 +98,11 @@ describe("pairing store", () => {
 
   it("regenerates when a generated code collides", async () => {
     await withTempStateDir(async () => {
-      const spy = vi.spyOn(crypto, "randomInt");
+      const spy = vi.spyOn(crypto, "randomInt") as unknown as {
+        mockReturnValue: (value: number) => void;
+        mockImplementation: (fn: () => number) => void;
+        mockRestore: () => void;
+      };
       try {
         spy.mockReturnValue(0);
         const first = await upsertChannelPairingRequest({

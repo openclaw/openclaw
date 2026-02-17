@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { UsageProviderId } from "./provider-usage.types.js";
 import {
+  dedupeProfileIds,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -144,14 +145,7 @@ async function resolveOAuthToken(params: {
     store,
     provider: params.provider,
   });
-
-  const candidates = order;
-  const deduped: string[] = [];
-  for (const entry of candidates) {
-    if (!deduped.includes(entry)) {
-      deduped.push(entry);
-    }
-  }
+  const deduped = dedupeProfileIds(order);
 
   for (const profileId of deduped) {
     const cred = store.profiles[profileId];

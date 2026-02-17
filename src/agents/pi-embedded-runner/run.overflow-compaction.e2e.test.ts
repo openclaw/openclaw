@@ -47,6 +47,7 @@ vi.mock("../pi-embedded-helpers.js", async () => {
   };
 });
 
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { log } from "./logger.js";
 import { runEmbeddedPiAgent } from "./run.js";
@@ -171,7 +172,12 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           promptError: overflowError,
-          messagesSnapshot: [{ role: "assistant", content: "big tool output" }],
+          messagesSnapshot: [
+            {
+              role: "assistant",
+              content: "big tool output",
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
         }),
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -362,7 +368,7 @@ describe("overflow compaction in run loop", () => {
             cacheWrite: 0,
             total: 2_000,
           },
-        } as EmbeddedRunAttemptResult["lastAssistant"],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
 

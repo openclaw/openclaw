@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  createDoctorRuntime,
   findLegacyGatewayServices,
+  migrateLegacyConfig,
+  mockDoctorConfigSnapshot,
   note,
   readConfigFileSnapshot,
   resolveOpenClawPackageRoot,
@@ -9,39 +12,20 @@ import {
   serviceInstall,
   serviceIsLoaded,
   uninstallLegacyGatewayServices,
-  migrateLegacyConfig,
   writeConfigFile,
 } from "./doctor.e2e-harness.js";
 
 describe("doctor command", () => {
   it("migrates routing.allowFrom to channels.whatsapp.allowFrom", { timeout: 60_000 }, async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
+    mockDoctorConfigSnapshot({
       parsed: { routing: { allowFrom: ["+15555550123"] } },
       valid: false,
-      config: {},
-      issues: [
-        {
-          path: "routing.allowFrom",
-          message: "legacy",
-        },
-      ],
-      legacyIssues: [
-        {
-          path: "routing.allowFrom",
-          message: "legacy",
-        },
-      ],
+      issues: [{ path: "routing.allowFrom", message: "legacy" }],
+      legacyIssues: [{ path: "routing.allowFrom", message: "legacy" }],
     });
 
     const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createDoctorRuntime();
 
     migrateLegacyConfig.mockReturnValue({
       config: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
@@ -59,16 +43,7 @@ describe("doctor command", () => {
   });
 
   it("skips legacy gateway services migration", { timeout: 60_000 }, async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
+    mockDoctorConfigSnapshot();
 
     findLegacyGatewayServices.mockResolvedValueOnce([
       {
@@ -81,13 +56,7 @@ describe("doctor command", () => {
     serviceInstall.mockClear();
 
     const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    await doctorCommand(runtime);
+    await doctorCommand(createDoctorRuntime());
 
     expect(uninstallLegacyGatewayServices).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
@@ -113,25 +82,10 @@ describe("doctor command", () => {
       durationMs: 1,
     });
 
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
+    mockDoctorConfigSnapshot();
 
     const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    await doctorCommand(runtime);
+    await doctorCommand(createDoctorRuntime());
 
     expect(runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining({ cwd: root }));
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();

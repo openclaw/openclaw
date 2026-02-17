@@ -26,6 +26,36 @@ vi.mock("../usage.js", () => ({
   hasNonzeroUsage: vi.fn(() => false),
 }));
 
+vi.mock("../workspace-run.js", () => ({
+  resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string }) => ({
+    workspaceDir: params.workspaceDir,
+    usedFallback: false,
+    fallbackReason: undefined,
+    agentId: "main",
+  })),
+  redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
+}));
+
+vi.mock("../pi-embedded-helpers.js", () => ({
+  formatBillingErrorMessage: vi.fn(() => ""),
+  classifyFailoverReason: vi.fn(() => null),
+  formatAssistantErrorText: vi.fn(() => ""),
+  isAuthAssistantError: vi.fn(() => false),
+  isBillingAssistantError: vi.fn(() => false),
+  isCompactionFailureError: vi.fn(() => false),
+  isLikelyContextOverflowError: vi.fn((msg?: string) => {
+    const lower = (msg ?? "").toLowerCase();
+    return lower.includes("request_too_large") || lower.includes("context window exceeded");
+  }),
+  isFailoverAssistantError: vi.fn(() => false),
+  isFailoverErrorMessage: vi.fn(() => false),
+  parseImageSizeError: vi.fn(() => null),
+  parseImageDimensionError: vi.fn(() => null),
+  isRateLimitAssistantError: vi.fn(() => false),
+  isTimeoutErrorMessage: vi.fn(() => false),
+  pickFallbackThinkingLevel: vi.fn(() => null),
+}));
+
 vi.mock("./run/attempt.js", () => ({
   runEmbeddedAttempt: vi.fn(),
 }));

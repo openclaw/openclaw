@@ -24,6 +24,7 @@ export type CallManagerRuntimeDeps = {
 };
 
 export type CallManagerTransientState = {
+  activeTurnCalls: Set<CallId>;
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
 };

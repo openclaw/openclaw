@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyMergePatch } from "./merge-patch.js";
 
 describe("applyMergePatch", () => {
-  it("replaces arrays by default", () => {
+  function makeAgentListBaseAndPatch() {
     const base = {
       agents: {
         list: [
@@ -16,6 +16,11 @@ describe("applyMergePatch", () => {
         list: [{ id: "primary", memorySearch: { extraPaths: ["/tmp/memory.md"] } }],
       },
     };
+    return { base, patch };
+  }
+
+  it("replaces arrays by default", () => {
+    const { base, patch } = makeAgentListBaseAndPatch();
 
     const merged = applyMergePatch(base, patch) as {
       agents?: { list?: Array<{ id?: string; workspace?: string }> };
@@ -26,19 +31,7 @@ describe("applyMergePatch", () => {
   });
 
   it("merges object arrays by id when enabled", () => {
-    const base = {
-      agents: {
-        list: [
-          { id: "primary", workspace: "/tmp/one" },
-          { id: "secondary", workspace: "/tmp/two" },
-        ],
-      },
-    };
-    const patch = {
-      agents: {
-        list: [{ id: "primary", memorySearch: { extraPaths: ["/tmp/memory.md"] } }],
-      },
-    };
+    const { base, patch } = makeAgentListBaseAndPatch();
 
     const merged = applyMergePatch(base, patch, {
       mergeObjectArraysById: true,

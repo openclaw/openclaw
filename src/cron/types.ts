@@ -21,6 +21,30 @@ export type CronDelivery = {
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
 
+export type CronRunStatus = "ok" | "error" | "skipped";
+
+export type CronUsageSummary = {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+};
+
+export type CronRunTelemetry = {
+  model?: string;
+  provider?: string;
+  usage?: CronUsageSummary;
+};
+
+export type CronRunOutcome = {
+  status: CronRunStatus;
+  error?: string;
+  summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
   | {
@@ -68,6 +92,8 @@ export type CronJobState = {
 export type CronJob = {
   id: string;
   agentId?: string;
+  /** Origin session namespace for reminder delivery and wake routing. */
+  sessionKey?: string;
   name: string;
   description?: string;
   enabled: boolean;

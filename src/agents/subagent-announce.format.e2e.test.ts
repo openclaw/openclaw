@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
-const agentSpy = vi.fn(async () => ({ runId: "run-main", status: "ok" }));
-const sessionsDeleteSpy = vi.fn();
-const readLatestAssistantReplyMock = vi.fn(async () => "raw subagent reply");
+type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
+type RequesterResolution = {
+  requesterSessionKey: string;
+  requesterOrigin?: Record<string, unknown>;
+} | null;
+
+const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
+const readLatestAssistantReplyMock = vi.fn(
+  async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
+);
 const embeddedRunMock = {
   isEmbeddedPiRunActive: vi.fn(() => false),
   isEmbeddedPiRunStreaming: vi.fn(() => false),
@@ -12,8 +20,8 @@ const embeddedRunMock = {
 };
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
-  countActiveDescendantRuns: vi.fn(() => 0),
-  resolveRequesterForChildSession: vi.fn(() => null),
+  countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
+  resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
 let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
@@ -22,6 +30,21 @@ let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfi
     scope: "per-sender",
   },
 };
+const defaultOutcomeAnnounce = {
+  task: "do thing",
+  timeoutMs: 1000,
+  cleanup: "keep" as const,
+  waitForCompletion: false,
+  startedAt: 10,
+  endedAt: 20,
+  outcome: { status: "ok" } as const,
+};
+
+async function getSingleAgentCallParams() {
+  await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+  const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+  return call?.params ?? {};
+}
 
 function loadSessionStoreFixture(): Record<string, Record<string, unknown>> {
   return new Proxy(sessionStore, {
@@ -150,13 +173,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-456",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
@@ -171,13 +188,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-direct-idem",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
@@ -205,13 +216,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-usage",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
@@ -248,13 +253,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-789",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -285,22 +284,14 @@ describe("subagent announce formatting", () => {
       childRunId: "run-999",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
-    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
-
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.channel).toBe("whatsapp");
-    expect(call?.params?.to).toBe("+1555");
-    expect(call?.params?.accountId).toBe("kev");
+    const params = await getSingleAgentCallParams();
+    expect(params.channel).toBe("whatsapp");
+    expect(params.to).toBe("+1555");
+    expect(params.accountId).toBe("kev");
   });
 
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
@@ -376,13 +367,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:subagent:orchestrator",
       requesterDisplayKey: "agent:main:subagent:orchestrator",
       requesterOrigin: { channel: "whatsapp", to: "+1555", accountId: "acct" },
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -415,22 +400,14 @@ describe("subagent announce formatting", () => {
       childRunId: "run-thread",
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
-    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
-
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.channel).toBe("telegram");
-    expect(call?.params?.to).toBe("telegram:123");
-    expect(call?.params?.threadId).toBe("42");
+    const params = await getSingleAgentCallParams();
+    expect(params.channel).toBe("telegram");
+    expect(params.to).toBe("telegram:123");
+    expect(params.threadId).toBe("42");
   });
 
   it("prefers requesterOrigin.threadId over session entry threadId", async () => {
@@ -458,13 +435,7 @@ describe("subagent announce formatting", () => {
         to: "telegram:123",
         threadId: 99,
       },
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -495,13 +466,7 @@ describe("subagent announce formatting", () => {
         requesterSessionKey: "main",
         requesterDisplayKey: "main",
         requesterOrigin: { accountId: "acct-a" },
-        task: "do thing",
-        timeoutMs: 1000,
-        cleanup: "keep",
-        waitForCompletion: false,
-        startedAt: 10,
-        endedAt: 20,
-        outcome: { status: "ok" },
+        ...defaultOutcomeAnnounce,
       }),
       runSubagentAnnounceFlow({
         childSessionKey: "agent:main:subagent:test-b",
@@ -509,13 +474,7 @@ describe("subagent announce formatting", () => {
         requesterSessionKey: "main",
         requesterDisplayKey: "main",
         requesterOrigin: { accountId: "acct-b" },
-        task: "do thing",
-        timeoutMs: 1000,
-        cleanup: "keep",
-        waitForCompletion: false,
-        startedAt: 10,
-        endedAt: 20,
-        outcome: { status: "ok" },
+        ...defaultOutcomeAnnounce,
       }),
     ]);
 
@@ -538,13 +497,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:main",
       requesterOrigin: { channel: "whatsapp", accountId: "acct-123" },
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -568,13 +521,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:subagent:orchestrator",
       requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
       requesterDisplayKey: "agent:main:subagent:orchestrator",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -632,13 +579,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-child",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
@@ -661,13 +602,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-parent",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(false);
@@ -687,13 +622,7 @@ describe("subagent announce formatting", () => {
       childRunId: "run-leaf",
       requesterSessionKey: "agent:main:subagent:orchestrator",
       requesterDisplayKey: "agent:main:subagent:orchestrator",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -771,13 +700,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "agent:main:main",
       requesterOrigin: { channel: " whatsapp ", accountId: " acct-987 " },
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -806,13 +729,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: "main",
       requesterOrigin: { channel: "bluebubbles", to: "bluebubbles:chat_guid:123" },
       requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1000,
-      cleanup: "keep",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
+      ...defaultOutcomeAnnounce,
     });
 
     expect(didAnnounce).toBe(true);
@@ -822,5 +739,147 @@ describe("subagent announce formatting", () => {
     // The channel should match requesterOrigin, NOT the stale session entry.
     expect(call?.params?.channel).toBe("bluebubbles");
     expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
+  });
+
+  it("routes to parent subagent when parent run ended but session still exists (#18037)", async () => {
+    // Scenario: Newton (depth-1) spawns Birdie (depth-2). Newton's agent turn ends
+    // after spawning but Newton's SESSION still exists (waiting for Birdie's result).
+    // Birdie completes → Birdie's announce should go to Newton, NOT to Jaris (depth-0).
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    // Parent's run has ended (no active run)
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    // BUT parent session still exists in the store
+    sessionStore = {
+      "agent:main:subagent:newton": {
+        sessionId: "newton-session-id-alive",
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      "agent:main:subagent:newton:subagent:birdie": {
+        sessionId: "birdie-session-id",
+        inputTokens: 20,
+        outputTokens: 10,
+      },
+    };
+    // Fallback would be available to Jaris (grandparent)
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "discord" },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:newton:subagent:birdie",
+      childRunId: "run-birdie",
+      requesterSessionKey: "agent:main:subagent:newton",
+      requesterDisplayKey: "subagent:newton",
+      task: "QA the outline",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    // Verify announce went to Newton (the parent), NOT to Jaris (grandparent fallback)
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:subagent:newton");
+    // deliver=false because Newton is a subagent (internal injection)
+    expect(call?.params?.deliver).toBe(false);
+    // Should NOT have used the grandparent fallback
+    expect(call?.params?.sessionKey).not.toBe("agent:main:main");
+  });
+
+  it("falls back to grandparent only when parent session is deleted (#18037)", async () => {
+    // Scenario: Parent session was cleaned up. Only then should we fallback.
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    // Parent's run ended AND session is gone
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    // Parent session does NOT exist (was deleted)
+    sessionStore = {
+      "agent:main:subagent:birdie": {
+        sessionId: "birdie-session-id",
+        inputTokens: 20,
+        outputTokens: 10,
+      },
+      // Newton's entry is MISSING (session was deleted)
+    };
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "discord", accountId: "jaris-account" },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:birdie",
+      childRunId: "run-birdie-orphan",
+      requesterSessionKey: "agent:main:subagent:newton",
+      requesterDisplayKey: "subagent:newton",
+      task: "QA task",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    // Verify announce fell back to Jaris (grandparent) since Newton is gone
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
+    // deliver=true because Jaris is main (user-facing)
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("discord");
+  });
+
+  it("falls back when parent session is missing a sessionId (#18037)", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:subagent:newton": {
+        sessionId: " ",
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      "agent:main:subagent:newton:subagent:birdie": {
+        sessionId: "birdie-session-id",
+        inputTokens: 20,
+        outputTokens: 10,
+      },
+    };
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "discord" },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:newton:subagent:birdie",
+      childRunId: "run-birdie-empty-parent",
+      requesterSessionKey: "agent:main:subagent:newton",
+      requesterDisplayKey: "subagent:newton",
+      task: "QA task",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("discord");
   });
 });

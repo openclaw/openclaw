@@ -213,8 +213,8 @@ export async function monitorNextcloudTalkProvider(
     accountId: opts.accountId,
   });
   const runtime: RuntimeEnv = opts.runtime ?? {
-    log: (message: string) => core.logging.getChildLogger().info(message),
-    error: (message: string) => core.logging.getChildLogger().error(message),
+    log: (...args: unknown[]) => core.logging.getChildLogger().info(args.map(String).join(" ")),
+    error: (...args: unknown[]) => core.logging.getChildLogger().error(args.map(String).join(" ")),
     exit: () => {
       throw new Error("Runtime exit not available");
     },

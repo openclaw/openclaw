@@ -589,11 +589,11 @@ Max characters per workspace bootstrap file before truncation. Default: `20000`.
 
 ### `agents.defaults.bootstrapTotalMaxChars`
 
-Max total characters injected across all workspace bootstrap files. Default: `24000`.
+Max total characters injected across all workspace bootstrap files. Default: `150000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapTotalMaxChars: 24000 } },
+  agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
 }
 ```
 
@@ -666,6 +666,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 Your configured aliases always win over defaults.
 
 Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinking off` or define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
+Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 
 ### `agents.defaults.cliBackends`
 
@@ -718,6 +719,7 @@ Periodic heartbeat runs.
         target: "last", // last | whatsapp | telegram | discord | ... | none
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
+        suppressToolErrorWarnings: false,
       },
     },
   },
@@ -725,6 +727,7 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m`.
+- `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -988,7 +991,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
-- `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks).
+- `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
@@ -1414,6 +1417,39 @@ Controls elevated (host) exec access:
   },
 }
 ```
+
+### `tools.loopDetection`
+
+Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection.
+Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
+
+```json5
+{
+  tools: {
+    loopDetection: {
+      enabled: true,
+      historySize: 30,
+      warningThreshold: 10,
+      criticalThreshold: 20,
+      globalCircuitBreakerThreshold: 30,
+      detectors: {
+        genericRepeat: true,
+        knownPollNoProgress: true,
+        pingPong: true,
+      },
+    },
+  },
+}
+```
+
+- `historySize`: max tool-call history retained for loop analysis.
+- `warningThreshold`: repeating no-progress pattern threshold for warnings.
+- `criticalThreshold`: higher repeating threshold for blocking critical loops.
+- `globalCircuitBreakerThreshold`: hard stop threshold for any no-progress run.
+- `detectors.genericRepeat`: warn on repeated same-tool/same-args calls.
+- `detectors.knownPollNoProgress`: warn/block on known poll tools (`process.poll`, `command_status`, etc.).
+- `detectors.pingPong`: warn/block on alternating no-progress pair patterns.
+- If `warningThreshold >= criticalThreshold` or `criticalThreshold >= globalCircuitBreakerThreshold`, validation fails.
 
 ### `tools.web`
 

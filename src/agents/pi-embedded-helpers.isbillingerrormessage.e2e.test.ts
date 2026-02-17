@@ -10,6 +10,7 @@ import {
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
+  isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
@@ -283,6 +284,15 @@ describe("isFailoverErrorMessage", () => {
       "invalid request format",
     ];
     for (const sample of samples) {
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("matches abort stop-reason timeout variants", () => {
+    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });

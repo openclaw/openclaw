@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -22,14 +23,14 @@ describe("resolveBootstrapFilesForRun", () => {
           path: path.join(context.workspaceDir, "EXTRA.md"),
           content: "extra",
           missing: false,
-        },
+        } as unknown as WorkspaceBootstrapFile,
       ];
     });
 
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
-    expect(files.some((file) => file.name === "EXTRA.md")).toBe(true);
+    expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
   });
 });
 
@@ -47,7 +48,7 @@ describe("resolveBootstrapContextForRun", () => {
           path: path.join(context.workspaceDir, "EXTRA.md"),
           content: "extra",
           missing: false,
-        },
+        } as unknown as WorkspaceBootstrapFile,
       ];
     });
 
