@@ -73,7 +73,39 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 
 **重要：** 容器会在智能体下次使用时自动重新创建。
 
+### `openclaw sandbox run <command>`
+
+在沙箱容器内运行 shell 命令，其行为与智能体通过 `exec` 工具执行完全一致。
+
+```bash
+openclaw sandbox run "ls -la"                  # 默认沙箱
+openclaw sandbox run "npm test" --agent coder  # 特定智能体的沙箱
+openclaw sandbox run "pwd" --workdir ./subdir  # 将主机路径映射到沙箱
+```
+
+**选项：**
+
+- `--session <key>`：要使用的会话键（影响使用哪个容器）
+- `--agent <id>`：用于配置/会话解析的智能体 ID
+- `--workdir <path>`：沙箱内的工作目录（或要解析的主机路径）
+
+这是手动测试沙箱环境、验证依赖项或在不启动完整智能体会话的情况下调试问题的推荐方法。
+
 ## 使用场景
+
+### 测试沙箱依赖项
+
+```bash
+# 验证沙箱内工具是否可用
+openclaw sandbox run "ffmpeg -version"
+```
+
+### 调试沙箱权限
+
+```bash
+# 验证是否可以写入特定目录
+openclaw sandbox run "touch test.txt" --workdir /path/to/check
+```
 
 ### 更新 Docker 镜像后
 
