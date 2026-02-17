@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("emits duplicate warning with precedence guidance for distinct plugins with same id", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -65,6 +65,42 @@ describe("loadPluginManifestRegistry", () => {
       (d) => d.level === "warn" && d.message?.includes("duplicate plugin id"),
     );
     expect(duplicateWarnings.length).toBe(1);
+    expect(duplicateWarnings[0]?.message).toContain("takes precedence");
+    expect(duplicateWarnings[0]?.message).toContain("remove the other if this is unintentional");
+  });
+
+  it("emits duplicate warning without precedence hint for same-origin duplicates", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "same-origin-dup", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      {
+        idHint: "same-origin-dup",
+        source: path.join(dirA, "index.ts"),
+        rootDir: dirA,
+        origin: "global",
+      },
+      {
+        idHint: "same-origin-dup",
+        source: path.join(dirB, "index.ts"),
+        rootDir: dirB,
+        origin: "global",
+      },
+    ];
+
+    const registry = loadPluginManifestRegistry({
+      candidates,
+      cache: false,
+    });
+
+    const duplicateWarnings = registry.diagnostics.filter(
+      (d) => d.level === "warn" && d.message?.includes("duplicate plugin id"),
+    );
+    expect(duplicateWarnings.length).toBe(1);
+    expect(duplicateWarnings[0]?.message).not.toContain("takes precedence");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
