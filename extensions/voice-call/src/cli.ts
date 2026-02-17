@@ -62,8 +62,14 @@ function summarizeSeries(values: number[]): {
     return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
   }
 
-  const minMs = values.reduce((min, value) => (value < min ? value : min), Number.POSITIVE_INFINITY);
-  const maxMs = values.reduce((max, value) => (value > max ? value : max), Number.NEGATIVE_INFINITY);
+  const minMs = values.reduce(
+    (min, value) => (value < min ? value : min),
+    Number.POSITIVE_INFINITY,
+  );
+  const maxMs = values.reduce(
+    (max, value) => (value > max ? value : max),
+    Number.NEGATIVE_INFINITY,
+  );
   const avgMs = values.reduce((sum, value) => sum + value, 0) / values.length;
   return {
     count: values.length,
