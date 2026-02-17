@@ -32,7 +32,7 @@ function createOAuthFetchFn(params: {
   refreshToken: string;
   username: string;
   passthrough?: boolean;
-}): typeof fetch {
+}) {
   return withFetchPreconnect(async (input, init) => {
     const url = urlToString(input);
     if (url === CHUTES_TOKEN_ENDPOINT) {

@@ -216,7 +216,7 @@ describe("web_search external content wrapping", () => {
 
   it("wraps Brave result descriptions", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
-    const mockFetch = vi.fn(() =>
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -233,7 +233,7 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    global.fetch = mockFetch;
+    global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
     const result = await tool?.execute?.("call-1", { query: "test" });
@@ -254,7 +254,7 @@ describe("web_search external content wrapping", () => {
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
     const url = "https://example.com/some-page";
-    const mockFetch = vi.fn(() =>
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -271,7 +271,7 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    global.fetch = mockFetch;
+    global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
     const result = await tool?.execute?.("call-1", { query: "unique-test-url-not-wrapped" });
@@ -284,7 +284,7 @@ describe("web_search external content wrapping", () => {
 
   it("does not wrap Brave site names", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
-    const mockFetch = vi.fn(() =>
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -301,7 +301,7 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    global.fetch = mockFetch;
+    global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
     const result = await tool?.execute?.("call-1", { query: "unique-test-site-name-wrapping" });
@@ -313,7 +313,7 @@ describe("web_search external content wrapping", () => {
 
   it("does not wrap Brave published ages", async () => {
     vi.stubEnv("BRAVE_API_KEY", "test-key");
-    const mockFetch = vi.fn(() =>
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -331,7 +331,7 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    global.fetch = mockFetch;
+    global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
     const result = await tool?.execute?.("call-1", {
@@ -345,7 +345,7 @@ describe("web_search external content wrapping", () => {
 
   it("wraps Perplexity content", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
-    const mockFetch = vi.fn(() =>
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -355,7 +355,7 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    global.fetch = mockFetch;
+    global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "perplexity" } } } },
@@ -371,7 +371,7 @@ describe("web_search external content wrapping", () => {
   it("does not wrap Perplexity citations (raw for tool chaining)", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const citation = "https://example.com/some-article";
-    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -381,7 +381,7 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    global.fetch = mockFetch;
+    global.fetch = withFetchPreconnect(mockFetch);
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "perplexity" } } } },
