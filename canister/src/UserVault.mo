@@ -1,5 +1,6 @@
 import Types "Types";
 import Array "mo:base/Array";
+import Buffer "mo:base/Buffer";
 import Nat "mo:base/Nat";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
@@ -21,7 +22,9 @@ persistent actor class UserVault(initOwner : Principal) {
   var memories : Trie.Trie<Text, Types.MemoryEntry> = Trie.empty();
   var sessions : Trie.Trie<Text, Types.SessionEntry> = Trie.empty();
 
-  // Immutable audit log -- append-only array, never deleted/modified
+  // Immutable audit log -- append-only, never deleted/modified.
+  // Stored as array for EOP stability. Single-element appends are O(n) per call
+  // but acceptable since each update call appends at most once.
   var auditLog : [Types.AuditEntry] = [];
 
   var lastUpdated : Int = 0;
@@ -123,13 +126,13 @@ persistent actor class UserVault(initOwner : Principal) {
 
   /// Simple checksum for a category's entries.
   func categoryChecksum(category : Text) : Text {
-    var entries : [Text] = [];
+    let buf = Buffer.Buffer<Text>(16);
     for ((_, entry) in Trie.iter(memories)) {
       if (entry.category == category) {
-        entries := Array.append(entries, [entry.key # ":" # debug_show(entry.updatedAt)]);
+        buf.add(entry.key # ":" # debug_show(entry.updatedAt));
       };
     };
-    let sorted = Array.sort<Text>(entries, Text.compare);
+    let sorted = Array.sort<Text>(Buffer.toArray(buf), Text.compare);
     Text.join("|", sorted.vals());
   };
 
@@ -227,20 +230,21 @@ persistent actor class UserVault(initOwner : Principal) {
 
     var stored : Nat = 0;
     var skipped : Nat = 0;
-    var errors : [Text] = [];
+    let errorsBuf = Buffer.Buffer<Text>(4);
 
     // Sync memories
     for (input in memoryInputs.vals()) {
       if (input.key == "" or input.category == "") {
-        errors := Array.append(errors, ["Skipped memory with empty key or category"]);
+        errorsBuf.add("Skipped memory with empty key or category");
         skipped += 1;
       } else {
-        let shouldStore = switch (Trie.get(memories, textKey(input.key), Text.equal)) {
-          case (?existing) { input.updatedAt > existing.updatedAt };
+        let existing = Trie.get(memories, textKey(input.key), Text.equal);
+        let shouldStore = switch (existing) {
+          case (?e) { input.updatedAt > e.updatedAt };
           case null { true };
         };
         if (shouldStore) {
-          let isNew = switch (Trie.get(memories, textKey(input.key), Text.equal)) {
+          let isNew = switch (existing) {
             case null { true };
             case _ { false };
           };
@@ -264,15 +268,16 @@ persistent actor class UserVault(initOwner : Principal) {
     // Sync sessions
     for (input in sessionInputs.vals()) {
       if (input.sessionId == "") {
-        errors := Array.append(errors, ["Skipped session with empty sessionId"]);
+        errorsBuf.add("Skipped session with empty sessionId");
         skipped += 1;
       } else {
-        let shouldStore = switch (Trie.get(sessions, textKey(input.sessionId), Text.equal)) {
-          case (?existing) { input.startedAt > existing.startedAt };
+        let existing = Trie.get(sessions, textKey(input.sessionId), Text.equal);
+        let shouldStore = switch (existing) {
+          case (?e) { input.startedAt > e.startedAt };
           case null { true };
         };
         if (shouldStore) {
-          let isNew = switch (Trie.get(sessions, textKey(input.sessionId), Text.equal)) {
+          let isNew = switch (existing) {
             case null { true };
             case _ { false };
           };
@@ -306,7 +311,7 @@ persistent actor class UserVault(initOwner : Principal) {
     #ok({
       stored = stored;
       skipped = skipped;
-      errors = errors;
+      errors = Buffer.toArray(errorsBuf);
     });
   };
 
@@ -412,9 +417,9 @@ persistent actor class UserVault(initOwner : Principal) {
     limit : Nat,
   ) : async [Types.MemoryEntry] {
     assert (caller == owner);
-    var result : [Types.MemoryEntry] = [];
+    let buf = Buffer.Buffer<Types.MemoryEntry>(limit);
     for ((_, entry) in Trie.iter(memories)) {
-      if (result.size() < limit) {
+      if (buf.size() < limit) {
         let catMatch = switch (category) {
           case (?c) { entry.category == c };
           case null { true };
@@ -424,11 +429,11 @@ persistent actor class UserVault(initOwner : Principal) {
           case null { true };
         };
         if (catMatch and prefixMatch) {
-          result := Array.append(result, [entry]);
+          buf.add(entry);
         };
       };
     };
-    result;
+    Buffer.toArray(buf);
   };
 
   /// Sync manifest: checksums for differential sync.

@@ -81,14 +81,6 @@ module Types {
     errors : [Text];
   };
 
-  // -- Factory types --
-
-  /// Status of a vault as returned by the factory
-  public type VaultStatus = {
-    canisterId : Principal;
-    stats : VaultStats;
-  };
-
   // -- Input types for bulk operations --
 
   /// Input for a single memory to store/sync
@@ -113,9 +105,11 @@ module Types {
 
   /// Errors returned by the factory
   public type FactoryError = {
-    #alreadyExists;    // user already has a vault
-    #insufficientCycles;
-    #creationFailed : Text;
+    #alreadyExists;          // user already has a vault
+    #insufficientCycles;     // not enough cycles to create a vault
+    #unauthorized : Text;    // caller not permitted for this operation
+    #notFound : Text;        // requested resource not found
+    #creationFailed : Text;  // vault creation failed
   };
 
   /// Errors returned by the vault

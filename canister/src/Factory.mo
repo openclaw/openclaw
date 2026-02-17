@@ -51,6 +51,17 @@ persistent actor Factory {
     null;
   };
 
+  /// Assert caller is admin. Returns error result if not.
+  func requireAdmin(caller : Principal) : ?Types.FactoryError {
+    switch (admin) {
+      case null { ?#unauthorized("Admin not set -- call claimAdmin first") };
+      case (?a) {
+        if (caller != a) { ?#unauthorized("Only admin can perform this operation") }
+        else { null };
+      };
+    };
+  };
+
   // -- Public API --
 
   /// Create a new vault for the caller.
@@ -103,11 +114,11 @@ persistent actor Factory {
   /// Only the vault owner can call this.
   public shared ({ caller }) func transferController() : async Result.Result<(), Types.FactoryError> {
     if (Principal.isAnonymous(caller)) {
-      return #err(#creationFailed("Anonymous callers cannot transfer controllers"));
+      return #err(#unauthorized("Anonymous callers cannot transfer controllers"));
     };
 
     switch (findVault(caller)) {
-      case null { return #err(#creationFailed("No vault found for caller")) };
+      case null { return #err(#notFound("No vault found for caller")) };
       case (?vaultId) {
         let factoryPrincipal = Principal.fromActor(Factory);
         await ic.update_settings({
@@ -127,13 +138,15 @@ persistent actor Factory {
   // -- Admin functions --
 
   /// Claim admin role. Can only be called once (when admin is unset).
-  /// Call immediately after deployment to secure the Factory.
+  /// IMPORTANT: Call immediately after deployment/upgrade to secure the Factory.
+  /// After an upgrade with --wasm-memory-persistence replace, admin resets to
+  /// null and must be re-claimed.
   public shared ({ caller }) func claimAdmin() : async Result.Result<(), Types.FactoryError> {
     if (Principal.isAnonymous(caller)) {
-      return #err(#creationFailed("Anonymous callers cannot claim admin"));
+      return #err(#unauthorized("Anonymous callers cannot claim admin"));
     };
     switch (admin) {
-      case (?_) { #err(#creationFailed("Admin already set")) };
+      case (?_) { #err(#alreadyExists) };
       case null {
         admin := ?caller;
         #ok(());
@@ -147,15 +160,9 @@ persistent actor Factory {
     owner : Principal,
     vaultId : Principal,
   ) : async Result.Result<(), Types.FactoryError> {
-    switch (admin) {
-      case (?a) {
-        if (caller != a) {
-          return #err(#creationFailed("Only admin can register vaults"));
-        };
-      };
-      case null {
-        return #err(#creationFailed("Admin not set -- call claimAdmin first"));
-      };
+    switch (requireAdmin(caller)) {
+      case (?err) { return #err(err) };
+      case null {};
     };
 
     // Don't allow duplicate registrations for the same owner
@@ -186,8 +193,12 @@ persistent actor Factory {
     totalCreated;
   };
 
-  /// Get all vaults (admin diagnostic -- consider restricting in production).
-  public query func getAllVaults() : async [(Principal, Principal)] {
+  /// Get all vaults (admin-only diagnostic).
+  public query ({ caller }) func getAllVaults() : async [(Principal, Principal)] {
+    switch (admin) {
+      case (?a) { assert (caller == a) };
+      case null { assert false }; // no admin set -- deny all
+    };
     vaults;
   };
 };
