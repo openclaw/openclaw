@@ -198,9 +198,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
     it("filters out invalid normalized entries from allowList", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
-        .mockReturnValueOnce("+11234567890")
-        .mockReturnValueOnce(null) // Invalid entry
-        .mockReturnValueOnce("+11234567890");
+        .mockReturnValueOnce(null) // for allowFrom[0] "invalid" (processed first)
+        .mockReturnValueOnce("+11234567890") // for allowFrom[1] "+11234567890"
+        .mockReturnValueOnce("+11234567890"); // for 'to' param (processed last)
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
       const result = resolveWhatsAppOutboundTarget({
