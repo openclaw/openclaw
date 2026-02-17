@@ -1,0 +1,418 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Habilidades"
+  },
+  {
+    "source": "Skills config",
+    "target": "Configuración de Habilidades"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Configuración de Habilidades"
+  },
+  {
+    "source": "local loopback",
+    "target": "bucle local"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Primeros Pasos"
+  },
+  {
+    "source": "Getting started",
+    "target": "Primeros pasos"
+  },
+  {
+    "source": "Quick start",
+    "target": "Inicio rápido"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Inicio Rápido"
+  },
+  {
+    "source": "Docs directory",
+    "target": "Directorio de documentación"
+  },
+  {
+    "source": "Credits",
+    "target": "Créditos"
+  },
+  {
+    "source": "Features",
+    "target": "Características"
+  },
+  {
+    "source": "DMs",
+    "target": "Mensajes directos"
+  },
+  {
+    "source": "DM",
+    "target": "Mensaje directo"
+  },
+  {
+    "source": "sandbox",
+    "target": "sandbox"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Sandbox"
+  },
+  {
+    "source": "sandboxing",
+    "target": "sandboxing"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Sandboxing"
+  },
+  {
+    "source": "sandboxed",
+    "target": "en sandbox"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "En Sandbox"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "Nota sobre Sandbox"
+  },
+  {
+    "source": "Companion apps",
+    "target": "Aplicaciones complementarias"
+  },
+  {
+    "source": "Agent",
+    "target": "Agente"
+  },
+  {
+    "source": "Agents",
+    "target": "Agentes"
+  },
+  {
+    "source": "Multi-agent",
+    "target": "Multi-agente"
+  },
+  {
+    "source": "Channel",
+    "target": "Canal"
+  },
+  {
+    "source": "Channels",
+    "target": "Canales"
+  },
+  {
+    "source": "Session",
+    "target": "Sesión"
+  },
+  {
+    "source": "Sessions",
+    "target": "Sesiones"
+  },
+  {
+    "source": "Node",
+    "target": "Nodo"
+  },
+  {
+    "source": "Nodes",
+    "target": "Nodos"
+  },
+  {
+    "source": "Control UI",
+    "target": "Interfaz de Control"
+  },
+  {
+    "source": "WebChat",
+    "target": "WebChat"
+  },
+  {
+    "source": "Voice Wake",
+    "target": "Activación por Voz"
+  },
+  {
+    "source": "Talk Mode",
+    "target": "Modo Conversación"
+  },
+  {
+    "source": "Canvas",
+    "target": "Lienzo"
+  },
+  {
+    "source": "Workspace",
+    "target": "Espacio de trabajo"
+  },
+  {
+    "source": "Configuration",
+    "target": "Configuración"
+  },
+  {
+    "source": "Config",
+    "target": "Config"
+  },
+  {
+    "source": "Install",
+    "target": "Instalación"
+  },
+  {
+    "source": "Installation",
+    "target": "Instalación"
+  },
+  {
+    "source": "Setup",
+    "target": "Configuración inicial"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Solución de problemas"
+  },
+  {
+    "source": "FAQ",
+    "target": "Preguntas frecuentes"
+  },
+  {
+    "source": "Security",
+    "target": "Seguridad"
+  },
+  {
+    "source": "Remote",
+    "target": "Remoto"
+  },
+  {
+    "source": "Remote access",
+    "target": "Acceso remoto"
+  },
+  {
+    "source": "Tools",
+    "target": "Herramientas"
+  },
+  {
+    "source": "Browser",
+    "target": "Navegador"
+  },
+  {
+    "source": "Webhook",
+    "target": "Webhook"
+  },
+  {
+    "source": "Webhooks",
+    "target": "Webhooks"
+  },
+  {
+    "source": "Cron",
+    "target": "Cron"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "Tareas programadas"
+  },
+  {
+    "source": "Automation",
+    "target": "Automatización"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "Podman",
+    "target": "Podman"
+  },
+  {
+    "source": "macOS",
+    "target": "macOS"
+  },
+  {
+    "source": "iOS",
+    "target": "iOS"
+  },
+  {
+    "source": "Android",
+    "target": "Android"
+  },
+  {
+    "source": "Linux",
+    "target": "Linux"
+  },
+  {
+    "source": "Windows",
+    "target": "Windows"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Routing",
+    "target": "Enrutamiento"
+  },
+  {
+    "source": "Pairing",
+    "target": "Emparejamiento"
+  },
+  {
+    "source": "Authentication",
+    "target": "Autenticación"
+  },
+  {
+    "source": "Authorization",
+    "target": "Autorización"
+  },
+  {
+    "source": "Token",
+    "target": "Token"
+  },
+  {
+    "source": "Tokens",
+    "target": "Tokens"
+  },
+  {
+    "source": "API key",
+    "target": "Clave de API"
+  },
+  {
+    "source": "API keys",
+    "target": "Claves de API"
+  },
+  {
+    "source": "Model",
+    "target": "Modelo"
+  },
+  {
+    "source": "Models",
+    "target": "Modelos"
+  },
+  {
+    "source": "Anthropic",
+    "target": "Anthropic"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "Claude",
+    "target": "Claude"
+  },
+  {
+    "source": "Protocol",
+    "target": "Protocolo"
+  },
+  {
+    "source": "Dashboard",
+    "target": "Panel de control"
+  },
+  {
+    "source": "Logging",
+    "target": "Registro de eventos"
+  },
+  {
+    "source": "Logs",
+    "target": "Registros"
+  },
+  {
+    "source": "Debug",
+    "target": "Depuración"
+  },
+  {
+    "source": "Debugging",
+    "target": "Depuración"
+  },
+  {
+    "source": "Testing",
+    "target": "Pruebas"
+  },
+  {
+    "source": "Deployment",
+    "target": "Despliegue"
+  },
+  {
+    "source": "Migration",
+    "target": "Migración"
+  },
+  {
+    "source": "Update",
+    "target": "Actualización"
+  },
+  {
+    "source": "Updating",
+    "target": "Actualizando"
+  },
+  {
+    "source": "Upgrade",
+    "target": "Actualización"
+  },
+  {
+    "source": "Upgrading",
+    "target": "Actualizando"
+  },
+  {
+    "source": "Uninstall",
+    "target": "Desinstalación"
+  },
+  {
+    "source": "Wizard",
+    "target": "Asistente"
+  },
+  {
+    "source": "Onboarding",
+    "target": "Incorporación"
+  },
+  {
+    "source": "Bootstrap",
+    "target": "Inicialización"
+  },
+  {
+    "source": "Bootstrapping",
+    "target": "Inicializando"
+  }
+]
