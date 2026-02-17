@@ -98,6 +98,7 @@ function makeRuntime() {
   return {
     log: vi.fn(),
     error: vi.fn(),
+    exit: vi.fn(),
   };
 }
 
