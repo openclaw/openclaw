@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { __test as codexUsageFetcher } from "./provider-usage.fetch.codex.js";
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
@@ -66,6 +67,14 @@ describe("provider usage formatting", () => {
     };
     const lines = formatUsageReportLines(summary, { now });
     expect(lines.join("\n")).toContain("resets 1m");
+  });
+
+  it("labels codex 24h+ windows with true weekly cadence as Week", () => {
+    expect(codexUsageFetcher.describeWindowHours(1 * 3600)).toBe("1h");
+    expect(codexUsageFetcher.describeWindowHours(24 * 3600)).toBe("Day");
+    expect(codexUsageFetcher.describeWindowHours(48 * 3600)).toBe("Day");
+    expect(codexUsageFetcher.describeWindowHours(168 * 3600)).toBe("Week");
+    expect(codexUsageFetcher.describeWindowHours(336 * 3600)).toBe("Week");
   });
 });
 
