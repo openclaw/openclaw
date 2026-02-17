@@ -171,6 +171,6 @@ describe("BrowserProfilesService", () => {
     const result = await service.deleteProfile("custom");
 
     expect(result.deleted).toBe(true);
-    expect(movePathToTrash).toHaveBeenCalledWith(path.dirname(userDataDir));
+    expect(movePathToTrash).toHaveBeenCalledWith(userDataDir);
   });
 });
