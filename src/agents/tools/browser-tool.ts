@@ -224,6 +224,10 @@ export function createBrowserTool(opts?: {
   const cfg = loadConfig();
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const defaultBrowserProfile = resolvedBrowser.defaultProfile;
+  const directCdpPreferredProfile =
+    typeof defaultBrowserProfile === "string" && defaultBrowserProfile.trim() === "chrome"
+      ? "main"
+      : defaultBrowserProfile;
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -232,7 +236,7 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      `Profiles: omit profile to use browser.defaultProfile (currently "${defaultBrowserProfile}") for direct CDP control. Use profile="chrome" only when the user explicitly asks for Browser Relay extension flow. Use profile="openclaw" for the isolated openclaw-managed browser.`,
+      `Profiles: omit profile to use direct CDP control (currently "${directCdpPreferredProfile}"). Use profile="chrome" only when the user explicitly asks for Browser Relay extension flow. Use profile="openclaw" for the isolated openclaw-managed browser.`,
       'Only use profile="chrome" when the user explicitly asks for Browser Relay extension flow; otherwise use browser.defaultProfile.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       'For Browser Relay (profile="chrome"), user must attach a tab via toolbar badge ON. For normal workflows prefer browser.defaultProfile direct CDP first.',
@@ -301,7 +305,7 @@ export function createBrowserTool(opts?: {
         const value = typeof raw === "string" ? raw.trim() : "";
         return value.length > 0 ? value : undefined;
       };
-      const normalizedDefaultProfile = normalizeProfile(defaultBrowserProfile);
+      const normalizedDefaultProfile = normalizeProfile(directCdpPreferredProfile);
       const isLikelyCdpUnavailableError = (err: unknown): boolean => {
         const msg = String(err).toLowerCase();
         if (!msg) {
