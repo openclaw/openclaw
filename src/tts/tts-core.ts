@@ -318,6 +318,14 @@ export function parseTtsDirectives(
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
             break;
+          case "instructions":
+          case "openai_instructions":
+          case "openaiinstructions":
+            if (!policy.allowInstructions) {
+              break;
+            }
+            overrides.openai = { ...overrides.openai, instructions: rawValue };
+            break;
           default:
             break;
         }
@@ -621,8 +629,9 @@ export async function openaiTTS(params: {
   voice: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
+  instructions?: string;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, baseUrl, model, voice, responseFormat, timeoutMs, instructions } = params;
 
   if (!isValidOpenAIModel(model, baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -634,6 +643,19 @@ export async function openaiTTS(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+  // instructions parameter supported by gpt-4o-mini-tts model
+  // Also allow for custom endpoints (they may support instruction-compatible models)
+  const supportsInstructions = model === "gpt-4o-mini-tts" || isCustomOpenAIEndpoint(baseUrl);
+  const body: Record<string, unknown> = {
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+  };
+  if (supportsInstructions && instructions) {
+    body.instructions = instructions;
+  }
+
   try {
     const response = await fetch(`${baseUrl}/audio/speech`, {
       method: "POST",
@@ -641,12 +663,7 @@ export async function openaiTTS(params: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
