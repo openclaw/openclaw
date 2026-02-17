@@ -4,6 +4,7 @@ export type DeviceIdentity = {
   deviceId: string;
   publicKeyPem: string;
   privateKeyPem: string;
+  publicKeyBase64Url: string;
 };
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -30,11 +31,8 @@ export function generateDeviceIdentity(): DeviceIdentity {
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
   const raw = derivePublicKeyRaw(publicKeyPem);
   const deviceId = crypto.createHash("sha256").update(raw).digest("hex");
-  return { deviceId, publicKeyPem, privateKeyPem };
-}
-
-export function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
-  return base64UrlEncode(derivePublicKeyRaw(publicKeyPem));
+  const publicKeyBase64Url = base64UrlEncode(raw);
+  return { deviceId, publicKeyPem, privateKeyPem, publicKeyBase64Url };
 }
 
 export function signDevicePayload(privateKeyPem: string, payload: string): string {
@@ -51,9 +49,10 @@ export function buildDeviceAuthPayload(params: {
   scopes: string[];
   signedAtMs: number;
   token: string | null;
+  nonce: string;
 }): string {
   return [
-    "v1",
+    "v2",
     params.deviceId,
     params.clientId,
     params.clientMode,
@@ -61,5 +60,29 @@ export function buildDeviceAuthPayload(params: {
     params.scopes.join(","),
     String(params.signedAtMs),
     params.token ?? "",
+    params.nonce,
   ].join("|");
+}
+
+/**
+ * Build the paired.json content that pre-registers a device with the gateway.
+ */
+export function buildPairedDevicesJson(device: DeviceIdentity): string {
+  const now = Date.now();
+  const paired = {
+    [device.deviceId]: {
+      deviceId: device.deviceId,
+      publicKey: device.publicKeyBase64Url,
+      displayName: "hub-operator",
+      platform: "docker",
+      clientId: "gateway-client",
+      clientMode: "backend",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      createdAtMs: now,
+      approvedAtMs: now,
+    },
+  };
+  return JSON.stringify(paired);
 }

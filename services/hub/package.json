@@ -1,0 +1,31 @@
+{
+  "name": "openclaw-hub",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "build:admin": "cd admin && npm run build",
+    "build:all": "npm run build && npm run build:admin",
+    "dev": "tsc && node --watch dist/index.js",
+    "dev:admin": "cd admin && npm run dev",
+    "dev:all": "npm run dev & npm run dev:admin & wait",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.0.0",
+    "@slack/socket-mode": "^2.0.5",
+    "better-sqlite3": "^12.6.2",
+    "dockerode": "^4.0.0",
+    "dotenv": "^17.3.1",
+    "hono": "^4.0.0",
+    "ws": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/dockerode": "^3.3.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}

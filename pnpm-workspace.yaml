@@ -3,9 +3,12 @@ packages:
   - ui
   - packages/*
   - extensions/*
+  - services/*
+  - services/hub/admin
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"
+  - better-sqlite3
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"
   - "@whiskeysockets/baileys"

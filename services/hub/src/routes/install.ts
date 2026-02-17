@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { generateState } from "../oauth/state.js";
 import type { Env } from "../env.js";
+import { getInstance } from "../db/queries.js";
+import { generateState } from "../oauth/state.js";
 
 const BOT_SCOPES = [
   "chat:write",
@@ -25,7 +26,17 @@ export function createInstallRoute(env: Env) {
   const install = new Hono();
 
   install.get("/slack/install", (c) => {
-    const state = generateState(env.STATE_SECRET);
+    const instanceId = c.req.query("instance_id");
+    if (!instanceId) {
+      return c.json({ error: "Missing instance_id query parameter" }, 400);
+    }
+
+    const instance = getInstance(instanceId);
+    if (!instance) {
+      return c.json({ error: "Unknown instance_id" }, 404);
+    }
+
+    const state = generateState(env.STATE_SECRET, instanceId);
     const params = new URLSearchParams({
       client_id: env.SLACK_CLIENT_ID,
       scope: BOT_SCOPES,

@@ -86,3 +86,7 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+# Hub runtime data
+.openclaw/
+services/hub/data/

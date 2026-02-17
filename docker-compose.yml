@@ -1,16 +1,21 @@
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openclaw:local
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-default-gateway-token}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - gateway-config:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./.openclaw/workspace}:/home/node/.openclaw/workspace
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
@@ -25,41 +30,55 @@ services:
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
+        "--allow-unconfigured",
       ]
 
-  slack-oauth:
+  hub:
     build:
-      context: ./services/slack-oauth
+      context: ./services/hub
     environment:
-      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID}
-      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET}
-      SLACK_OAUTH_REDIRECT_URI: ${SLACK_OAUTH_REDIRECT_URI}
-      OPENCLAW_GATEWAY_URL: ws://openclaw-gateway:18789
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
-      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
-      SLACK_MODE: ${SLACK_MODE:-socket}
-      SLACK_ACCOUNT_ID: ${SLACK_ACCOUNT_ID:-}
+      SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-placeholder}
+      SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-placeholder}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-placeholder}
+      SLACK_OAUTH_REDIRECT_URI: ${SLACK_OAUTH_REDIRECT_URI:-http://localhost:9876/slack/callback}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-openclaw:local}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      DB_PATH: /app/data/hub.db
+    volumes:
+      - hub-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "${SLACK_OAUTH_PORT:-9876}:9876"
-    depends_on:
-      - openclaw-gateway
     restart: unless-stopped
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openclaw:local
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-default-gateway-token}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - gateway-config:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./.openclaw/workspace}:/home/node/.openclaw/workspace
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+volumes:
+  hub-data:
+  gateway-config:
