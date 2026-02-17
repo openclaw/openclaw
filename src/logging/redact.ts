@@ -14,7 +14,9 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments.
   String.raw`\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1`,
   // JSON fields.
-  String.raw`"(?:apiKey|token|secret|password|passwd|accessToken|refreshToken)"\s*:\s*"([^"]+)"`,
+  String.raw`"(?:apiKey|token|secret|password|passwd|accessToken|refreshToken|privateKey|clientSecret)"\s*:\s*"([^"]+)"`,
+  // JS object properties (util.inspect style, unquoted keys).
+  String.raw`\b(?:apiKey|token|secret|password|passwd|accessToken|refreshToken|privateKey|clientSecret)\s*:\s*(['"]?)([^\s"']+)\1`,
   // CLI flags.
   String.raw`--(?:api[-_]?key|token|secret|password|passwd)\s+(["']?)([^\s"']+)\1`,
   // Authorization headers.
@@ -148,4 +150,41 @@ export function redactToolDetail(detail: string): string {
 
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
+}
+
+function isSensitiveKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return (
+    lower.includes("secret") ||
+    lower.includes("token") ||
+    lower.includes("password") ||
+    lower.includes("passwd") ||
+    (lower.includes("key") && !lower.includes("public"))
+  );
+}
+
+/**
+ * Recursively redact sensitive values in an object.
+ * Useful for logging config objects or state dumps.
+ */
+export function redactObject<T>(obj: T): T {
+  if (!obj || typeof obj !== "object") {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => redactObject(item)) as unknown as T;
+  }
+  const next = { ...obj } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(next)) {
+    if (isSensitiveKey(key)) {
+      if (typeof value === "string") {
+        next[key] = maskToken(value);
+      } else if (value != null) {
+        next[key] = "***";
+      }
+    } else {
+      next[key] = redactObject(value);
+    }
+  }
+  return next as T;
 }
