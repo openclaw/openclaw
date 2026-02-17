@@ -4,12 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 
 // Mock streamSimple for testing
-vi.mock("@mariozechner/pi-ai", () => ({
-  streamSimple: vi.fn(() => ({
-    push: vi.fn(),
-    result: vi.fn(),
-  })),
-}));
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...mod,
+    streamSimple: vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(),
+    })),
+  };
+});
 
 type ToolStreamCase = {
   applyProvider: string;
