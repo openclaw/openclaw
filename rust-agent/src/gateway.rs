@@ -53,7 +53,25 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "sessions.resolve",
+                    family: MethodFamily::Sessions,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "sessions.list",
+                    family: MethodFamily::Sessions,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "sessions.reset",
+                    family: MethodFamily::Sessions,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "sessions.delete",
                     family: MethodFamily::Sessions,
                     requires_auth: true,
                     min_role: "client",
@@ -151,6 +169,9 @@ impl RpcDispatcher {
         match normalize(&req.method).as_str() {
             "sessions.list" => self.handle_sessions_list(req).await,
             "sessions.patch" => self.handle_sessions_patch(req).await,
+            "sessions.resolve" => self.handle_sessions_resolve(req).await,
+            "sessions.reset" => self.handle_sessions_reset(req).await,
+            "sessions.delete" => self.handle_sessions_delete(req).await,
             "sessions.history" => self.handle_sessions_history(req).await,
             "sessions.send" => self.handle_sessions_send(req).await,
             "session.status" | "sessions.status" => self.handle_session_status(req).await,
@@ -230,6 +251,85 @@ impl RpcDispatcher {
             .await;
         RpcDispatchOutcome::Handled(json!({
             "session": patched
+        }))
+    }
+
+    async fn handle_sessions_resolve(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SessionsResolveParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
+        };
+        let candidate = params
+            .session_key
+            .or(params.key)
+            .or(params.session_id)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        let Some(candidate) = candidate else {
+            return RpcDispatchOutcome::bad_request("sessionKey|key|sessionId is required");
+        };
+
+        if let Some(key) = self.sessions.resolve_key(&candidate).await {
+            return RpcDispatchOutcome::Handled(json!({
+                "ok": true,
+                "key": key
+            }));
+        }
+        RpcDispatchOutcome::not_found("session not found")
+    }
+
+    async fn handle_sessions_reset(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SessionsResetParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
+        };
+        let session_key = params
+            .session_key
+            .or(params.key)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        let Some(session_key) = session_key else {
+            return RpcDispatchOutcome::bad_request("sessionKey|key is required");
+        };
+
+        let reset = self
+            .sessions
+            .reset(
+                &session_key,
+                normalize_optional_text(params.reason, 64).unwrap_or_else(|| "reset".to_owned()),
+            )
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "key": session_key,
+            "reset": true,
+            "session": reset.session,
+            "reason": reset.reason
+        }))
+    }
+
+    async fn handle_sessions_delete(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SessionsDeleteParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
+        };
+        let session_key = params
+            .session_key
+            .or(params.key)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        let Some(session_key) = session_key else {
+            return RpcDispatchOutcome::bad_request("sessionKey|key is required");
+        };
+        if parse_session_key(&session_key).kind == SessionKind::Main {
+            return RpcDispatchOutcome::bad_request("cannot delete main session");
+        }
+
+        let deleted = self.sessions.delete(&session_key).await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "key": session_key,
+            "deleted": deleted
         }))
     }
 
@@ -444,6 +544,17 @@ impl SessionRegistry {
         guard.get(session_key).map(SessionEntry::to_view)
     }
 
+    async fn resolve_key(&self, candidate: &str) -> Option<String> {
+        let guard = self.entries.lock().await;
+        if guard.contains_key(candidate) {
+            return Some(candidate.to_owned());
+        }
+        guard
+            .keys()
+            .find(|key| key.eq_ignore_ascii_case(candidate))
+            .cloned()
+    }
+
     async fn list(&self, limit: Option<usize>, active_minutes: Option<u64>) -> Vec<SessionView> {
         let guard = self.entries.lock().await;
         let mut items = guard.values().cloned().collect::<Vec<_>>();
@@ -499,6 +610,28 @@ impl SessionRegistry {
         merged.sort_by(|a, b| b.at_ms.cmp(&a.at_ms));
         merged.truncate(lim);
         merged
+    }
+
+    async fn reset(&self, session_key: &str, reason: String) -> SessionReset {
+        let now = now_ms();
+        let mut guard = self.entries.lock().await;
+        let entry = guard
+            .entry(session_key.to_owned())
+            .or_insert_with(|| SessionEntry::new(session_key));
+        entry.updated_at_ms = now;
+        entry.total_requests = 0;
+        entry.last_action = None;
+        entry.last_risk_score = 0;
+        entry.history.clear();
+        SessionReset {
+            session: entry.to_view(),
+            reason,
+        }
+    }
+
+    async fn delete(&self, session_key: &str) -> bool {
+        let mut guard = self.entries.lock().await;
+        guard.remove(session_key).is_some()
     }
 
     async fn summary(&self) -> SessionSummary {
@@ -575,6 +708,12 @@ struct SessionPatch {
     send_policy: Option<SendPolicyOverride>,
     group_activation: Option<GroupActivationMode>,
     queue_mode: Option<SessionQueueMode>,
+}
+
+#[derive(Debug, Clone)]
+struct SessionReset {
+    session: SessionView,
+    reason: String,
 }
 
 #[derive(Debug, Clone)]
@@ -704,6 +843,33 @@ struct SessionsPatchParams {
     group_activation: Option<String>,
     #[serde(rename = "queueMode", alias = "queue_mode")]
     queue_mode: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SessionsResolveParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    key: Option<String>,
+    #[serde(rename = "sessionId", alias = "session_id")]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SessionsResetParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    key: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SessionsDeleteParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    key: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1040,6 +1206,139 @@ mod tests {
             }),
         };
         let out = dispatcher.handle_request(&send).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_resolve_finds_existing_session_key() {
+        let dispatcher = RpcDispatcher::new();
+        let patch = RpcRequestFrame {
+            id: "req-patch".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-resolve",
+                "queueMode": "followup"
+            }),
+        };
+        let _ = dispatcher.handle_request(&patch).await;
+
+        let resolve = RpcRequestFrame {
+            id: "req-resolve".to_owned(),
+            method: "sessions.resolve".to_owned(),
+            params: serde_json::json!({
+                "sessionId": "agent:main:discord:group:g-resolve"
+            }),
+        };
+        let out = dispatcher.handle_request(&resolve).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload.pointer("/key").and_then(serde_json::Value::as_str),
+                    Some("agent:main:discord:group:g-resolve")
+                );
+            }
+            _ => panic!("expected resolve handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_reset_clears_session_counters() {
+        let dispatcher = RpcDispatcher::new();
+        let request = ActionRequest {
+            id: "req-reset".to_owned(),
+            source: "agent".to_owned(),
+            session_id: Some("agent:main:discord:group:g-reset".to_owned()),
+            prompt: Some("hello".to_owned()),
+            command: None,
+            tool_name: None,
+            channel: Some("discord".to_owned()),
+            url: None,
+            file_path: None,
+            raw: serde_json::json!({}),
+        };
+        let decision = Decision {
+            action: DecisionAction::Allow,
+            risk_score: 2,
+            reasons: vec!["ok".to_owned()],
+            tags: vec![],
+            source: "openclaw-agent-rs".to_owned(),
+        };
+        dispatcher.record_decision(&request, &decision).await;
+
+        let reset = RpcRequestFrame {
+            id: "req-reset".to_owned(),
+            method: "sessions.reset".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-reset",
+                "reason": "new"
+            }),
+        };
+        let out = dispatcher.handle_request(&reset).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/session/totalRequests")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(0)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/reason")
+                        .and_then(serde_json::Value::as_str),
+                    Some("new")
+                );
+            }
+            _ => panic!("expected reset handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_delete_removes_session_and_blocks_main() {
+        let dispatcher = RpcDispatcher::new();
+        let patch = RpcRequestFrame {
+            id: "req-patch".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-delete",
+            }),
+        };
+        let _ = dispatcher.handle_request(&patch).await;
+
+        let delete = RpcRequestFrame {
+            id: "req-delete".to_owned(),
+            method: "sessions.delete".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-delete"
+            }),
+        };
+        let out = dispatcher.handle_request(&delete).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/deleted")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected delete handled"),
+        }
+
+        let deny_main = RpcRequestFrame {
+            id: "req-main-delete".to_owned(),
+            method: "sessions.delete".to_owned(),
+            params: serde_json::json!({"sessionKey": "main"}),
+        };
+        let out = dispatcher.handle_request(&deny_main).await;
         assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
     }
 }

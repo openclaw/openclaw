@@ -955,4 +955,132 @@ mod tests {
         server.await??;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn rpc_sessions_resolve_reset_delete_roundtrip() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let _connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-patch2",
+                        "method": "sessions.patch",
+                        "params": {
+                            "sessionKey": "agent:main:discord:group:g10",
+                            "queueMode": "steer"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let _patch_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for patch response"))?
+                .ok_or_else(|| anyhow::anyhow!("patch response stream ended"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-resolve2",
+                        "method": "sessions.resolve",
+                        "params": {
+                            "sessionKey": "agent:main:discord:group:g10"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let resolve_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for resolve response"))?
+                .ok_or_else(|| anyhow::anyhow!("resolve response stream ended"))??;
+            let resolve_json: Value = serde_json::from_str(resolve_response.to_text()?)?;
+            assert_eq!(
+                resolve_json.pointer("/result/key").and_then(Value::as_str),
+                Some("agent:main:discord:group:g10")
+            );
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-reset2",
+                        "method": "sessions.reset",
+                        "params": {
+                            "sessionKey": "agent:main:discord:group:g10",
+                            "reason": "new"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let reset_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for reset response"))?
+                .ok_or_else(|| anyhow::anyhow!("reset response stream ended"))??;
+            let reset_json: Value = serde_json::from_str(reset_response.to_text()?)?;
+            assert_eq!(
+                reset_json
+                    .pointer("/result/session/totalRequests")
+                    .and_then(Value::as_u64),
+                Some(0)
+            );
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-delete2",
+                        "method": "sessions.delete",
+                        "params": {
+                            "sessionKey": "agent:main:discord:group:g10"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let delete_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for delete response"))?
+                .ok_or_else(|| anyhow::anyhow!("delete response stream ended"))??;
+            let delete_json: Value = serde_json::from_str(delete_response.to_text()?)?;
+            assert_eq!(
+                delete_json
+                    .pointer("/result/deleted")
+                    .and_then(Value::as_bool),
+                Some(true)
+            );
+
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let bridge = GatewayBridge::new(
+            GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            "security.decision".to_owned(),
+            16,
+            SessionQueueMode::Followup,
+            GroupActivationMode::Always,
+        );
+        let evaluator: Arc<dyn ActionEvaluator> = Arc::new(StubEvaluator);
+        bridge.run_once(evaluator).await?;
+        server.await??;
+        Ok(())
+    }
 }

@@ -15,6 +15,9 @@
 - Gateway known-method registry plus first RPC dispatcher for:
   - `sessions.list`
   - `sessions.patch`
+  - `sessions.resolve`
+  - `sessions.reset`
+  - `sessions.delete`
   - `sessions.history`
   - `sessions.send`
   - `session.status`
