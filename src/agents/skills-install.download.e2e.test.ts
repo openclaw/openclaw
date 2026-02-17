@@ -51,7 +51,7 @@ async function seedZipDownloadResponse() {
   zip.file("hello.txt", "hi");
   const buffer = await zip.generateAsync({ type: "nodebuffer" });
   fetchWithSsrFGuardMock.mockResolvedValue({
-    response: new Response(buffer, { status: 200 }),
+    response: new Response(new Uint8Array(buffer), { status: 200 }),
     release: async () => undefined,
   });
 }
@@ -107,7 +107,7 @@ describe("installSkill download extraction safety", () => {
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
 
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -150,7 +150,7 @@ describe("installSkill download extraction safety", () => {
 
       const buffer = await fs.readFile(archivePath);
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -182,7 +182,7 @@ describe("installSkill download extraction safety", () => {
       zip.file("package/hello.txt", "hi");
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -215,7 +215,7 @@ describe("installSkill download extraction safety", () => {
       zip.file("hello.txt", "hi");
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 

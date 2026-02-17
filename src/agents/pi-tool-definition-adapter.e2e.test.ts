@@ -1,6 +1,10 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
+
+type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
+const extensionContext = {} as Parameters<ToolExecute>[3];
 
 describe("pi tool definition adapter", () => {
   it("wraps tool errors into a tool result", async () => {
@@ -8,14 +12,21 @@ describe("pi tool definition adapter", () => {
       name: "boom",
       label: "Boom",
       description: "throws",
-      parameters: {},
+      parameters: Type.Object({}),
       execute: async () => {
         throw new Error("nope");
       },
-    } satisfies AgentTool<unknown, unknown>;
+    } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const result = await defs[0].execute("call1", {}, undefined, undefined);
+    const args: Parameters<(typeof defs)[number]["execute"]> = [
+      "call1",
+      {},
+      undefined,
+      extensionContext,
+      undefined,
+    ];
+    const result = await defs[0].execute(...args);
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -30,14 +41,21 @@ describe("pi tool definition adapter", () => {
       name: "bash",
       label: "Bash",
       description: "throws",
-      parameters: {},
+      parameters: Type.Object({}),
       execute: async () => {
         throw new Error("nope");
       },
-    } satisfies AgentTool<unknown, unknown>;
+    } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const result = await defs[0].execute("call2", {}, undefined, undefined);
+    const args: Parameters<(typeof defs)[number]["execute"]> = [
+      "call2",
+      {},
+      undefined,
+      extensionContext,
+      undefined,
+    ];
+    const result = await defs[0].execute(...args);
 
     expect(result.details).toMatchObject({
       status: "error",

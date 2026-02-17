@@ -130,7 +130,12 @@ describe("subagent registry persistence", () => {
       cleanup: string;
       label?: string;
     };
-    const first = announceSpy.mock.calls[0]?.[0] as unknown as AnnounceParams;
+    const first = (announceSpy.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | AnnounceParams
+      | undefined;
+    if (!first) {
+      throw new Error("expected announce call");
+    }
     expect(first.childSessionKey).toBe("agent:main:subagent:test");
     expect(first.requesterOrigin?.channel).toBe("whatsapp");
     expect(first.requesterOrigin?.accountId).toBe("acct-main");
@@ -167,7 +172,7 @@ describe("subagent registry persistence", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     // announce should NOT be called since cleanupHandled was true
-    const calls = announceSpy.mock.calls.map((call) => call[0]);
+    const calls = (announceSpy.mock.calls as unknown as Array<[unknown]>).map((call) => call[0]);
     const match = calls.find(
       (params) =>
         (params as { childSessionKey?: string }).childSessionKey === "agent:main:subagent:two",
