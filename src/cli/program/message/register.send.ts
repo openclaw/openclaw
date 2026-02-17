@@ -5,7 +5,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
   helpers
     .withMessageBase(
       helpers
-        .withRequiredMessageTarget(
+        .withMessageTarget(
           message
             .command("send")
             .description("Send a message")
