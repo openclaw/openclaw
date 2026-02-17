@@ -30,7 +30,6 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict9");
   });
 
-
   it("preserves thinking block signatures for direct Anthropic API", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",

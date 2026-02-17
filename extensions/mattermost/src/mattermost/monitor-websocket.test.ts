@@ -144,9 +144,9 @@ describe("mattermost websocket monitor", () => {
             return;
           }
           // Start connectOnce so listeners are registered before emitting events
-    const promise = connectOnce();
+          const promise = connectOnce();
 
-    socket.emitOpen();
+          socket.emitOpen();
           socket.emitClose(1000);
         });
         return socket;
