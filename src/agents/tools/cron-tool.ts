@@ -887,9 +887,24 @@ function parseRelativeDurationMsFromText(text: unknown): number | undefined {
   return undefined;
 }
 
-function inferRequestedRelativeDurationMs(job: Record<string, unknown>): number | undefined {
+function hasRecurringReminderHint(text: unknown): boolean {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const raw = text.trim();
+  if (!raw) {
+    return false;
+  }
+  return /\b(every|each|daily|weekly|monthly|yearly|hourly|recurring|repeat(?:ing)?)\b/i.test(raw);
+}
+
+function collectReminderTextCandidates(job: Record<string, unknown>): unknown[] {
   const payload = isRecord(job.payload) ? job.payload : undefined;
-  const candidates: unknown[] = [job.description, job.name, payload?.text, payload?.message];
+  return [job.description, job.name, payload?.text, payload?.message];
+}
+
+function inferRequestedRelativeDurationMs(job: Record<string, unknown>): number | undefined {
+  const candidates = collectReminderTextCandidates(job);
   for (const candidate of candidates) {
     const ms = parseRelativeDurationMsFromText(candidate);
     if (ms !== undefined) {
@@ -897,6 +912,45 @@ function inferRequestedRelativeDurationMs(job: Record<string, unknown>): number 
     }
   }
   return undefined;
+}
+
+function hasRecurringIntentInReminderText(job: Record<string, unknown>): boolean {
+  const candidates = collectReminderTextCandidates(job);
+  for (const candidate of candidates) {
+    if (hasRecurringReminderHint(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validateRelativeReminderScheduleSemantics(job: Record<string, unknown>) {
+  const requestedMs = inferRequestedRelativeDurationMs(job);
+  if (requestedMs === undefined) {
+    return;
+  }
+  if (hasRecurringIntentInReminderText(job)) {
+    return;
+  }
+
+  const schedule = isRecord(job.schedule) ? job.schedule : null;
+  const scheduleKind = schedule ? normalizeScheduleKind(schedule.kind) : undefined;
+  if (!schedule || scheduleKind !== "at") {
+    throw new Error(
+      `explicit relative reminder requires schedule.kind="at" (one-shot), got ${scheduleKind ?? "missing"}`,
+    );
+  }
+  const atValue = typeof schedule.at === "string" ? schedule.at.trim() : "";
+  if (!atValue) {
+    throw new Error(
+      `explicit relative reminder requires schedule.at (absolute ISO timestamp). Compute target time before creating the job (use a deterministic time-calculation tool if available).`,
+    );
+  }
+  if (job.deleteAfterRun === false) {
+    throw new Error(
+      `explicit relative one-shot reminder requires deleteAfterRun=true (or omit it to use default).`,
+    );
+  }
 }
 
 function validateRelativeReminderAgainstAtSchedule(job: Record<string, unknown>) {
@@ -924,7 +978,7 @@ function validateRelativeReminderAgainstAtSchedule(job: Record<string, unknown>)
   throw new Error(
     `schedule.at mismatches explicit relative duration in reminder text (expected about ${Math.round(
       requestedMs / 1000,
-    )}s from now, got ${Math.round(actualDeltaMs / 1000)}s). Recompute time before creating the job.`,
+    )}s from now, got ${Math.round(actualDeltaMs / 1000)}s). Recompute time before creating the job (do not estimate manually).`,
   );
 }
 
@@ -986,6 +1040,7 @@ SCHEDULE TYPES (schedule.kind):
 - IMPORTANT: include only the fields for the chosen kind (do not mix at/every/cron fields).
 - IMPORTANT: deleteAfterRun=true only applies to one-shot schedules (kind="at"), not "every" or "cron".
 - For "in N minutes/hours" reminders, compute an absolute ISO timestamp and use kind="at".
+- For relative-time reminders, do not guess or reuse example values; use a deterministic time-calculation tool first if one is available.
 
 ISO timestamps without explicit timezone are treated as UTC.
 
@@ -1118,6 +1173,7 @@ Use jobId as canonical identifier; id is accepted for compatibility.`,
           const normalizedJob = normalizeCronJobCreate(params.job) ?? params.job;
           const job = sanitizeCronAddJobForGateway(normalizedJob) ?? normalizedJob;
           if (job && typeof job === "object") {
+            validateRelativeReminderScheduleSemantics(job as Record<string, unknown>);
             validateDeleteAfterRunCompatibility(job as Record<string, unknown>);
             validateRelativeReminderAgainstAtSchedule(job as Record<string, unknown>);
           }

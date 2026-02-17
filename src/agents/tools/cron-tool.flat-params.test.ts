@@ -75,7 +75,47 @@ describe("cron tool flat-params", () => {
         },
       }),
     ).rejects.toThrow("schedule.at mismatches explicit relative duration");
-
     expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("rejects one-shot relative reminders that are incorrectly generated as recurring", async () => {
+    const tool = createCronTool();
+    await expect(
+      tool.execute("call-relative-every", {
+        action: "add",
+        job: {
+          name: "remind-in-1-minute",
+          description: "remind me in 1 minute",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "reminder in 1 minute" },
+        },
+      }),
+    ).rejects.toThrow('explicit relative reminder requires schedule.kind="at"');
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("keeps recurring schedules when text clearly indicates recurring intent", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-recurring-intent", {
+      action: "add",
+      job: {
+        name: "hourly-check",
+        description: "in 1 minute every day remind me to check messages",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "recurring reminder: check messages" },
+        deleteAfterRun: false,
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: {
+        schedule?: { kind?: string; everyMs?: number };
+        deleteAfterRun?: boolean;
+      };
+    };
+    expect(call.params?.schedule).toEqual({ kind: "every", everyMs: 60_000 });
+    expect(call.params?.deleteAfterRun).toBe(false);
   });
 });

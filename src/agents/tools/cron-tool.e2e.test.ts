@@ -344,11 +344,12 @@ describe("cron tool", () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
     const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    const at = new Date(Date.now() + 10_000).toISOString();
     await tool.execute("call-implicit-current-session", {
       action: "add",
       job: {
         name: "reminder-current-session",
-        schedule: { at: new Date(123).toISOString() },
+        schedule: { at },
         payload: { kind: "systemEvent", text: "10 秒后提醒我开会" },
       },
     });
