@@ -21,38 +21,12 @@ import {
 } from "../../browser/client.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
-import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "../../browser/paths.js";
-import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
-import { wrapExternalContent } from "../../security/external-content.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
-
-function wrapBrowserExternalJson(params: {
-  kind: "snapshot" | "console" | "tabs";
-  payload: unknown;
-  includeWarning?: boolean;
-}): { wrappedText: string; safeDetails: Record<string, unknown> } {
-  const extractedText = JSON.stringify(params.payload, null, 2);
-  const wrappedText = wrapExternalContent(extractedText, {
-    source: "browser",
-    includeWarning: params.includeWarning ?? true,
-  });
-  return {
-    wrappedText,
-    safeDetails: {
-      ok: true,
-      externalContent: {
-        untrusted: true,
-        source: "browser",
-        kind: params.kind,
-        wrapped: true,
-      },
-    },
-  };
-}
 
 type BrowserProxyFile = {
   path: string;
@@ -181,11 +155,36 @@ async function callBrowserProxy(params: {
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  return await persistBrowserProxyFiles(files);
+  if (!files || files.length === 0) {
+    return new Map<string, string>();
+  }
+  const mapping = new Map<string, string>();
+  for (const file of files) {
+    const buffer = Buffer.from(file.base64, "base64");
+    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser", buffer.byteLength);
+    mapping.set(file.path, saved.path);
+  }
+  return mapping;
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  applyBrowserProxyPaths(result, mapping);
+  if (!result || typeof result !== "object") {
+    return;
+  }
+  const obj = result as Record<string, unknown>;
+  if (typeof obj.path === "string" && mapping.has(obj.path)) {
+    obj.path = mapping.get(obj.path);
+  }
+  if (typeof obj.imagePath === "string" && mapping.has(obj.imagePath)) {
+    obj.imagePath = mapping.get(obj.imagePath);
+  }
+  const download = obj.download;
+  if (download && typeof download === "object") {
+    const d = download as Record<string, unknown>;
+    if (typeof d.path === "string" && mapping.has(d.path)) {
+      d.path = mapping.get(d.path);
+    }
+  }
 }
 
 function resolveBrowserBaseUrl(params: {
@@ -298,19 +297,106 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
+      const normalizeProfile = (raw?: string) => {
+        const value = typeof raw === "string" ? raw.trim() : "";
+        return value.length > 0 ? value : undefined;
+      };
+      const normalizedDefaultProfile = normalizeProfile(defaultBrowserProfile);
+      const isLikelyCdpUnavailableError = (err: unknown): boolean => {
+        const msg = String(err).toLowerCase();
+        if (!msg) {
+          return false;
+        }
+        return (
+          (msg.includes("cdp") &&
+            (msg.includes("not reachable") ||
+              msg.includes("is unreachable") ||
+              msg.includes("unavailable") ||
+              msg.includes("connect") ||
+              msg.includes("refused") ||
+              msg.includes("timeout") ||
+              msg.includes("timed out"))) ||
+          msg.includes("browser is unavailable") ||
+          msg.includes("connection timeout") ||
+          msg.includes("econnrefused")
+        );
+      };
+      const buildCdpFallbackProfiles = (currentProfile: string | undefined): string[] => {
+        const seen = new Set<string>();
+        const out: string[] = [];
+        for (const candidate of [normalizedDefaultProfile, "main", "openclaw"]) {
+          const normalized = normalizeProfile(candidate);
+          if (!normalized || normalized === currentProfile || seen.has(normalized)) {
+            continue;
+          }
+          seen.add(normalized);
+          out.push(normalized);
+        }
+        return out;
+      };
+      const withCdpFallback = async <T>(
+        initialProfile: string | undefined,
+        runForProfile: (effectiveProfile: string | undefined) => Promise<T>,
+      ): Promise<T> => {
+        const normalizedInitial = normalizeProfile(initialProfile);
+        try {
+          return await runForProfile(normalizedInitial);
+        } catch (err) {
+          if (requestedNode || target === "node") {
+            throw err;
+          }
+          if (!isLikelyCdpUnavailableError(err)) {
+            throw err;
+          }
+          const shouldTryFallback =
+            !normalizedInitial ||
+            normalizedInitial === "main" ||
+            normalizedInitial === normalizedDefaultProfile;
+          if (!shouldTryFallback) {
+            throw err;
+          }
+          const fallbackProfiles = buildCdpFallbackProfiles(normalizedInitial);
+          let lastError: unknown = err;
+          for (const fallbackProfile of fallbackProfiles) {
+            try {
+              return await runForProfile(fallbackProfile);
+            } catch (fallbackErr) {
+              if (!isLikelyCdpUnavailableError(fallbackErr)) {
+                throw fallbackErr;
+              }
+              lastError = fallbackErr;
+            }
+          }
+          const triedProfiles = [normalizedInitial ?? "(default)", ...fallbackProfiles].join(", ");
+          throw new Error(
+            `Browser CDP is currently unreachable. Tried profiles: ${triedProfiles}. If this persists, use Chrome DevTools MCP or browser-use as fallback.`,
+            { cause: err },
+          );
+        }
+      };
 
       switch (action) {
         case "status":
           if (proxyRequest) {
             return jsonResult(
-              await proxyRequest({
-                method: "GET",
-                path: "/",
+              await withCdpFallback(
                 profile,
-              }),
+                async (effectiveProfile) =>
+                  await proxyRequest({
+                    method: "GET",
+                    path: "/",
+                    profile: effectiveProfile,
+                  }),
+              ),
             );
           }
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return jsonResult(
+            await withCdpFallback(
+              profile,
+              async (effectiveProfile) =>
+                await browserStatus(baseUrl, { profile: effectiveProfile }),
+            ),
+          );
         case "start":
           if (proxyRequest) {
             await proxyRequest({
@@ -356,48 +442,48 @@ export function createBrowserTool(opts?: {
           return jsonResult({ profiles: await browserProfiles(baseUrl) });
         case "tabs":
           if (proxyRequest) {
-            const result = await proxyRequest({
-              method: "GET",
-              path: "/tabs",
+            const result = await withCdpFallback(
               profile,
-            });
+              async (effectiveProfile) =>
+                await proxyRequest({
+                  method: "GET",
+                  path: "/tabs",
+                  profile: effectiveProfile,
+                }),
+            );
             const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
+            return jsonResult({ tabs });
           }
-          {
-            const tabs = await browserTabs(baseUrl, { profile });
-            const wrapped = wrapBrowserExternalJson({
-              kind: "tabs",
-              payload: { tabs },
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: { ...wrapped.safeDetails, tabCount: tabs.length },
-            };
-          }
+          return jsonResult({
+            tabs: await withCdpFallback(
+              profile,
+              async (effectiveProfile) => await browserTabs(baseUrl, { profile: effectiveProfile }),
+            ),
+          });
         case "open": {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
           });
           if (proxyRequest) {
-            const result = await proxyRequest({
-              method: "POST",
-              path: "/tabs/open",
+            const result = await withCdpFallback(
               profile,
-              body: { url: targetUrl },
-            });
+              async (effectiveProfile) =>
+                await proxyRequest({
+                  method: "POST",
+                  path: "/tabs/open",
+                  profile: effectiveProfile,
+                  body: { url: targetUrl },
+                }),
+            );
             return jsonResult(result);
           }
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
+          return jsonResult(
+            await withCdpFallback(
+              profile,
+              async (effectiveProfile) =>
+                await browserOpenTab(baseUrl, targetUrl, { profile: effectiveProfile }),
+            ),
+          );
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -482,12 +568,28 @@ export function createBrowserTool(opts?: {
               : undefined;
           const selector = typeof params.selector === "string" ? params.selector.trim() : undefined;
           const frame = typeof params.frame === "string" ? params.frame.trim() : undefined;
-          const snapshot = proxyRequest
-            ? ((await proxyRequest({
-                method: "GET",
-                path: "/snapshot",
-                profile,
-                query: {
+          const snapshot = await withCdpFallback(profile, async (effectiveProfile) =>
+            proxyRequest
+              ? ((await proxyRequest({
+                  method: "GET",
+                  path: "/snapshot",
+                  profile: effectiveProfile,
+                  query: {
+                    format,
+                    targetId,
+                    limit,
+                    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                    refs,
+                    interactive,
+                    compact,
+                    depth,
+                    selector,
+                    frame,
+                    labels,
+                    mode,
+                  },
+                })) as Awaited<ReturnType<typeof browserSnapshot>>)
+              : await browserSnapshot(baseUrl, {
                   format,
                   targetId,
                   limit,
@@ -500,86 +602,24 @@ export function createBrowserTool(opts?: {
                   frame,
                   labels,
                   mode,
-                },
-              })) as Awaited<ReturnType<typeof browserSnapshot>>)
-            : await browserSnapshot(baseUrl, {
-                format,
-                targetId,
-                limit,
-                ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-                refs,
-                interactive,
-                compact,
-                depth,
-                selector,
-                frame,
-                labels,
-                mode,
-                profile,
-              });
+                  profile: effectiveProfile,
+                }),
+          );
           if (snapshot.format === "ai") {
-            const extractedText = snapshot.snapshot ?? "";
-            const wrappedSnapshot = wrapExternalContent(extractedText, {
-              source: "browser",
-              includeWarning: true,
-            });
-            const safeDetails = {
-              ok: true,
-              format: snapshot.format,
-              targetId: snapshot.targetId,
-              url: snapshot.url,
-              truncated: snapshot.truncated,
-              stats: snapshot.stats,
-              refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
-              labels: snapshot.labels,
-              labelsCount: snapshot.labelsCount,
-              labelsSkipped: snapshot.labelsSkipped,
-              imagePath: snapshot.imagePath,
-              imageType: snapshot.imageType,
-              externalContent: {
-                untrusted: true,
-                source: "browser",
-                kind: "snapshot",
-                format: "ai",
-                wrapped: true,
-              },
-            };
             if (labels && snapshot.imagePath) {
               return await imageResultFromFile({
                 label: "browser:snapshot",
                 path: snapshot.imagePath,
-                extraText: wrappedSnapshot,
-                details: safeDetails,
+                extraText: snapshot.snapshot,
+                details: snapshot,
               });
             }
             return {
-              content: [{ type: "text", text: wrappedSnapshot }],
-              details: safeDetails,
+              content: [{ type: "text", text: snapshot.snapshot }],
+              details: snapshot,
             };
           }
-          {
-            const wrapped = wrapBrowserExternalJson({
-              kind: "snapshot",
-              payload: snapshot,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: {
-                ...wrapped.safeDetails,
-                format: "aria",
-                targetId: snapshot.targetId,
-                url: snapshot.url,
-                nodeCount: snapshot.nodes.length,
-                externalContent: {
-                  untrusted: true,
-                  source: "browser",
-                  kind: "snapshot",
-                  format: "aria",
-                  wrapped: true,
-                },
-              },
-            };
-          }
+          return jsonResult(snapshot);
         }
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
@@ -620,79 +660,76 @@ export function createBrowserTool(opts?: {
           });
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
-            const result = await proxyRequest({
-              method: "POST",
-              path: "/navigate",
+            const result = await withCdpFallback(
               profile,
-              body: {
-                url: targetUrl,
-                targetId,
-              },
-            });
+              async (effectiveProfile) =>
+                await proxyRequest({
+                  method: "POST",
+                  path: "/navigate",
+                  profile: effectiveProfile,
+                  body: {
+                    url: targetUrl,
+                    targetId,
+                  },
+                }),
+            );
             return jsonResult(result);
           }
           return jsonResult(
-            await browserNavigate(baseUrl, {
-              url: targetUrl,
-              targetId,
+            await withCdpFallback(
               profile,
-            }),
+              async (effectiveProfile) =>
+                await browserNavigate(baseUrl, {
+                  url: targetUrl,
+                  targetId,
+                  profile: effectiveProfile,
+                }),
+            ),
           );
         }
         case "console": {
           const level = typeof params.level === "string" ? params.level.trim() : undefined;
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           if (proxyRequest) {
-            const result = (await proxyRequest({
-              method: "GET",
-              path: "/console",
+            const result = await withCdpFallback(
               profile,
-              query: {
-                level,
-                targetId,
-              },
-            })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
-            const wrapped = wrapBrowserExternalJson({
-              kind: "console",
-              payload: result,
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: {
-                ...wrapped.safeDetails,
-                targetId: typeof result.targetId === "string" ? result.targetId : undefined,
-                messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-              },
-            };
+              async (effectiveProfile) =>
+                await proxyRequest({
+                  method: "GET",
+                  path: "/console",
+                  profile: effectiveProfile,
+                  query: {
+                    level,
+                    targetId,
+                  },
+                }),
+            );
+            return jsonResult(result);
           }
-          {
-            const result = await browserConsoleMessages(baseUrl, { level, targetId, profile });
-            const wrapped = wrapBrowserExternalJson({
-              kind: "console",
-              payload: result,
-              includeWarning: false,
-            });
-            return {
-              content: [{ type: "text", text: wrapped.wrappedText }],
-              details: {
-                ...wrapped.safeDetails,
-                targetId: result.targetId,
-                messageCount: result.messages.length,
-              },
-            };
-          }
+          return jsonResult(
+            await withCdpFallback(
+              profile,
+              async (effectiveProfile) =>
+                await browserConsoleMessages(baseUrl, {
+                  level,
+                  targetId,
+                  profile: effectiveProfile,
+                }),
+            ),
+          );
         }
         case "pdf": {
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
-          const result = proxyRequest
-            ? ((await proxyRequest({
-                method: "POST",
-                path: "/pdf",
-                profile,
-                body: { targetId },
-              })) as Awaited<ReturnType<typeof browserPdfSave>>)
-            : await browserPdfSave(baseUrl, { targetId, profile });
+          const result = await withCdpFallback(profile, async (effectiveProfile) =>
+            proxyRequest
+              ? ((await proxyRequest({
+                  method: "POST",
+                  path: "/pdf",
+                  profile: effectiveProfile,
+                  body: { targetId },
+                })) as Awaited<ReturnType<typeof browserPdfSave>>)
+              : await browserPdfSave(baseUrl, { targetId, profile: effectiveProfile }),
+          );
           return {
             content: [{ type: "text", text: `FILE:${result.path}` }],
             details: result,
@@ -703,15 +740,6 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = resolvePathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
-          if (!uploadPathsResult.ok) {
-            throw new Error(uploadPathsResult.error);
-          }
-          const normalizedPaths = uploadPathsResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
@@ -726,7 +754,7 @@ export function createBrowserTool(opts?: {
               path: "/hooks/file-chooser",
               profile,
               body: {
-                paths: normalizedPaths,
+                paths,
                 ref,
                 inputRef,
                 element,
@@ -738,7 +766,7 @@ export function createBrowserTool(opts?: {
           }
           return jsonResult(
             await browserArmFileChooser(baseUrl, {
-              paths: normalizedPaths,
+              paths,
               ref,
               inputRef,
               element,
@@ -785,82 +813,88 @@ export function createBrowserTool(opts?: {
           if (!request || typeof request !== "object") {
             throw new Error("request required");
           }
-          try {
-            const result = proxyRequest
-              ? await proxyRequest({
-                  method: "POST",
-                  path: "/act",
-                  profile,
-                  body: request,
-                })
-              : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
-                  profile,
-                });
-            return jsonResult(result);
-          } catch (err) {
-            const msg = String(err);
-            if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
-              const requestTargetId =
-                typeof (request as { targetId?: unknown }).targetId === "string"
-                  ? ((request as { targetId?: string }).targetId?.trim() ?? "")
-                  : "";
-              const tabs = proxyRequest
-                ? ((
-                    (await proxyRequest({
-                      method: "GET",
-                      path: "/tabs",
-                      profile,
-                    })) as { tabs?: unknown[] }
-                  ).tabs ?? [])
-                : await browserTabs(baseUrl, { profile }).catch(() => []);
-              if (!tabs.length) {
-                const canTryDefaultProfile =
-                  !requestTargetId &&
-                  Boolean(defaultBrowserProfile) &&
-                  defaultBrowserProfile !== "chrome";
-                if (canTryDefaultProfile) {
-                  const fallbackTabs = proxyRequest
-                    ? ((
-                        (await proxyRequest({
-                          method: "GET",
-                          path: "/tabs",
-                          profile: defaultBrowserProfile,
-                        })) as { tabs?: unknown[] }
-                      ).tabs ?? [])
-                    : await browserTabs(baseUrl, { profile: defaultBrowserProfile }).catch(
-                        () => [],
-                      );
-                  if (fallbackTabs.length > 0) {
-                    const fallbackResult = proxyRequest
-                      ? await proxyRequest({
-                          method: "POST",
-                          path: "/act",
-                          profile: defaultBrowserProfile,
-                          body: request,
-                        })
-                      : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
-                          profile: defaultBrowserProfile,
-                        });
-                    return jsonResult(fallbackResult);
-                  }
-                }
-                const fallbackHint =
-                  defaultBrowserProfile && defaultBrowserProfile !== "chrome"
-                    ? ` Try profile="${defaultBrowserProfile}" (or omit profile to use browser.defaultProfile).`
+          const result = await withCdpFallback(profile, async (effectiveProfile) => {
+            try {
+              return proxyRequest
+                ? await proxyRequest({
+                    method: "POST",
+                    path: "/act",
+                    profile: effectiveProfile,
+                    body: request,
+                  })
+                : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+                    profile: effectiveProfile,
+                  });
+            } catch (err) {
+              const msg = String(err);
+              if (
+                msg.includes("404:") &&
+                msg.includes("tab not found") &&
+                effectiveProfile === "chrome"
+              ) {
+                const requestTargetId =
+                  typeof (request as { targetId?: unknown }).targetId === "string"
+                    ? ((request as { targetId?: string }).targetId?.trim() ?? "")
                     : "";
+                const tabs = proxyRequest
+                  ? ((
+                      (await proxyRequest({
+                        method: "GET",
+                        path: "/tabs",
+                        profile: effectiveProfile,
+                      })) as { tabs?: unknown[] }
+                    ).tabs ?? [])
+                  : await browserTabs(baseUrl, { profile: effectiveProfile }).catch(() => []);
+                if (!tabs.length) {
+                  const canTryDefaultProfile =
+                    !requestTargetId &&
+                    Boolean(normalizedDefaultProfile) &&
+                    normalizedDefaultProfile !== "chrome" &&
+                    normalizedDefaultProfile !== effectiveProfile;
+                  if (canTryDefaultProfile && normalizedDefaultProfile) {
+                    const fallbackTabs = proxyRequest
+                      ? ((
+                          (await proxyRequest({
+                            method: "GET",
+                            path: "/tabs",
+                            profile: normalizedDefaultProfile,
+                          })) as { tabs?: unknown[] }
+                        ).tabs ?? [])
+                      : await browserTabs(baseUrl, { profile: normalizedDefaultProfile }).catch(
+                          () => [],
+                        );
+                    if (fallbackTabs.length > 0) {
+                      return proxyRequest
+                        ? await proxyRequest({
+                            method: "POST",
+                            path: "/act",
+                            profile: normalizedDefaultProfile,
+                            body: request,
+                          })
+                        : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+                            profile: normalizedDefaultProfile,
+                          });
+                    }
+                  }
+                  const fallbackHint =
+                    normalizedDefaultProfile && normalizedDefaultProfile !== "chrome"
+                      ? ` Try profile="${normalizedDefaultProfile}" (or omit profile to use browser.defaultProfile).`
+                      : "";
+                  throw new Error(
+                    "No attached tabs found on relay profile (chrome). Prefer browser.defaultProfile direct CDP first; use relay attach only when explicitly needed." +
+                      fallbackHint,
+                    { cause: err },
+                  );
+                }
                 throw new Error(
-                  "No attached tabs found on relay profile (chrome). Prefer browser.defaultProfile direct CDP first; use relay attach only when explicitly needed." +
-                    fallbackHint,
+                  'Chrome relay tab not found (stale targetId?). Run action=tabs profile="chrome" for relay tabs, or omit profile to use browser.defaultProfile tabs.',
                   { cause: err },
                 );
               }
-              throw new Error(
-                'Chrome relay tab not found (stale targetId?). Run action=tabs profile="chrome" for relay tabs, or omit profile to use browser.defaultProfile tabs.',
-                { cause: err },
-              );
+              throw err;
             }
-            throw err;
-          }
+          });
+          return jsonResult(result);
         }
         default:
           throw new Error(`Unknown action: ${action}`);

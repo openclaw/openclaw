@@ -285,6 +285,58 @@ describe("browser tool snapshot maxChars", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("retries on CDP-down errors across fallback profiles", async () => {
+    browserConfigMocks.resolveBrowserConfig.mockReturnValue({
+      enabled: true,
+      controlPort: 18791,
+      defaultProfile: "main",
+    });
+    browserClientMocks.browserStatus
+      .mockRejectedValueOnce(new Error("CDP not reachable"))
+      .mockRejectedValueOnce(new Error("ECONNREFUSED"))
+      .mockResolvedValueOnce({
+        ok: true,
+        running: true,
+        pid: 1,
+        cdpPort: 18792,
+        cdpUrl: "http://127.0.0.1:18792",
+      });
+
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "status" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      expect.objectContaining({ profile: undefined }),
+    );
+    expect(browserClientMocks.browserStatus).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      expect.objectContaining({ profile: "main" }),
+    );
+    expect(browserClientMocks.browserStatus).toHaveBeenNthCalledWith(
+      3,
+      undefined,
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+  });
+
+  it("does not auto-fallback when a non-default profile is explicitly pinned", async () => {
+    browserConfigMocks.resolveBrowserConfig.mockReturnValue({
+      enabled: true,
+      controlPort: 18791,
+      defaultProfile: "main",
+    });
+    browserClientMocks.browserStatus.mockRejectedValueOnce(new Error("CDP connection timeout"));
+
+    const tool = createBrowserTool();
+    await expect(tool.execute?.(null, { action: "status", profile: "chrome" })).rejects.toThrow(
+      /CDP connection timeout/i,
+    );
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to browser.defaultProfile when chrome relay has no attached tabs", async () => {
     browserConfigMocks.resolveBrowserConfig.mockReturnValue({
       enabled: true,
