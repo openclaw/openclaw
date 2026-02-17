@@ -306,4 +306,78 @@ describe("hooks mapping", () => {
     });
     expect(result?.ok).toBe(false);
   });
+
+  describe("prototype chain traversal blocking", () => {
+    async function renderPayloadTemplate(template: string, payload: Record<string, unknown> = {}) {
+      const mappings = resolveHookMappings({
+        mappings: [
+          {
+            match: { path: "test" },
+            action: "agent",
+            messageTemplate: template,
+          },
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload,
+        headers: {},
+        url: new URL("http://127.0.0.1:18789/hooks/test"),
+        path: "test",
+      });
+      if (result?.ok && result.action?.kind === "agent") {
+        return result.action.message;
+      }
+      return undefined;
+    }
+
+    it("blocks __proto__ in path expression", async () => {
+      const message = await renderPayloadTemplate("got:{{__proto__}}");
+      expect(message).toBe("got:");
+    });
+
+    it("blocks prototype in path expression", async () => {
+      const message = await renderPayloadTemplate("got:{{prototype}}");
+      expect(message).toBe("got:");
+    });
+
+    it("blocks constructor in path expression", async () => {
+      const message = await renderPayloadTemplate("got:{{constructor}}");
+      expect(message).toBe("got:");
+    });
+
+    it("blocks __proto__ nested in a deeper path", async () => {
+      const message = await renderPayloadTemplate("got:{{payload.foo.__proto__.bar}}", {
+        foo: { safe: "value" },
+      });
+      expect(message).toBe("got:");
+    });
+
+    it("blocks prototype nested in a deeper path", async () => {
+      const message = await renderPayloadTemplate("got:{{payload.foo.prototype.bar}}", {
+        foo: { safe: "value" },
+      });
+      expect(message).toBe("got:");
+    });
+
+    it("blocks constructor nested in a deeper path", async () => {
+      const message = await renderPayloadTemplate("got:{{payload.foo.constructor.name}}", {
+        foo: { safe: "value" },
+      });
+      expect(message).toBe("got:");
+    });
+
+    it("allows normal paths that are not blocked", async () => {
+      const message = await renderPayloadTemplate("got:{{payload.name}}", {
+        name: "Alice",
+      });
+      expect(message).toBe("got:Alice");
+    });
+
+    it("allows normal nested paths with array indexing", async () => {
+      const message = await renderPayloadTemplate("got:{{items[0].label}}", {
+        items: [{ label: "first" }],
+      });
+      expect(message).toBe("got:first");
+    });
+  });
 });
