@@ -78,6 +78,24 @@ describe("skill-scanner-ast", () => {
     expect(findings.some((f) => f.ruleId === "indirect-eval")).toBe(true);
   });
 
+  it("ignores bracket eval on non-global object", () => {
+    const source = `const cache = {};\ncache["eval"]("key");`;
+    const findings = scanSourceAst(source, "test.ts");
+    expect(findings.some((f) => f.ruleId === "indirect-eval")).toBe(false);
+  });
+
+  it("ignores dot eval on non-global object", () => {
+    const source = `const obj = {};\nobj.eval("key");`;
+    const findings = scanSourceAst(source, "test.ts");
+    expect(findings.some((f) => f.ruleId === "indirect-eval")).toBe(false);
+  });
+
+  it("flags self['eval'](...) as known global", () => {
+    const source = `self["eval"]("alert(1)");`;
+    const findings = scanSourceAst(source, "test.ts");
+    expect(findings.some((f) => f.ruleId === "indirect-eval")).toBe(true);
+  });
+
   // -----------------------------------------------------------------------
   // Prototype pollution
   // -----------------------------------------------------------------------

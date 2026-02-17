@@ -88,9 +88,12 @@ function detectIndirectEval(node: ts.Node, sf: ts.SourceFile, findings: AstFindi
     ts.isElementAccessExpression(node.expression)
   ) {
     const arg = node.expression.argumentExpression;
+    const obj = node.expression.expression;
     if (
       ts.isStringLiteral(arg) &&
-      (arg.text === "eval" || arg.text === "Function")
+      (arg.text === "eval" || arg.text === "Function") &&
+      ts.isIdentifier(obj) &&
+      GLOBAL_OBJECTS.has(obj.text)
     ) {
       findings.push({
         ruleId: "indirect-eval",
@@ -181,8 +184,8 @@ function detectPrototypePollution(
     if (ts.isIdentifier(obj) && (obj.text === "Object" || obj.text === "Reflect")) {
       findings.push({
         ruleId: "prototype-pollution",
-        severity: "critical",
-        message: "Prototype pollution — setPrototypeOf call detected",
+        severity: "warn",
+        message: "Prototype mutation — setPrototypeOf call detected (review in context)",
         line: nodeLine(node, sf),
         evidence: nodeEvidence(node, sf),
       });
