@@ -359,6 +359,7 @@ function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
+  deliveryFallbackNotice?: string;
 }): string {
   if (params.remainingActiveSubagentRuns > 0) {
     const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
@@ -366,6 +367,9 @@ function buildAnnounceReplyInstruction(params: {
   }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+  }
+  if (params.deliveryFallbackNotice) {
+    return `A completed ${params.announceType} is ready for user delivery, but outbound delivery failed so this is a fallback routed into the requester session (${params.deliveryFallbackNotice}). Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Write the user-facing text in the same language as the requester's most recent user message in this session; if that language is unclear, match the language of the result text. Include a brief system-style notice that clearly says this is a fallback caused by outbound delivery failure (not the normal path), then continue with the normal update. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
   }
   return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
@@ -386,6 +390,11 @@ export async function runSubagentAnnounceFlow(params: {
   label?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  deliveryFallback?: {
+    channel?: string;
+    to?: string;
+    error?: string;
+  };
 }): Promise<boolean> {
   let didAnnounce = false;
   let shouldDeleteChildSession = params.cleanup === "delete";
@@ -503,6 +512,18 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionId || "unknown";
     const findings = reply || "(no output)";
     let triggerMessage = "";
+    const fallbackChannel = params.deliveryFallback?.channel?.trim();
+    const fallbackTo = params.deliveryFallback?.to?.trim();
+    const fallbackError = params.deliveryFallback?.error?.trim();
+    const fallbackNotice = params.deliveryFallback
+      ? [
+          fallbackChannel ? `channel=${fallbackChannel}` : undefined,
+          fallbackTo ? `to=${fallbackTo}` : undefined,
+          fallbackError ? `error=${fallbackError}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : undefined;
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     let requesterIsSubagent = requesterDepth >= 1;
@@ -558,6 +579,7 @@ export async function runSubagentAnnounceFlow(params: {
       remainingActiveSubagentRuns,
       requesterIsSubagent,
       announceType,
+      deliveryFallbackNotice: fallbackNotice,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -566,6 +588,12 @@ export async function runSubagentAnnounceFlow(params: {
     });
     triggerMessage = [
       `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
+      fallbackNotice
+        ? `[System Notice] code=delivery_fallback_outbound_send_failed details=(${fallbackNotice})`
+        : undefined,
+      fallbackNotice
+        ? "This result is being routed to this session as a fallback (not the normal delivery path)."
+        : undefined,
       "",
       "Result:",
       findings,
@@ -573,7 +601,9 @@ export async function runSubagentAnnounceFlow(params: {
       statsLine,
       "",
       replyInstruction,
-    ].join("\n");
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n");
 
     const announceId = buildAnnounceIdFromChildRun({
       childSessionKey: params.childSessionKey,
