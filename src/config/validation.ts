@@ -88,11 +88,17 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
+ *
+ * Returns success with warnings if only provider-specific issues are found (graceful degradation).
+ * Returns error only for critical validation failures.
  */
 export function validateConfigObjectRaw(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] } {
   const allIssues: ConfigValidationIssue[] = [];
+  const allWarnings: ConfigValidationIssue[] = [];
   const providersToDisable = new Set<string>(); // Tracks keys of providers with validation errors
 
   const legacyIssues = findLegacyConfigIssues(raw);
@@ -116,10 +122,6 @@ export function validateConfigObjectRaw(
 
     for (const issue of validatedResult.error.issues) {
       const issuePath = issue.path.join(".");
-      allIssues.push({
-        path: issuePath,
-        message: issue.message,
-      });
 
       // If the issue is specifically within `models.providers.<providerKey>`,
       // mark that provider for disabling. This is the key for graceful degradation.
@@ -134,6 +136,11 @@ export function validateConfigObjectRaw(
         console.warn(
           `[Config Warning] Provider '${issue.path[2]}' failed Zod validation: ${issue.message}. This provider will be disabled.`,
         );
+        // Add to warnings, not issues - provider errors are degradable
+        allWarnings.push({ path: issuePath, message: issue.message });
+      } else {
+        // Non-provider issues are critical and prevent startup
+        allIssues.push({ path: issuePath, message: issue.message });
       }
     }
   } else {
@@ -141,7 +148,7 @@ export function validateConfigObjectRaw(
     finalConfig = validatedResult.data;
   }
 
-  // Construct the OpenClawConfig object, filtering out invalid providers identified in Step 2.
+  // Construct the OpenClawConfig object, filtering out invalid providers identified above.
   // This ensures the returned config *only* contains valid providers.
   if (providersToDisable.size > 0 && finalConfig.models?.providers) {
     const originalProviders = finalConfig.models.providers;
@@ -153,7 +160,7 @@ export function validateConfigObjectRaw(
         filteredProviders[providerKey] = providerConfig as z.infer<typeof ModelProviderSchema>;
       } else {
         // This provider was explicitly marked for disabling due to errors.
-        // Its error has already been added to `allIssues` and a warning logged.
+        // Its error has already been added to `allWarnings` and a console warning logged.
       }
     }
     // Replace the original providers object with the filtered, valid one.
@@ -171,25 +178,34 @@ export function validateConfigObjectRaw(
   if (avatarIssues.length > 0) {
     allIssues.push(...avatarIssues);
   }
+
+  // Return error only if there are critical issues (non-provider)
   if (allIssues.length > 0) {
-    return { ok: false, issues: allIssues }; // REMOVED config from error return
+    return { ok: false, issues: allIssues, warnings: allWarnings };
   }
-  return {
-    ok: true,
-    config: finalConfig,
-  };
+
+  // Success path: either no issues at all, or only provider-level warnings
+  return { ok: true, config: finalConfig, warnings: allWarnings };
 }
 
+/**
+ * Validates config and applies runtime defaults.
+ * Returns success with warnings if only provider-specific issues are found.
+ * Returns error for critical validation failures.
+ */
 export function validateConfigObject(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] } {
   const result = validateConfigObjectRaw(raw);
   if (!result.ok) {
-    return { ok: false, issues: result.issues }; // Ensure no config is returned on error
+    return { ok: false, issues: result.issues, warnings: result.warnings };
   }
   return {
     ok: true,
     config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
+    warnings: result.warnings,
   };
 }
 
@@ -237,12 +253,12 @@ function validateConfigObjectWithPluginsBase(
     } {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+    return { ok: false, issues: base.issues, warnings: base.warnings };
   }
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...base.warnings]; // Start with base warnings (provider-related)
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
