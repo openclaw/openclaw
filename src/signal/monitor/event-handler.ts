@@ -573,7 +573,10 @@ export function createSignalEventHandler(
     const nativeMention = isGroup && eDeps && hasNativeSignalMention(dataMessage, deps.account);
     const wasMentioned =
       isGroup && (matchesMentionPatterns(messageText, mentionRegexes) || Boolean(nativeMention));
+    // When custom enhancement deps are present, checkRequireMention (above) is
+    // the sole mention gate — skip upstream's gating to avoid conflicting defaults.
     const requireMention =
+      !eDeps &&
       isGroup &&
       resolveChannelGroupRequireMention({
         cfg: deps.cfg,
