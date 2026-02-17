@@ -176,7 +176,9 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
   const normalized = params.command.commandBodyNormalized;
   if (
     normalized !== "/export-session" &&
+    normalized !== "/export_session" &&
     !normalized.startsWith("/export-session ") &&
+    !normalized.startsWith("/export_session ") &&
     normalized !== "/export" &&
     !normalized.startsWith("/export ")
   ) {
