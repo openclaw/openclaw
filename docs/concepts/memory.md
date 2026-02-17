@@ -124,16 +124,15 @@ memorySearch: {
 - `GOOGLE_APPLICATION_CREDENTIALS`: Path to your Service Account JSON key file.
 - `GOOGLE_CLOUD_LOCATION` (optional): Defaults to `us-central1`.
 
-You can set these in your `openclaw.json` under `agents.defaults.env`:
+You can set these in your shell environment or in `openclaw.json` under the
+global `env` section (or per-agent `agents.defaults.env`):
 
 ```json5
-agents: {
-  defaults: {
-    env: {
-      GOOGLE_CLOUD_PROJECT: "your-project-id",
-      GOOGLE_APPLICATION_CREDENTIALS: "/path/to/key.json",
-      GOOGLE_CLOUD_LOCATION: "us-central1"
-    }
+{
+  env: {
+    GOOGLE_CLOUD_PROJECT: "your-project-id",
+    GOOGLE_APPLICATION_CREDENTIALS: "/path/to/key.json",
+    GOOGLE_CLOUD_LOCATION: "us-central1"
   }
 }
 ```
