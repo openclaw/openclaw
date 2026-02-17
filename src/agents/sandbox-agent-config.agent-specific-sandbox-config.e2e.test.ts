@@ -21,6 +21,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         stdout?: Readable;
         stderr?: Readable;
         on: (event: string, cb: (...args: unknown[]) => void) => void;
+        emit: (event: string, ...args: unknown[]) => boolean;
       };
       child.stdout = new Readable({ read() {} });
       child.stderr = new Readable({ read() {} });
@@ -40,8 +41,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("../skills.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../skills.js")>();
+vi.mock("./skills.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./skills.js")>();
   return {
     ...actual,
     syncSkillsToWorkspace: vi.fn(async () => undefined),
