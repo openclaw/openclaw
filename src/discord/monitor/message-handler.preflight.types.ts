@@ -87,6 +87,9 @@ export type DiscordMessagePreflightContext = {
   historyEntry?: HistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
+
+  /** True when this is a bot message in a fanOut channel (from another agent's bot). */
+  isFanOutBotMessage: boolean;
 };
 
 export type DiscordMessagePreflightParams = {
