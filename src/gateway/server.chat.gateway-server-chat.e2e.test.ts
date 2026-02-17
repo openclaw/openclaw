@@ -433,8 +433,8 @@ describe("gateway server chat", () => {
 
         const res = await waitP;
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(200);
+        expect(res.payload?.status).toBe("ok");
+        expect(res.payload?.startedAt).toBe(200);
       }
 
       {
@@ -449,8 +449,8 @@ describe("gateway server chat", () => {
           timeoutMs: 1000,
         });
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(50);
+        expect(res.payload?.status).toBe("ok");
+        expect(res.payload?.startedAt).toBe(50);
       }
 
       {
@@ -459,7 +459,7 @@ describe("gateway server chat", () => {
           timeoutMs: 30,
         });
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("timeout");
+        expect(res.payload?.status).toBe("timeout");
       }
 
       {
@@ -478,8 +478,8 @@ describe("gateway server chat", () => {
 
         const res = await waitP;
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("error");
-        expect(res.payload.error).toBe("boom");
+        expect(res.payload?.status).toBe("error");
+        expect(res.payload?.error).toBe("boom");
       }
 
       {
@@ -504,9 +504,9 @@ describe("gateway server chat", () => {
 
         const res = await waitP;
         expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(123);
-        expect(res.payload.endedAt).toBe(456);
+        expect(res.payload?.status).toBe("ok");
+        expect(res.payload?.startedAt).toBe(123);
+        expect(res.payload?.endedAt).toBe(456);
       }
     } finally {
       webchatWs.close();
