@@ -1040,38 +1040,48 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const appended = appendAssistantTranscriptMessage({
-      message: p.message,
-      label: p.label,
-      sessionId,
-      storePath,
-      sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
-      createIfMissing: false,
-    });
-    if (!appended.ok || !appended.messageId || !appended.message) {
+    // Append to transcript file using shared helper (includes transcript path validation)
+    try {
+      const result = appendAssistantTranscriptMessage({
+        message: p.message,
+        label: p.label,
+        sessionId,
+        storePath,
+        sessionFile: entry?.sessionFile,
+        agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
+        createIfMissing: false,
+      });
+
+      if (!result.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, result.error ?? "failed to inject message"),
+        );
+        return;
+      }
+
+      // Broadcast to webchat for immediate UI update
+      const chatPayload = {
+        runId: `inject-${result.messageId ?? "unknown"}`,
+        sessionKey: rawSessionKey,
+        seq: 0,
+        state: "final" as const,
+        message: result.message,
+      };
+      context.broadcast("chat", chatPayload);
+      context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
+
+      respond(true, { ok: true, messageId: result.messageId });
+      return;
+    } catch (err) {
+      const errMessage = err instanceof Error ? err.message : String(err);
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `failed to write transcript: ${appended.error ?? "unknown error"}`,
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, `failed to write transcript: ${errMessage}`),
       );
       return;
     }
-
-    // Broadcast to webchat for immediate UI update
-    const chatPayload = {
-      runId: `inject-${appended.messageId}`,
-      sessionKey: rawSessionKey,
-      seq: 0,
-      state: "final" as const,
-      message: appended.message,
-    };
-    context.broadcast("chat", chatPayload);
-    context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
-
-    respond(true, { ok: true, messageId: appended.messageId });
   },
 };

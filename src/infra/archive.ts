@@ -6,6 +6,9 @@ import { pipeline } from "node:stream/promises";
 import JSZip from "jszip";
 import * as tar from "tar";
 import { resolveSafeBaseDir } from "./path-safety.js";
+import { isPathWithinBase } from "./paths.js";
+
+export { isPathWithinBase };
 
 export type ArchiveKind = "tar" | "zip";
 
