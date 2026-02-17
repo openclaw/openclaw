@@ -20,6 +20,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
         scope: "per-sender",
         agentToAgent: { maxPingPongTurns: 2 },
       },
+      tools: {
+        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+        sessions: { visibility: "all" },
+      },
     }),
     resolveGatewayPort: () => 18789,
   };
@@ -783,7 +787,7 @@ describe("sessions tools", () => {
         text?: string;
       };
       expect(details.status).toBe("ok");
-      expect(details.text).toContain("tokens 1k (in 12 / out 1k)");
+      expect(details.text).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
       expect(details.text).toContain("prompt/cache 197k");
       expect(details.text).not.toContain("1.0k io");
     } finally {

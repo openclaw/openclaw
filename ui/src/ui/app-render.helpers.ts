@@ -4,6 +4,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import { OpenClawApp } from "./app.ts";
@@ -186,7 +187,7 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        title="Refresh chat data"
+        title=${t("chat.refreshTitle")}
       >
         ${refreshIcon}
       </button>
@@ -204,11 +205,7 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        title=${
-          disableThinkingToggle
-            ? "Disabled during onboarding"
-            : "Toggle assistant thinking/working output"
-        }
+        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
       >
         ${icons.brain}
       </button>
@@ -225,11 +222,7 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        title=${
-          disableFocusToggle
-            ? "Disabled during onboarding"
-            : "Toggle focus mode (hide sidebar + page header)"
-        }
+        title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
       >
         ${focusIcon}
       </button>

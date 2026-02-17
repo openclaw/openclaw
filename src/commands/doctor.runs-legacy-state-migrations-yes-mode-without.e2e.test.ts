@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   arrangeLegacyStateMigrationTest,
   confirm,
+  createDoctorRuntime,
   ensureAuthProfileStore,
-  readConfigFileSnapshot,
+  mockDoctorConfigSnapshot,
   serviceIsLoaded,
   serviceRestart,
   writeConfigFile,
@@ -20,17 +21,18 @@ describe("doctor command", () => {
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
+  it("runs legacy state migrations in non-interactive mode without prompting", async () => {
+    const { doctorCommand, runtime, runLegacyStateMigrations } =
+      await arrangeLegacyStateMigrationTest();
+
+    await doctorCommand(runtime, { nonInteractive: true });
+
+    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+  }, 30_000);
+
   it("skips gateway restarts in non-interactive mode", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
+    mockDoctorConfigSnapshot();
 
     const { healthCommand } = await import("./health.js");
     healthCommand.mockRejectedValueOnce(new Error("gateway closed"));
@@ -40,25 +42,14 @@ describe("doctor command", () => {
     confirm.mockClear();
 
     const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    await doctorCommand(runtime, { nonInteractive: true });
+    await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
     expect(serviceRestart).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
   });
 
   it("migrates anthropic oauth config profile id when only email profile exists", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
+    mockDoctorConfigSnapshot({
       config: {
         auth: {
           profiles: {
@@ -66,8 +57,6 @@ describe("doctor command", () => {
           },
         },
       },
-      issues: [],
-      legacyIssues: [],
     });
 
     ensureAuthProfileStore.mockReturnValueOnce({
@@ -85,7 +74,7 @@ describe("doctor command", () => {
     });
 
     const { doctorCommand } = await import("./doctor.js");
-    await doctorCommand({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }, { yes: true });
+    await doctorCommand(createDoctorRuntime(), { yes: true });
 
     const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;

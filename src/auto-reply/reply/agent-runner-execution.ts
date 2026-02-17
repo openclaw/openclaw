@@ -312,6 +312,7 @@ export async function runAgentTurnWithFallback(params: {
               }
               return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
             })(),
+            suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
             bashElevated: params.followupRun.run.bashElevated,
             timeoutMs: params.followupRun.run.timeoutMs,
             runId,
@@ -333,6 +334,7 @@ export async function runAgentTurnWithFallback(params: {
               : undefined,
             onAssistantMessageStart: async () => {
               await params.typingSignals.signalMessageStart();
+              await params.opts?.onAssistantMessageStart?.();
             },
             onReasoningStream:
               params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
@@ -344,13 +346,16 @@ export async function runAgentTurnWithFallback(params: {
                     });
                   }
                 : undefined,
+            onReasoningEnd: params.opts?.onReasoningEnd,
             onAgentEvent: async (evt) => {
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
               if (evt.stream === "tool") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
+                  await params.opts?.onToolStart?.({ name, phase });
                 }
               }
               // Track auto-compaction completion

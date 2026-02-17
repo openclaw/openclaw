@@ -15,40 +15,60 @@ beforeAll(async () => {
 
 installTriggerHandlingE2eTestHooks();
 
+function mockEmbeddedOk() {
+  const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+  runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: {
+      durationMs: 1,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+  return runEmbeddedPiAgentMock;
+}
+
+function makeUnauthorizedWhatsAppCfg(home: string) {
+  const baseCfg = makeCfg(home);
+  return {
+    ...baseCfg,
+    channels: {
+      ...baseCfg.channels,
+      whatsapp: {
+        allowFrom: ["+1000"],
+      },
+    },
+  };
+}
+
+async function runInlineUnauthorizedCommand(params: {
+  home: string;
+  command: "/status" | "/help";
+  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+}) {
+  const cfg = makeUnauthorizedWhatsAppCfg(params.home);
+  const res = await params.getReplyFromConfig(
+    {
+      Body: `please ${params.command} now`,
+      From: "+2001",
+      To: "+2000",
+      Provider: "whatsapp",
+      SenderE164: "+2001",
+    },
+    {},
+    cfg,
+  );
+  return { cfg, res };
+}
+
 describe("trigger handling", () => {
   it("keeps inline /status for unauthorized senders", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
+      const runEmbeddedPiAgentMock = mockEmbeddedOk();
+      const { res } = await runInlineUnauthorizedCommand({
+        home,
+        command: "/status",
+        getReplyFromConfig,
       });
-
-      const baseCfg = makeCfg(home);
-      const cfg = {
-        ...baseCfg,
-        channels: {
-          ...baseCfg.channels,
-          whatsapp: {
-            allowFrom: ["+1000"],
-          },
-        },
-      };
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "please /status now",
-          From: "+2001",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+2001",
-        },
-        {},
-        cfg,
-      );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
       expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
@@ -60,37 +80,12 @@ describe("trigger handling", () => {
 
   it("keeps inline /help for unauthorized senders", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
+      const runEmbeddedPiAgentMock = mockEmbeddedOk();
+      const { res } = await runInlineUnauthorizedCommand({
+        home,
+        command: "/help",
+        getReplyFromConfig,
       });
-
-      const baseCfg = makeCfg(home);
-      const cfg = {
-        ...baseCfg,
-        channels: {
-          ...baseCfg.channels,
-          whatsapp: {
-            allowFrom: ["+1000"],
-          },
-        },
-      };
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "please /help now",
-          From: "+2001",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+2001",
-        },
-        {},
-        cfg,
-      );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
       expect(runEmbeddedPiAgentMock).toHaveBeenCalled();

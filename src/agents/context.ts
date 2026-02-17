@@ -6,9 +6,35 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
+type ModelRegistryLike = {
+  getAvailable?: () => ModelEntry[];
+  getAll: () => ModelEntry[];
+};
 type ConfigModelEntry = { id?: string; contextWindow?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
+
+export function applyDiscoveredContextWindows(params: {
+  cache: Map<string, number>;
+  models: ModelEntry[];
+}) {
+  for (const model of params.models) {
+    if (!model?.id) {
+      continue;
+    }
+    const contextWindow =
+      typeof model.contextWindow === "number" ? Math.trunc(model.contextWindow) : undefined;
+    if (!contextWindow || contextWindow <= 0) {
+      continue;
+    }
+    const existing = params.cache.get(model.id);
+    // When multiple providers expose the same model id with different limits,
+    // prefer the smaller window so token budgeting is fail-safe (no overestimation).
+    if (existing === undefined || contextWindow < existing) {
+      params.cache.set(model.id, contextWindow);
+    }
+  }
+}
 
 export function applyConfiguredContextWindows(params: {
   cache: Map<string, number>;
@@ -54,16 +80,15 @@ const loadPromise = (async () => {
     const { discoverAuthStorage, discoverModels } = await import("./pi-model-discovery.js");
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
-    const modelRegistry = discoverModels(authStorage, agentDir);
-    const models = modelRegistry.getAll() as ModelEntry[];
-    for (const m of models) {
-      if (!m?.id) {
-        continue;
-      }
-      if (typeof m.contextWindow === "number" && m.contextWindow > 0) {
-        MODEL_CACHE.set(m.id, m.contextWindow);
-      }
-    }
+    const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
+    const models =
+      typeof modelRegistry.getAvailable === "function"
+        ? modelRegistry.getAvailable()
+        : modelRegistry.getAll();
+    applyDiscoveredContextWindows({
+      cache: MODEL_CACHE,
+      models,
+    });
   } catch {
     // If model discovery fails, continue with config overrides only.
   }

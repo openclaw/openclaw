@@ -1,6 +1,7 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { Agent, type Dispatcher } from "undici";
+import { normalizeHostname } from "./hostname.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -25,14 +26,6 @@ export type SsrFPolicy = {
 
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
 
-function normalizeHostname(hostname: string): string {
-  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-  if (normalized.startsWith("[") && normalized.endsWith("]")) {
-    return normalized.slice(1, -1);
-  }
-  return normalized;
-}
-
 function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
     return new Set<string>();
@@ -40,7 +33,7 @@ function normalizeHostnameSet(values?: string[]): Set<string> {
   return new Set(values.map((value) => normalizeHostname(value)).filter(Boolean));
 }
 
-function normalizeHostnameAllowlist(values?: string[]): string[] {
+export function normalizeHostnameAllowlist(values?: string[]): string[] {
   if (!values || values.length === 0) {
     return [];
   }
@@ -64,7 +57,7 @@ function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean 
   return hostname === pattern;
 }
 
-function matchesHostnameAllowlist(hostname: string, allowlist: string[]): boolean {
+export function matchesHostnameAllowlist(hostname: string, allowlist: string[]): boolean {
   if (allowlist.length === 0) {
     return true;
   }

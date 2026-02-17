@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -129,29 +130,7 @@ describe("buildStatusMessage", () => {
       sessionKey: "agent:main:main",
       queue: { mode: "none" },
       mediaDecisions: [
-        {
-          capability: "image",
-          outcome: "success",
-          attachments: [
-            {
-              attachmentIndex: 0,
-              attempts: [
-                {
-                  type: "provider",
-                  outcome: "success",
-                  provider: "openai",
-                  model: "gpt-5.2",
-                },
-              ],
-              chosen: {
-                type: "provider",
-                outcome: "success",
-                provider: "openai",
-                model: "gpt-5.2",
-              },
-            },
-          ],
-        },
+        createSuccessfulImageMediaDecision(),
         {
           capability: "audio",
           outcome: "skipped",
@@ -382,39 +361,58 @@ describe("buildStatusMessage", () => {
     );
   }
 
+  const baselineTranscriptUsage = {
+    input: 1,
+    output: 2,
+    cacheRead: 1000,
+    cacheWrite: 0,
+    totalTokens: 1003,
+  } as const;
+
+  function writeBaselineTranscriptUsageLog(params: {
+    dir: string;
+    agentId: string;
+    sessionId: string;
+  }) {
+    writeTranscriptUsageLog({
+      ...params,
+      usage: baselineTranscriptUsage,
+    });
+  }
+
+  function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
+    return buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: params.sessionId,
+        updatedAt: 0,
+        totalTokens: 3,
+        contextTokens: 32_000,
+      },
+      sessionKey: params.sessionKey,
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      includeTranscriptUsage: true,
+      modelAuth: "api-key",
+    });
+  }
+
   it("prefers cached prompt tokens from the session log", async () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-1";
-        writeTranscriptUsageLog({
+        writeBaselineTranscriptUsageLog({
           dir,
           agentId: "main",
           sessionId,
-          usage: {
-            input: 1,
-            output: 2,
-            cacheRead: 1000,
-            cacheWrite: 0,
-            totalTokens: 1003,
-          },
         });
 
-        const text = buildStatusMessage({
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            contextTokens: 32_000,
-          },
-          sessionEntry: {
-            sessionId,
-            updatedAt: 0,
-            totalTokens: 3, // would be wrong if cached prompt tokens exist
-            contextTokens: 32_000,
-          },
+        const text = buildTranscriptStatusText({
+          sessionId,
           sessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          queue: { mode: "collect", depth: 0 },
-          includeTranscriptUsage: true,
-          modelAuth: "api-key",
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
@@ -427,35 +425,15 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-worker1";
-        writeTranscriptUsageLog({
+        writeBaselineTranscriptUsageLog({
           dir,
           agentId: "worker1",
           sessionId,
-          usage: {
-            input: 1,
-            output: 2,
-            cacheRead: 1000,
-            cacheWrite: 0,
-            totalTokens: 1003,
-          },
         });
 
-        const text = buildStatusMessage({
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            contextTokens: 32_000,
-          },
-          sessionEntry: {
-            sessionId,
-            updatedAt: 0,
-            totalTokens: 3,
-            contextTokens: 32_000,
-          },
+        const text = buildTranscriptStatusText({
+          sessionId,
           sessionKey: "agent:worker1:telegram:12345",
-          sessionScope: "per-sender",
-          queue: { mode: "collect", depth: 0 },
-          includeTranscriptUsage: true,
-          modelAuth: "api-key",
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");

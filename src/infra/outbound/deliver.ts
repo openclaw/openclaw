@@ -1,5 +1,8 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
@@ -79,8 +82,7 @@ type ChannelHandler = {
   sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
 };
 
-// Channel docking: outbound delivery delegates to plugin.outbound adapters.
-async function createChannelHandler(params: {
+type ChannelHandlerParams = {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -92,49 +94,26 @@ async function createChannelHandler(params: {
   gifPlayback?: boolean;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
-}): Promise<ChannelHandler> {
+};
+
+// Channel docking: outbound delivery delegates to plugin.outbound adapters.
+async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   const outbound = await loadChannelOutboundAdapter(params.channel);
-  if (!outbound?.sendText || !outbound?.sendMedia) {
-    throw new Error(`Outbound not configured for channel: ${params.channel}`);
-  }
-  const handler = createPluginHandler({
-    outbound,
-    cfg: params.cfg,
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-    identity: params.identity,
-    deps: params.deps,
-    gifPlayback: params.gifPlayback,
-    silent: params.silent,
-    mediaLocalRoots: params.mediaLocalRoots,
-  });
+  const handler = createPluginHandler({ ...params, outbound });
   if (!handler) {
     throw new Error(`Outbound not configured for channel: ${params.channel}`);
   }
   return handler;
 }
 
-function createPluginHandler(params: {
-  outbound?: ChannelOutboundAdapter;
-  cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  identity?: OutboundIdentity;
-  deps?: OutboundSendDeps;
-  gifPlayback?: boolean;
-  silent?: boolean;
-  mediaLocalRoots?: readonly string[];
-}): ChannelHandler | null {
+function createPluginHandler(
+  params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
+): ChannelHandler | null {
   const outbound = params.outbound;
   if (!outbound?.sendText || !outbound?.sendMedia) {
     return null;
   }
+  const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
   const sendMedia = outbound.sendMedia;
   const chunker = outbound.chunker ?? null;
@@ -146,50 +125,40 @@ function createPluginHandler(params: {
     sendPayload: outbound.sendPayload
       ? async (payload) =>
           outbound.sendPayload!({
-            cfg: params.cfg,
-            to: params.to,
+            ...baseCtx,
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
-            accountId: params.accountId,
-            replyToId: params.replyToId,
-            threadId: params.threadId,
-            identity: params.identity,
-            gifPlayback: params.gifPlayback,
-            deps: params.deps,
-            silent: params.silent,
-            mediaLocalRoots: params.mediaLocalRoots,
             payload,
           })
       : undefined,
     sendText: async (text) =>
       sendText({
-        cfg: params.cfg,
-        to: params.to,
+        ...baseCtx,
         text,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        identity: params.identity,
-        gifPlayback: params.gifPlayback,
-        deps: params.deps,
-        silent: params.silent,
-        mediaLocalRoots: params.mediaLocalRoots,
       }),
     sendMedia: async (caption, mediaUrl) =>
       sendMedia({
-        cfg: params.cfg,
-        to: params.to,
+        ...baseCtx,
         text: caption,
         mediaUrl,
-        accountId: params.accountId,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        identity: params.identity,
-        gifPlayback: params.gifPlayback,
-        deps: params.deps,
-        silent: params.silent,
-        mediaLocalRoots: params.mediaLocalRoots,
       }),
+  };
+}
+
+function createChannelOutboundContextBase(
+  params: ChannelHandlerParams,
+): Omit<ChannelOutboundContext, "text" | "mediaUrl"> {
+  return {
+    cfg: params.cfg,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    identity: params.identity,
+    gifPlayback: params.gifPlayback,
+    deps: params.deps,
+    silent: params.silent,
+    mediaLocalRoots: params.mediaLocalRoots,
   };
 }
 

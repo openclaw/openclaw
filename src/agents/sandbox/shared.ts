@@ -6,6 +6,8 @@ import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 
 export function slugifySessionKey(value: string) {
   const trimmed = value.trim() || "session";
+  // SHA-1 is intentional: this is a non-security slug differentiator and changing
+  // the algorithm orphans existing workspace directories on upgrade (#18503).
   const hash = crypto.createHash("sha1").update(trimmed).digest("hex").slice(0, 8);
   const safe = trimmed
     .toLowerCase()

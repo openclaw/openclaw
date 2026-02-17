@@ -1,16 +1,9 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import type { FetchLike } from "../../media/fetch.js";
-import type { SlackFile } from "../types.js";
+import type { SlackAttachment, SlackFile } from "../types.js";
+import { normalizeHostname } from "../../infra/net/hostname.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
-
-function normalizeHostname(hostname: string): string {
-  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-  if (normalized.startsWith("[") && normalized.endsWith("]")) {
-    return normalized.slice(1, -1);
-  }
-  return normalized;
-}
 
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
@@ -224,6 +217,73 @@ export async function resolveSlackMedia(params: {
 
   const results = resolved.filter((entry): entry is SlackMediaResult => Boolean(entry));
   return results.length > 0 ? results : null;
+}
+
+/** Extracts text and media from forwarded-message attachments. Returns null when empty. */
+export async function resolveSlackAttachmentContent(params: {
+  attachments?: SlackAttachment[];
+  token: string;
+  maxBytes: number;
+}): Promise<{ text: string; media: SlackMediaResult[] } | null> {
+  const attachments = params.attachments;
+  if (!attachments || attachments.length === 0) {
+    return null;
+  }
+
+  const textBlocks: string[] = [];
+  const allMedia: SlackMediaResult[] = [];
+
+  for (const att of attachments) {
+    const text = att.text?.trim() || att.fallback?.trim();
+    if (text) {
+      const author = att.author_name;
+      const heading = author ? `[Forwarded message from ${author}]` : "[Forwarded message]";
+      textBlocks.push(`${heading}\n${text}`);
+    }
+
+    const imageUrl = att.image_url;
+    if (imageUrl) {
+      try {
+        const fetched = await fetchRemoteMedia({
+          url: imageUrl,
+          maxBytes: params.maxBytes,
+        });
+        if (fetched.buffer.byteLength <= params.maxBytes) {
+          const saved = await saveMediaBuffer(
+            fetched.buffer,
+            fetched.contentType,
+            "inbound",
+            params.maxBytes,
+          );
+          const label = fetched.fileName ?? "forwarded image";
+          allMedia.push({
+            path: saved.path,
+            contentType: fetched.contentType ?? saved.contentType,
+            placeholder: `[Forwarded image: ${label}]`,
+          });
+        }
+      } catch {
+        // Skip images that fail to download
+      }
+    }
+
+    if (att.files && att.files.length > 0) {
+      const fileMedia = await resolveSlackMedia({
+        files: att.files,
+        token: params.token,
+        maxBytes: params.maxBytes,
+      });
+      if (fileMedia) {
+        allMedia.push(...fileMedia);
+      }
+    }
+  }
+
+  const combinedText = textBlocks.join("\n\n");
+  if (!combinedText && allMedia.length === 0) {
+    return null;
+  }
+  return { text: combinedText, media: allMedia };
 }
 
 export type SlackThreadStarter = {

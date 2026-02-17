@@ -61,6 +61,10 @@ const registryCache = new Map<string, { expiresAt: number; registry: PluginManif
 
 const DEFAULT_MANIFEST_CACHE_MS = 200;
 
+export function clearPluginManifestRegistryCache(): void {
+  registryCache.clear();
+}
+
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
   if (raw === "" || raw === "0") {

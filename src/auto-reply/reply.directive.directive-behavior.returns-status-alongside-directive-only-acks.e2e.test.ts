@@ -13,6 +13,31 @@ import { getReplyFromConfig } from "./reply.js";
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
+  function extractReplyText(res: Awaited<ReturnType<typeof getReplyFromConfig>>): string {
+    return (Array.isArray(res) ? res[0]?.text : res?.text) ?? "";
+  }
+
+  function makeQueueDirectiveConfig(home: string, storePath: string) {
+    return {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: path.join(home, "openclaw"),
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+  }
+
+  async function runQueueDirective(params: { home: string; storePath: string; body: string }) {
+    return await getReplyFromConfig(
+      { Body: params.body, From: "+1222", To: "+1222", CommandAuthorized: true },
+      {},
+      makeQueueDirectiveConfig(params.home, params.storePath),
+    );
+  }
+
   it("returns status alongside directive-only acks", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
@@ -44,7 +69,7 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = extractReplyText(res);
       expect(text).toContain("Elevated mode disabled.");
       expect(text).toContain("Session: agent:main:main");
       const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
@@ -72,7 +97,7 @@ describe("directive behavior", () => {
         makeRestrictedElevatedDisabledConfig(home),
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = extractReplyText(res);
       expect(text).not.toContain("elevated");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -81,22 +106,13 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
-        { Body: "/queue interrupt", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        },
-      );
+      const res = await runQueueDirective({
+        home,
+        storePath,
+        body: "/queue interrupt",
+      });
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = extractReplyText(res);
       expect(text).toMatch(/^⚙️ Queue mode set to interrupt\./);
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];
@@ -108,27 +124,13 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/queue collect debounce:2s cap:5 drop:old",
-          From: "+1222",
-          To: "+1222",
-          CommandAuthorized: true,
-        },
-        {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        },
-      );
+      const res = await runQueueDirective({
+        home,
+        storePath,
+        body: "/queue collect debounce:2s cap:5 drop:old",
+      });
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const text = extractReplyText(res);
       expect(text).toMatch(/^⚙️ Queue mode set to collect\./);
       expect(text).toMatch(/Queue debounce set to 2000ms/);
       expect(text).toMatch(/Queue cap set to 5/);
@@ -146,37 +148,9 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      await getReplyFromConfig(
-        { Body: "/queue interrupt", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        },
-      );
-
-      const res = await getReplyFromConfig(
-        { Body: "/queue reset", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-opus-4-5",
-              workspace: path.join(home, "openclaw"),
-            },
-          },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        },
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      await runQueueDirective({ home, storePath, body: "/queue interrupt" });
+      const res = await runQueueDirective({ home, storePath, body: "/queue reset" });
+      const text = extractReplyText(res);
       expect(text).toMatch(/^⚙️ Queue mode reset to default\./);
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];

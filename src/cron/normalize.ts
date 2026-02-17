@@ -151,7 +151,7 @@ function coerceDelivery(delivery: UnknownRecord) {
     const mode = delivery.mode.trim().toLowerCase();
     if (mode === "deliver") {
       next.mode = "announce";
-    } else if (mode === "announce" || mode === "none") {
+    } else if (mode === "announce" || mode === "none" || mode === "webhook") {
       next.mode = mode;
     } else {
       delete next.mode;

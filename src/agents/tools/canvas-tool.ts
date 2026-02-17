@@ -87,8 +87,13 @@ export function createCanvasTool(): AnyAgentTool {
             height: typeof params.height === "number" ? params.height : undefined,
           };
           const invokeParams: Record<string, unknown> = {};
-          if (typeof params.target === "string" && params.target.trim()) {
-            invokeParams.url = params.target.trim();
+          // Accept both `target` and `url` for present to match common caller expectations.
+          // `target` remains the canonical field for CLI compatibility.
+          const presentTarget =
+            readStringParam(params, "target", { trim: true }) ??
+            readStringParam(params, "url", { trim: true });
+          if (presentTarget) {
+            invokeParams.url = presentTarget;
           }
           if (
             Number.isFinite(placement.x) ||
@@ -105,7 +110,10 @@ export function createCanvasTool(): AnyAgentTool {
           await invoke("canvas.hide", undefined);
           return jsonResult({ ok: true });
         case "navigate": {
-          const url = readStringParam(params, "url", { required: true });
+          // Support `target` as an alias so callers can reuse the same field across present/navigate.
+          const url =
+            readStringParam(params, "url", { trim: true }) ??
+            readStringParam(params, "target", { required: true, trim: true, label: "url" });
           await invoke("canvas.navigate", { url });
           return jsonResult({ ok: true });
         }

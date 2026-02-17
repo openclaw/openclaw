@@ -6,6 +6,7 @@ import {
   installTriggerHandlingE2eTestHooks,
   MAIN_SESSION_KEY,
   makeCfg,
+  makeWhatsAppElevatedCfg,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -26,25 +27,7 @@ describe("trigger handling", () => {
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
         },
       });
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "openclaw"),
-          },
-        },
-        tools: {
-          elevated: {
-            allowFrom: { whatsapp: ["+1000"] },
-          },
-        },
-        channels: {
-          whatsapp: {
-            allowFrom: ["+1000"],
-          },
-        },
-        session: { store: join(home, "sessions.json") },
-      };
+      const cfg = makeWhatsAppElevatedCfg(home);
 
       const res = await getReplyFromConfig(
         {

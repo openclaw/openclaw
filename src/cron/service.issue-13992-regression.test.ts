@@ -127,4 +127,45 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     // But should NOT have changed nextRunAtMs (it's still future)
     expect(job.state.nextRunAtMs).toBe(futureTime);
   });
+
+  it("isolates schedule errors while filling missing nextRunAtMs", () => {
+    const now = Date.now();
+    const pastDue = now - 1_000;
+
+    const dueJob: CronJob = {
+      id: "due-job",
+      name: "due job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+      payload: { kind: "systemEvent", text: "due" },
+      sessionTarget: "main",
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        nextRunAtMs: pastDue,
+      },
+    };
+
+    const malformedJob: CronJob = {
+      id: "bad-job",
+      name: "bad job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
+      payload: { kind: "systemEvent", text: "bad" },
+      sessionTarget: "main",
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        // missing nextRunAtMs
+      },
+    };
+
+    const state = createMockState([dueJob, malformedJob]);
+
+    expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
+    expect(dueJob.state.nextRunAtMs).toBe(pastDue);
+    expect(malformedJob.state.nextRunAtMs).toBeUndefined();
+    expect(malformedJob.state.scheduleErrorCount).toBe(1);
+    expect(malformedJob.state.lastError).toMatch(/^schedule error:/);
+  });
 });

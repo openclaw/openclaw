@@ -1,149 +1,101 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
+function createBlockReplyHarness(blockReplyBreak: "message_end" | "text_end") {
+  const { session, emit } = createStubSessionHarness();
+  const onBlockReply = vi.fn();
+  subscribeEmbeddedPiSession({
+    session,
+    runId: "run",
+    onBlockReply,
+    blockReplyBreak,
+  });
+  return { emit, onBlockReply };
+}
+
+async function emitMessageToolLifecycle(params: {
+  emit: (evt: unknown) => void;
+  toolCallId: string;
+  message: string;
+  result: unknown;
+}) {
+  params.emit({
+    type: "tool_execution_start",
+    toolName: "message",
+    toolCallId: params.toolCallId,
+    args: { action: "send", to: "+1555", message: params.message },
+  });
+  // Wait for async handler to complete.
+  await Promise.resolve();
+  params.emit({
+    type: "tool_execution_end",
+    toolName: "message",
+    toolCallId: params.toolCallId,
+    isError: false,
+    result: params.result,
+  });
+}
+
+function emitAssistantMessageEnd(emit: (evt: unknown) => void, text: string) {
+  const assistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text }],
+  } as AssistantMessage;
+  emit({ type: "message_end", message: assistantMessage });
+}
+
+function emitAssistantTextEndBlock(emit: (evt: unknown) => void, text: string) {
+  emit({ type: "message_start", message: { role: "assistant" } });
+  emit({
+    type: "message_update",
+    message: { role: "assistant" },
+    assistantMessageEvent: { type: "text_delta", delta: text },
+  });
+  emit({
+    type: "message_update",
+    message: { role: "assistant" },
+    assistantMessageEvent: { type: "text_end" },
+  });
+}
 
 describe("subscribeEmbeddedPiSession", () => {
   it("suppresses message_end block replies when the message tool already sent", async () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onBlockReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "message_end",
-    });
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 
     const messageText = "This is the answer.";
-
-    handler?.({
-      type: "tool_execution_start",
-      toolName: "message",
+    await emitMessageToolLifecycle({
+      emit,
       toolCallId: "tool-message-1",
-      args: { action: "send", to: "+1555", message: messageText },
-    });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "message",
-      toolCallId: "tool-message-1",
-      isError: false,
+      message: messageText,
       result: "ok",
     });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: messageText }],
-    } as AssistantMessage;
-
-    handler?.({ type: "message_end", message: assistantMessage });
+    emitAssistantMessageEnd(emit, messageText);
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
   it("does not suppress message_end replies when message tool reports error", async () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onBlockReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "message_end",
-    });
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 
     const messageText = "Please retry the send.";
-
-    handler?.({
-      type: "tool_execution_start",
-      toolName: "message",
+    await emitMessageToolLifecycle({
+      emit,
       toolCallId: "tool-message-err",
-      args: { action: "send", to: "+1555", message: messageText },
-    });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "message",
-      toolCallId: "tool-message-err",
-      isError: false,
+      message: messageText,
       result: { details: { status: "error" } },
     });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: messageText }],
-    } as AssistantMessage;
-
-    handler?.({ type: "message_end", message: assistantMessage });
+    emitAssistantMessageEnd(emit, messageText);
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
   it("clears block reply state on message_start", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onBlockReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-    });
-
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "OK" },
-    });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_end" },
-    });
+    const { emit, onBlockReply } = createBlockReplyHarness("text_end");
+    emitAssistantTextEndBlock(emit, "OK");
     expect(onBlockReply).toHaveBeenCalledTimes(1);
 
     // New assistant message with identical output should still emit.
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_delta", delta: "OK" },
-    });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_end" },
-    });
+    emitAssistantTextEndBlock(emit, "OK");
     expect(onBlockReply).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk", () => ({
   getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
@@ -147,47 +148,8 @@ describe("whatsapp resolveTarget", () => {
     expect(result.error).toBeDefined();
   });
 
-  it("should error on normalization failure with allowlist (implicit mode)", () => {
-    const result = resolveTarget({
-      to: "invalid-target",
-      mode: "implicit",
-      allowFrom: ["5511999999999"],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target provided with allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "implicit",
-      allowFrom: ["5511999999999"],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target and no allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should handle whitespace-only target", () => {
-    const result = resolveTarget({
-      to: "   ",
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+  installCommonResolveTargetErrorCases({
+    resolveTarget,
+    implicitAllowFrom: ["5511999999999"],
   });
 });

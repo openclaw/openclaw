@@ -23,6 +23,14 @@ import { normalizeToolName } from "./tool-policy.js";
 /** Track tool execution start times and args for after_tool_call hook */
 const toolStartData = new Map<string, { startTime: number; args: unknown }>();
 
+function isCronAddAction(args: unknown): boolean {
+  if (!args || typeof args !== "object") {
+    return false;
+  }
+  const action = (args as Record<string, unknown>).action;
+  return typeof action === "string" && action.trim().toLowerCase() === "add";
+}
+
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
@@ -137,6 +145,11 @@ export async function handleToolExecutionStart(
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
         ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
       }
+      // Track media URL from messaging tool args (pending until tool_execution_end)
+      const mediaUrl = argsRecord.mediaUrl ?? argsRecord.path ?? argsRecord.filePath;
+      if (mediaUrl && typeof mediaUrl === "string") {
+        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrl);
+      }
     }
   }
 }
@@ -188,6 +201,8 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const startData = toolStartData.get(toolCallId);
+  toolStartData.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
@@ -237,6 +252,19 @@ export async function handleToolExecutionEnd(
       ctx.state.messagingToolSentTargets.push(pendingTarget);
       ctx.trimMessagingToolSent();
     }
+  }
+  const pendingMediaUrl = ctx.state.pendingMessagingMediaUrls.get(toolCallId);
+  if (pendingMediaUrl) {
+    ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+    if (!isToolError) {
+      ctx.state.messagingToolSentMediaUrls.push(pendingMediaUrl);
+      ctx.trimMessagingToolSent();
+    }
+  }
+
+  // Track committed reminders only when cron.add completed successfully.
+  if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+    ctx.state.successfulCronAdds += 1;
   }
 
   emitAgentEvent({
@@ -290,8 +318,6 @@ export async function handleToolExecutionEnd(
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const startData = toolStartData.get(toolCallId);
-    toolStartData.delete(toolCallId);
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const toolArgs = startData?.args;
     const hookEvent: PluginHookAfterToolCallEvent = {
@@ -310,7 +336,5 @@ export async function handleToolExecutionEnd(
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
-  } else {
-    toolStartData.delete(toolCallId);
   }
 }

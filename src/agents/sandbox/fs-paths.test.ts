@@ -6,37 +6,10 @@ import {
   parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
 } from "./fs-paths.js";
+import { createSandboxTestContext } from "./test-fixtures.js";
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
-  return {
-    enabled: true,
-    sessionKey: "sandbox:test",
-    workspaceDir: "/tmp/workspace",
-    agentWorkspaceDir: "/tmp/workspace",
-    workspaceAccess: "rw",
-    containerName: "openclaw-sbx-test",
-    containerWorkdir: "/workspace",
-    docker: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
-      network: "none",
-      user: "1000:1000",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      capDrop: [],
-      seccompProfile: "",
-      apparmorProfile: "",
-      setupCommand: "",
-      binds: [],
-      dns: [],
-      extraHosts: [],
-      pidsLimit: 0,
-    },
-    tools: { allow: ["*"], deny: [] },
-    browserAllowHostControl: false,
-    ...overrides,
-  };
+  return createSandboxTestContext({ overrides });
 }
 
 describe("parseSandboxBindMount", () => {
@@ -49,6 +22,19 @@ describe("parseSandboxBindMount", () => {
     expect(parseSandboxBindMount("/tmp/b:/workspace-b:rw")).toEqual({
       hostRoot: path.resolve("/tmp/b"),
       containerRoot: "/workspace-b",
+      writable: true,
+    });
+  });
+
+  it("parses Windows drive-letter host paths", () => {
+    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
+      hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
+      containerRoot: "/workspace",
+      writable: false,
+    });
+    expect(parseSandboxBindMount("D:/data:/workspace-data:rw")).toEqual({
+      hostRoot: path.resolve("D:/data"),
+      containerRoot: "/workspace-data",
       writable: true,
     });
   });
