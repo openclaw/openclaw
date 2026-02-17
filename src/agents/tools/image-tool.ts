@@ -416,20 +416,6 @@ export function createImageTool(options?: {
           details: { error: "too_many_images", count: imageInputs.length, max: maxImages },
         };
       }
-      if (/^\d+$/.test(imageRaw)) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Invalid image reference: ${imageRawInput}. This looks like a message ID, not a file path. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
-            },
-          ],
-          details: {
-            error: "invalid_image_reference",
-            image: imageRawInput,
-          },
-        };
-      }
       const promptRaw =
         typeof record.prompt === "string" && record.prompt.trim()
           ? record.prompt.trim()
@@ -479,6 +465,20 @@ export function createImageTool(options?: {
             ],
             details: {
               error: "unsupported_image_reference",
+              image: imageRawInput,
+            },
+          };
+        }
+        if (/^\d+$/.test(imageRaw)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Invalid image reference: ${imageRawInput}. This looks like a message ID, not a file path. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
+              },
+            ],
+            details: {
+              error: "invalid_image_reference",
               image: imageRawInput,
             },
           };
