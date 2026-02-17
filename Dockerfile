@@ -52,6 +52,11 @@ RUN chown -R node:node /app
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
+# Entrypoint loads Docker secrets from /run/secrets/ into env vars.
+# Falls back to direct environment variables for backward compatibility.
+COPY --chown=node:node docker-entrypoint.sh /app/docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #
