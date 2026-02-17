@@ -35,7 +35,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
   const buildAssistantErrorMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
-    content: [] as const,
+    content: [],
     stopReason: "error" as const,
     errorMessage: "boom",
     api: model.api,
