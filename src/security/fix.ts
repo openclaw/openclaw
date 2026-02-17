@@ -451,6 +451,19 @@ export async function fixSecurityFootguns(opts?: {
     }
   }
 
+  // Harden cron/, browser/, and settings/ subdirectories (#18866)
+  const cronDir = path.join(stateDir, "cron");
+  const cronJobsFile = path.join(cronDir, "jobs.json");
+  const cronJobsBakFile = path.join(cronDir, "jobs.json.bak");
+  const browserDir = path.join(stateDir, "browser");
+  const settingsDir = path.join(stateDir, "settings");
+
+  actions.push(await applyPerms({ path: cronDir, mode: 0o700, require: "dir" }));
+  actions.push(await applyPerms({ path: cronJobsFile, mode: 0o600, require: "file" }));
+  actions.push(await applyPerms({ path: cronJobsBakFile, mode: 0o600, require: "file" }));
+  actions.push(await applyPerms({ path: browserDir, mode: 0o700, require: "dir" }));
+  actions.push(await applyPerms({ path: settingsDir, mode: 0o700, require: "dir" }));
+
   await chmodCredentialsAndAgentState({
     env,
     stateDir,
