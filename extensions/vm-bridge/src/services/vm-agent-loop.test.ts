@@ -1291,6 +1291,30 @@ describe("structured QA checklist", () => {
       expect(prompt).toContain(legacyDoc);
       expect(prompt).not.toContain("Check 1:");
     });
+
+    it("includes snapshot/parity instructions when checks contain parity or snapshot IDs", () => {
+      const positionalDoc = JSON.stringify([
+        { id: "jshearer_added", description: "jshearer subscribed", nav: "DB query", pass_if: "jshearer has active subscriptions" },
+        { id: "jshearer_parity_cabarca", description: "jshearer matches cabarca", nav: "DB compare", pass_if: "jshearer subscribed everywhere cabarca is" },
+        { id: "cabarca_snapshot", description: "cabarca unchanged", nav: "DB query", pass_if: "cabarca subscription count identical to pre-execution" },
+      ]);
+      const contract = makeContract({ qa_doc: positionalDoc });
+      const prompt = buildQaPrompt(contract);
+
+      expect(prompt).toContain("snapshot and parity checks");
+      expect(prompt).toContain("query the current state");
+      expect(prompt).toContain("Report exact numbers");
+      expect(prompt).toContain("parity checks, list any");
+    });
+
+    it("omits snapshot/parity instructions for plain action checks", () => {
+      // STRUCTURED_QA_DOC has ids: user_added, correct_scope, existing_unchanged — no parity/snapshot
+      const contract = makeContract({ qa_doc: STRUCTURED_QA_DOC });
+      const prompt = buildQaPrompt(contract);
+
+      expect(prompt).not.toContain("snapshot and parity checks");
+      expect(prompt).not.toContain("query the current state");
+    });
   });
 
   describe("parseQaPassed", () => {

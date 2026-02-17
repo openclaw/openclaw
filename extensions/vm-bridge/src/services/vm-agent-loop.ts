@@ -415,6 +415,20 @@ export function buildQaPrompt(contract: Contract): string {
     parts.push(`Verify ALL ${checklist.length} criteria below using the Chrome browser.`);
     parts.push("Evaluate EACH check independently. Report per-check results.");
     parts.push("Only report overall PASS if ALL checks pass.");
+
+    // Detect parity/snapshot checks and add specialized instructions
+    const hasPositionalChecks = checklist.some(
+      (c) => c.id.includes("parity") || c.id.includes("snapshot"),
+    );
+    if (hasPositionalChecks) {
+      parts.push("");
+      parts.push("IMPORTANT — This checklist contains snapshot and parity checks:");
+      parts.push("1. FIRST query the current state of each entity (count, locations, types)");
+      parts.push("2. THEN compare against the expected state described in each check");
+      parts.push("3. Report exact numbers and lists — e.g. 'user has 107 records across 107 entries' not just 'user is present'");
+      parts.push("4. For parity checks, list any locations where the target is missing but the reference entity is present");
+    }
+
     parts.push("");
 
     checklist.forEach((check, i) => {

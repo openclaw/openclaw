@@ -22,10 +22,16 @@ A logically complete intent resolves all ambiguity from the original message:
 - WHAT: The specific action to take, using precise system terminology from the project's intent descriptions
 - WHERE: Exact location, page, table, or component to modify
 - BOUNDARY: What should NOT change (e.g., "do not remove existing recipients")
-- VERIFICATION: A concrete, pass/fail condition an automated QA agent can check via Chrome browser
+- PARITY: If the request says "as well as X", "same as X", or "like X does", the intent must explicitly state that the target should MATCH the reference entity's existing state for the relevant scope
+- VERIFICATION: A concrete, pass/fail condition an automated QA agent can check via Chrome browser or database query
 
-Example — raw message: "Can you update VTC USA Service related reviews go to Jason Shearer as well as Chris and Pete"
-Logically complete intent: "Add jshearer@vvgtruck.com (Jason Shearer) to NEGATIVE review notifications for all VTC USA Service department locations. Chris Abarca (cabarca@vvgtruck.com) and Pete Hobbs (phobbs@vvgtruck.com) should already be receiving these — do not remove them."
+ENTITY EXTRACTION — Identify every person, system, or data object mentioned or implied:
+- Action targets: the entity being added/changed/removed
+- Reference entities: anyone mentioned for parity ("as well as X", "same as X", "like X does")
+- Unchanged entities: anyone explicitly preserved ("do not remove", "keep")
+- Scope qualifiers: filters that limit the action (brand, department, location type)
+
+When reference entities are mentioned ("as well as X"), the intent MUST state that the action target should MATCH the reference entity's existing state for the relevant scope. Do not interpret the scope independently — derive it from what the reference entities already have.
 
 If no project/intent matches with reasonable confidence, respond with {"matched": false}.
 
@@ -33,26 +39,28 @@ Otherwise respond with:
 {
   "matched": true,
   "project_id": "...",
-  "intent": "Logically complete statement that an engineer could execute without referring back to the original email. Include names, emails, specific locations/brands, and what NOT to change.",
+  "intent": "Logically complete statement that an engineer could execute without referring back to the original email. Include names, emails, specific locations/brands, and what NOT to change. When parity is implied, state explicitly that the target must match the reference entity's existing state.",
   "qa_doc": [
-    {"id": "short_snake_id", "description": "what to verify", "nav": "URL or page location to navigate to", "pass_if": "exact condition that must be true for this check to pass"}
+    {"id": "short_snake_id", "description": "what to verify", "nav": "URL, page, or database query location", "pass_if": "exact state assertion — not existence, but complete expected state"}
   ],
   "confidence": 0.0-1.0,
   "reasoning": "one sentence"
 }
 
-qa_doc rules:
-- Each check must be independently verifiable via Chrome browser
-- Include at least one check per entity mentioned in the intent
-- Include boundary checks for what should NOT have changed (e.g. existing users still present)
-- Use specific URLs, page elements, or database values in nav and pass_if
-- Example for "Add jshearer to Service dept notifications, keep cabarca and phobbs":
-  [
-    {"id": "user_added", "description": "jshearer in recipients", "nav": "customer-response.vtc.systems/admin/settings > Recipients tab", "pass_if": "jshearer@vvgtruck.com listed as Active"},
-    {"id": "correct_scope", "description": "Scope is Service dept only", "nav": "Location Subscriptions tab for jshearer", "pass_if": "Only VTC USA Service department locations are checked"},
-    {"id": "cabarca_unchanged", "description": "cabarca still present", "nav": "Recipients tab", "pass_if": "cabarca@vvgtruck.com still listed as Active"},
-    {"id": "phobbs_unchanged", "description": "phobbs still present", "nav": "Recipients tab", "pass_if": "phobbs@vvgtruck.com still listed as Active"}
-  ]`;
+qa_doc rules — ENTITY-POSITIONAL CHECKS:
+Every entity mentioned or implied gets a STATE ASSERTION, not just an existence check.
+
+For each entity, the check must specify its COMPLETE EXPECTED STATE after execution:
+- Action targets: What records/settings they should have after the action, at what scope, with what attributes
+- Reference entities ("as well as X"): PARITY CHECK — target must match the reference entity's state for the relevant scope. The target should be present everywhere the reference is present, with matching attributes.
+- Unchanged entities: SNAPSHOT CHECK — entity's state must be identical before and after execution. Total count, record list, and attributes must all be unchanged.
+- Scope boundaries: BOUNDARY CHECK — no records should exist outside the stated scope for the action target.
+
+Do NOT write existence checks like "X is still present" or "X is listed as Active."
+DO write state checks like "X has the same total records at the same locations with the same attributes as before execution."
+
+Each check must be independently verifiable via Chrome browser or database query.
+Use specific URLs, page elements, or database values in nav and pass_if.`;
 
 export async function dispatchMessage(
   senderEmail: string,
