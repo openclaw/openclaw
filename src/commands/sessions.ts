@@ -32,6 +32,7 @@ type SessionRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  modelProvider?: string;
   model?: string;
   contextTokens?: number;
 };
@@ -152,6 +153,7 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         outputTokens: entry?.outputTokens,
         totalTokens: entry?.totalTokens,
         totalTokensFresh: entry?.totalTokensFresh,
+        modelProvider: entry?.modelProvider,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
       } satisfies SessionRow;
@@ -171,7 +173,7 @@ export async function sessionsCommand(
   });
   const configContextTokens =
     cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model) ??
+    lookupContextTokens({ provider: resolved.provider, modelId: resolved.model }) ??
     DEFAULT_CONTEXT_TOKENS;
   const configModel = resolved.model ?? DEFAULT_MODEL;
   const storePath = resolveStorePath(opts.store ?? cfg.session?.store);
@@ -211,7 +213,7 @@ export async function sessionsCommand(
             totalTokensFresh:
               typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
             contextTokens:
-              r.contextTokens ?? lookupContextTokens(r.model) ?? configContextTokens ?? null,
+              r.contextTokens ?? lookupContextTokens({ provider: r.modelProvider, modelId: r.model }) ?? configContextTokens ?? null,
             model: r.model ?? configModel ?? null,
           })),
         },
@@ -246,7 +248,7 @@ export async function sessionsCommand(
 
   for (const row of rows) {
     const model = row.model ?? configModel;
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const contextTokens = row.contextTokens ?? lookupContextTokens({ provider: row.modelProvider, modelId: model }) ?? configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 
     const keyLabel = truncateKey(row.key).padEnd(KEY_PAD);

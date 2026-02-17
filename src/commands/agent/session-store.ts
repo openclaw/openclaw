@@ -42,7 +42,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const contextTokens =
-    params.contextTokensOverride ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+    params.contextTokensOverride ?? lookupContextTokens({ provider: providerUsed, modelId: modelUsed }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
