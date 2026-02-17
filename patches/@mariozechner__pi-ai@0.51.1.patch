@@ -1,0 +1,30 @@
+diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
+--- a/dist/providers/google-shared.js
++++ b/dist/providers/google-shared.js
+@@ -138,14 +138,20 @@
+                     const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature);
+                     // Gemini 3 requires thoughtSignature on all function calls when thinking mode is enabled.
+                     // When replaying history from providers without thought signatures (e.g. Claude via Antigravity),
+-                    // convert unsigned function calls to text to avoid API validation errors.
+-                    // We include a note telling the model this is historical context to prevent mimicry.
++                    // or from a different Gemini model (e.g. Flash -> Pro), use the official dummy signature
++                    // to bypass validation while keeping tool calls as native functionCall parts.
++                    // See: https://ai.google.dev/gemini-api/docs/thought-signatures
+                     const isGemini3 = model.id.toLowerCase().includes("gemini-3");
+                     if (isGemini3 && !thoughtSignature) {
+-                        const argsStr = JSON.stringify(block.arguments ?? {}, null, 2);
+-                        parts.push({
+-                            text: `[Historical context: a different model called tool "${block.name}" with arguments: ${argsStr}. Do not mimic this format - use proper function calling.]`,
+-                        });
++                        const part = {
++                            functionCall: {
++                                name: block.name,
++                                args: block.arguments ?? {},
++                                ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
++                            },
++                            thoughtSignature: "skip_thought_signature_validator",
++                        };
++                        parts.push(part);
+                     }
+                     else {
+                         const part = {
