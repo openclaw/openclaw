@@ -7,7 +7,3 @@ export function setThreadRoot(channelId: string, rootId: string) {
 export function getThreadRoot(channelId: string): string | undefined {
   return threadRoots.get(channelId);
 }
-
-export function clearThreadRoot(channelId: string) {
-  threadRoots.delete(channelId);
-}
