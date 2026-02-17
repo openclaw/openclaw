@@ -69,16 +69,12 @@ export function buildGatewayCronService(params: {
 
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = loadConfig();
+    // Use the requested agentId directly — don't require agents.list membership.
+    // Agents can exist via their directory without being in agents.list, and
+    // downstream code (runCronIsolatedAgentTurn) already handles unlisted agents.
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const hasAgent =
-      normalized !== undefined &&
-      Array.isArray(runtimeConfig.agents?.list) &&
-      runtimeConfig.agents.list.some(
-        (entry) =>
-          entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === normalized,
-      );
-    const agentId = hasAgent ? normalized : resolveDefaultAgentId(runtimeConfig);
+    const agentId = normalized ?? resolveDefaultAgentId(runtimeConfig);
     return { agentId, cfg: runtimeConfig };
   };
 
