@@ -24,6 +24,7 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     }),
     storePath,
     webhookUrl: null,
+    activeTurnCalls: new Set(),
     transcriptWaiters: new Map(),
     maxDurationTimers: new Map(),
     ...overrides,
