@@ -46,7 +46,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("tools.elevated.enabled");
 
-      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const storeRaw = await fs.readFile(cfg.session!.store, "utf-8");
       const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
       expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBeUndefined();
     });

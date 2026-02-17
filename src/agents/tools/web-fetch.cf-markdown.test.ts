@@ -37,7 +37,6 @@ function htmlResponse(body: string): Response {
 describe("web_fetch Cloudflare Markdown for Agents", () => {
   it("sends Accept header preferring text/markdown", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Test Page\n\nHello world."));
-    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const tool = createWebFetchTool(baseToolConfig);
@@ -52,34 +51,36 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
   it("uses cf-markdown extractor for text/markdown responses", async () => {
     const md = "# CF Markdown\n\nThis is server-rendered markdown.";
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse(md));
-    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const tool = createWebFetchTool(baseToolConfig);
 
     const result = await tool?.execute?.("call", { url: "https://example.com/cf" });
-    expect(result?.details).toMatchObject({
+    const details = result?.details as
+      | { status?: number; extractor?: string; contentType?: string; text?: string }
+      | undefined;
+    expect(details).toMatchObject({
       status: 200,
       extractor: "cf-markdown",
       contentType: "text/markdown",
     });
     // The body should contain the original markdown (wrapped with security markers)
-    expect(result?.details?.text).toContain("CF Markdown");
-    expect(result?.details?.text).toContain("server-rendered markdown");
+    expect(details?.text).toContain("CF Markdown");
+    expect(details?.text).toContain("server-rendered markdown");
   });
 
   it("falls back to readability for text/html responses", async () => {
     const html =
       "<html><body><article><h1>HTML Page</h1><p>Content here.</p></article></body></html>";
     const fetchSpy = vi.fn().mockResolvedValue(htmlResponse(html));
-    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const tool = createWebFetchTool(baseToolConfig);
 
     const result = await tool?.execute?.("call", { url: "https://example.com/html" });
-    expect(result?.details?.extractor).toBe("readability");
-    expect(result?.details?.contentType).toBe("text/html");
+    const details = result?.details as { extractor?: string; contentType?: string } | undefined;
+    expect(details?.extractor).toBe("readability");
+    expect(details?.contentType).toBe("text/html");
   });
 
   it("logs x-markdown-tokens when header is present", async () => {
@@ -87,7 +88,6 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValue(markdownResponse("# Tokens Test", { "x-markdown-tokens": "1500" }));
-    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const tool = createWebFetchTool(baseToolConfig);
@@ -108,7 +108,6 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
   it("converts markdown to text when extractMode is text", async () => {
     const md = "# Heading\n\n**Bold text** and [a link](https://example.com).";
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse(md));
-    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const tool = createWebFetchTool(baseToolConfig);
@@ -117,20 +116,22 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
       url: "https://example.com/text-mode",
       extractMode: "text",
     });
-    expect(result?.details).toMatchObject({
+    const details = result?.details as
+      | { extractor?: string; extractMode?: string; text?: string }
+      | undefined;
+    expect(details).toMatchObject({
       extractor: "cf-markdown",
       extractMode: "text",
     });
     // Text mode strips header markers (#) and link syntax
-    expect(result?.details?.text).not.toContain("# Heading");
-    expect(result?.details?.text).toContain("Heading");
-    expect(result?.details?.text).not.toContain("[a link](https://example.com)");
+    expect(details?.text).not.toContain("# Heading");
+    expect(details?.text).toContain("Heading");
+    expect(details?.text).not.toContain("[a link](https://example.com)");
   });
 
   it("does not log x-markdown-tokens when header is absent", async () => {
     const logSpy = vi.spyOn(logger, "logDebug").mockImplementation(() => {});
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# No tokens"));
-    // @ts-expect-error mock fetch
     global.fetch = fetchSpy;
 
     const tool = createWebFetchTool(baseToolConfig);

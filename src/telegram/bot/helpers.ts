@@ -1,13 +1,13 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
-import type { TelegramStreamMode } from "./types.js";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import {
   firstDefined,
   normalizeAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import type { TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -101,20 +101,22 @@ export function resolveTelegramThreadSpec(params: {
       scope: params.isForum ? "forum" : "none",
     };
   }
-  if (params.messageThreadId == null) {
-    return { scope: "dm" };
+  // DM with forum/topics enabled — treat like a forum, not a flat DM
+  if (params.isForum && params.messageThreadId != null) {
+    return { id: params.messageThreadId, scope: "forum" };
   }
-  return {
-    id: params.messageThreadId,
-    scope: "dm",
-  };
+  // Preserve thread ID for non-forum DM threads (session routing, #8891)
+  if (params.messageThreadId != null) {
+    return { id: params.messageThreadId, scope: "dm" };
+  }
+  return { scope: "dm" };
 }
 
 /**
  * Build thread params for Telegram API calls (messages, media).
  *
  * IMPORTANT: Thread IDs behave differently based on chat type:
- * - DMs (private chats): Never send thread_id (threads don't exist)
+ * - DMs (private chats): Include message_thread_id when present (DM topics)
  * - Forum topics: Skip thread_id=1 (General topic), include others
  * - Regular groups: Thread IDs are ignored by Telegram
  *
@@ -130,9 +132,8 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   }
   const normalized = Math.trunc(thread.id);
 
-  // Never send thread_id for DMs (threads don't exist in private chats)
   if (thread.scope === "dm") {
-    return undefined;
+    return normalized > 0 ? { message_thread_id: normalized } : undefined;
   }
 
   // Telegram rejects message_thread_id=1 for General forum topic

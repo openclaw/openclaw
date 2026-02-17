@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoice } from "./onboard-types.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
+import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
   createAuthTestLifecycle,
@@ -235,13 +235,10 @@ describe("applyAuthChoice", () => {
       }
       return "default";
     });
-    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
-    const prompter = createPrompter({
+    const { prompter, runtime } = createApiKeyPromptHarness({
       select: select as WizardPrompter["select"],
-      multiselect,
       text,
     });
-    const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoice({
       authChoice: "zai-api-key",
@@ -265,13 +262,10 @@ describe("applyAuthChoice", () => {
 
     const text = vi.fn().mockResolvedValue("zai-test-key");
     const select = vi.fn(async () => "default");
-    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
-    const prompter = createPrompter({
+    const { prompter, runtime } = createApiKeyPromptHarness({
       select: select as WizardPrompter["select"],
-      multiselect,
       text,
     });
-    const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoice({
       authChoice: "zai-coding-global",

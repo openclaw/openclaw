@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Chat, Message } from "@grammyjs/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import {
@@ -36,6 +37,14 @@ const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
 const ORIGINAL_TZ = process.env.TZ;
+const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
+  chat as Chat;
+const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message =>
+  ({
+    message_id: 1,
+    date: 0,
+    ...message,
+  }) as Message;
 
 describe("createTelegramBot", () => {
   beforeEach(() => {
@@ -109,55 +118,63 @@ describe("createTelegramBot", () => {
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
-    expect(getTelegramSequentialKey({ message: { chat: { id: 123 } } })).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({ message: mockMessage({ chat: mockChat({ id: 123 }) }) }),
+    ).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, type: "private" }, message_thread_id: 9 },
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "private" }),
+          message_thread_id: 9,
+        }),
       }),
     ).toBe("telegram:123:topic:9");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, type: "supergroup" }, message_thread_id: 9 },
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "supergroup" }),
+          message_thread_id: 9,
+        }),
       }),
     ).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, type: "supergroup", is_forum: true } },
+        message: mockMessage({ chat: mockChat({ id: 123, type: "supergroup", is_forum: true }) }),
       }),
     ).toBe("telegram:123:topic:1");
     expect(
       getTelegramSequentialKey({
-        update: { message: { chat: { id: 555 } } },
+        update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) },
       }),
     ).toBe("telegram:555");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "/stop" },
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }),
       }),
     ).toBe("telegram:123:control");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "/status" },
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }),
       }),
     ).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "stop" },
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop" }),
       }),
     ).toBe("telegram:123:control");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "stop please" },
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop please" }),
       }),
     ).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "/abort" },
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }),
       }),
     ).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "/abort now" },
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }),
       }),
     ).toBe("telegram:123");
   });

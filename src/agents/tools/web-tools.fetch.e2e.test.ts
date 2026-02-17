@@ -90,6 +90,40 @@ function requestUrl(input: RequestInfo): string {
   return "";
 }
 
+function installMockFetch(impl: (input: RequestInfo) => Promise<Response>) {
+  const mockFetch = vi.fn(impl);
+  global.fetch = mockFetch;
+  return mockFetch;
+}
+
+function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
+  return createWebFetchTool({
+    config: {
+      tools: {
+        web: {
+          fetch: {
+            cacheTtlMinutes: 0,
+            ...fetchOverrides,
+          },
+        },
+      },
+    },
+    sandboxed: false,
+  });
+}
+
+async function captureToolErrorMessage(params: {
+  tool: ReturnType<typeof createWebFetchTool>;
+  url: string;
+}) {
+  try {
+    await params.tool?.execute?.("call", { url: params.url });
+    return "";
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
 describe("web_fetch extraction fallbacks", () => {
   const priorFetch = global.fetch;
 
@@ -106,13 +140,12 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   afterEach(() => {
-    // @ts-expect-error restore
     global.fetch = priorFetch;
     vi.restoreAllMocks();
   });
 
   it("wraps fetched text with external content markers", async () => {
-    const mockFetch = vi.fn((input: RequestInfo) =>
+    installMockFetch((input: RequestInfo) =>
       Promise.resolve({
         ok: true,
         status: 200,
@@ -121,19 +154,8 @@ describe("web_fetch extraction fallbacks", () => {
         url: requestUrl(input),
       } as Response),
     );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
-          },
-        },
-      },
-      sandboxed: false,
-    });
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/plain" });
     const details = result?.details as {
@@ -161,7 +183,7 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("enforces maxChars after wrapping", async () => {
     const longText = "x".repeat(5_000);
-    const mockFetch = vi.fn((input: RequestInfo) =>
+    installMockFetch((input: RequestInfo) =>
       Promise.resolve({
         ok: true,
         status: 200,
@@ -170,18 +192,10 @@ describe("web_fetch extraction fallbacks", () => {
         url: requestUrl(input),
       } as Response),
     );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false }, maxChars: 2000 },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+      maxChars: 2000,
     });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/long" });
@@ -192,7 +206,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("honors maxChars even when wrapper overhead exceeds limit", async () => {
-    const mockFetch = vi.fn((input: RequestInfo) =>
+    installMockFetch((input: RequestInfo) =>
       Promise.resolve({
         ok: true,
         status: 200,
@@ -201,18 +215,10 @@ describe("web_fetch extraction fallbacks", () => {
         url: requestUrl(input),
       } as Response),
     );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false }, maxChars: 100 },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+      maxChars: 100,
     });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/short" });
@@ -226,7 +232,7 @@ describe("web_fetch extraction fallbacks", () => {
   // The sanitization of these fields is verified by external-content.test.ts tests.
 
   it("falls back to firecrawl when readability returns no content", async () => {
-    const mockFetch = vi.fn((input: RequestInfo) => {
+    installMockFetch((input: RequestInfo) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve(firecrawlResponse("firecrawl content")) as Promise<Response>;
@@ -235,21 +241,9 @@ describe("web_fetch extraction fallbacks", () => {
         htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
       ) as Promise<Response>;
     });
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: {
-              cacheTtlMinutes: 0,
-              firecrawl: { apiKey: "firecrawl-test" },
-            },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      firecrawl: { apiKey: "firecrawl-test" },
     });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/empty" });
@@ -259,21 +253,13 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
-    const mockFetch = vi.fn((input: RequestInfo) =>
+    installMockFetch((input: RequestInfo) =>
       Promise.resolve(htmlResponse("<html><body>hi</body></html>", requestUrl(input))),
     );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { readability: false, cacheTtlMinutes: 0, firecrawl: { enabled: false } },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      readability: false,
+      firecrawl: { enabled: false },
     });
 
     await expect(
@@ -282,7 +268,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("throws when readability is empty and firecrawl fails", async () => {
-    const mockFetch = vi.fn((input: RequestInfo) => {
+    installMockFetch((input: RequestInfo) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve(firecrawlError()) as Promise<Response>;
@@ -291,18 +277,9 @@ describe("web_fetch extraction fallbacks", () => {
         htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
       ) as Promise<Response>;
     });
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      firecrawl: { apiKey: "firecrawl-test" },
     });
 
     await expect(
@@ -311,7 +288,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("uses firecrawl when direct fetch fails", async () => {
-    const mockFetch = vi.fn((input: RequestInfo) => {
+    installMockFetch((input: RequestInfo) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve(firecrawlResponse("firecrawl fallback", url)) as Promise<Response>;
@@ -323,18 +300,9 @@ describe("web_fetch extraction fallbacks", () => {
         text: async () => "blocked",
       } as Response);
     });
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      firecrawl: { apiKey: "firecrawl-test" },
     });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/blocked" });
@@ -345,22 +313,14 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("wraps external content and clamps oversized maxChars", async () => {
     const large = "a".repeat(80_000);
-    const mockFetch = vi.fn(
+    installMockFetch(
       (input: RequestInfo) =>
         Promise.resolve(textResponse(large, requestUrl(input))) as Promise<Response>,
     );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false }, maxCharsCap: 10_000 },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+      maxCharsCap: 10_000,
     });
 
     const result = await tool?.execute?.("call", {
@@ -373,35 +333,22 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.length).toBeLessThanOrEqual(10_000);
     expect(details.truncated).toBe(true);
   });
+
   it("strips and truncates HTML from error responses", async () => {
     const long = "x".repeat(12_000);
     const html =
       "<!doctype html><html><head><title>Not Found</title></head><body><h1>Not Found</h1><p>" +
       long +
       "</p></body></html>";
-    const mockFetch = vi.fn((input: RequestInfo) =>
+    installMockFetch((input: RequestInfo) =>
       Promise.resolve(errorHtmlResponse(html, 404, requestUrl(input), "Text/HTML; charset=utf-8")),
     );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/missing",
     });
-
-    let message = "";
-    try {
-      await tool?.execute?.("call", { url: "https://example.com/missing" });
-    } catch (error) {
-      message = (error as Error).message;
-    }
 
     expect(message).toContain("Web fetch failed (404):");
     expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
@@ -414,29 +361,15 @@ describe("web_fetch extraction fallbacks", () => {
   it("strips HTML errors when content-type is missing", async () => {
     const html =
       "<!DOCTYPE HTML><html><head><title>Oops</title></head><body><h1>Oops</h1></body></html>";
-    const mockFetch = vi.fn((input: RequestInfo) =>
+    installMockFetch((input: RequestInfo) =>
       Promise.resolve(errorHtmlResponse(html, 500, requestUrl(input), null)),
     );
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/oops",
     });
-
-    let message = "";
-    try {
-      await tool?.execute?.("call", { url: "https://example.com/oops" });
-    } catch (error) {
-      message = (error as Error).message;
-    }
 
     expect(message).toContain("Web fetch failed (500):");
     expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
@@ -444,7 +377,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("wraps firecrawl error details", async () => {
-    const mockFetch = vi.fn((input: RequestInfo) => {
+    installMockFetch((input: RequestInfo) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev")) {
         return Promise.resolve({
@@ -455,26 +388,15 @@ describe("web_fetch extraction fallbacks", () => {
       }
       return Promise.reject(new Error("network down"));
     });
-    // @ts-expect-error mock fetch
-    global.fetch = mockFetch;
 
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
-          },
-        },
-      },
-      sandboxed: false,
+    const tool = createFetchTool({
+      firecrawl: { apiKey: "firecrawl-test" },
     });
 
-    let message = "";
-    try {
-      await tool?.execute?.("call", { url: "https://example.com/firecrawl-error" });
-    } catch (error) {
-      message = (error as Error).message;
-    }
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/firecrawl-error",
+    });
 
     expect(message).toContain("Firecrawl fetch failed (403):");
     expect(message).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
