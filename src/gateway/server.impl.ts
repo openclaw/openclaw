@@ -430,7 +430,7 @@ export async function startGatewayServer(
     getHealthVersion,
     refreshGatewayHealthSnapshot,
     logHealth,
-    logStuck: { warn: (msg, meta) => logGateway.warn({ ...meta }, msg) },
+    logStuck: { warn: (msg, meta) => log.warn({ ...meta }, msg) },
     dedupe,
     chatAbortControllers,
     chatRunState,

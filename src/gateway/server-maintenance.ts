@@ -128,8 +128,8 @@ export function startGatewayMaintenanceTimers(params: {
         (stuckConfig?.thresholdMinutes ?? DEFAULT_STUCK_THRESHOLD_MINUTES) * 60 * 1000;
       const action = stuckConfig?.action ?? "log";
 
-      for (const [sessionId, entries] of params.chatRunRegistry.entries()) {
-        for (const entry of entries) {
+      for (const [sessionId, entries] of [...params.chatRunRegistry.entries()]) {
+        for (const entry of [...entries]) {
           const elapsed = now - entry.startedAt;
           if (elapsed > thresholdMs) {
             const elapsedMin = Math.round(elapsed / 60_000);
