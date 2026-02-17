@@ -3,7 +3,13 @@ import { createBaseDiscordMessageContext } from "./message-handler.test-harness.
 
 const reactMessageDiscord = vi.fn(async () => {});
 const removeReactionDiscord = vi.fn(async () => {});
-const dispatchInboundMessage = vi.fn(async () => ({
+type DispatchInboundParams = {
+  replyOptions?: {
+    onReasoningStream?: () => Promise<void> | void;
+    onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+  };
+};
+const dispatchInboundMessage = vi.fn(async (_params?: DispatchInboundParams) => ({
   queuedFinal: false,
   counts: { final: 0, tool: 0, block: 0 },
 }));
@@ -114,18 +120,11 @@ describe("processDiscordMessage ack reactions", () => {
   });
 
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
-    dispatchInboundMessage.mockImplementationOnce(
-      async (params: {
-        replyOptions?: {
-          onReasoningStream?: () => Promise<void> | void;
-          onToolStart?: (payload: { name?: string }) => Promise<void> | void;
-        };
-      }) => {
-        await params.replyOptions?.onReasoningStream?.();
-        await params.replyOptions?.onToolStart?.({ name: "exec" });
-        return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
-      },
-    );
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await params?.replyOptions?.onToolStart?.({ name: "exec" });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
 
     const ctx = await createBaseContext();
 
