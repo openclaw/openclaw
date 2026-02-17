@@ -286,9 +286,10 @@ export class VoiceCallWebhookServer {
           }
           (this.provider as TwilioProvider).clearTtsQueue(callId);
         }
+        // Also stop silence filler on partial transcript
         const streamSid = this.callStreamSids.get(callId);
         if (streamSid) {
-          this.mediaStreamHandler?.clearTtsQueue(streamSid);
+          this.silenceFiller?.stop(streamSid);
         }
       },
       onConnect: (callId, streamSid) => {
