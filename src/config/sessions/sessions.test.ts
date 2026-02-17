@@ -3,12 +3,13 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { SessionConfig } from "../types.base.js";
+import type { SessionEntry } from "./types.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
   updateSessionStore,
 } from "../sessions.js";
-import type { SessionConfig } from "../types.base.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
@@ -16,7 +17,6 @@ import {
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
-import type { SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
@@ -31,6 +31,15 @@ describe("session path safety", () => {
     const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");
 
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
+  });
+
+  it("accepts absolute sessionFile paths for sibling agents in multi-agent setups", () => {
+    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+    const siblingSessionFile = "/tmp/openclaw/agents/eva-public/sessions/abc-123.jsonl";
+
+    expect(
+      resolveSessionFilePath("sess-1", { sessionFile: siblingSessionFile }, { sessionsDir }),
+    ).toBe(siblingSessionFile);
   });
 
   it("rejects absolute sessionFile paths outside known agent sessions dirs", () => {
