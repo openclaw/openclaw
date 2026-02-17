@@ -26,12 +26,14 @@ interface BuildLineMessageContextParams {
   account: ResolvedLineAccount;
 }
 
-function getSourceInfo(source: EventSource): {
+export type LineSourceInfo = {
   userId?: string;
   groupId?: string;
   roomId?: string;
   isGroup: boolean;
-} {
+};
+
+export function getLineSourceInfo(source: EventSource): LineSourceInfo {
   const userId =
     source.type === "user"
       ? source.userId
@@ -58,6 +60,39 @@ function buildPeerId(source: EventSource): string {
     return source.userId;
   }
   return "unknown";
+}
+
+function resolveLineInboundRoute(params: {
+  source: EventSource;
+  cfg: OpenClawConfig;
+  account: ResolvedLineAccount;
+}): {
+  userId?: string;
+  groupId?: string;
+  roomId?: string;
+  isGroup: boolean;
+  peerId: string;
+  route: ReturnType<typeof resolveAgentRoute>;
+} {
+  recordChannelActivity({
+    channel: "line",
+    accountId: params.account.accountId,
+    direction: "inbound",
+  });
+
+  const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
+  const peerId = buildPeerId(params.source);
+  const route = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "line",
+    accountId: params.account.accountId,
+    peer: {
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
+    },
+  });
+
+  return { userId, groupId, roomId, isGroup, peerId, route };
 }
 
 // Common LINE sticker package descriptions
@@ -137,7 +172,7 @@ function extractMediaPlaceholder(message: MessageEvent["message"]): string {
 }
 
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
-type LineSourceInfo = ReturnType<typeof getSourceInfo> & { peerId: string };
+type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
 function resolveLineConversationLabel(params: {
   isGroup: boolean;
@@ -178,7 +213,7 @@ async function finalizeLineInboundContext(params: {
   account: ResolvedLineAccount;
   event: MessageEvent | PostbackEvent;
   route: LineRouteInfo;
-  source: LineSourceInfo;
+  source: LineSourceInfoWithPeerId;
   rawBody: string;
   timestamp: number;
   messageSid: string;
@@ -299,24 +334,11 @@ async function finalizeLineInboundContext(params: {
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
   const { event, allMedia, cfg, account } = params;
 
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "inbound",
-  });
-
   const source = event.source;
-  const { userId, groupId, roomId, isGroup } = getSourceInfo(source);
-  const peerId = buildPeerId(source);
-
-  const route = resolveAgentRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+    source,
     cfg,
-    channel: "line",
-    accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    account,
   });
 
   const message = event.message;
@@ -389,24 +411,11 @@ export async function buildLinePostbackContext(params: {
 }) {
   const { event, cfg, account } = params;
 
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "inbound",
-  });
-
   const source = event.source;
-  const { userId, groupId, roomId, isGroup } = getSourceInfo(source);
-  const peerId = buildPeerId(source);
-
-  const route = resolveAgentRoute({
+  const { userId, groupId, roomId, isGroup, peerId, route } = resolveLineInboundRoute({
+    source,
     cfg,
-    channel: "line",
-    accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "direct",
-      id: peerId,
-    },
+    account,
   });
 
   const timestamp = event.timestamp;

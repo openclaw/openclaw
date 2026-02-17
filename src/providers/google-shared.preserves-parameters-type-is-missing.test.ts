@@ -1,48 +1,12 @@
-import type { Context, Model, Tool } from "@mariozechner/pi-ai/dist/types.js";
+import type { Context, Tool } from "@mariozechner/pi-ai/dist/types.js";
 import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
 import { describe, expect, it } from "vitest";
-
-const asRecord = (value: unknown): Record<string, unknown> => {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
-  return value as Record<string, unknown>;
-};
-
-const getFirstToolParameters = (
-  converted: ReturnType<typeof convertTools>,
-): Record<string, unknown> => {
-  const functionDeclaration = asRecord(converted?.[0]?.functionDeclarations?.[0]);
-  return asRecord(functionDeclaration.parametersJsonSchema ?? functionDeclaration.parameters);
-};
-
-const makeModel = (id: string): Model<"google-generative-ai"> =>
-  ({
-    id,
-    name: id,
-    api: "google-generative-ai",
-    provider: "google",
-    baseUrl: "https://example.invalid",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1,
-    maxTokens: 1,
-  }) as Model<"google-generative-ai">;
-
-const _makeGeminiCliModel = (id: string): Model<"google-gemini-cli"> =>
-  ({
-    id,
-    name: id,
-    api: "google-gemini-cli",
-    provider: "google-gemini-cli",
-    baseUrl: "https://example.invalid",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1,
-    maxTokens: 1,
-  }) as Model<"google-gemini-cli">;
+import {
+  asRecord,
+  getFirstToolParameters,
+  makeGoogleAssistantMessage,
+  makeModel,
+} from "./google-shared.test-helpers.js";
 
 describe("google-shared convertTools", () => {
   it("preserves parameters when type is missing", () => {
@@ -163,35 +127,13 @@ describe("google-shared convertMessages", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
       messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "thinking",
-              thinking: "hidden",
-              thinkingSignature: "c2ln",
-            },
-          ],
-          api: "google-generative-ai",
-          provider: "google",
-          model: "gemini-1.5-pro",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
+        makeGoogleAssistantMessage(model.id, [
+          {
+            type: "thinking",
+            thinking: "hidden",
+            thinkingSignature: "c2ln",
           },
-          stopReason: "stop",
-          timestamp: 0,
-        },
+        ]),
       ],
     } as unknown as Context;
 
@@ -208,35 +150,13 @@ describe("google-shared convertMessages", () => {
     const model = makeModel("claude-3-opus");
     const context = {
       messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "thinking",
-              thinking: "structured",
-              thinkingSignature: "c2ln",
-            },
-          ],
-          api: "google-generative-ai",
-          provider: "google",
-          model: "claude-3-opus",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
+        makeGoogleAssistantMessage(model.id, [
+          {
+            type: "thinking",
+            thinking: "structured",
+            thinkingSignature: "c2ln",
           },
-          stopReason: "stop",
-          timestamp: 0,
-        },
+        ]),
       ],
     } as unknown as Context;
 
@@ -303,52 +223,8 @@ describe("google-shared convertMessages", () => {
           role: "user",
           content: "Hello",
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Hi there!" }],
-          api: "google-generative-ai",
-          provider: "google",
-          model: "gemini-1.5-pro",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
-          stopReason: "stop",
-          timestamp: 0,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "How can I help?" }],
-          api: "google-generative-ai",
-          provider: "google",
-          model: "gemini-1.5-pro",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
-          stopReason: "stop",
-          timestamp: 0,
-        },
+        makeGoogleAssistantMessage(model.id, [{ type: "text", text: "Hi there!" }]),
+        makeGoogleAssistantMessage(model.id, [{ type: "text", text: "How can I help?" }]),
       ],
     } as unknown as Context;
 
@@ -369,36 +245,14 @@ describe("google-shared convertMessages", () => {
           role: "user",
           content: "Use a tool",
         },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call_1",
-              name: "myTool",
-              arguments: { arg: "value" },
-            },
-          ],
-          api: "google-generative-ai",
-          provider: "google",
-          model: "gemini-1.5-pro",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
+        makeGoogleAssistantMessage(model.id, [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "myTool",
+            arguments: { arg: "value" },
           },
-          stopReason: "stop",
-          timestamp: 0,
-        },
+        ]),
         {
           role: "toolResult",
           toolCallId: "call_1",

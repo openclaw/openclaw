@@ -45,6 +45,11 @@ type SessionExporterConfig = {
   collectionName: string;
 };
 
+type ListedCollection = {
+  path?: string;
+  pattern?: string;
+};
+
 type QmdManagerMode = "full" | "status";
 
 export class QmdMemoryManager implements MemorySearchManager {
@@ -203,7 +208,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     // QMD collections are persisted inside the index database and must be created
     // via the CLI. Prefer listing existing collections when supported, otherwise
     // fall back to best-effort idempotent `qmd collection add`.
-    const existing = new Set<string>();
+    const existing = new Map<string, ListedCollection>();
     try {
       const result = await this.runQmd(["collection", "list", "--json"], {
         timeoutMs: this.qmd.update.commandTimeoutMs,
@@ -212,11 +217,22 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (Array.isArray(parsed)) {
         for (const entry of parsed) {
           if (typeof entry === "string") {
-            existing.add(entry);
+            existing.set(entry, {});
           } else if (entry && typeof entry === "object") {
             const name = (entry as { name?: unknown }).name;
             if (typeof name === "string") {
-              existing.add(name);
+              const listedPath = (entry as { path?: unknown }).path;
+              const listedPattern = (entry as { pattern?: unknown; mask?: unknown }).pattern;
+              const listedMask = (entry as { mask?: unknown }).mask;
+              existing.set(name, {
+                path: typeof listedPath === "string" ? listedPath : undefined,
+                pattern:
+                  typeof listedPattern === "string"
+                    ? listedPattern
+                    : typeof listedMask === "string"
+                      ? listedMask
+                      : undefined,
+              });
             }
           }
         }
@@ -226,8 +242,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     for (const collection of this.qmd.collections) {
-      if (existing.has(collection.name)) {
+      const listed = existing.get(collection.name);
+      if (listed && !this.shouldRebindCollection(collection, listed)) {
         continue;
+      }
+      if (listed) {
+        try {
+          await this.removeCollection(collection.name);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!this.isCollectionMissingError(message)) {
+            log.warn(`qmd collection remove failed for ${collection.name}: ${message}`);
+          }
+        }
       }
       try {
         await this.addCollection(collection.path, collection.name, collection.pattern);
@@ -263,6 +290,35 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.runQmd(["collection", "remove", name], {
       timeoutMs: this.qmd.update.commandTimeoutMs,
     });
+  }
+
+  private shouldRebindCollection(
+    collection: { kind: string; path: string; pattern: string },
+    listed: ListedCollection,
+  ): boolean {
+    if (!listed.path) {
+      // Older qmd versions may only return names from `collection list --json`.
+      // Force sessions collections to rebind so per-agent session export paths stay isolated.
+      return collection.kind === "sessions";
+    }
+    if (!this.pathsMatch(listed.path, collection.path)) {
+      return true;
+    }
+    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
+      return true;
+    }
+    return false;
+  }
+
+  private pathsMatch(left: string, right: string): boolean {
+    const normalize = (value: string): string => {
+      const resolved = path.isAbsolute(value)
+        ? path.resolve(value)
+        : path.resolve(this.workspaceDir, value);
+      const normalized = path.normalize(resolved);
+      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    };
+    return normalize(left) === normalize(right);
   }
 
   private shouldRepairNullByteCollectionError(err: unknown): boolean {

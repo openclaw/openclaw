@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fixSecurityFootguns } from "./fix.js";
 
 const isWindows = process.platform === "win32";
@@ -15,10 +15,27 @@ const expectPerms = (actual: number, expected: number) => {
 };
 
 describe("security fix", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createStateDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-suite-"));
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("tightens groupPolicy + filesystem perms", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-"));
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true });
+    const stateDir = await createStateDir("tightens");
     await fs.chmod(stateDir, 0o755);
 
     const configPath = path.join(stateDir, "openclaw.json");
@@ -53,10 +70,10 @@ describe("security fix", () => {
     const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: "",
+      OPENCLAW_CONFIG_PATH: configPath,
     };
 
-    const res = await fixSecurityFootguns({ env });
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(true);
     expect(res.configWritten).toBe(true);
     expect(res.changes).toEqual(
@@ -88,9 +105,7 @@ describe("security fix", () => {
   });
 
   it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-"));
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true });
+    const stateDir = await createStateDir("per-account");
 
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(
@@ -122,10 +137,10 @@ describe("security fix", () => {
     const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: "",
+      OPENCLAW_CONFIG_PATH: configPath,
     };
 
-    const res = await fixSecurityFootguns({ env });
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(true);
 
     const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
@@ -138,9 +153,7 @@ describe("security fix", () => {
   });
 
   it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-"));
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true });
+    const stateDir = await createStateDir("no-seed");
 
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(
@@ -168,10 +181,10 @@ describe("security fix", () => {
     const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: "",
+      OPENCLAW_CONFIG_PATH: configPath,
     };
 
-    const res = await fixSecurityFootguns({ env });
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(true);
 
     const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
@@ -181,9 +194,7 @@ describe("security fix", () => {
   });
 
   it("returns ok=false for invalid config but still tightens perms", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-"));
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true });
+    const stateDir = await createStateDir("invalid-config");
     await fs.chmod(stateDir, 0o755);
 
     const configPath = path.join(stateDir, "openclaw.json");
@@ -193,10 +204,10 @@ describe("security fix", () => {
     const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: "",
+      OPENCLAW_CONFIG_PATH: configPath,
     };
 
-    const res = await fixSecurityFootguns({ env });
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(false);
 
     const stateMode = (await fs.stat(stateDir)).mode & 0o777;
@@ -207,9 +218,7 @@ describe("security fix", () => {
   });
 
   it("tightens perms for credentials + agent auth/sessions + include files", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-"));
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true });
+    const stateDir = await createStateDir("includes");
 
     const includesDir = path.join(stateDir, "includes");
     await fs.mkdir(includesDir, { recursive: true });
@@ -250,10 +259,10 @@ describe("security fix", () => {
     const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: "",
+      OPENCLAW_CONFIG_PATH: configPath,
     };
 
-    const res = await fixSecurityFootguns({ env });
+    const res = await fixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(true);
 
     expectPerms((await fs.stat(credsDir)).mode & 0o777, 0o700);

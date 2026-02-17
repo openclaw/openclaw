@@ -137,6 +137,34 @@ describe("exec approval forwarder", () => {
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
   });
 
+  it("skips discord forwarding when discord exec approvals target channel", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: { exec: { enabled: true, mode: "session" } },
+      channels: {
+        discord: {
+          execApprovals: {
+            enabled: true,
+            target: "channel",
+            approvers: ["123"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
+    });
+
+    await forwarder.handleRequested(baseRequest);
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("uses a longer fence when command already contains triple backticks", async () => {
     vi.useFakeTimers();
     const deliver = vi.fn().mockResolvedValue([]);

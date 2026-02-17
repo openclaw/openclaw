@@ -1,50 +1,12 @@
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
+import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
 
-export async function applyInlineDirectivesFastLane(params: {
-  directives: InlineDirectives;
-  commandAuthorized: boolean;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath?: string;
-  elevatedEnabled: boolean;
-  elevatedAllowed: boolean;
-  elevatedFailures?: Array<{ gate: string; key: string }>;
-  messageProviderKey?: string;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelKeys: Set<string>;
-  allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
-  >;
-  resetModelOverride: boolean;
-  provider: string;
-  model: string;
-  initialModelLabel: string;
-  formatModelSwitchEvent: (label: string, alias?: string) => string;
-  agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];
-  modelState: {
-    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
-    allowedModelKeys: Set<string>;
-    allowedModelCatalog: Awaited<
-      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
-    >;
-    resetModelOverride: boolean;
-  };
-}): Promise<{ directiveAck?: ReplyPayload; provider: string; model: string }> {
+export async function applyInlineDirectivesFastLane(
+  params: ApplyInlineDirectivesFastLaneParams,
+): Promise<{ directiveAck?: ReplyPayload; provider: string; model: string }> {
   const {
     directives,
     commandAuthorized,
@@ -86,19 +48,12 @@ export async function applyInlineDirectivesFastLane(params: {
   }
 
   const agentCfg = params.agentCfg;
-  const resolvedDefaultThinkLevel =
-    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-    (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-    (await modelState.resolveDefaultThinkingLevel());
-  const currentThinkLevel = resolvedDefaultThinkLevel;
-  const currentVerboseLevel =
-    (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-    (agentCfg?.verboseDefault as VerboseLevel | undefined);
-  const currentReasoningLevel =
-    (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
-  const currentElevatedLevel =
-    (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-    (agentCfg?.elevatedDefault as ElevatedLevel | undefined);
+  const { currentThinkLevel, currentVerboseLevel, currentReasoningLevel, currentElevatedLevel } =
+    await resolveCurrentDirectiveLevels({
+      sessionEntry,
+      agentCfg,
+      resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+    });
 
   const directiveAck = await handleDirectiveOnly({
     cfg,

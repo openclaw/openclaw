@@ -11,17 +11,13 @@ installGatewayTestHooks({ scope: "suite" });
 async function withServer<T>(
   run: (ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"]) => Promise<T>,
 ) {
-  const { server, ws, prevToken } = await startServerWithClient("secret");
+  const { server, ws, envSnapshot } = await startServerWithClient("secret");
   try {
     return await run(ws);
   } finally {
     ws.close();
     await server.close();
-    if (prevToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-    }
+    envSnapshot.restore();
   }
 }
 

@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveLineAccount } from "./accounts.js";
 import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
+import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 
 type RichMenuRequest = messagingApi.RichMenuRequest;
 type RichMenuResponse = messagingApi.RichMenuResponse;
@@ -39,28 +40,13 @@ interface RichMenuOpts {
   verbose?: boolean;
 }
 
-function resolveToken(
-  explicit: string | undefined,
-  params: { accountId: string; channelAccessToken: string },
-): string {
-  if (explicit?.trim()) {
-    return explicit.trim();
-  }
-  if (!params.channelAccessToken) {
-    throw new Error(
-      `LINE channel access token missing for account "${params.accountId}" (set channels.line.channelAccessToken or LINE_CHANNEL_ACCESS_TOKEN).`,
-    );
-  }
-  return params.channelAccessToken.trim();
-}
-
 function getClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiClient {
   const cfg = loadConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   return new messagingApi.MessagingApiClient({
     channelAccessToken: token,
@@ -73,7 +59,7 @@ function getBlobClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiBlobCl
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   return new messagingApi.MessagingApiBlobClient({
     channelAccessToken: token,

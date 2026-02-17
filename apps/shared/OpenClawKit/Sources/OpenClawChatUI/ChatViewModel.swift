@@ -103,18 +103,22 @@ public final class OpenClawChatViewModel {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
-        var seen = Set<String>()
-        var recent: [OpenClawChatSessionEntry] = []
-        for entry in sorted {
-            guard !seen.contains(entry.key) else { continue }
-            seen.insert(entry.key)
-            guard (entry.updatedAt ?? 0) >= cutoff else { continue }
-            recent.append(entry)
-        }
 
         var result: [OpenClawChatSessionEntry] = []
         var included = Set<String>()
-        for entry in recent where !included.contains(entry.key) {
+
+        // Always show the main session first, even if it hasn't been updated recently.
+        if let main = sorted.first(where: { $0.key == "main" }) {
+            result.append(main)
+            included.insert(main.key)
+        } else {
+            result.append(self.placeholderSession(key: "main"))
+            included.insert("main")
+        }
+
+        for entry in sorted {
+            guard !included.contains(entry.key) else { continue }
+            guard (entry.updatedAt ?? 0) >= cutoff else { continue }
             result.append(entry)
             included.insert(entry.key)
         }

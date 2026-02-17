@@ -59,6 +59,7 @@ async function createBaseContext(overrides: Record<string, unknown> = {}) {
       timestamp: new Date().toISOString(),
       attachments: [],
     },
+    messageChannelId: "c1",
     author: {
       id: "U1",
       username: "alice",
@@ -129,5 +130,26 @@ describe("processDiscordMessage ack reactions", () => {
     await processDiscordMessage(ctx as any);
 
     expect(reactMessageDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });
+  });
+
+  it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
+    const ctx = await createBaseContext({
+      message: {
+        id: "m1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+      messageChannelId: "fallback-channel",
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+      sender: { label: "user" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(reactMessageDiscord).toHaveBeenCalledWith("fallback-channel", "m1", "👀", {
+      rest: {},
+    });
   });
 });
