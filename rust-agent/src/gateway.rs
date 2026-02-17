@@ -89,6 +89,12 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "sessions.usage",
+                    family: MethodFamily::Sessions,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "sessions.history",
                     family: MethodFamily::Sessions,
                     requires_auth: true,
@@ -186,6 +192,7 @@ impl RpcDispatcher {
             "sessions.reset" => self.handle_sessions_reset(req).await,
             "sessions.delete" => self.handle_sessions_delete(req).await,
             "sessions.compact" => self.handle_sessions_compact(req).await,
+            "sessions.usage" => self.handle_sessions_usage(req).await,
             "sessions.history" => self.handle_sessions_history(req).await,
             "sessions.send" => self.handle_sessions_send(req).await,
             "session.status" | "sessions.status" => self.handle_session_status(req).await,
@@ -406,6 +413,28 @@ impl RpcDispatcher {
         }))
     }
 
+    async fn handle_sessions_usage(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SessionsUsageParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
+        };
+        let session_key = params
+            .session_key
+            .or(params.key)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        let usage = self
+            .sessions
+            .usage(session_key.as_deref(), params.limit)
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "generatedAtMs": now_ms(),
+            "sessionKey": session_key,
+            "sessions": usage,
+            "count": usage.len()
+        }))
+    }
+
     async fn handle_sessions_history(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
         let params = match decode_params::<SessionsHistoryParams>(&req.params) {
             Ok(v) => v,
@@ -549,6 +578,11 @@ impl SessionRegistry {
         entry.total_requests += 1;
         entry.last_action = Some(decision.action);
         entry.last_risk_score = decision.risk_score;
+        match decision.action {
+            DecisionAction::Allow => entry.allowed_count += 1,
+            DecisionAction::Review => entry.review_count += 1,
+            DecisionAction::Block => entry.blocked_count += 1,
+        }
         if entry.channel.is_none() {
             entry.channel = request.channel.clone();
         }
@@ -748,6 +782,9 @@ impl SessionRegistry {
             .or_insert_with(|| SessionEntry::new(session_key));
         entry.updated_at_ms = now;
         entry.total_requests = 0;
+        entry.allowed_count = 0;
+        entry.review_count = 0;
+        entry.blocked_count = 0;
         entry.last_action = None;
         entry.last_risk_score = 0;
         entry.history.clear();
@@ -795,6 +832,41 @@ impl SessionRegistry {
         }
     }
 
+    async fn usage(
+        &self,
+        session_key: Option<&str>,
+        limit: Option<usize>,
+    ) -> Vec<SessionUsageView> {
+        let lim = limit.unwrap_or(100).clamp(1, 1_000);
+        let guard = self.entries.lock().await;
+        let mut items = guard
+            .values()
+            .filter(|entry| session_key.map(|k| k == entry.key).unwrap_or(true))
+            .cloned()
+            .collect::<Vec<_>>();
+        items.sort_by(|a, b| {
+            b.total_requests
+                .cmp(&a.total_requests)
+                .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms))
+        });
+        items
+            .into_iter()
+            .take(lim)
+            .map(|entry| SessionUsageView {
+                key: entry.key,
+                kind: entry.kind,
+                channel: entry.channel,
+                total_requests: entry.total_requests,
+                allowed_count: entry.allowed_count,
+                review_count: entry.review_count,
+                blocked_count: entry.blocked_count,
+                last_action: entry.last_action,
+                last_risk_score: entry.last_risk_score,
+                updated_at_ms: entry.updated_at_ms,
+            })
+            .collect()
+    }
+
     async fn summary(&self) -> SessionSummary {
         let guard = self.entries.lock().await;
         let total_sessions = guard.len() as u64;
@@ -814,6 +886,9 @@ struct SessionEntry {
     channel: Option<String>,
     updated_at_ms: u64,
     total_requests: u64,
+    allowed_count: u64,
+    review_count: u64,
+    blocked_count: u64,
     last_action: Option<DecisionAction>,
     last_risk_score: u8,
     send_policy: Option<SendPolicyOverride>,
@@ -831,6 +906,9 @@ impl SessionEntry {
             channel: parsed.channel,
             updated_at_ms: now_ms(),
             total_requests: 0,
+            allowed_count: 0,
+            review_count: 0,
+            blocked_count: 0,
             last_action: None,
             last_risk_score: 0,
             send_policy: None,
@@ -847,6 +925,9 @@ impl SessionEntry {
             channel: self.channel.clone(),
             updated_at_ms: self.updated_at_ms,
             total_requests: self.total_requests,
+            allowed_count: self.allowed_count,
+            review_count: self.review_count,
+            blocked_count: self.blocked_count,
             last_action: self.last_action,
             last_risk_score: self.last_risk_score,
             send_policy: self.send_policy,
@@ -981,6 +1062,27 @@ struct SessionPreviewItem {
     channel: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct SessionUsageView {
+    key: String,
+    kind: SessionKind,
+    channel: Option<String>,
+    #[serde(rename = "totalRequests")]
+    total_requests: u64,
+    #[serde(rename = "allowedCount")]
+    allowed_count: u64,
+    #[serde(rename = "reviewCount")]
+    review_count: u64,
+    #[serde(rename = "blockedCount")]
+    blocked_count: u64,
+    #[serde(rename = "lastAction", skip_serializing_if = "Option::is_none")]
+    last_action: Option<DecisionAction>,
+    #[serde(rename = "lastRiskScore")]
+    last_risk_score: u8,
+    #[serde(rename = "updatedAtMs")]
+    updated_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SendPolicyOverride {
@@ -998,6 +1100,12 @@ struct SessionView {
     updated_at_ms: u64,
     #[serde(rename = "totalRequests")]
     total_requests: u64,
+    #[serde(rename = "allowedCount")]
+    allowed_count: u64,
+    #[serde(rename = "reviewCount")]
+    review_count: u64,
+    #[serde(rename = "blockedCount")]
+    blocked_count: u64,
     #[serde(rename = "lastAction")]
     last_action: Option<DecisionAction>,
     #[serde(rename = "lastRiskScore")]
@@ -1084,6 +1192,15 @@ struct SessionsCompactParams {
     key: Option<String>,
     #[serde(rename = "maxLines", alias = "max_lines")]
     max_lines: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SessionsUsageParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    key: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1683,6 +1800,81 @@ mod tests {
                 );
             }
             _ => panic!("expected history handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_usage_reports_action_counters() {
+        let dispatcher = RpcDispatcher::new();
+        let make_request = |id: &str, action: DecisionAction| {
+            let request = ActionRequest {
+                id: id.to_owned(),
+                source: "agent".to_owned(),
+                session_id: Some("agent:main:discord:group:g-usage".to_owned()),
+                prompt: Some("usage".to_owned()),
+                command: None,
+                tool_name: None,
+                channel: Some("discord".to_owned()),
+                url: None,
+                file_path: None,
+                raw: serde_json::json!({}),
+            };
+            let decision = Decision {
+                action,
+                risk_score: 10,
+                reasons: vec![],
+                tags: vec![],
+                source: "openclaw-agent-rs".to_owned(),
+            };
+            (request, decision)
+        };
+
+        for (id, action) in [
+            ("u1", DecisionAction::Allow),
+            ("u2", DecisionAction::Review),
+            ("u3", DecisionAction::Block),
+        ] {
+            let (request, decision) = make_request(id, action);
+            dispatcher.record_decision(&request, &decision).await;
+        }
+
+        let usage = RpcRequestFrame {
+            id: "req-usage".to_owned(),
+            method: "sessions.usage".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-usage",
+                "limit": 5
+            }),
+        };
+        let out = dispatcher.handle_request(&usage).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/totalRequests")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(3)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/allowedCount")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/reviewCount")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/blockedCount")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+            }
+            _ => panic!("expected usage handled"),
         }
     }
 }

@@ -20,6 +20,7 @@
   - `sessions.reset`
   - `sessions.delete`
   - `sessions.compact`
+  - `sessions.usage`
   - `sessions.history`
   - `sessions.send`
   - `session.status`
