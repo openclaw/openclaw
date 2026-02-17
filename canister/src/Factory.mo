@@ -8,9 +8,23 @@ import ExperimentalCycles "mo:base/ExperimentalCycles";
 import UserVault "UserVault";
 
 /// Factory canister that spawns per-user UserVault canisters.
-/// Launcher, not landlord -- sets user as controller, then steps back.
+/// Launcher, not landlord -- creates vault, then transfers control to the user.
 /// Uses stable arrays (not Buffer) for EOP compatibility.
 persistent actor Factory {
+
+  // -- IC management canister interface (subset for controller transfer) --
+
+  let ic : actor {
+    update_settings : shared {
+      canister_id : Principal;
+      settings : {
+        controllers : ?[Principal];
+        compute_allocation : ?Nat;
+        memory_allocation : ?Nat;
+        freezing_threshold : ?Nat;
+      };
+    } -> async ();
+  } = actor "aaaaa-aa";
 
   // -- Configuration --
 
@@ -60,11 +74,50 @@ persistent actor Factory {
     let vault = await UserVault.UserVault(caller);
     let canisterId = Principal.fromActor(vault);
 
+    // Transfer IC-level controller to the user (+ keep Factory for future ops)
+    let factoryPrincipal = Principal.fromActor(Factory);
+    await ic.update_settings({
+      canister_id = canisterId;
+      settings = {
+        controllers = ?[caller, factoryPrincipal];
+        compute_allocation = null;
+        memory_allocation = null;
+        freezing_threshold = null;
+      };
+    });
+
     // Store the mapping (append to array)
     vaults := Array.append(vaults, [(caller, canisterId)]);
     totalCreated += 1;
 
     #ok(canisterId);
+  };
+
+  /// Transfer IC-level controller of a vault to its owner.
+  /// Sets controllers to [owner, Factory] so the owner can upgrade their own
+  /// vault directly, while Factory retains access for future operations.
+  /// Only the vault owner can call this.
+  public shared ({ caller }) func transferController() : async Result.Result<(), Types.FactoryError> {
+    if (Principal.isAnonymous(caller)) {
+      return #err(#creationFailed("Anonymous callers cannot transfer controllers"));
+    };
+
+    switch (findVault(caller)) {
+      case null { return #err(#creationFailed("No vault found for caller")) };
+      case (?vaultId) {
+        let factoryPrincipal = Principal.fromActor(Factory);
+        await ic.update_settings({
+          canister_id = vaultId;
+          settings = {
+            controllers = ?[caller, factoryPrincipal];
+            compute_allocation = null;
+            memory_allocation = null;
+            freezing_threshold = null;
+          };
+        });
+        #ok(());
+      };
+    };
   };
 
   /// Get the vault canister ID for the caller.
