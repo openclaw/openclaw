@@ -1,4 +1,3 @@
-
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { __testing } from "./compaction-safeguard.js";
 
@@ -14,7 +13,7 @@ describe("Compaction Safeguard Logging", () => {
     }));
 
     const section = formatToolFailuresSection(failures);
-    
+
     // CURRENT BEHAVIOR: It logs up to 8 failures, then "...and X more".
     // We want to verify this behavior first.
     expect(section).toContain("- broken_tool (exitCode=1): failed");
@@ -22,7 +21,7 @@ describe("Compaction Safeguard Logging", () => {
   });
 
   it("normalizes failure text", () => {
-      // This is just a placeholder to ensure the test file runs
-      expect(true).toBe(true);
+    // This is just a placeholder to ensure the test file runs
+    expect(true).toBe(true);
   });
 });

@@ -271,7 +271,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               `Compaction safeguard: new content uses ${newContentRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
-              `(${pruned.droppedMessages} messages) to fit history budget.`,
+                `(${pruned.droppedMessages} messages) to fit history budget.`,
             );
             messagesToSummarize = pruned.messages;
 
@@ -299,7 +299,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 });
               } catch (droppedError) {
                 logger.warn(
-                  `Compaction safeguard: failed to summarize dropped messages, continuing without: ${droppedError instanceof Error ? droppedError.message : String(droppedError)
+                  `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
+                    droppedError instanceof Error ? droppedError.message : String(droppedError)
                   }`,
                 );
               }
@@ -365,7 +366,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       };
     } catch (error) {
       logger.warn(
-        `Compaction summarization failed; truncating history: ${error instanceof Error ? error.message : String(error)
+        `Compaction summarization failed; truncating history: ${
+          error instanceof Error ? error.message : String(error)
         }`,
       );
       return {
