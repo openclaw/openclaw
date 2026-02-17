@@ -1,31 +1,6 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../auth-profiles.js", () => ({
-  isProfileInCooldown: vi.fn(() => false),
-  markAuthProfileFailure: vi.fn(async () => {}),
-  markAuthProfileGood: vi.fn(async () => {}),
-  markAuthProfileUsed: vi.fn(async () => {}),
-}));
-
-vi.mock("../usage.js", () => ({
-  normalizeUsage: vi.fn((usage?: unknown) =>
-    usage && typeof usage === "object" ? usage : undefined,
-  ),
-  derivePromptTokens: vi.fn(
-    (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) => {
-      if (!usage) {
-        return undefined;
-      }
-      const input = usage.input ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const sum = input + cacheRead + cacheWrite;
-      return sum > 0 ? sum : undefined;
-    },
-  ),
-}));
-
 vi.mock("../workspace-run.js", () => ({
   resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string }) => ({
     workspaceDir: params.workspaceDir,

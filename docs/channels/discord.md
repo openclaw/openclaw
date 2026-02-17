@@ -87,6 +87,77 @@ Token resolution is account-aware. Config token values win over env fallback. `D
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
 
+## Interactive components
+
+OpenClaw supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results are routed back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
+
+Supported blocks:
+
+- `text`, `section`, `separator`, `actions`, `media-gallery`, `file`
+- Action rows allow up to 5 buttons or a single select menu
+- Select types: `string`, `user`, `role`, `mentionable`, `channel`
+
+File attachments:
+
+- `file` blocks must point to an attachment reference (`attachment://<filename>`)
+- Provide the attachment via `media`/`path`/`filePath` (single file); use `media-gallery` for multiple files
+- Use `filename` to override the upload name when it should match the attachment reference
+
+Modal forms:
+
+- Add `components.modal` with up to 5 fields
+- Field types: `text`, `checkbox`, `radio`, `select`, `role-select`, `user-select`
+- OpenClaw adds a trigger button automatically
+
+Example:
+
+```json5
+{
+  channel: "discord",
+  action: "send",
+  to: "channel:123456789012345678",
+  message: "Optional fallback text",
+  components: {
+    text: "Choose a path",
+    blocks: [
+      {
+        type: "actions",
+        buttons: [
+          { label: "Approve", style: "success" },
+          { label: "Decline", style: "danger" },
+        ],
+      },
+      {
+        type: "actions",
+        select: {
+          type: "string",
+          placeholder: "Pick an option",
+          options: [
+            { label: "Option A", value: "a" },
+            { label: "Option B", value: "b" },
+          ],
+        },
+      },
+    ],
+    modal: {
+      title: "Details",
+      triggerLabel: "Open form",
+      fields: [
+        { type: "text", label: "Requester" },
+        {
+          type: "select",
+          label: "Priority",
+          options: [
+            { label: "Low", value: "low" },
+            { label: "High", value: "high" },
+          ],
+        },
+      ],
+    },
+  },
+}
+```
+
 ## Access control and routing
 
 <Tabs>
@@ -313,6 +384,23 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
   </Accordion>
 
+  <Accordion title="Ack reactions">
+    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+
+    Resolution order:
+
+    - `channels.discord.accounts.<accountId>.ackReaction`
+    - `channels.discord.ackReaction`
+    - `messages.ackReaction`
+    - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+
+    Notes:
+
+    - Discord accepts unicode emoji or custom emoji names.
+    - Use `""` to disable the reaction for a channel or account.
+
+  </Accordion>
+
   <Accordion title="Config writes">
     Channel-initiated config writes are enabled by default.
 
@@ -482,6 +570,30 @@ Default gate behavior:
 | moderation                                                                                                                                                               | disabled |
 | presence                                                                                                                                                                 | disabled |
 
+## Components v2 UI
+
+OpenClaw uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires Carbon component instances), while legacy `embeds` remain available but are not recommended.
+
+- `channels.discord.ui.components.accentColor` sets the accent color used by Discord component containers (hex).
+- Set per account with `channels.discord.accounts.<id>.ui.components.accentColor`.
+- `embeds` are ignored when components v2 are present.
+
+Example:
+
+```json5
+{
+  channels: {
+    discord: {
+      ui: {
+        components: {
+          accentColor: "#5865F2",
+        },
+      },
+    },
+  },
+}
+```
+
 ## Voice messages
 
 Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
@@ -574,6 +686,7 @@ High-signal Discord fields:
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
+- UI: `ui.components.accentColor`
 - features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
 ## Safety and operations

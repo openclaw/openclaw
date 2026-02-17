@@ -106,6 +106,18 @@ export const sendHandlers: GatewayRequestHandlers = {
     const channelInput = typeof request.channel === "string" ? request.channel : undefined;
     const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
     if (channelInput && !normalizedChannel) {
+      const normalizedInput = channelInput.trim().toLowerCase();
+      if (normalizedInput === "webchat") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+          ),
+        );
+        return;
+      }
       respond(
         false,
         undefined,
@@ -187,6 +199,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           to: resolved.to,
           accountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
+          agentId: providedSessionKey
+            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+            : derivedAgentId,
           gifPlayback: request.gifPlayback,
           deps: outboundDeps,
           mirror: providedSessionKey

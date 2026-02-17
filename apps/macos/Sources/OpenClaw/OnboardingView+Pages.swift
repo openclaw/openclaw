@@ -206,7 +206,9 @@ extension OnboardingView {
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: fieldWidth)
                                     }
-                                    if let message = CommandResolver.sshTargetValidationMessage(self.state.remoteTarget) {
+                                    if let message = CommandResolver
+                                        .sshTargetValidationMessage(self.state.remoteTarget)
+                                    {
                                         GridRow {
                                             Text("")
                                                 .frame(width: labelWidth, alignment: .leading)

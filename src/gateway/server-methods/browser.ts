@@ -10,7 +10,7 @@ import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js
 import { loadConfig } from "../../config/config.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import { safeParseJson } from "./nodes.helpers.js";
+import { respondUnavailableOnNodeInvokeError, safeParseJson } from "./nodes.helpers.js";
 
 type BrowserRequestParams = {
   method?: string;
@@ -194,14 +194,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         timeoutMs,
         idempotencyKey: crypto.randomUUID(),
       });
-      if (!res.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
-          }),
-        );
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;

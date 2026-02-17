@@ -7,6 +7,47 @@ import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
 
 describe("hooks mapping", () => {
+  function expectSkippedTransformResult(result: Awaited<ReturnType<typeof applyHookMappings>>) {
+    expect(result?.ok).toBe(true);
+    if (result?.ok) {
+      expect(result.action).toBeNull();
+      expect("skipped" in result).toBe(true);
+    }
+  }
+
+  async function applyNullTransformFromTempConfig(params: {
+    configDir: string;
+    transformsDir?: string;
+  }) {
+    const transformsRoot = path.join(params.configDir, "hooks", "transforms");
+    const transformsDir = params.transformsDir
+      ? path.join(transformsRoot, params.transformsDir)
+      : transformsRoot;
+    fs.mkdirSync(transformsDir, { recursive: true });
+    fs.writeFileSync(path.join(transformsDir, "transform.mjs"), "export default () => null;");
+
+    const mappings = resolveHookMappings(
+      {
+        transformsDir: params.transformsDir,
+        mappings: [
+          {
+            match: { path: "skip" },
+            action: "agent",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir: params.configDir },
+    );
+
+    return applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/skip"),
+      path: "skip",
+    });
+  }
+
   it("resolves gmail preset", () => {
     const mappings = resolveHookMappings({ presets: ["gmail"] });
     expect(mappings.length).toBeGreaterThan(0);
@@ -186,69 +227,13 @@ describe("hooks mapping", () => {
 
   it("accepts transformsDir subdirectory within the transforms root", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-xformdir-ok-"));
-    const transformsSubdir = path.join(configDir, "hooks", "transforms", "subdir");
-    fs.mkdirSync(transformsSubdir, { recursive: true });
-    fs.writeFileSync(path.join(transformsSubdir, "transform.mjs"), "export default () => null;");
-
-    const mappings = resolveHookMappings(
-      {
-        transformsDir: "subdir",
-        mappings: [
-          {
-            match: { path: "skip" },
-            action: "agent",
-            transform: { module: "transform.mjs" },
-          },
-        ],
-      },
-      { configDir },
-    );
-
-    const result = await applyHookMappings(mappings, {
-      payload: {},
-      headers: {},
-      url: new URL("http://127.0.0.1:18789/hooks/skip"),
-      path: "skip",
-    });
-
-    expect(result?.ok).toBe(true);
-    if (result?.ok) {
-      expect(result.action).toBeNull();
-      expect("skipped" in result).toBe(true);
-    }
+    const result = await applyNullTransformFromTempConfig({ configDir, transformsDir: "subdir" });
+    expectSkippedTransformResult(result);
   });
   it("treats null transform as a handled skip", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-skip-"));
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
-    const modPath = path.join(transformsRoot, "transform.mjs");
-    fs.writeFileSync(modPath, "export default () => null;");
-
-    const mappings = resolveHookMappings(
-      {
-        mappings: [
-          {
-            match: { path: "skip" },
-            action: "agent",
-            transform: { module: "transform.mjs" },
-          },
-        ],
-      },
-      { configDir },
-    );
-
-    const result = await applyHookMappings(mappings, {
-      payload: {},
-      headers: {},
-      url: new URL("http://127.0.0.1:18789/hooks/skip"),
-      path: "skip",
-    });
-
-    expect(result?.ok).toBe(true);
-    if (result?.ok) {
-      expect(result.action).toBeNull();
-      expect("skipped" in result).toBe(true);
-    }
+    const result = await applyNullTransformFromTempConfig({ configDir });
+    expectSkippedTransformResult(result);
   });
 
   it("prefers explicit mappings over presets", async () => {

@@ -11,6 +11,41 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
+type SessionDefaultsSnapshot = {
+  mainSessionKey?: string;
+  mainKey?: string;
+};
+
+function resolveSidebarChatSessionKey(state: AppViewState): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
+  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
+  if (mainKey) {
+    return mainKey;
+  }
+  return "main";
+}
+
+function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+  state.sessionKey = sessionKey;
+  state.chatMessage = "";
+  state.chatStream = null;
+  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+  state.chatRunId = null;
+  (state as unknown as OpenClawApp).resetToolStream();
+  (state as unknown as OpenClawApp).resetChatScroll();
+  state.applySettings({
+    ...state.settings,
+    sessionKey,
+    lastActiveSessionKey: sessionKey,
+  });
+}
+
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
   return html`
@@ -29,6 +64,13 @@ export function renderTab(state: AppViewState, tab: Tab) {
           return;
         }
         event.preventDefault();
+        if (tab === "chat") {
+          const mainSessionKey = resolveSidebarChatSessionKey(state);
+          if (state.sessionKey !== mainSessionKey) {
+            resetChatStateForSessionSwitch(state, mainSessionKey);
+            void state.loadAssistantIdentity();
+          }
+        }
         state.setTab(tab);
       }}
       title=${titleForTab(tab)}
@@ -117,7 +159,7 @@ export function renderChatControls(state: AppViewState) {
             sessionOptions,
             (entry) => entry.key,
             (entry) =>
-              html`<option value=${entry.key}>
+              html`<option value=${entry.key} title=${entry.key}>
                 ${entry.displayName ?? entry.key}
               </option>`,
           )}
@@ -195,11 +237,6 @@ export function renderChatControls(state: AppViewState) {
   `;
 }
 
-type SessionDefaultsSnapshot = {
-  mainSessionKey?: string;
-  mainKey?: string;
-};
-
 function resolveMainSessionKey(
   hello: AppViewState["hello"],
   sessions: SessionsListResult | null,
@@ -219,19 +256,96 @@ function resolveMainSessionKey(
   return null;
 }
 
+/* ── Channel display labels ────────────────────────────── */
+const CHANNEL_LABELS: Record<string, string> = {
+  bluebubbles: "iMessage",
+  telegram: "Telegram",
+  discord: "Discord",
+  signal: "Signal",
+  slack: "Slack",
+  whatsapp: "WhatsApp",
+  matrix: "Matrix",
+  email: "Email",
+  sms: "SMS",
+};
+
+const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
+
+/** Parsed type / context extracted from a session key. */
+export type SessionKeyInfo = {
+  /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
+  prefix: string;
+  /** Human-readable fallback when no label / displayName is available. */
+  fallbackName: string;
+};
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Parse a session key to extract type information and a human-readable
+ * fallback display name.  Exported for testing.
+ */
+export function parseSessionKey(key: string): SessionKeyInfo {
+  // ── Main session ─────────────────────────────────
+  if (key === "main" || key === "agent:main:main") {
+    return { prefix: "", fallbackName: "Main Session" };
+  }
+
+  // ── Subagent ─────────────────────────────────────
+  if (key.includes(":subagent:")) {
+    return { prefix: "Subagent:", fallbackName: "Subagent:" };
+  }
+
+  // ── Cron job ─────────────────────────────────────
+  if (key.includes(":cron:")) {
+    return { prefix: "Cron:", fallbackName: "Cron Job:" };
+  }
+
+  // ── Direct chat  (agent:<x>:<channel>:direct:<id>) ──
+  const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
+  if (directMatch) {
+    const channel = directMatch[1];
+    const identifier = directMatch[2];
+    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    return { prefix: "", fallbackName: `${channelLabel} · ${identifier}` };
+  }
+
+  // ── Group chat  (agent:<x>:<channel>:group:<id>) ────
+  const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
+  if (groupMatch) {
+    const channel = groupMatch[1];
+    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    return { prefix: "", fallbackName: `${channelLabel} Group` };
+  }
+
+  // ── Channel-prefixed legacy keys (e.g. "bluebubbles:g-…") ──
+  for (const ch of KNOWN_CHANNEL_KEYS) {
+    if (key === ch || key.startsWith(`${ch}:`)) {
+      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+    }
+  }
+
+  // ── Unknown — return key as-is ───────────────────
+  return { prefix: "", fallbackName: key };
+}
+
 export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
-) {
-  const displayName = row?.displayName?.trim() || "";
+): string {
   const label = row?.label?.trim() || "";
-  if (displayName && displayName !== key) {
-    return `${displayName} (${key})`;
-  }
+  const displayName = row?.displayName?.trim() || "";
+  const { prefix, fallbackName } = parseSessionKey(key);
+
   if (label && label !== key) {
-    return `${label} (${key})`;
+    return prefix ? `${prefix} ${label}` : label;
   }
-  return key;
+  if (displayName && displayName !== key) {
+    return prefix ? `${prefix} ${displayName}` : displayName;
+  }
+  return fallbackName;
 }
 
 function resolveSessionOptions(

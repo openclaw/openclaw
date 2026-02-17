@@ -1,10 +1,8 @@
 import "./test-helpers.js";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { monitorWebChannel } from "./auto-reply.js";
+import { monitorWebChannelWithCapture } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
-  createWebInboundDeliverySpies,
-  createWebListenerFactoryCapture,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -35,15 +33,10 @@ describe("broadcast groups", () => {
       return { text: "ok" };
     });
 
-    const spies = createWebInboundDeliverySpies();
-    const { listenerFactory, getOnMessage } = createWebListenerFactoryCapture();
-
-    await monitorWebChannel(false, listenerFactory, false, resolver);
-    const onMessage = getOnMessage();
-    expect(onMessage).toBeDefined();
+    const { spies, onMessage } = await monitorWebChannelWithCapture(resolver);
 
     await sendWebDirectInboundMessage({
-      onMessage: onMessage!,
+      onMessage,
       spies,
       id: "m1",
       from: "+1000",

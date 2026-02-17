@@ -10,7 +10,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
 import {
   resolveSandboxConfigForAgent,
@@ -18,6 +18,7 @@ import {
 } from "../agents/sandbox.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { createConfigIO } from "../config/config.js";
@@ -31,6 +32,8 @@ import {
   inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
+import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import * as skillScanner from "./skill-scanner.js";
 
 export type SecurityAuditFinding = {
@@ -62,22 +65,6 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
-function isPathInside(basePath: string, candidatePath: string): boolean {
-  const base = path.resolve(basePath);
-  const candidate = path.resolve(candidatePath);
-  const rel = path.relative(base, candidate);
-  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
-}
-
-function extensionUsesSkippedScannerPath(entry: string): boolean {
-  const segments = entry.split(/[\\/]+/).filter(Boolean);
-  return segments.some(
-    (segment) =>
-      segment === "node_modules" ||
-      (segment.startsWith(".") && segment !== "." && segment !== ".."),
-  );
-}
-
 async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {
   const manifestPath = path.join(pluginPath, "package.json");
   const raw = await fs.readFile(manifestPath, "utf-8").catch(() => "");
@@ -95,20 +82,6 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
   return extensions.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
-function listWorkspaceDirs(cfg: OpenClawConfig): string[] {
-  const dirs = new Set<string>();
-  const list = cfg.agents?.list;
-  if (Array.isArray(list)) {
-    for (const entry of list) {
-      if (entry && typeof entry === "object" && typeof entry.id === "string") {
-        dirs.add(resolveAgentWorkspaceDir(cfg, entry.id));
-      }
-    }
-  }
-  dirs.add(resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
-  return [...dirs];
-}
-
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
   return findings
     .map((finding) => {
@@ -123,36 +96,6 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
     .join("\n");
 }
 
-function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
-  if (!Array.isArray(extra) || extra.length === 0) {
-    return base;
-  }
-  if (!Array.isArray(base) || base.length === 0) {
-    return Array.from(new Set(["*", ...extra]));
-  }
-  return Array.from(new Set([...base, ...extra]));
-}
-
-function pickToolPolicy(config?: {
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-}): SandboxToolPolicy | undefined {
-  if (!config) {
-    return undefined;
-  }
-  const allow = Array.isArray(config.allow)
-    ? unionAllow(config.allow, config.alsoAllow)
-    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
-      ? unionAllow(undefined, config.alsoAllow)
-      : undefined;
-  const deny = Array.isArray(config.deny) ? config.deny : undefined;
-  if (!allow && !deny) {
-    return undefined;
-  }
-  return { allow, deny };
-}
-
 function resolveToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
@@ -163,8 +106,8 @@ function resolveToolPolicies(params: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const policies: Array<SandboxToolPolicy | undefined> = [
     profilePolicy,
-    pickToolPolicy(params.cfg.tools ?? undefined),
-    pickToolPolicy(params.agentTools),
+    pickSandboxToolPolicy(params.cfg.tools ?? undefined),
+    pickSandboxToolPolicy(params.agentTools),
   ];
   if (params.sandboxMode === "all") {
     policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
@@ -785,7 +728,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const workspaceDirs = listWorkspaceDirs(params.cfg);
+  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
 
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });

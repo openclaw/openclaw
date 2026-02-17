@@ -57,15 +57,18 @@ export type RouteReplyResult = {
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
   const normalizedChannel = normalizeMessageChannel(channel);
+  const resolvedAgentId = params.sessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: cfg,
+      })
+    : undefined;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = params.sessionKey
     ? resolveEffectiveMessagesConfig(
         cfg,
-        resolveSessionAgentId({
-          sessionKey: params.sessionKey,
-          config: cfg,
-        }),
+        resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
         { channel: normalizedChannel, accountId },
       ).responsePrefix
     : cfg.messages?.responsePrefix === "auto"
@@ -123,12 +126,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       payloads: [normalized],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
+      agentId: resolvedAgentId,
       abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
-              agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+              agentId: resolvedAgentId,
               text,
               mediaUrls,
             }

@@ -41,8 +41,7 @@ struct UsageRow: Identifiable {
 
     var remainingPercent: Int? {
         guard let usedPercent, usedPercent.isFinite else { return nil }
-        let remaining = max(0, min(100, Int(round(100 - usedPercent))))
-        return remaining
+        return max(0, min(100, Int(round(100 - usedPercent))))
     }
 
     func detailText(now: Date = .init()) -> String {

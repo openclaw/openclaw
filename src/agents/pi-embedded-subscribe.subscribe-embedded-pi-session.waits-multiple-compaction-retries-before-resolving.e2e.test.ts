@@ -7,13 +7,6 @@ type StubSession = {
 };
 
 describe("subscribeEmbeddedPiSession", () => {
-  const _THINKING_TAG_CASES = [
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-    { tag: "thought", open: "<thought>", close: "</thought>" },
-    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  ] as const;
-
   it("waits for multiple compaction retries before resolving", async () => {
     const listeners: SessionEventHandler[] = [];
     const session = {

@@ -141,6 +141,17 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("binding.peer");
   });
 
+  test("coerces numeric peer ids to stable session keys", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: 1468834856187203680n as unknown as string },
+    });
+    expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
+  });
+
   test("guild binding wins over account binding when peer not bound", () => {
     const cfg: OpenClawConfig = {
       bindings: [

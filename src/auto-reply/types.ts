@@ -43,6 +43,8 @@ export type GetReplyOptions = {
   skillFilter?: string[];
   /** Mutable ref to track if a reply was sent (for Slack "first" threading mode). */
   hasRepliedRef?: { value: boolean };
+  /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
+  timeoutOverrideSeconds?: number;
 };
 
 export type ReplyPayload = {
