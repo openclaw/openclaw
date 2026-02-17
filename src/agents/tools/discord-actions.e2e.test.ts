@@ -660,4 +660,50 @@ describe("handleDiscordAction per-account gating", () => {
     );
     expect(kickMemberDiscord).toHaveBeenCalled();
   });
+
+  it("inherits top-level channel gate when account overrides moderation only", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: false },
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleDiscordAction(
+        { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+        cfg,
+      ),
+    ).rejects.toThrow(/channel management is disabled/i);
+  });
+
+  it("allows account to explicitly re-enable top-level disabled channel gate", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: false },
+          accounts: {
+            ops: {
+              token: "tok-ops",
+              actions: { moderation: true, channels: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+      cfg,
+    );
+
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", name: "alerts" }),
+      { accountId: "ops" },
+    );
+  });
 });
