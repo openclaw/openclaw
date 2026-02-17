@@ -5,7 +5,7 @@ import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent, refreshChat } from "./app-chat.ts";
 import {
   applySettings,
   loadCron,
@@ -169,12 +169,44 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refreshing…`;
+      void refreshChat(host as unknown as Parameters<typeof refreshChat>[0]).then(() => {
+        if (host.lastError?.includes("event gap")) {
+          host.lastError = null;
+        }
+      });
+    },
+    onReconnect: () => {
+      if (host.client !== client) {
+        return;
+      }
+      void refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
     },
   });
   host.client = client;
   previousClient?.stop();
   client.start();
+
+  // Resync chat when the user returns to the tab (e.g. after iOS Safari backgrounding).
+  let visibilityDebounce: ReturnType<typeof setTimeout> | null = null;
+  const onVisibilityChange = () => {
+    if (document.visibilityState !== "visible" || host.client !== client) {
+      return;
+    }
+    if (visibilityDebounce !== null) {
+      clearTimeout(visibilityDebounce);
+    }
+    visibilityDebounce = setTimeout(() => {
+      visibilityDebounce = null;
+      if (host.connected && host.client === client) {
+        if (host.lastError?.includes("event gap")) {
+          host.lastError = null;
+        }
+        void refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
+      }
+    }, 300);
+  };
+  document.addEventListener("visibilitychange", onVisibilityChange);
 }
 
 export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
