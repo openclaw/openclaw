@@ -333,10 +333,23 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
+        // Extract token from URL query string (set by gateway during upgrade).
+        // This enables /?token=XXX URLs to work for Control UI authentication.
+        const urlToken = (upgradeReq as IncomingMessage & { _gatewayUrlToken?: string })
+          ._gatewayUrlToken;
+
+        // Use URL token as fallback when client doesn't provide auth.
+        const connectAuth =
+          connectParams.auth?.token || connectParams.auth?.password
+            ? connectParams.auth
+            : urlToken
+              ? { token: urlToken, password: urlToken }
+              : undefined;
+
         const deviceRaw = connectParams.device;
         let devicePublicKey: string | null = null;
-        const hasTokenAuth = Boolean(connectParams.auth?.token);
-        const hasPasswordAuth = Boolean(connectParams.auth?.password);
+        const hasTokenAuth = Boolean(connectAuth?.token);
+        const hasPasswordAuth = Boolean(connectAuth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
         const allowInsecureControlUi =
           isControlUi && configSnapshot.gateway?.controlUi?.allowInsecureAuth === true;
@@ -345,10 +358,10 @@ export function attachGatewayWsMessageHandler(params: {
         const allowControlUiBypass = allowInsecureControlUi || disableControlUiDeviceAuth;
         const device = disableControlUiDeviceAuth ? null : deviceRaw;
 
-        const hasDeviceTokenCandidate = Boolean(connectParams.auth?.token && device);
+        const hasDeviceTokenCandidate = Boolean(connectAuth?.token && device);
         let authResult: GatewayAuthResult = await authorizeGatewayConnect({
           auth: resolvedAuth,
-          connectAuth: connectParams.auth,
+          connectAuth: connectAuth,
           req: upgradeReq,
           trustedProxies,
           rateLimiter: hasDeviceTokenCandidate ? undefined : rateLimiter,
@@ -381,7 +394,7 @@ export function attachGatewayWsMessageHandler(params: {
         const sharedAuthResult = hasSharedAuth
           ? await authorizeGatewayConnect({
               auth: { ...resolvedAuth, allowTailscale: false },
-              connectAuth: connectParams.auth,
+              connectAuth: connectAuth,
               req: upgradeReq,
               trustedProxies,
               // Shared-auth probe only; rate-limit side effects are handled in

@@ -631,6 +631,15 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
+      // Extract token from URL query string for websocket auth fallback.
+      // This allows users to access Control UI at /?token=XXX and have the
+      // token automatically used for websocket authentication.
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const urlToken = url.searchParams.get("token") ?? undefined;
+      if (urlToken) {
+        (req as IncomingMessage & { _gatewayUrlToken?: string })._gatewayUrlToken = urlToken;
+      }
+
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });
