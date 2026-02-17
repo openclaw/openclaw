@@ -145,8 +145,8 @@ describe("acp event mapper", () => {
   it("extracts text and resource blocks into prompt text", () => {
     const text = extractTextFromPrompt([
       { type: "text", text: "Hello" },
-      { type: "resource", resource: { text: "File contents" } },
-      { type: "resource_link", uri: "https://example.com", title: "Spec" },
+      { type: "resource", resource: { uri: "file:///tmp/spec.txt", text: "File contents" } },
+      { type: "resource_link", uri: "https://example.com", name: "Spec", title: "Spec" },
       { type: "image", data: "abc", mimeType: "image/png" },
     ]);
 

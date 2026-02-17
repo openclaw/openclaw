@@ -130,6 +130,9 @@ describe("resolveChannelCapabilities", () => {
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
   plugins: [],
   tools: [],
+  hooks: [],
+  typedHooks: [],
+  commands: [],
   channels,
   providers: [],
   gatewayHandlers: {},
