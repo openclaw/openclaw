@@ -35,27 +35,36 @@ export function normalizeSignalMessagingTarget(raw: string): string | undefined 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_COMPACT_PATTERN = /^[0-9a-f]{32}$/i;
 
-export function looksLikeSignalTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^(signal:)?(group:|username:|u:)/i.test(trimmed)) {
-    return true;
-  }
-  if (/^(signal:)?uuid:/i.test(trimmed)) {
-    const stripped = trimmed
-      .replace(/^signal:/i, "")
-      .replace(/^uuid:/i, "")
-      .trim();
-    if (!stripped) {
-      return false;
+export function looksLikeSignalTargetId(raw: string, normalized?: string): boolean {
+  const candidates = [raw, normalized ?? ""].map((value) => value.trim()).filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (/^(signal:)?(group:|username:|u:)/i.test(candidate)) {
+      return true;
     }
-    return UUID_PATTERN.test(stripped) || UUID_COMPACT_PATTERN.test(stripped);
+    if (/^(signal:)?uuid:/i.test(candidate)) {
+      const stripped = candidate
+        .replace(/^signal:/i, "")
+        .replace(/^uuid:/i, "")
+        .trim();
+      if (!stripped) {
+        continue;
+      }
+      if (UUID_PATTERN.test(stripped) || UUID_COMPACT_PATTERN.test(stripped)) {
+        return true;
+      }
+      continue;
+    }
+
+    const withoutSignalPrefix = candidate.replace(/^signal:/i, "").trim();
+    // Accept UUIDs (used by signal-cli for reactions)
+    if (UUID_PATTERN.test(withoutSignalPrefix) || UUID_COMPACT_PATTERN.test(withoutSignalPrefix)) {
+      return true;
+    }
+    if (/^\+?\d{3,}$/.test(withoutSignalPrefix)) {
+      return true;
+    }
   }
-  // Accept UUIDs (used by signal-cli for reactions)
-  if (UUID_PATTERN.test(trimmed) || UUID_COMPACT_PATTERN.test(trimmed)) {
-    return true;
-  }
-  return /^\+?\d{3,}$/.test(trimmed);
+
+  return false;
 }

@@ -51,4 +51,41 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
     expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
   });
+
+  it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
+    capturedCtx = undefined;
+
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler({
+      event: "receive",
+      data: JSON.stringify({
+        envelope: {
+          sourceNumber: "+15550002222",
+          sourceName: "Bob",
+          timestamp: 1700000000001,
+          dataMessage: {
+            message: "hello",
+            attachments: [],
+          },
+        },
+      }),
+    });
+
+    expect(capturedCtx).toBeTruthy();
+    const context = capturedCtx as unknown as {
+      ChatType?: string;
+      To?: string;
+      OriginatingTo?: string;
+    };
+    expect(context.ChatType).toBe("direct");
+    expect(context.To).toBe("+15550002222");
+    expect(context.OriginatingTo).toBe("+15550002222");
+  });
 });

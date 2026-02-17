@@ -5,6 +5,7 @@ import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
+import { normalizeTelegramCommandName } from "../config/telegram-custom-commands.js";
 import {
   answerCallbackQuerySpy,
   commandSpy,
@@ -72,7 +73,7 @@ describe("createTelegramBot", () => {
     }>;
     const skillCommands = resolveSkillCommands(config);
     const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
-      command: command.name,
+      command: normalizeTelegramCommandName(command.name),
       description: command.description,
     }));
     expect(registered.slice(0, native.length)).toEqual(native);
@@ -113,7 +114,7 @@ describe("createTelegramBot", () => {
     }>;
     const skillCommands = resolveSkillCommands(config);
     const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
-      command: command.name,
+      command: normalizeTelegramCommandName(command.name),
       description: command.description,
     }));
     const nativeStatus = native.find((command) => command.command === "status");
@@ -999,6 +1000,44 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("enqueues one event per added emoji reaction", async () => {
+    onSpy.mockReset();
+    enqueueSystemEventSpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 505 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [
+          { type: "emoji", emoji: "👍" },
+          { type: "emoji", emoji: "🔥" },
+          { type: "emoji", emoji: "🎉" },
+        ],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(2);
+    expect(enqueueSystemEventSpy.mock.calls.map((call) => call[0])).toEqual([
+      "Telegram reaction added: 🔥 by Ada on msg 42",
+      "Telegram reaction added: 🎉 by Ada on msg 42",
+    ]);
   });
 
   it("routes forum group reactions to the general topic (thread id not available on reactions)", async () => {
