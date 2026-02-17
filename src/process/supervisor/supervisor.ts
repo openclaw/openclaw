@@ -273,6 +273,19 @@ export function createProcessSupervisor(): ProcessSupervisor {
     spawn,
     cancel,
     cancelScope,
+    cancelAll: (reason: TerminationReason = "manual-cancel") => {
+      const runIds = Array.from(active.keys());
+      if (runIds.length > 0) {
+        log.info(`cancelAll: terminating ${runIds.length} active run(s), reason=${reason}`);
+      }
+      for (const runId of runIds) {
+        try {
+          cancel(runId, reason);
+        } catch (err) {
+          log.warn(`cancelAll: failed to cancel runId=${runId}: ${String(err)}`);
+        }
+      }
+    },
     reconcileOrphans: async () => {
       // Deliberate no-op: this supervisor uses in-memory ownership only.
       // Active runs are not recovered after process restart in the current model.
