@@ -27,9 +27,7 @@ describe("session-id validation", () => {
   });
 
   it("rejects session key format with leading whitespace", () => {
-    expect(() => validateSessionId("  agent:foo:bar")).toThrow(
-      "Please use --session-key instead",
-    );
+    expect(() => validateSessionId("  agent:foo:bar")).toThrow("Please use --session-key instead");
   });
 
   it("accepts UUID format", () => {
