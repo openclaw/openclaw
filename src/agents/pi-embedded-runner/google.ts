@@ -438,6 +438,7 @@ export async function sanitizeSessionHistory(params: {
       toolCallIdMode: policy.toolCallIdMode,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      maxHistoryImages: policy.maxHistoryImages,
     },
   );
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks

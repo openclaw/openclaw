@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "./model-selection.js";
 import { isAntigravityClaude, isGoogleModelApi } from "./pi-embedded-helpers/google.js";
+import { DEFAULT_MAX_HISTORY_IMAGES } from "./pi-embedded-helpers/images.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -19,6 +20,15 @@ export type TranscriptPolicy = {
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
   allowSyntheticToolResults: boolean;
+  /**
+   * Maximum number of images to retain across the entire conversation history
+   * when building a request payload.  Oldest images beyond this cap are
+   * replaced with a placeholder text block so providers that enforce a
+   * per-request image limit (commonly 8) do not return HTTP 400 errors.
+   *
+   * Defaults to DEFAULT_MAX_HISTORY_IMAGES (8).  Set to undefined to disable.
+   */
+  maxHistoryImages?: number;
 };
 
 const MISTRAL_MODEL_HINTS = [
@@ -119,5 +129,6 @@ export function resolveTranscriptPolicy(params: {
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && isAnthropic,
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+    maxHistoryImages: DEFAULT_MAX_HISTORY_IMAGES,
   };
 }

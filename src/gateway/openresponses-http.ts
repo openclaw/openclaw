@@ -62,8 +62,8 @@ const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
-  res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
+  res.write(`event: ${event.type}\n`, "utf-8");
+  res.write(`data: ${JSON.stringify(event)}\n\n`, "utf-8");
 }
 
 function extractTextContent(content: string | ContentPart[]): string {

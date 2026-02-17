@@ -77,7 +77,7 @@ export async function readJsonBodyOrError(
 }
 
 export function writeDone(res: ServerResponse) {
-  res.write("data: [DONE]\n\n");
+  res.write("data: [DONE]\n\n", "utf-8");
 }
 
 export function setSseHeaders(res: ServerResponse) {
