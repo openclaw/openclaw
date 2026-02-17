@@ -13,7 +13,13 @@ function clampTtl(value: number | undefined) {
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
-let jobTtlMs = clampTtl(Number.parseInt(process.env.PI_BASH_JOB_TTL_MS ?? "", 10));
+let jobTtlMs = clampTtl(
+  (() => {
+    const s = process.env.PI_BASH_JOB_TTL_MS?.trim() ?? "";
+    // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+    return /^\d+$/.test(s) ? Number.parseInt(s, 10) : undefined;
+  })(),
+);
 
 export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 

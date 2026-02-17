@@ -16,6 +16,20 @@ type LogLine = ReturnType<typeof parseLogLine>;
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
+/** Parse a positive integer string. Returns undefined for invalid input. */
+function parsePositiveInt(value: string): number | undefined {
+  const trimmed = value.trim();
+  // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
 const getChannelSet = () =>
   new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
 
@@ -78,7 +92,7 @@ export async function channelsLogsCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const channel = parseChannelFilter(opts.channel);
-  const limitRaw = typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
+  const limitRaw = typeof opts.lines === "string" ? parsePositiveInt(opts.lines) : opts.lines;
   const limit =
     typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
       ? Math.floor(limitRaw)

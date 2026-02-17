@@ -68,6 +68,20 @@ describe("argv helpers", () => {
     expect(
       getPositiveIntFlagValue(["node", "openclaw", "status", "--timeout", "nope"], "--timeout"),
     ).toBeUndefined();
+    // Edge cases: reject mixed alphanumeric, decimals, scientific notation
+    expect(
+      getPositiveIntFlagValue(["node", "openclaw", "status", "--timeout", "100abc"], "--timeout"),
+    ).toBeUndefined();
+    expect(
+      getPositiveIntFlagValue(["node", "openclaw", "status", "--timeout", "12.5"], "--timeout"),
+    ).toBeUndefined();
+    expect(
+      getPositiveIntFlagValue(["node", "openclaw", "status", "--timeout", "1e3"], "--timeout"),
+    ).toBeUndefined();
+    // Valid with trim
+    expect(
+      getPositiveIntFlagValue(["node", "openclaw", "status", "--timeout", "  5000  "], "--timeout"),
+    ).toBe(5000);
   });
 
   it("builds parse argv from raw args", () => {

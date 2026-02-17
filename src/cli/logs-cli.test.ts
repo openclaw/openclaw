@@ -57,6 +57,30 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
+  it("falls back to defaults for invalid numeric options", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({ lines: [] });
+
+    await runLogsCli(["logs", "--limit", "20abc", "--max-bytes", "12.5", "--interval", "1e3"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    expect(callGatewayFromCli.mock.calls[0]?.[2]).toMatchObject({
+      limit: 200,
+      maxBytes: 250_000,
+    });
+  });
+
+  it("accepts trimmed positive integer options", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({ lines: [] });
+
+    await runLogsCli(["logs", "--limit", " 50 ", "--max-bytes", "+1234"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    expect(callGatewayFromCli.mock.calls[0]?.[2]).toMatchObject({
+      limit: 50,
+      maxBytes: 1234,
+    });
+  });
+
   it("wires --local-time through CLI parsing and emits local timestamps", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",

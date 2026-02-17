@@ -116,13 +116,23 @@ export function registerNodesCameraCommands(nodes: Command) {
                     );
                   })();
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
-          const delayMs = opts.delayMs ? Number.parseInt(String(opts.delayMs), 10) : undefined;
+          const maxWidthStr = typeof opts.maxWidth === "string" ? opts.maxWidth.trim() : "";
+          const maxWidth =
+            maxWidthStr && /^\d+$/.test(maxWidthStr) ? Number.parseInt(maxWidthStr, 10) : undefined;
+          const qualityStr = typeof opts.quality === "string" ? opts.quality.trim() : "";
+          // Allow decimals for quality (0-100)
+          const quality =
+            qualityStr && /^\d+(\.\d+)?$/.test(qualityStr)
+              ? Number.parseFloat(qualityStr)
+              : undefined;
+          const delayMsStr = typeof opts.delayMs === "string" ? opts.delayMs.trim() : "";
+          const delayMs =
+            delayMsStr && /^\d+$/.test(delayMsStr) ? Number.parseInt(delayMsStr, 10) : undefined;
           const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const timeoutStr =
+            typeof opts.invokeTimeout === "string" ? opts.invokeTimeout.trim() : "";
+          const timeoutMs =
+            timeoutStr && /^\d+$/.test(timeoutStr) ? Number.parseInt(timeoutStr, 10) : undefined;
 
           const results: Array<{
             facing: CameraFacing;
@@ -198,9 +208,10 @@ export function registerNodesCameraCommands(nodes: Command) {
           const facing = parseFacing(String(opts.facing ?? "front"));
           const durationMs = parseDurationMs(String(opts.duration ?? "3000"));
           const includeAudio = opts.audio !== false;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const timeoutStr2 =
+            typeof opts.invokeTimeout === "string" ? opts.invokeTimeout.trim() : "";
+          const timeoutMs =
+            timeoutStr2 && /^\d+$/.test(timeoutStr2) ? Number.parseInt(timeoutStr2, 10) : undefined;
           const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
 
           const invokeParams = buildNodeInvokeParams({

@@ -131,4 +131,38 @@ describe("channelsCapabilitiesCommand", () => {
     expect(output).toContain("ChannelMessage.Read.All (channel history)");
     expect(output).toContain("Files.Read.All (files (OneDrive))");
   });
+
+  it("falls back to default timeout when timeout is not a strict integer", async () => {
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+    });
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    vi.mocked(fetchSlackScopes).mockResolvedValue({ ok: true, scopes: ["chat:write"] });
+
+    await channelsCapabilitiesCommand({ channel: "slack", timeout: "1e3" }, runtime);
+
+    expect(fetchSlackScopes).toHaveBeenCalledWith("xoxb-bot", 10_000);
+  });
+
+  it("uses explicit integer timeout values", async () => {
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+    });
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    vi.mocked(fetchSlackScopes).mockResolvedValue({ ok: true, scopes: ["chat:write"] });
+
+    await channelsCapabilitiesCommand({ channel: "slack", timeout: "2500" }, runtime);
+
+    expect(fetchSlackScopes).toHaveBeenCalledWith("xoxb-bot", 2500);
+  });
 });

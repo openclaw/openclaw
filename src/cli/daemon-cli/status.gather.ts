@@ -217,7 +217,9 @@ export async function gatherDaemonStatus(
     { deep: Boolean(opts.deep) },
   ).catch(() => []);
 
-  const timeoutMsRaw = Number.parseInt(String(opts.rpc.timeout ?? "10000"), 10);
+  const timeoutStr = String(opts.rpc.timeout ?? "10000").trim();
+  // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+  const timeoutMsRaw = /^\d+$/.test(timeoutStr) ? Number.parseInt(timeoutStr, 10) : NaN;
   const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 10_000;
 
   const rpc = opts.probe

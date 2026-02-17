@@ -20,7 +20,12 @@ function isValueToken(arg: string | undefined): boolean {
 }
 
 function parsePositiveInt(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10);
+  const trimmed = value.trim();
+  // Require full digit string (no mixed alphanumeric like "100abc")
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
     return undefined;
   }

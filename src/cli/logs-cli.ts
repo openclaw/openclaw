@@ -34,12 +34,18 @@ type LogsCliOptions = {
   expectFinal?: boolean;
 };
 
+const POSITIVE_INT_PATTERN = /^\+?\d+$/;
+
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
   }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  const trimmed = value.trim();
+  if (!POSITIVE_INT_PATTERN.test(trimmed)) {
+    return fallback;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function fetchLogs(

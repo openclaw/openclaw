@@ -93,7 +93,11 @@ export async function writeUrlToFile(filePath: string, url: string) {
   }
 
   const contentLengthRaw = res.headers.get("content-length");
-  const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
+  const contentLengthStr = typeof contentLengthRaw === "string" ? contentLengthRaw.trim() : "";
+  const contentLength =
+    contentLengthStr && /^\d+$/.test(contentLengthStr)
+      ? Number.parseInt(contentLengthStr, 10)
+      : undefined;
   if (
     typeof contentLength === "number" &&
     Number.isFinite(contentLength) &&

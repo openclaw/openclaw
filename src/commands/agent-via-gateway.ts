@@ -55,10 +55,17 @@ export type AgentCliOpts = {
 };
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
-  const raw =
-    opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+  let raw: number;
+  if (opts.timeout !== undefined) {
+    const s = String(opts.timeout).trim();
+    // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+    if (!/^\d+$/.test(s)) {
+      throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
+    }
+    raw = Number.parseInt(s, 10);
+  } else {
+    raw = opts.cfg.agents?.defaults?.timeoutSeconds ?? 600;
+  }
   if (Number.isNaN(raw) || raw < 0) {
     throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }

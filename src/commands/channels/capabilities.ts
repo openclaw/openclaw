@@ -2,6 +2,7 @@ import type { ChannelCapabilities, ChannelPlugin } from "../../channels/plugins/
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
+import { parseTimeoutMs } from "../../cli/parse-timeout.js";
 import { fetchChannelPermissionsDiscord } from "../../discord/send.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
 import { danger } from "../../globals.js";
@@ -66,8 +67,8 @@ const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
 };
 
 function normalizeTimeout(raw: unknown, fallback = 10_000) {
-  const value = typeof raw === "string" ? Number(raw) : Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
+  const value = parseTimeoutMs(raw);
+  if (value === undefined || value <= 0) {
     return fallback;
   }
   return value;

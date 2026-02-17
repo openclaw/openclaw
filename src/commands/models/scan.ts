@@ -2,6 +2,7 @@ import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompt
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
+import { parseTimeoutMs } from "../../cli/parse-timeout.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -14,6 +15,20 @@ import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
+
+/** Parse a non-negative integer string (0, 1, 2, ...). Returns undefined for invalid input. */
+function parseNonNegativeInt(value: string): number | undefined {
+  const trimmed = value.trim();
+  // Require full digit string (no mixed alphanumeric like "100abc", no decimals, no scientific)
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
 
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
   clackMultiselect({
@@ -156,24 +171,24 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = opts.minParams ? Number(opts.minParams) : undefined;
-  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
+  const minParams = opts.minParams ? parseNonNegativeInt(opts.minParams) : undefined;
+  if (minParams !== undefined && minParams < 0) {
     throw new Error("--min-params must be >= 0");
   }
-  const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
-  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
+  const maxAgeDays = opts.maxAgeDays ? parseNonNegativeInt(opts.maxAgeDays) : undefined;
+  if (maxAgeDays !== undefined && maxAgeDays < 0) {
     throw new Error("--max-age-days must be >= 0");
   }
-  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
-  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
+  const maxCandidates = opts.maxCandidates ? parseNonNegativeInt(opts.maxCandidates) : 6;
+  if (maxCandidates === undefined || maxCandidates <= 0) {
     throw new Error("--max-candidates must be > 0");
   }
-  const timeout = opts.timeout ? Number(opts.timeout) : undefined;
-  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+  const timeout = opts.timeout ? parseTimeoutMs(opts.timeout) : undefined;
+  if (timeout !== undefined && timeout <= 0) {
     throw new Error("--timeout must be > 0");
   }
-  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
+  const concurrency = opts.concurrency ? parseTimeoutMs(opts.concurrency) : undefined;
+  if (concurrency !== undefined && concurrency <= 0) {
     throw new Error("--concurrency must be > 0");
   }
 

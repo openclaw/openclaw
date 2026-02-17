@@ -32,12 +32,19 @@ export async function callBrowserRequest<T>(
   params: BrowserRequestParams,
   extra?: { timeoutMs?: number; progress?: boolean },
 ): Promise<T> {
-  const resolvedTimeoutMs =
-    typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
-      ? Math.max(1, Math.floor(extra.timeoutMs))
-      : typeof opts.timeout === "string"
-        ? Number.parseInt(opts.timeout, 10)
-        : undefined;
+  let resolvedTimeoutMs: number | undefined;
+  if (typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)) {
+    resolvedTimeoutMs = Math.max(1, Math.floor(extra.timeoutMs));
+  } else if (typeof opts.timeout === "string") {
+    const s = opts.timeout.trim();
+    // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+    if (/^\d+$/.test(s)) {
+      const parsed = Number.parseInt(s, 10);
+      if (Number.isFinite(parsed)) {
+        resolvedTimeoutMs = parsed;
+      }
+    }
+  }
   const resolvedTimeout =
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
       ? resolvedTimeoutMs

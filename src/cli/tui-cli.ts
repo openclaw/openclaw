@@ -30,7 +30,10 @@ export function registerTuiCli(program: Command) {
             `warning: invalid --timeout-ms "${String(opts.timeoutMs)}"; ignoring`,
           );
         }
-        const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
+        const historyLimitStr = String(opts.historyLimit ?? "200").trim();
+        const historyLimit = /^\d+$/.test(historyLimitStr)
+          ? Number.parseInt(historyLimitStr, 10)
+          : NaN;
         await runTui({
           url: opts.url as string | undefined,
           token: opts.token as string | undefined,

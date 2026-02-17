@@ -23,7 +23,9 @@ export function registerNodesLocationCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const maxAgeMs = opts.maxAge ? Number.parseInt(String(opts.maxAge), 10) : undefined;
+          const maxAgeStr = typeof opts.maxAge === "string" ? opts.maxAge.trim() : "";
+          const maxAgeMs =
+            maxAgeStr && /^\d+$/.test(maxAgeStr) ? Number.parseInt(maxAgeStr, 10) : undefined;
           const desiredAccuracyRaw =
             typeof opts.accuracy === "string" ? opts.accuracy.trim().toLowerCase() : undefined;
           const desiredAccuracy =
@@ -32,12 +34,18 @@ export function registerNodesLocationCommands(nodes: Command) {
             desiredAccuracyRaw === "precise"
               ? desiredAccuracyRaw
               : undefined;
-          const timeoutMs = opts.locationTimeout
-            ? Number.parseInt(String(opts.locationTimeout), 10)
-            : undefined;
-          const invokeTimeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const locationTimeoutStr =
+            typeof opts.locationTimeout === "string" ? opts.locationTimeout.trim() : "";
+          const timeoutMs =
+            locationTimeoutStr && /^\d+$/.test(locationTimeoutStr)
+              ? Number.parseInt(locationTimeoutStr, 10)
+              : undefined;
+          const invokeTimeoutStr =
+            typeof opts.invokeTimeout === "string" ? opts.invokeTimeout.trim() : "";
+          const invokeTimeoutMs =
+            invokeTimeoutStr && /^\d+$/.test(invokeTimeoutStr)
+              ? Number.parseInt(invokeTimeoutStr, 10)
+              : undefined;
 
           const invokeParams: Record<string, unknown> = {
             nodeId,

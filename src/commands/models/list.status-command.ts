@@ -25,6 +25,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { parseTimeoutMs } from "../../cli/parse-timeout.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { CONFIG_PATH, loadConfig } from "../../config/config.js";
 import {
@@ -205,16 +206,16 @@ export async function modelsStatusCommand(
       .map((value) => value.trim())
       .filter(Boolean);
   })();
-  const probeTimeoutMs = opts.probeTimeout ? Number(opts.probeTimeout) : 8000;
-  if (!Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
+  const probeTimeoutMs = opts.probeTimeout ? parseTimeoutMs(opts.probeTimeout) : 8000;
+  if (probeTimeoutMs === undefined || probeTimeoutMs <= 0) {
     throw new Error("--probe-timeout must be a positive number (ms).");
   }
-  const probeConcurrency = opts.probeConcurrency ? Number(opts.probeConcurrency) : 2;
-  if (!Number.isFinite(probeConcurrency) || probeConcurrency <= 0) {
+  const probeConcurrency = opts.probeConcurrency ? parseTimeoutMs(opts.probeConcurrency) : 2;
+  if (probeConcurrency === undefined || probeConcurrency <= 0) {
     throw new Error("--probe-concurrency must be > 0.");
   }
-  const probeMaxTokens = opts.probeMaxTokens ? Number(opts.probeMaxTokens) : 8;
-  if (!Number.isFinite(probeMaxTokens) || probeMaxTokens <= 0) {
+  const probeMaxTokens = opts.probeMaxTokens ? parseTimeoutMs(opts.probeMaxTokens) : 8;
+  if (probeMaxTokens === undefined || probeMaxTokens <= 0) {
     throw new Error("--probe-max-tokens must be > 0.");
   }
 

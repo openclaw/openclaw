@@ -2,6 +2,7 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { parseTimeoutMs } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -241,7 +242,8 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = Number(opts.timeout ?? 10_000);
+  const timeoutMsRaw = parseTimeoutMs(opts.timeout);
+  const timeoutMs = timeoutMsRaw !== undefined && timeoutMsRaw >= 0 ? timeoutMsRaw : 10_000;
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {

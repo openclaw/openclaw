@@ -14,7 +14,9 @@ import {
 describe("runCapability auto audio entries", () => {
   it("uses provider keys to auto-enable audio transcription", async () => {
     const originalPath = process.env.PATH;
-    process.env.PATH = "/usr/bin:/bin";
+    // Use a PATH that excludes local whisper/sherpa-onnx/gemini so the
+    // provider-key auto-detection path is exercised instead of local CLI fallback.
+    process.env.PATH = "/nonexistent-path-for-test";
     const tmpPath = path.join(os.tmpdir(), `openclaw-auto-audio-${Date.now()}.wav`);
     await fs.writeFile(tmpPath, Buffer.from("RIFF"));
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };

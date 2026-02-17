@@ -157,12 +157,23 @@ export async function channelsAddCommand(
     plugin.setup.resolveAccountId?.({ cfg: nextConfig, accountId: opts.account }) ??
     normalizeAccountId(opts.account);
   const useEnv = opts.useEnv === true;
-  const initialSyncLimit =
-    typeof opts.initialSyncLimit === "number"
-      ? opts.initialSyncLimit
-      : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
-        ? Number.parseInt(opts.initialSyncLimit, 10)
+  const initialSyncLimitRaw = opts.initialSyncLimit;
+  let initialSyncLimit: number | undefined;
+  if (typeof initialSyncLimitRaw === "number") {
+    initialSyncLimit =
+      Number.isFinite(initialSyncLimitRaw) && initialSyncLimitRaw > 0
+        ? Math.floor(initialSyncLimitRaw)
         : undefined;
+  } else if (typeof initialSyncLimitRaw === "string" && initialSyncLimitRaw.trim()) {
+    const trimmed = initialSyncLimitRaw.trim();
+    // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number.parseInt(trimmed, 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        initialSyncLimit = parsed;
+      }
+    }
+  }
   const groupChannels = parseList(opts.groupChannels);
   const dmAllowlist = parseList(opts.dmAllowlist);
 

@@ -245,12 +245,17 @@ export async function agentCommand(
 
   const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
   const isSubagentLane = laneRaw === String(AGENT_LANE_SUBAGENT);
-  const timeoutSecondsRaw =
-    opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
-      : isSubagentLane
-        ? 0
-        : undefined;
+  let timeoutSecondsRaw: number | undefined;
+  if (opts.timeout !== undefined) {
+    const s = String(opts.timeout).trim();
+    // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+    if (!/^\d+$/.test(s)) {
+      throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
+    }
+    timeoutSecondsRaw = Number.parseInt(s, 10);
+  } else {
+    timeoutSecondsRaw = isSubagentLane ? 0 : undefined;
+  }
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)

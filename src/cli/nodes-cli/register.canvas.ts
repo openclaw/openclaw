@@ -50,8 +50,15 @@ export function registerNodesCanvasCommands(nodes: Command) {
             throw new Error(`invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`);
           }
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
+          const maxWidthStr = typeof opts.maxWidth === "string" ? opts.maxWidth.trim() : "";
+          const maxWidth =
+            maxWidthStr && /^\d+$/.test(maxWidthStr) ? Number.parseInt(maxWidthStr, 10) : undefined;
+          const qualityStr = typeof opts.quality === "string" ? opts.quality.trim() : "";
+          // Allow decimals for quality (0-100)
+          const quality =
+            qualityStr && /^\d+(\.\d+)?$/.test(qualityStr)
+              ? Number.parseFloat(qualityStr)
+              : undefined;
           const raw = await invokeCanvas(opts, "canvas.snapshot", {
             format: formatForParams,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
@@ -89,11 +96,18 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("canvas present", async () => {
+          const xStr = typeof opts.x === "string" ? opts.x.trim() : "";
+          const yStr = typeof opts.y === "string" ? opts.y.trim() : "";
+          const widthStr = typeof opts.width === "string" ? opts.width.trim() : "";
+          const heightStr = typeof opts.height === "string" ? opts.height.trim() : "";
+          // Allow decimals for coordinates/dimensions
+          const floatRegex = /^-?\d+(\.\d+)?$/;
           const placement = {
-            x: opts.x ? Number.parseFloat(opts.x) : undefined,
-            y: opts.y ? Number.parseFloat(opts.y) : undefined,
-            width: opts.width ? Number.parseFloat(opts.width) : undefined,
-            height: opts.height ? Number.parseFloat(opts.height) : undefined,
+            x: xStr && floatRegex.test(xStr) ? Number.parseFloat(xStr) : undefined,
+            y: yStr && floatRegex.test(yStr) ? Number.parseFloat(yStr) : undefined,
+            width: widthStr && floatRegex.test(widthStr) ? Number.parseFloat(widthStr) : undefined,
+            height:
+              heightStr && floatRegex.test(heightStr) ? Number.parseFloat(heightStr) : undefined,
           };
           const params: Record<string, unknown> = {};
           if (opts.target) {

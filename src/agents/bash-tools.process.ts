@@ -78,7 +78,12 @@ function resolvePollWaitMs(value: unknown) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
+    const trimmed = value.trim();
+    // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+    if (!/^\d+$/.test(trimmed)) {
+      return 0;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
     if (Number.isFinite(parsed)) {
       return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
     }

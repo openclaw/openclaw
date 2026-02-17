@@ -31,11 +31,15 @@ export function registerNodesScreenCommands(nodes: Command) {
         await runNodesCommand("screen record", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const durationMs = parseDurationMs(opts.duration ?? "");
-          const screenIndex = Number.parseInt(String(opts.screen ?? "0"), 10);
-          const fps = Number.parseFloat(String(opts.fps ?? "10"));
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const screenStr = typeof opts.screen === "string" ? opts.screen.trim() : "0";
+          const screenIndex = /^\d+$/.test(screenStr) ? Number.parseInt(screenStr, 10) : 0;
+          const fpsStr = typeof opts.fps === "string" ? opts.fps.trim() : "10";
+          // Allow decimals for fps
+          const fps = /^\d+(\.\d+)?$/.test(fpsStr) ? Number.parseFloat(fpsStr) : undefined;
+          const timeoutStr =
+            typeof opts.invokeTimeout === "string" ? opts.invokeTimeout.trim() : "";
+          const timeoutMs =
+            timeoutStr && /^\d+$/.test(timeoutStr) ? Number.parseInt(timeoutStr, 10) : undefined;
 
           const invokeParams = buildNodeInvokeParams({
             nodeId,

@@ -157,7 +157,12 @@ export function readEnvInt(key: string) {
   if (!raw) {
     return undefined;
   }
-  const parsed = Number.parseInt(raw, 10);
+  const trimmed = raw.trim();
+  // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

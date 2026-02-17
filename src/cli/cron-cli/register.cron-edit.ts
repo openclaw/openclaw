@@ -145,7 +145,14 @@ export function registerCronEditCommand(cron: Command) {
               ? opts.thinking.trim()
               : undefined;
           const timeoutSeconds = opts.timeoutSeconds
-            ? Number.parseInt(String(opts.timeoutSeconds), 10)
+            ? (() => {
+                const s = String(opts.timeoutSeconds).trim();
+                // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+                if (!/^\d+$/.test(s)) {
+                  return undefined;
+                }
+                return Number.parseInt(s, 10);
+              })()
             : undefined;
           const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";

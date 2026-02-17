@@ -116,9 +116,11 @@ export function registerNodesInvokeCommands(nodes: Command) {
             return;
           }
           const params = JSON.parse(String(opts.params ?? "{}")) as unknown;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const timeoutStr =
+            typeof opts.invokeTimeout === "string" ? opts.invokeTimeout.trim() : "";
+          // Require full digit string (no mixed alphanumeric like "100abc", no decimals)
+          const timeoutMs =
+            timeoutStr && /^\d+$/.test(timeoutStr) ? Number.parseInt(timeoutStr, 10) : undefined;
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
