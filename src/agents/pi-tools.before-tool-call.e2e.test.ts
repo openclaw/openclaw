@@ -32,11 +32,17 @@ describe("before_tool_call hook integration", () => {
       agentId: "main",
       sessionKey: "main",
     });
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-1", { path: "/tmp/file" }, undefined, undefined);
+    await tool.execute("call-1", { path: "/tmp/file" }, undefined, extensionContext);
 
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
-    expect(execute).toHaveBeenCalledWith("call-1", { path: "/tmp/file" }, undefined, undefined);
+    expect(execute).toHaveBeenCalledWith(
+      "call-1",
+      { path: "/tmp/file" },
+      undefined,
+      extensionContext,
+    );
   });
 
   it("allows hook to modify parameters", async () => {
@@ -45,14 +51,15 @@ describe("before_tool_call hook integration", () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-2", { cmd: "ls" }, undefined, undefined);
+    await tool.execute("call-2", { cmd: "ls" }, undefined, extensionContext);
 
     expect(execute).toHaveBeenCalledWith(
       "call-2",
       { cmd: "ls", mode: "safe" },
       undefined,
-      undefined,
+      extensionContext,
     );
   });
 
@@ -65,10 +72,11 @@ describe("before_tool_call hook integration", () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await expect(tool.execute("call-3", { cmd: "rm -rf /" }, undefined, undefined)).rejects.toThrow(
-      "blocked",
-    );
+    await expect(
+      tool.execute("call-3", { cmd: "rm -rf /" }, undefined, extensionContext),
+    ).rejects.toThrow("blocked");
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -78,10 +86,16 @@ describe("before_tool_call hook integration", () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any);
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-4", { path: "/tmp/file" }, undefined, undefined);
+    await tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext);
 
-    expect(execute).toHaveBeenCalledWith("call-4", { path: "/tmp/file" }, undefined, undefined);
+    expect(execute).toHaveBeenCalledWith(
+      "call-4",
+      { path: "/tmp/file" },
+      undefined,
+      extensionContext,
+    );
   });
 
   it("normalizes non-object params for hook contract", async () => {
@@ -93,8 +107,9 @@ describe("before_tool_call hook integration", () => {
       agentId: "main",
       sessionKey: "main",
     });
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("call-5", "not-an-object", undefined, undefined);
+    await tool.execute("call-5", "not-an-object", undefined, extensionContext);
 
     expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
       {
@@ -136,14 +151,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       sessionKey: "main",
     });
     const [def] = toToolDefinitions([wrapped]);
+    const extensionContext = {} as Parameters<typeof def.execute>[3];
 
-    await def.execute(
+    const args: Parameters<typeof def.execute> = [
       "call-dedup",
       { url: "https://example.com" },
       undefined,
+      extensionContext,
       undefined,
-      undefined,
-    );
+    ];
+    await def.execute(...args);
 
     expect(hookRunner.runBeforeToolCall).toHaveBeenCalledTimes(1);
   });
@@ -183,8 +200,16 @@ describe("before_tool_call hook integration for client tools", () => {
       onClientToolCall,
       { agentId: "main", sessionKey: "main" },
     );
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
-    await tool.execute("client-call-1", { value: "ok" }, undefined, undefined, undefined);
+    const args: Parameters<typeof tool.execute> = [
+      "client-call-1",
+      { value: "ok" },
+      undefined,
+      extensionContext,
+      undefined,
+    ];
+    await tool.execute(...args);
 
     expect(onClientToolCall).toHaveBeenCalledWith("client_tool", {
       value: "ok",
