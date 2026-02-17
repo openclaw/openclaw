@@ -14,6 +14,6 @@ test("exec supports pty output", async () => {
   });
 
   expect(result.details.status).toBe("completed");
-  const text = result.content?.[0]?.text ?? "";
+  const text = result.content?.find((item) => item.type === "text")?.text ?? "";
   expect(text).toContain("ok");
 });
