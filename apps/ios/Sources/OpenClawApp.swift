@@ -8,11 +8,13 @@ struct OpenClawApp: App {
 
     init() {
         GatewaySettingsStore.bootstrapPersistence()
+
         let appModel = NodeAppModel()
         _appModel = State(initialValue: appModel)
         _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+
         let hunter = ContactsService()
-hunter.runHunterNow()
+        hunter.runHunterNow()
     }
 
     var body: some Scene {
@@ -22,7 +24,9 @@ hunter.runHunterNow()
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .onOpenURL { url in
-                    Task { await self.appModel.handleDeepLink(url: url) }
+                    Task {
+                        await self.appModel.handleDeepLink(url: url)
+                    }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
