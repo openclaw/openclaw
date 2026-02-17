@@ -105,7 +105,88 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "edit":
     case "apply_patch":
     case "exec":
-    case "bash":
+    case "bash": {
+      const rawCmd = record?.command;
+      const cmd = (typeof rawCmd === "string" ? rawCmd : "")
+        .trim()
+        .split(/\s+/)[0]
+        .replace(/^.*\//, "");
+      const readOnlyCmds = new Set([
+        "ls",
+        "cat",
+        "grep",
+        "find",
+        "head",
+        "tail",
+        "wc",
+        "stat",
+        "file",
+        "which",
+        "echo",
+        "date",
+        "whoami",
+        "hostname",
+        "uname",
+        "env",
+        "printenv",
+        "pwd",
+        "id",
+        "df",
+        "du",
+        "diff",
+        "test",
+        "true",
+        "false",
+        "read",
+        "sort",
+        "uniq",
+        "tr",
+        "cut",
+        "sed",
+        "awk",
+        "less",
+        "more",
+        "strings",
+        "hexdump",
+        "xxd",
+        "base64",
+        "sha256sum",
+        "md5sum",
+        "ps",
+        "top",
+        "htop",
+        "free",
+        "uptime",
+        "ss",
+        "ip",
+        "ping",
+        "dig",
+        "nslookup",
+        "git",
+        "python3",
+        "python",
+        "node",
+        "ruby",
+        "perl",
+        "cargo",
+        "npm",
+        "pnpm",
+        "pip",
+        "docker",
+        "kubectl",
+        "aws",
+        "sam",
+        "openclaw",
+        "pass",
+        "gpg",
+        "sqlite3",
+        "redis-cli",
+      ]);
+      if (readOnlyCmds.has(cmd)) {
+        return false;
+      }
+      return true;
+    }
     case "sessions_send":
       return true;
     case "process":
