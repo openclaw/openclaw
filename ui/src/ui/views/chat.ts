@@ -1,6 +1,10 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+
+import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -173,7 +177,7 @@ function renderSessionTabs(props: ChatProps) {
     return nothing;
   }
 
-  const getSessionDisplayName = (session: unknown): string => {
+  const getSessionDisplayName = (session: GatewaySessionRow): string => {
     // Use label or displayName if available
     if (session.label?.trim()) {
       return session.label.trim();
@@ -467,6 +471,9 @@ export function renderChat(props: ChatProps) {
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
 
+  // Textarea element reference for autosuggest
+  let textareaEl: HTMLTextAreaElement | null = null;
+
   // Local state from props
   const showSlashMenu = props.showSlashMenu ?? false;
   const showAtMenu = props.showAtMenu ?? false;
@@ -665,10 +672,8 @@ export function renderChat(props: ChatProps) {
             <textarea
               ${ref((el) => {
                 if (el) {
-                  adjustTextareaHeight(el as HTMLTextAreaElement);
-                  (
-                    el as HTMLTextAreaElement & { _textareaRef?: HTMLTextAreaElement }
-                  )._textareaRef = el;
+                  textareaEl = el as HTMLTextAreaElement;
+                  adjustTextareaHeight(textareaEl);
                 }
               })}
               .value=${props.draft}
