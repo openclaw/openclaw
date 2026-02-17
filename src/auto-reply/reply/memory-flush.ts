@@ -204,15 +204,17 @@ export function resolvePeriodicExtractionSettings(
 }
 
 export function shouldRunPeriodicExtraction(params: {
-  entry?: Pick<SessionEntry, "lastPeriodicExtractionAt">;
+  entry?: Pick<SessionEntry, "lastPeriodicExtractionAt"> & { totalTokens?: number };
   settings: PeriodicExtractionSettings;
   nowMs?: number;
 }): boolean {
   const now = params.nowMs ?? Date.now();
   const lastRun = params.entry?.lastPeriodicExtractionAt;
   if (typeof lastRun !== "number") {
-    // Never run before — but only run if session has been active for a bit
-    return true;
+    // Never run before — only run if the session has accumulated enough context
+    // to make extraction worthwhile (at least 1000 tokens of conversation).
+    const tokens = params.entry?.totalTokens;
+    return typeof tokens === "number" && tokens >= 1000;
   }
   return now - lastRun >= params.settings.intervalMs;
 }

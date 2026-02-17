@@ -170,16 +170,10 @@ export async function runMemoryFlushIfNeeded(params: {
     logVerbose(`memory flush run failed: ${String(err)}`);
   }
 
-  // --- Periodic fact extraction (independent of compaction threshold) ---
-  activeSessionEntry = await runPeriodicExtractionIfNeeded({
-    ...params,
-    sessionEntry: activeSessionEntry,
-  });
-
   return activeSessionEntry;
 }
 
-async function runPeriodicExtractionIfNeeded(params: {
+export async function runPeriodicExtractionIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;

@@ -122,9 +122,17 @@ describe("shouldRunPeriodicExtraction", () => {
     systemPrompt: "test",
   };
 
-  it("returns true when never run before", () => {
-    expect(shouldRunPeriodicExtraction({ settings })).toBe(true);
-    expect(shouldRunPeriodicExtraction({ entry: {}, settings })).toBe(true);
+  it("returns false when never run and no token info", () => {
+    expect(shouldRunPeriodicExtraction({ settings })).toBe(false);
+    expect(shouldRunPeriodicExtraction({ entry: {}, settings })).toBe(false);
+  });
+
+  it("returns false when never run and tokens below threshold", () => {
+    expect(shouldRunPeriodicExtraction({ entry: { totalTokens: 500 }, settings })).toBe(false);
+  });
+
+  it("returns true when never run and tokens above threshold", () => {
+    expect(shouldRunPeriodicExtraction({ entry: { totalTokens: 2000 }, settings })).toBe(true);
   });
 
   it("returns false when recently run", () => {
