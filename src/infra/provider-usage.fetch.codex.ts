@@ -19,6 +19,14 @@ type CodexUsageResponse = {
   credits?: { balance?: number | string | null };
 };
 
+const describeWindowHours = (windowSeconds?: number): string => {
+  const windowHours = Math.round((windowSeconds || 0) / 3600);
+  if (windowHours >= 168) {
+    return "Week";
+  }
+  return windowHours >= 24 ? "Day" : `${windowHours}h`;
+};
+
 export async function fetchCodexUsage(
   token: string,
   accountId: string | undefined,
@@ -64,9 +72,8 @@ export async function fetchCodexUsage(
 
   if (data.rate_limit?.primary_window) {
     const pw = data.rate_limit.primary_window;
-    const windowHours = Math.round((pw.limit_window_seconds || 10800) / 3600);
     windows.push({
-      label: `${windowHours}h`,
+      label: describeWindowHours(pw.limit_window_seconds),
       usedPercent: clampPercent(pw.used_percent || 0),
       resetAt: pw.reset_at ? pw.reset_at * 1000 : undefined,
     });
@@ -74,10 +81,8 @@ export async function fetchCodexUsage(
 
   if (data.rate_limit?.secondary_window) {
     const sw = data.rate_limit.secondary_window;
-    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = windowHours >= 24 ? "Day" : `${windowHours}h`;
     windows.push({
-      label,
+      label: describeWindowHours(sw.limit_window_seconds),
       usedPercent: clampPercent(sw.used_percent || 0),
       resetAt: sw.reset_at ? sw.reset_at * 1000 : undefined,
     });
@@ -99,3 +104,7 @@ export async function fetchCodexUsage(
     plan,
   };
 }
+
+export const __test = {
+  describeWindowHours,
+};
