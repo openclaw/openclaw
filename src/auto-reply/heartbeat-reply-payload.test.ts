@@ -48,6 +48,11 @@ describe("resolveHeartbeatReplyPayload", () => {
   });
 
   describe("BUG #19302: Error payload filtering", () => {
+    // NOTE: The actual fix is in heartbeat-runner.ts (line 661) and web/auto-reply/heartbeat-runner.ts (line 176)
+    // where isError payloads are filtered BEFORE calling resolveHeartbeatReplyPayload.
+    // These tests verify that when error payloads are filtered, the correct reply is selected.
+    // Integration tests in heartbeat-runner.ts files would verify the filter is actually applied in production.
+
     it("ignores error payloads when filtering is applied", () => {
       const payloads: ReplyPayload[] = [
         { text: "normal message" },
