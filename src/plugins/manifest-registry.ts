@@ -229,11 +229,17 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      const precedenceHint =
+        candidateRank !== existingRank
+          ? `; the "${candidateRank < existingRank ? candidate.origin : existing.candidate.origin}" copy takes precedence — remove the other if this is unintentional`
+          : "";
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
         source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        message: `duplicate plugin id detected (${existing.candidate.source} vs ${candidate.source})${precedenceHint}`,
       });
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
