@@ -35,15 +35,12 @@ describe("nostrPlugin gateway.startAccount", () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const mockReplyDispatcher = vi.fn(async () => undefined);
 
-    type OnMessage = (
-      payload: NostrInboundMessage,
-      reply: (text: string, options?: NostrOutboundMessageOptions) => Promise<void>,
-    ) => Promise<void>;
+    type OnMessage = NostrBusOptions["onMessage"];
     let capturedOnMessage: OnMessage | null = null;
 
     vi.mocked(startNostrBus).mockImplementation(async (options: NostrBusOptions) => {
       const { onMessage } = options;
-      capturedOnMessage = onMessage as OnMessage | null;
+      capturedOnMessage = onMessage;
       return {
         close: vi.fn(),
         publicKey: "bot-pubkey",
@@ -113,7 +110,7 @@ describe("nostrPlugin gateway.startAccount", () => {
       throw new Error("inbound handler was not registered");
     }
 
-    await capturedOnMessage(
+    await (capturedOnMessage as OnMessage)(
       {
         senderPubkey: "sender".repeat(8).slice(0, 64),
         text: "hello world",
