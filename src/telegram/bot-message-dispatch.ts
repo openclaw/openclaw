@@ -1,4 +1,10 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -15,15 +21,9 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { editMessageTelegram } from "./send.js";
@@ -266,6 +266,7 @@ export const dispatchTelegramMessage = async ({
     skippedNonSilent: 0,
   };
   let finalizedViaPreviewMessage = false;
+  let preserveDraft = false;
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
@@ -352,6 +353,15 @@ export const dispatchTelegramMessage = async ({
                 `telegram: preview final too long for edit (${finalText.length} > ${draftMaxChars}); falling back to standard send`,
               );
             }
+            // When the final payload is an error and we already streamed
+            // useful content to the user, preserve the draft message so the
+            // user doesn't lose what they already saw.
+            if (payload.isError && hasStreamedMessage && draftStream?.messageId()) {
+              preserveDraft = true;
+              draftStream?.stop();
+              // Force a new message so the error is delivered separately.
+              draftStream?.forceNewMessage();
+            }
             if (!draftStoppedForPreviewEdit) {
               draftStream?.stop();
             }
@@ -421,7 +431,7 @@ export const dispatchTelegramMessage = async ({
       },
     }));
   } finally {
-    if (!finalizedViaPreviewMessage) {
+    if (!finalizedViaPreviewMessage && !preserveDraft) {
       await draftStream?.clear();
     }
     draftStream?.stop();
