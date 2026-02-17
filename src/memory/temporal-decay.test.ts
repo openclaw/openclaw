@@ -261,7 +261,7 @@ describe("importance-weighted decay", () => {
 
     // Both started at 0.8, ~92 days old
     // Normal decays with full age, important with age/3
-    expect(results[1]!.score).toBeGreaterThan(results[0]!.score);
+    expect(results[1].score).toBeGreaterThan(results[0].score);
   });
 
   it("boost is disabled by default (backwards-compatible)", async () => {
@@ -285,7 +285,7 @@ describe("importance-weighted decay", () => {
     });
 
     // Without importance boost, both should decay identically
-    expect(results[0]!.score).toBeCloseTo(results[1]!.score);
+    expect(results[0].score).toBeCloseTo(results[1].score);
   });
 
   it("boostFactor of 1 has no effect", async () => {
@@ -312,7 +312,7 @@ describe("importance-weighted decay", () => {
       nowMs: NOW_MS,
     });
 
-    expect(results[0]!.score).toBeCloseTo(results[1]!.score);
+    expect(results[0].score).toBeCloseTo(results[1].score);
   });
 
   it("integrates with hybrid merge via file pattern matching", async () => {
