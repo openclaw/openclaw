@@ -156,8 +156,10 @@ export async function sendMessageNextcloudTalk(
     // Response parsing failed, but message was sent.
   }
 
-  if (opts.verbose) {
-    console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
+  if (opts.verbose || getNextcloudTalkRuntime().logging.shouldLogVerbose()) {
+    getNextcloudTalkRuntime()
+      .logging.getChildLogger()
+      .info(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
   }
 
   getNextcloudTalkRuntime().channel.activity.record({
