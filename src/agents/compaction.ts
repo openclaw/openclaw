@@ -14,6 +14,28 @@ const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
 
+/**
+ * Vertex AI's Anthropic Messages API does not support the
+ * `thinking: { type: "adaptive" }` parameter that the upstream pi-ai
+ * library sends for Opus 4.6+ models.  When the model goes through a
+ * non-direct Anthropic endpoint, disable `reasoning` on a shallow copy
+ * so the library falls back to `type: "enabled"` (budget-based) which
+ * Vertex AI accepts.
+ */
+function patchModelForCompaction(
+  model: NonNullable<ExtensionContext["model"]>,
+): NonNullable<ExtensionContext["model"]> {
+  if (
+    model.api === "anthropic-messages" &&
+    model.reasoning &&
+    (model.id.includes("opus-4-6") || model.id.includes("opus-4.6")) &&
+    !model.baseUrl?.includes("api.anthropic.com")
+  ) {
+    return { ...model, reasoning: false };
+  }
+  return model;
+}
+
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
   const safe = stripToolResultDetails(messages);
@@ -164,7 +186,7 @@ async function summarizeChunks(params: {
       () =>
         generateSummary(
           chunk,
-          params.model,
+          patchModelForCompaction(params.model),
           params.reserveTokens,
           params.apiKey,
           params.signal,
