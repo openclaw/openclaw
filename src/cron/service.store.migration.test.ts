@@ -30,7 +30,7 @@ async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 
   await cron.start();

@@ -39,7 +39,7 @@ async function withCronService(
     log: noopLogger,
     enqueueSystemEvent,
     requestHeartbeatNow,
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 
   await cron.start();

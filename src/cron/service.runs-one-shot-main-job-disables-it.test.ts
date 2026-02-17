@@ -394,7 +394,7 @@ async function loadLegacyDeliveryMigration(rawJob: Record<string, unknown>) {
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await cron.start();
   const jobs = await cron.list({ includeDisabled: true });
@@ -506,7 +506,7 @@ describe("CronService", () => {
     expect(job.state.runningAtMs).toBeTypeOf("number");
 
     if (typeof resolveHeartbeat === "function") {
-      resolveHeartbeat({ status: "ran", durationMs: 123 });
+      (resolveHeartbeat as (res: HeartbeatRunResult) => void)({ status: "ran", durationMs: 123 });
     }
     await runPromise;
 

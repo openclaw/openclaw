@@ -25,6 +25,7 @@ describe("runCronIsolatedAgentTurn", () => {
         lastTo: "123",
       });
       const deps: CliDeps = {
+        sendMessageSlack: vi.fn(),
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn().mockResolvedValue({
           messageId: "t1",
