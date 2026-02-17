@@ -144,7 +144,7 @@ Key behaviors:
 - Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
 - `delivery.mode` chooses what happens:
   - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
-  - `webhook`: POST the finished event payload to `delivery.to`.
+  - `webhook`: POST the finished event payload to `delivery.to` when the finished event includes a summary.
   - `none`: internal only (no delivery, no main-session summary).
 - `wakeMode` controls when the main-session summary posts:
   - `now`: immediate heartbeat.
@@ -197,7 +197,7 @@ Behavior details:
 
 #### Webhook delivery flow
 
-When `delivery.mode = "webhook"`, cron posts the finished event payload to `delivery.to`.
+When `delivery.mode = "webhook"`, cron posts the finished event payload to `delivery.to` when the finished event includes a summary.
 
 Behavior details:
 
@@ -359,7 +359,7 @@ Webhook behavior:
 
 - Preferred: set `delivery.mode: "webhook"` with `delivery.to: "https://..."` per job.
 - Webhook URLs must be valid `http://` or `https://` URLs.
-- Payload is the cron finished event JSON.
+- When posted, payload is the cron finished event JSON.
 - If `cron.webhookToken` is set, auth header is `Authorization: Bearer <cron.webhookToken>`.
 - If `cron.webhookToken` is not set, no `Authorization` header is sent.
 - Deprecated fallback: stored legacy jobs with `notify: true` still use `cron.webhook` when present.
