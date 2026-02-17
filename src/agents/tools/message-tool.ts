@@ -432,6 +432,8 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
+  /** Whether the sender is the bot owner (used for privileged action gating). */
+  senderIsOwner?: boolean;
 };
 
 function resolveMessageToolSchemaActions(params: {
@@ -667,6 +669,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           : undefined,
         sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
+        senderIsOwner: options?.senderIsOwner,
       });
 
       const toolResult = getToolResult(result);
