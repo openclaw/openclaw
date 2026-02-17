@@ -7,7 +7,10 @@ import {
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 
-type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId" | "senderIsOwner">;
+type Ctx = Pick<
+  ChannelMessageActionContext,
+  "action" | "params" | "cfg" | "accountId" | "senderIsOwner"
+>;
 
 /** Actions that require owner authorization due to their destructive or privileged nature. */
 const OWNER_ONLY_GUILD_ACTIONS = new Set([
