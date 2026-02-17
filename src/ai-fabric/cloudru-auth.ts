@@ -8,6 +8,7 @@
  */
 
 import type { CloudruAuthConfig, ResolvedToken, CloudruTokenResponse } from "./types.js";
+import { describeNetworkError } from "../infra/errors.js";
 import { resolveFetch } from "../infra/fetch.js";
 import {
   CLOUDRU_IAM_TOKEN_URL,
@@ -115,6 +116,11 @@ export class CloudruTokenProvider {
 
       this.cached = resolved;
       return resolved;
+    } catch (err) {
+      if (err instanceof CloudruAuthError) {
+        throw err;
+      }
+      throw new CloudruAuthError(`IAM token exchange failed: ${describeNetworkError(err)}`);
     } finally {
       clearTimeout(timer);
     }

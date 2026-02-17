@@ -242,6 +242,65 @@ describe("CloudruSimpleClient", () => {
     expect(url).toContain("limit=20");
   });
 
+  it("retries on ECONNREFUSED network error", async () => {
+    const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+      code: "ECONNREFUSED",
+    });
+    const fetchImpl = vi.fn();
+    // IAM exchange succeeds
+    fetchImpl.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(IAM_TOKEN_RESPONSE),
+      text: () => Promise.resolve(JSON.stringify(IAM_TOKEN_RESPONSE)),
+      headers: new Headers(),
+    });
+    // First API call: network error
+    fetchImpl.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
+    // Retry: success
+    fetchImpl.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ items: [], total: 0 }),
+      text: () => Promise.resolve("{}"),
+      headers: new Headers(),
+    });
+
+    const client = new CloudruSimpleClient({
+      ...BASE_CONFIG,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await client.get<{ items: unknown[]; total: number }>("/mcpServers");
+
+    expect(result).toEqual({ items: [], total: 0 });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry on ENOTFOUND network error", async () => {
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND api.example.com"), {
+      code: "ENOTFOUND",
+    });
+    const fetchImpl = vi.fn();
+    // IAM exchange succeeds
+    fetchImpl.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(IAM_TOKEN_RESPONSE),
+      text: () => Promise.resolve(JSON.stringify(IAM_TOKEN_RESPONSE)),
+      headers: new Headers(),
+    });
+    // API call: DNS failure
+    fetchImpl.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
+
+    const client = new CloudruSimpleClient({
+      ...BASE_CONFIG,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(client.get("/mcpServers")).rejects.toThrow("fetch failed");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("clearAuthCache forces fresh IAM exchange", async () => {
     const fetchImpl = createMockFetch([
       { status: 200, body: IAM_TOKEN_RESPONSE },

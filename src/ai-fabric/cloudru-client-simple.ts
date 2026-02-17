@@ -17,6 +17,7 @@ import type {
   Agent,
   ListAgentsParams,
 } from "./types.js";
+import { isRetryableNetworkError } from "../infra/errors.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { resolveRetryConfig, retryAsync } from "../infra/retry.js";
 import { CloudruTokenProvider, type CloudruAuthOptions } from "./cloudru-auth.js";
@@ -123,10 +124,10 @@ export class CloudruSimpleClient {
         ...retryConfig,
         label: `GET ${path}`,
         shouldRetry: (err) => {
-          if (!(err instanceof CloudruApiError)) {
-            return false;
+          if (err instanceof CloudruApiError) {
+            return err.status === 429 || err.status >= 500;
           }
-          return err.status === 429 || err.status >= 500;
+          return isRetryableNetworkError(err);
         },
       },
     );

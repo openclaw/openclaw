@@ -15,6 +15,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { CloudruAuthError } from "../ai-fabric/cloudru-auth.js";
 import { CloudruSimpleClient } from "../ai-fabric/cloudru-client-simple.js";
 import { CloudruApiError } from "../ai-fabric/cloudru-client.js";
+import { describeNetworkError } from "../infra/errors.js";
 import { ensureGitignoreEntries } from "./onboard-cloudru-fm.js";
 import {
   writeMcpConfigFile,
@@ -220,7 +221,7 @@ async function discoverMcpServers(params: {
         ? `IAM auth failed: ${err.message}`
         : err instanceof CloudruApiError
           ? `API error ${err.status}: ${err.message}`
-          : String(err);
+          : describeNetworkError(err);
     spinner.stop("MCP discovery failed");
     await params.prompter.note(
       `Could not list MCP servers: ${detail}\nYou can configure them manually later.`,
@@ -246,8 +247,14 @@ async function discoverAgents(params: {
         : "No agents found",
     );
     return agents;
-  } catch {
-    spinner.stop("Agent discovery failed (continuing without agents)");
+  } catch (err) {
+    const detail =
+      err instanceof CloudruAuthError
+        ? `IAM auth failed: ${err.message}`
+        : err instanceof CloudruApiError
+          ? `API error ${err.status}: ${err.message}`
+          : describeNetworkError(err);
+    spinner.stop(`Agent discovery failed: ${detail}`);
     return [];
   }
 }

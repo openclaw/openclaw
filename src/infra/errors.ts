@@ -43,6 +43,61 @@ export function formatErrorMessage(err: unknown): string {
   }
 }
 
+/**
+ * Retryable network error codes — transient failures worth retrying.
+ */
+const RETRYABLE_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "EPIPE",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT",
+]);
+
+/**
+ * Unwrap the cause chain of a `TypeError("fetch failed")` and return
+ * a human-readable description of the root network error.
+ *
+ * Example: `TypeError("fetch failed", { cause: Error("getaddrinfo ENOTFOUND foo.com") })`
+ *  → `"ENOTFOUND: getaddrinfo ENOTFOUND foo.com"`
+ *
+ * Falls back to `formatErrorMessage(err)` for non-network errors.
+ */
+export function describeNetworkError(err: unknown): string {
+  const root = unwrapCause(err);
+  const code = extractErrorCode(root);
+  const message = formatErrorMessage(root);
+  return code ? `${code}: ${message}` : message;
+}
+
+/**
+ * Determine whether a network error is worth retrying.
+ * Returns `true` for transient failures (connection refused, reset, timeout).
+ * Returns `false` for permanent failures (DNS ENOTFOUND, TLS errors).
+ */
+export function isRetryableNetworkError(err: unknown): boolean {
+  const root = unwrapCause(err);
+  const code = extractErrorCode(root);
+  return code != null && RETRYABLE_CODES.has(code);
+}
+
+/**
+ * Recursively unwrap `err.cause` to find the root cause.
+ */
+function unwrapCause(err: unknown): unknown {
+  let current = err;
+  while (current instanceof Error && current.cause != null) {
+    current = current.cause;
+  }
+  return current;
+}
+
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
     return formatErrorMessage(err);
