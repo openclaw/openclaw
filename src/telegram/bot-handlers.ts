@@ -688,7 +688,20 @@ export const registerTelegramHandlers = ({
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationKey =
       resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
-    const isForward = Boolean((msg as { forward_origin?: unknown }).forward_origin);
+    const forwardMeta = msg as {
+      forward_origin?: unknown;
+      forward_from?: unknown;
+      forward_from_chat?: unknown;
+      forward_sender_name?: unknown;
+      forward_date?: unknown;
+    };
+    const isForward = Boolean(
+      forwardMeta.forward_origin ??
+      forwardMeta.forward_from ??
+      forwardMeta.forward_from_chat ??
+      forwardMeta.forward_sender_name ??
+      forwardMeta.forward_date,
+    );
     const debounceKey = senderId
       ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${isForward ? "forward" : "default"}`
       : null;

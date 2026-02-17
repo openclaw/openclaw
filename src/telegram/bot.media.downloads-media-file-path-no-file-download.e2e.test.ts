@@ -333,41 +333,43 @@ describe("telegram forwarded bursts", () => {
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
       const fetchSpy = mockTelegramPngDownload();
 
-      await handler({
-        message: {
-          chat: { id: 42, type: "private" },
-          from: { id: 777, is_bot: false, first_name: "N" },
-          message_id: 21,
-          text: "Look at this",
-          date: 1736380800,
-          forward_origin: { type: "hidden_user", date: 1736380700, sender_user_name: "A" },
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
-      });
+      try {
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "N" },
+            message_id: 21,
+            text: "Look at this",
+            date: 1736380800,
+            forward_origin: { type: "hidden_user", date: 1736380700, sender_user_name: "A" },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
 
-      await handler({
-        message: {
-          chat: { id: 42, type: "private" },
-          from: { id: 777, is_bot: false, first_name: "N" },
-          message_id: 22,
-          date: 1736380801,
-          photo: [{ file_id: "fwd_photo_1" }],
-          forward_origin: { type: "hidden_user", date: 1736380701, sender_user_name: "A" },
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "photos/fwd1.jpg" }),
-      });
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "N" },
+            message_id: 22,
+            date: 1736380801,
+            photo: [{ file_id: "fwd_photo_1" }],
+            forward_origin: { type: "hidden_user", date: 1736380701, sender_user_name: "A" },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/fwd1.jpg" }),
+        });
 
-      await sleep(250);
+        await sleep(250);
 
-      expect(runtimeError).not.toHaveBeenCalled();
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0];
-      expect(payload.Body).toContain("Look at this");
-      expect(payload.MediaPaths).toHaveLength(1);
-
-      fetchSpy.mockRestore();
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0][0];
+        expect(payload.Body).toContain("Look at this");
+        expect(payload.MediaPaths).toHaveLength(1);
+      } finally {
+        fetchSpy.mockRestore();
+      }
     },
     FORWARD_BURST_TEST_TIMEOUT_MS,
   );
