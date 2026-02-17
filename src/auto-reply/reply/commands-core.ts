@@ -13,6 +13,12 @@ import {
   handleCommandsListCommand,
   handleContextCommand,
   handleExportSessionCommand,
+    handleSessionCommand,
+    handleSessionsCommand,
+  handleSessionCommand,
+  handleSessionsCommand,
+  handleSessionCommand,
+  handleSessionsCommand,
   handleHelpCommand,
   handleStatusCommand,
   handleWhoamiCommand,
@@ -58,6 +64,12 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleApproveCommand,
       handleContextCommand,
       handleExportSessionCommand,
+    handleSessionCommand,
+    handleSessionsCommand,
+  handleSessionCommand,
+  handleSessionsCommand,
+    handleSessionCommand,
+    handleSessionsCommand,
       handleWhoamiCommand,
       handleSubagentsCommand,
       handleConfigCommand,
@@ -111,7 +123,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       }
     }
 
-    // Fire before_reset plugin hook — extract memories before session history is lost
+    // Fire before_reset plugin hook 闁?extract memories before session history is lost
     const hookRunner = getGlobalHookRunner();
     if (hookRunner?.hasHooks("before_reset")) {
       const prevEntry = params.previousSessionEntry;

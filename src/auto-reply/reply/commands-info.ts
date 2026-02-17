@@ -191,6 +191,63 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };
 
+export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== '/session' && !normalized.startsWith('/session ')) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      \Ignoring /session from unauthorized sender: \,
+    );
+    return { shouldContinue: false };
+  }
+  const args = normalized.replace('/session', '').trim();
+  if (!args) {
+    return {
+      shouldContinue: false,
+      reply: { text: 'Usage: /session <key>\n\nExample: /session main' },
+    };
+  }
+  return {
+    shouldContinue: false,
+    reply: { text: \Session switch requested to: \
+(Note: Session switching via text command requires gateway support)\ },
+  };
+};
+
+export const handleSessionsCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== '/sessions' && !normalized.startsWith('/sessions ')) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      \Ignoring /sessions from unauthorized sender: \,
+    );
+    return { shouldContinue: false };
+  }
+  const args = normalized.replace('/sessions', '').trim();
+  if (!args || args.toLowerCase() === 'list') {
+    return {
+      shouldContinue: false,
+      reply: { text: 'Listing sessions requires gateway API access. Use the TUI for session management.' },
+    };
+  }
+  return {
+    shouldContinue: false,
+    reply: { text: \Session switch requested to: \
+(Note: Session switching via text command requires gateway support)\ },
+  };
+};
+
+
 export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

@@ -288,7 +288,38 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "sessions":
-        await openSessionSelector();
+        if (!args) {
+          await openSessionSelector();
+        } else if (args.toLowerCase() === "list") {
+          try {
+            const result = await client.listSessions({
+              includeGlobal: false,
+              includeUnknown: false,
+              includeDerivedTitles: true,
+              includeLastMessage: true,
+              agentId: state.currentAgentId,
+            });
+            if (result.sessions.length === 0) {
+              chatLog.addSystem("no sessions found");
+            } else {
+              const lines = result.sessions.map((s, i) => {
+                const formattedKey = formatSessionKey(s.key);
+                const title = s.derivedTitle ?? s.displayName ?? formattedKey;
+                const timePart = s.updatedAt
+                  ? formatRelativeTimestamp(s.updatedAt, { dateFallback: true, fallback: "" })
+                  : "";
+                const preview = s.lastMessagePreview?.replace(/\s+/g, " ").trim().slice(0, 60) ?? "";
+                const marker = s.key === state.currentSessionKey ? "\u25CF" : `${i + 1.}`;
+                return `${marker} ${title} (${formattedKey}) ${timePart ? "\u00B7 " + timePart : ""}${preview ? " \u2014 " + preview : ""}`;
+              });
+              chatLog.addSystem(`sessions (${result.sessions.length}):\n${lines.join("\n")}`);
+            }
+          } catch (err) {
+            chatLog.addSystem(`sessions list failed: ${String(err)}`);
+          }
+        } else {
+          await setSession(args);
+        }
         break;
       case "model":
         if (!args) {

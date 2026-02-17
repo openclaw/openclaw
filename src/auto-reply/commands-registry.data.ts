@@ -468,6 +468,38 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "session",
     }),
     defineChatCommand({
+      key: "session",
+      nativeName: "session",
+      description: "Switch to a session by key.",
+      textAlias: "/session",
+      acceptsArgs: true,
+      category: "session",
+      args: [
+        {
+          name: "key",
+          description: "Session key to switch to",
+          type: "string",
+          required: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "sessions",
+      nativeName: "sessions",
+      description: "List sessions or switch session.",
+      textAlias: "/sessions",
+      acceptsArgs: true,
+      category: "session",
+      args: [
+        {
+          name: "action",
+          description: "list or session key",
+          type: "string",
+        },
+      ],
+    }),
+
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",
