@@ -167,6 +167,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   },
   capabilities: {
     chatTypes: ["direct", "channel", "group", "thread"],
+    reactions: true,
     threads: true,
     media: true,
   },
