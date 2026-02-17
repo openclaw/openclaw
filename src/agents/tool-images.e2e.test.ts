@@ -49,8 +49,8 @@ describe("tool image sanitizing", () => {
     expect(dropped).toBe(0);
     expect(out.length).toBe(1);
     const meta = await sharp(Buffer.from(out[0].data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(2000);
-    expect(meta.height).toBeLessThanOrEqual(2000);
+    expect(meta.width).toBeLessThanOrEqual(1200);
+    expect(meta.height).toBeLessThanOrEqual(1200);
   }, 20_000);
 
   it("shrinks images that exceed max dimension even if size is small", async () => {
@@ -77,8 +77,8 @@ describe("tool image sanitizing", () => {
       throw new Error("expected image block");
     }
     const meta = await sharp(Buffer.from(image.data, "base64")).metadata();
-    expect(meta.width).toBeLessThanOrEqual(2000);
-    expect(meta.height).toBeLessThanOrEqual(2000);
+    expect(meta.width).toBeLessThanOrEqual(1200);
+    expect(meta.height).toBeLessThanOrEqual(1200);
     expect(image.mimeType).toBe("image/jpeg");
   }, 20_000);
 
