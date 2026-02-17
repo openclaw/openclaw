@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot, SimplexStatus } from "../types.ts";
-import type { ChannelsProps } from "./channels.types.ts";
 import { formatRelativeTimestamp } from "../format.ts";
+import type { ChannelAccountSnapshot, SimplexStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
+import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderSimplexCard(params: {
   props: ChannelsProps;

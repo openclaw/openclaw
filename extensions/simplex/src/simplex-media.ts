@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk";
-import type { SimplexComposedMessage, SimplexMsgContent } from "./simplex-commands.js";
 import { getSimplexRuntime } from "./runtime.js";
+import type { SimplexComposedMessage, SimplexMsgContent } from "./simplex-commands.js";
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 

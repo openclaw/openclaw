@@ -4,7 +4,6 @@ import type {
   OpenClawConfig,
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
-import type { ResolvedSimplexAccount } from "./types.js";
 import { resolveSimplexAccount } from "./accounts.js";
 import {
   buildListContactsCommand,
@@ -13,6 +12,7 @@ import {
   buildShowActiveUserCommand,
 } from "./simplex-commands.js";
 import { SimplexWsClient } from "./simplex-ws-client.js";
+import type { ResolvedSimplexAccount } from "./types.js";
 
 type SimplexDirectoryParams = {
   cfg: OpenClawConfig;

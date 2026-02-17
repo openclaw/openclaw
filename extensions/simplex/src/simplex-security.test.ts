@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
-import type { ResolvedSimplexAccount } from "./types.js";
 import {
   formatSimplexAllowFrom,
   isSimplexAllowlisted,
@@ -8,6 +7,7 @@ import {
   resolveSimplexAllowFrom,
   resolveSimplexDmPolicy,
 } from "./simplex-security.js";
+import type { ResolvedSimplexAccount } from "./types.js";
 
 describe("simplex allowlist", () => {
   it("parses wildcard allowlist entries", () => {

@@ -8,7 +8,6 @@ import {
   formatPairingApproveHint,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk";
-import type { ResolvedSimplexAccount } from "./types.js";
 import {
   listSimplexAccountIds,
   resolveDefaultSimplexAccountId,
@@ -31,6 +30,7 @@ import { buildComposedMessages } from "./simplex-media.js";
 import { startSimplexMonitor } from "./simplex-monitor.js";
 import { formatSimplexAllowFrom, resolveSimplexAllowFrom } from "./simplex-security.js";
 import { SimplexWsClient } from "./simplex-ws-client.js";
+import type { ResolvedSimplexAccount } from "./types.js";
 
 const activeClients = new Map<string, SimplexWsClient>();
 const SIMPLEX_LINK_REGEX = /\b(simplex:\/\/[^\s"'<>]+|https?:\/\/[^\s"'<>]+)/gi;
