@@ -73,22 +73,31 @@ export class DiscordMessageListener extends MessageCreateListener {
     super();
   }
 
-  async handle(data: DiscordMessageEvent, client: Client) {
+  // NOTE: Carbon's EventQueue applies a timeout to listener handlers.
+  // Even though we don't await the real work, marking this method `async`
+  // can still cause the queue to treat it as awaitable and subject to the
+  // timeout in some runtimes.
+  //
+  // We *never* want MESSAGE_CREATE handling to block the event loop or the
+  // queue: we enqueue work and return immediately.
+  handle(data: DiscordMessageEvent, client: Client) {
     const startedAt = Date.now();
-    const task = Promise.resolve(this.handler(data, client));
-    void task
-      .catch((err) => {
-        const logger = this.logger ?? discordEventQueueLog;
-        logger.error(danger(`discord handler failed: ${String(err)}`));
-      })
-      .finally(() => {
-        logSlowDiscordListener({
-          logger: this.logger,
-          listener: this.constructor.name,
-          event: this.type,
-          durationMs: Date.now() - startedAt,
+    queueMicrotask(() => {
+      const task = Promise.resolve(this.handler(data, client));
+      void task
+        .catch((err) => {
+          const logger = this.logger ?? discordEventQueueLog;
+          logger.error(danger(`discord handler failed: ${String(err)}`));
+        })
+        .finally(() => {
+          logSlowDiscordListener({
+            logger: this.logger,
+            listener: this.constructor.name,
+            event: this.type,
+            durationMs: Date.now() - startedAt,
+          });
         });
-      });
+    });
   }
 }
 
