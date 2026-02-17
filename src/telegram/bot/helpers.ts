@@ -48,6 +48,15 @@ export function resolveTelegramThreadSpec(params: {
   if (params.messageThreadId == null) {
     return { scope: "dm" };
   }
+  // Since Bot API 9.3, private chats can have topics (has_topics_enabled).
+  // When isForum is true for a DM, treat the thread as a forum topic so
+  // message_thread_id is preserved; otherwise suppress it (#12929).
+  if (params.isForum) {
+    return {
+      id: params.messageThreadId,
+      scope: "forum",
+    };
+  }
   return {
     id: params.messageThreadId,
     scope: "dm",

@@ -5,6 +5,7 @@ import {
   expandTextLinks,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
+  resolveTelegramThreadSpec,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -29,6 +30,33 @@ describe("resolveTelegramForumThreadId", () => {
 
   it("returns the topic id for forum groups with messageThreadId", () => {
     expect(resolveTelegramForumThreadId({ isForum: true, messageThreadId: 99 })).toBe(99);
+  });
+});
+
+describe("resolveTelegramThreadSpec", () => {
+  it("returns forum scope for DM chats with topics enabled (Bot API 9.3+)", () => {
+    const spec = resolveTelegramThreadSpec({
+      isGroup: false,
+      isForum: true,
+      messageThreadId: 42,
+    });
+    expect(spec).toEqual({ id: 42, scope: "forum" });
+  });
+
+  it("returns dm scope for plain DM chats without topics", () => {
+    const spec = resolveTelegramThreadSpec({
+      isGroup: false,
+      isForum: false,
+      messageThreadId: 7,
+    });
+    expect(spec).toEqual({ id: 7, scope: "dm" });
+  });
+
+  it("returns dm scope with no id when no thread id provided", () => {
+    const spec = resolveTelegramThreadSpec({
+      isGroup: false,
+    });
+    expect(spec).toEqual({ scope: "dm" });
   });
 });
 
