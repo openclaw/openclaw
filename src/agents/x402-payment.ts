@@ -145,6 +145,12 @@ interface PaymentRequiredHeader {
 
 type PaymentRequirement = NonNullable<PaymentRequiredHeader["accepts"]>[number];
 
+interface ErrorResponse {
+  code?: string;
+  error?: string;
+  message?: string;
+}
+
 interface CachedPermit {
   paymentSig: string;
   deadline: number;
@@ -153,6 +159,7 @@ interface CachedPermit {
   network: string;
   asset: string;
   payTo: string;
+  as: string;
 }
 
 const ROUTER_CONFIG_CACHE = new Map<string, RouterConfig>();
@@ -229,6 +236,71 @@ function getRequirementMaxAmountRequired(requirement?: PaymentRequirement): stri
     requirement.extra.max_amount_required ||
     requirement.extra.maxAmount ||
     requirement.extra.max_amount
+  );
+}
+
+function parseErrorResponse(body: unknown): ErrorResponse | null {
+  if (!body || typeof body !== "object") {
+    return null;
+  }
+  const obj = body as Record<string, unknown>;
+  const topCode = typeof obj.code === "string" ? obj.code : undefined;
+  const topError = typeof obj.error === "string" ? obj.error : undefined;
+  const topMessage = typeof obj.message === "string" ? obj.message : undefined;
+
+  if (obj.error && typeof obj.error === "object") {
+    const nested = obj.error as Record<string, unknown>;
+    const code = typeof nested.code === "string" ? nested.code : topCode;
+    const error = typeof nested.error === "string" ? nested.error : topError;
+    const message = typeof nested.message === "string" ? nested.message : topMessage;
+    if (!code && !error && !message) {
+      return null;
+    }
+    return { code, error, message };
+  }
+
+  if (!topCode && !topError && !topMessage) {
+    return null;
+  }
+  return { code: topCode, error: topError, message: topMessage };
+}
+
+function normalizeErrorText(error?: string, message?: string): string {
+  return `${error ?? ""} ${message ?? ""}`.toLowerCase();
+}
+
+function isCapExhausted(error: ErrorResponse): boolean {
+  if (error.code === "cap_exhausted") {
+    return true;
+  }
+  return normalizeErrorText(error.error, error.message).includes("cap exhausted");
+}
+
+function isSessionClosed(error: ErrorResponse): boolean {
+  if (error.code === "session_closed") {
+    return true;
+  }
+  return normalizeErrorText(error.error, error.message).includes("session closed");
+}
+
+function isSettlementBlocked(error: ErrorResponse): boolean {
+  if (error.code === "settlement_blocked") {
+    return true;
+  }
+  const text = normalizeErrorText(error.error, error.message);
+  return text.includes("settlement blocked") || text.includes("blocked after previous settlement");
+}
+
+function isSessionPermitMismatch(error: ErrorResponse): boolean {
+  return error.code === "session_permit_mismatch";
+}
+
+function shouldInvalidatePermit(error: ErrorResponse): boolean {
+  return (
+    isCapExhausted(error) ||
+    isSessionClosed(error) ||
+    isSettlementBlocked(error) ||
+    isSessionPermitMismatch(error)
   );
 }
 
@@ -330,15 +402,24 @@ function getPermitDomain(
   } as const;
 }
 
+function computePermitDeadline(minDeadlineExclusive?: number): number {
+  let deadline = Math.floor(Date.now() / 1000) + DEFAULT_VALIDITY_SECONDS;
+  if (minDeadlineExclusive !== undefined && deadline <= minDeadlineExclusive) {
+    deadline = minDeadlineExclusive + 1;
+  }
+  return deadline;
+}
+
 async function signPermit(params: {
   wallet: ReturnType<typeof createWalletClient>;
   account: Account;
   config: RouterConfig;
   permitCap: string;
+  minDeadlineExclusive?: number;
 }): Promise<{ signature: string; nonce: string; deadline: string }> {
   const chain = CHAINS[params.config.network] || base;
   const chainId = Number.parseInt(params.config.network.split(":")[1] ?? "0", 10);
-  const deadline = Math.floor(Date.now() / 1000) + DEFAULT_VALIDITY_SECONDS;
+  const deadline = computePermitDeadline(params.minDeadlineExclusive);
   const nonceValue = await fetchPermitNonce(
     chain,
     params.config.asset as `0x${string}`,
@@ -380,10 +461,11 @@ async function signPermitViaSaw(params: {
   ownerAddress: `0x${string}`;
   config: RouterConfig;
   permitCap: string;
+  minDeadlineExclusive?: number;
 }): Promise<{ signature: string; nonce: string; deadline: string }> {
   const chain = CHAINS[params.config.network] || base;
   const chainId = Number.parseInt(params.config.network.split(":")[1] ?? "0", 10);
-  const deadline = Math.floor(Date.now() / 1000) + DEFAULT_VALIDITY_SECONDS;
+  const deadline = computePermitDeadline(params.minDeadlineExclusive);
   const nonceValue = await fetchPermitNonce(
     chain,
     params.config.asset as `0x${string}`,
@@ -422,6 +504,7 @@ async function createCachedPermit(params: {
   backend: SigningBackend;
   config: RouterConfig;
   permitCap: string;
+  minDeadlineExclusive?: number;
 }): Promise<CachedPermit> {
   const { signature, nonce, deadline } =
     params.backend.mode === "key"
@@ -430,12 +513,14 @@ async function createCachedPermit(params: {
           account: params.backend.account,
           config: params.config,
           permitCap: params.permitCap,
+          minDeadlineExclusive: params.minDeadlineExclusive,
         })
       : await signPermitViaSaw({
           client: params.backend.client,
           ownerAddress: params.backend.ownerAddress,
           config: params.config,
           permitCap: params.permitCap,
+          minDeadlineExclusive: params.minDeadlineExclusive,
         });
 
   const owner = getOwnerAddress(params.backend);
@@ -478,6 +563,7 @@ async function resolvePermit(params: {
   backend: SigningBackend;
   config: RouterConfig;
   permitCap: string;
+  minDeadlineExclusive?: number;
 }): Promise<CachedPermit> {
   const cacheKey = buildPermitCacheKey({
     network: params.config.network,
@@ -488,13 +574,49 @@ async function resolvePermit(params: {
   });
   const cached = PERMIT_CACHE.get(cacheKey);
   const now = Math.floor(Date.now() / 1000);
-  if (cached && cached.deadline > now + 30) {
+  const forceRefresh = params.minDeadlineExclusive !== undefined;
+  if (cached && !forceRefresh && cached.deadline > now + 30) {
     return cached;
   }
+  if (forceRefresh) {
+    PERMIT_CACHE.delete(cacheKey);
+  }
 
-  const fresh = await createCachedPermit(params);
+  const fresh = await createCachedPermit({
+    backend: params.backend,
+    config: params.config,
+    permitCap: params.permitCap,
+    minDeadlineExclusive: params.minDeadlineExclusive,
+  });
   PERMIT_CACHE.set(cacheKey, fresh);
   return fresh;
+}
+
+function deletePermitCacheEntries(params: {
+  backend: SigningBackend;
+  previousConfig: RouterConfig;
+  previousCap: string;
+  refreshedConfig: RouterConfig;
+  refreshedCap: string;
+}): void {
+  const account = getOwnerAddress(params.backend);
+  const previousKey = buildPermitCacheKey({
+    network: params.previousConfig.network,
+    asset: params.previousConfig.asset,
+    payTo: params.previousConfig.payTo,
+    cap: params.previousCap,
+    account,
+  });
+  PERMIT_CACHE.delete(previousKey);
+
+  const refreshedKey = buildPermitCacheKey({
+    network: params.refreshedConfig.network,
+    asset: params.refreshedConfig.asset,
+    payTo: params.refreshedConfig.payTo,
+    cap: params.refreshedCap,
+    account,
+  });
+  PERMIT_CACHE.delete(refreshedKey);
 }
 
 function wrapStreamFnWithFetch(streamFn: StreamFn, fetchImpl: typeof fetch): StreamFn {
@@ -619,7 +741,7 @@ export function maybeWrapStreamFnWithX402Payment(params: {
   }
 
   const fetchWithPayment: typeof fetch = async (input, init) => {
-    const url = (() => {
+    const url = ((): string | null => {
       if (typeof input === "string") {
         return input;
       }
@@ -632,8 +754,11 @@ export function maybeWrapStreamFnWithX402Payment(params: {
       if (input && typeof (input as { url?: string }).url === "string") {
         return (input as { url: string }).url;
       }
-      return String(input);
+      return null;
     })();
+    if (!url) {
+      return baseFetch(input, init);
+    }
     let parsed: URL | null = null;
     try {
       parsed = new URL(url);
@@ -695,27 +820,56 @@ export function maybeWrapStreamFnWithX402Payment(params: {
         return response;
       }
 
+      let errorResponse: ErrorResponse | null = null;
+      try {
+        const body = await response.clone().json();
+        errorResponse = parseErrorResponse(body);
+      } catch {
+        // Non-JSON bodies are expected on some failures.
+      }
+
       const paymentRequired = response.headers.get("PAYMENT-REQUIRED");
       const decoded = paymentRequired ? decodePaymentRequiredHeader(paymentRequired) : null;
       const requirement = decoded?.accepts?.[0];
       const maxAmountRequired = getRequirementMaxAmountRequired(requirement);
+      const invalidatePermit = errorResponse ? shouldInvalidatePermit(errorResponse) : false;
+      if (!paymentRequired && !invalidatePermit) {
+        // No retry hints from router and no known stale-permit signal.
+        return response;
+      }
 
       const previousConfig = routerConfig;
       if (requirement) {
         routerConfig = applyPaymentRequirement(routerConfig, requirement);
       }
-      if (
+      const refreshedCap = maxAmountRequired || permitCap;
+      if (invalidatePermit) {
+        deletePermitCacheEntries({
+          backend,
+          previousConfig,
+          previousCap: permitCap,
+          refreshedConfig: routerConfig,
+          refreshedCap,
+        });
+      } else if (
         previousConfig.payTo !== routerConfig.payTo ||
         previousConfig.asset !== routerConfig.asset
       ) {
-        PERMIT_CACHE.clear();
+        deletePermitCacheEntries({
+          backend,
+          previousConfig,
+          previousCap: permitCap,
+          refreshedConfig: routerConfig,
+          refreshedCap,
+        });
       }
 
-      const refreshedCap = maxAmountRequired || permitCap;
+      const minDeadline = invalidatePermit ? permit.deadline : undefined;
       const refreshed = await resolvePermit({
         backend,
         config: routerConfig,
         permitCap: refreshedCap,
+        minDeadlineExclusive: minDeadline,
       });
       return await sendWithPermit(refreshed);
     } catch {
@@ -729,4 +883,11 @@ export function maybeWrapStreamFnWithX402Payment(params: {
 export const __testing = {
   buildPermitCacheKey,
   parseSawConfig,
+  parseErrorResponse,
+  isCapExhausted,
+  isSessionClosed,
+  isSettlementBlocked,
+  isSessionPermitMismatch,
+  shouldInvalidatePermit,
+  computePermitDeadline,
 };

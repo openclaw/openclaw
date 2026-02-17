@@ -1,4 +1,9 @@
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import {
+  emptyPluginConfigSchema,
+  type OpenClawPluginApi,
+  type ProviderAuthContext,
+  type ProviderAuthResult,
+} from "openclaw/plugin-sdk";
 
 const PROVIDER_ID = "x402";
 const PROVIDER_LABEL = "Daydreams Router (x402)";
@@ -51,7 +56,7 @@ const x402Plugin = {
   name: "Daydreams Router (x402) Auth",
   description: "Permit-signed auth for Daydreams Router (x402)",
   configSchema: emptyPluginConfigSchema(),
-  register(api) {
+  register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -62,7 +67,7 @@ const x402Plugin = {
           label: "Secure Agent Wallet (SAW)",
           hint: "Signs permits via SAW daemon (recommended)",
           kind: "api_key",
-          run: async (ctx) => {
+          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             await ctx.prompter.note(
               [
                 "SAW keeps private keys in a separate daemon process,",
@@ -75,21 +80,21 @@ const x402Plugin = {
             const socketInput = await ctx.prompter.text({
               message: "SAW daemon socket path",
               initialValue: DEFAULT_SAW_SOCKET,
-              validate: (value) => (value.trim() ? undefined : "Socket path required"),
+              validate: (value: string) => (value.trim() ? undefined : "Socket path required"),
             });
             const socketPath = String(socketInput).trim();
 
             const walletInput = await ctx.prompter.text({
               message: "SAW wallet name",
               initialValue: DEFAULT_SAW_WALLET,
-              validate: (value) => (value.trim() ? undefined : "Wallet name required"),
+              validate: (value: string) => (value.trim() ? undefined : "Wallet name required"),
             });
             const walletName = String(walletInput).trim();
 
             const routerInput = await ctx.prompter.text({
               message: "Daydreams Router URL",
               initialValue: DEFAULT_ROUTER_URL,
-              validate: (value) => {
+              validate: (value: string) => {
                 try {
                   // eslint-disable-next-line no-new
                   new URL(value);
@@ -104,14 +109,15 @@ const x402Plugin = {
             const capInput = await ctx.prompter.text({
               message: "Permit cap (USD)",
               initialValue: String(DEFAULT_PERMIT_CAP_USD),
-              validate: (value) => (normalizePermitCap(value) ? undefined : "Invalid amount"),
+              validate: (value: string) =>
+                normalizePermitCap(value) ? undefined : "Invalid amount",
             });
             const permitCap = normalizePermitCap(String(capInput)) ?? DEFAULT_PERMIT_CAP_USD;
 
             const networkInput = await ctx.prompter.text({
               message: "Network (CAIP-2)",
               initialValue: DEFAULT_NETWORK,
-              validate: (value) => (normalizeNetwork(value) ? undefined : "Required"),
+              validate: (value: string) => (normalizeNetwork(value) ? undefined : "Required"),
             });
             const network = normalizeNetwork(String(networkInput)) ?? DEFAULT_NETWORK;
 
@@ -203,7 +209,7 @@ const x402Plugin = {
           label: "Wallet private key",
           hint: "Signs ERC-2612 permits per request",
           kind: "api_key",
-          run: async (ctx) => {
+          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             await ctx.prompter.note(
               [
                 "Daydreams Router uses wallet-signed ERC-2612 permits for payment in USDC.",
@@ -214,7 +220,7 @@ const x402Plugin = {
 
             const keyInput = await ctx.prompter.text({
               message: "Wallet private key (0x + 64 hex chars)",
-              validate: (value) =>
+              validate: (value: string) =>
                 normalizePrivateKey(value) ? undefined : "Invalid private key format",
             });
             const normalizedKey = normalizePrivateKey(String(keyInput));
@@ -223,7 +229,7 @@ const x402Plugin = {
             const routerInput = await ctx.prompter.text({
               message: "Daydreams Router URL",
               initialValue: DEFAULT_ROUTER_URL,
-              validate: (value) => {
+              validate: (value: string) => {
                 try {
                   // eslint-disable-next-line no-new
                   new URL(value);
@@ -238,14 +244,15 @@ const x402Plugin = {
             const capInput = await ctx.prompter.text({
               message: "Permit cap (USD)",
               initialValue: String(DEFAULT_PERMIT_CAP_USD),
-              validate: (value) => (normalizePermitCap(value) ? undefined : "Invalid amount"),
+              validate: (value: string) =>
+                normalizePermitCap(value) ? undefined : "Invalid amount",
             });
             const permitCap = normalizePermitCap(String(capInput)) ?? DEFAULT_PERMIT_CAP_USD;
 
             const networkInput = await ctx.prompter.text({
               message: "Network (CAIP-2)",
               initialValue: DEFAULT_NETWORK,
-              validate: (value) => (normalizeNetwork(value) ? undefined : "Required"),
+              validate: (value: string) => (normalizeNetwork(value) ? undefined : "Required"),
             });
             const network = normalizeNetwork(String(networkInput)) ?? DEFAULT_NETWORK;
 

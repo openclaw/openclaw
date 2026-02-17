@@ -13,7 +13,7 @@ if (args.length > 0) {
   env.OPENCLAW_WATCH_COMMAND = args.join(" ");
 }
 
-const initialBuild = spawnSync("pnpm", ["exec", compiler], {
+const initialBuild = spawnSync("pnpm", ["exec", compiler, "--no-clean"], {
   cwd,
   env,
   stdio: "inherit",
@@ -23,7 +23,7 @@ if (initialBuild.status !== 0) {
   process.exit(initialBuild.status ?? 1);
 }
 
-const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch"], {
+const compilerProcess = spawn("pnpm", ["exec", compiler, "--watch", "--no-clean"], {
   cwd,
   env,
   stdio: "inherit",

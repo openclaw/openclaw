@@ -12,6 +12,8 @@ export type AuthChoice =
   | "vllm"
   | "openai-codex"
   | "openai-api-key"
+  | "xai-api-key"
+  | "qianfan-api-key"
   | "openrouter-api-key"
   | "litellm-api-key"
   | "ai-gateway-api-key"
@@ -45,6 +47,7 @@ export type AuthChoice =
   | "copilot-proxy"
   | "qwen-portal"
   | "x402"
+  | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"
@@ -69,6 +72,7 @@ export type AuthChoiceGroupId =
   | "huggingface"
   | "qianfan"
   | "xai"
+  | "x402"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
