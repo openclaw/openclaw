@@ -20,8 +20,13 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
+  resolveUrlAllowlist,
+  withTimeout,
   writeCache,
 } from "./web-shared.js";
+
+// Re-export for backwards compatibility
+export { resolveUrlAllowlist } from "./web-shared.js";
 
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
@@ -89,22 +94,6 @@ type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer
     ? Search
     : undefined
   : undefined;
-
-type WebConfig = NonNullable<OpenClawConfig["tools"]>["web"];
-
-export function resolveUrlAllowlist(web?: WebConfig): string[] | undefined {
-  if (!web || typeof web !== "object") {
-    return undefined;
-  }
-  if (!("urlAllowlist" in web)) {
-    return undefined;
-  }
-  const allowlist = web.urlAllowlist;
-  if (!Array.isArray(allowlist)) {
-    return undefined;
-  }
-  return allowlist.length > 0 ? allowlist : undefined;
-}
 
 export function filterResultsByAllowlist(
   results: Array<{ url?: string; siteName?: string }>,
@@ -1206,6 +1195,14 @@ async function runWebSearch(params: {
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
+    // Apply allowlist filtering to cache hits to ensure current allowlist is respected
+    if (params.urlAllowlist && params.urlAllowlist.length > 0 && cached.value.results) {
+      const filteredResults = filterResultsByAllowlist(
+        cached.value.results as Array<{ url?: string; siteName?: string }>,
+        params.urlAllowlist,
+      );
+      return { ...cached.value, results: filteredResults, cached: true };
+    }
     return { ...cached.value, cached: true };
   }
 

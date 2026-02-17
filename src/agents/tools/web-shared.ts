@@ -8,6 +8,24 @@ export const DEFAULT_TIMEOUT_SECONDS = 30;
 export const DEFAULT_CACHE_TTL_MINUTES = 15;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
+/**
+ * Shared utility to resolve urlAllowlist from web config.
+ * Used by both web-search.ts and web-fetch.ts to avoid code duplication.
+ */
+export function resolveUrlAllowlist(web: unknown): string[] | undefined {
+  if (!web || typeof web !== "object") {
+    return undefined;
+  }
+  if (!("urlAllowlist" in web)) {
+    return undefined;
+  }
+  const allowlist = (web as { urlAllowlist?: unknown }).urlAllowlist;
+  if (!Array.isArray(allowlist)) {
+    return undefined;
+  }
+  return allowlist.length > 0 ? allowlist : undefined;
+}
+
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.max(1, Math.floor(parsed));

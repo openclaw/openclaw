@@ -28,9 +28,16 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
+  resolveUrlAllowlist,
   withTimeout,
   writeCache,
 } from "./web-shared.js";
+
+// Re-export for backwards compatibility
+export { resolveUrlAllowlist };
+
+// Alias for backwards compatibility
+export const resolveFetchUrlAllowlist = resolveUrlAllowlist;
 
 export { extractReadableContent } from "./web-fetch-utils.js";
 
@@ -71,22 +78,6 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     ? Fetch
     : undefined
   : undefined;
-
-type WebConfig = NonNullable<OpenClawConfig["tools"]>["web"];
-
-export function resolveFetchUrlAllowlist(web?: WebConfig): string[] | undefined {
-  if (!web || typeof web !== "object") {
-    return undefined;
-  }
-  if (!("urlAllowlist" in web)) {
-    return undefined;
-  }
-  const allowlist = web.urlAllowlist;
-  if (!Array.isArray(allowlist)) {
-    return undefined;
-  }
-  return allowlist.length > 0 ? allowlist : undefined;
-}
 
 export function isUrlAllowedByAllowlist(url: string, allowlist: string[]): boolean {
   try {
@@ -762,7 +753,7 @@ export function createWebFetchTool(options?: {
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
-  const urlAllowlist = resolveFetchUrlAllowlist(options?.config?.tools?.web);
+  const urlAllowlist = resolveUrlAllowlist(options?.config?.tools?.web);
   return {
     label: "Web Fetch",
     name: "web_fetch",
