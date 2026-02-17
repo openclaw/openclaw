@@ -29,6 +29,7 @@
     "@types/ws": "^8.0.0"
   },
   "peerDependencies": {
-    "openclaw": "*"
+    "openclaw": "*",
+    "zod": "*"
   }
 }
