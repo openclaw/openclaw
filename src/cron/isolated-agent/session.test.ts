@@ -151,7 +151,7 @@ describe("resolveCronSession", () => {
           updatedAt: Date.now() - 1000,
           modelOverride: "some-model",
         },
-      } as ReturnType<typeof loadSessionStore>);
+      } as unknown as ReturnType<typeof loadSessionStore>);
       vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
 
       const result = resolveCronSession({

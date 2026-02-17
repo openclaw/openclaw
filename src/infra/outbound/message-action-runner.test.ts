@@ -558,6 +558,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
     });
   });
@@ -575,6 +578,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "note.ogg"));
     });
   });
@@ -864,10 +870,15 @@ describe("runMessageAction accountId defaults", () => {
     });
 
     expect(handleAction).toHaveBeenCalled();
-    const ctx = handleAction.mock.calls[0]?.[0] as {
-      accountId?: string | null;
-      params: Record<string, unknown>;
-    };
+    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | {
+          accountId?: string | null;
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (!ctx) {
+      throw new Error("expected action context");
+    }
     expect(ctx.accountId).toBe("ops");
     expect(ctx.params.accountId).toBe("ops");
   });

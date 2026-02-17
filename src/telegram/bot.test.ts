@@ -26,7 +26,10 @@ const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
-  return listSkillCommandsForAgents({ cfg: config });
+  void config;
+  return listSkillCommandsForAgents() as NonNullable<
+    Parameters<typeof listNativeCommandSpecsForConfig>[1]
+  >["skillCommands"];
 }
 
 const ORIGINAL_TZ = process.env.TZ;
@@ -1111,7 +1114,10 @@ describe("createTelegramBot", () => {
       }),
     );
     // Verify session key does NOT contain :topic:
-    const sessionKey = enqueueSystemEventSpy.mock.calls[0][1].sessionKey;
+    const eventOptions = enqueueSystemEventSpy.mock.calls[0]?.[1] as {
+      sessionKey?: string;
+    };
+    const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
   });
 });

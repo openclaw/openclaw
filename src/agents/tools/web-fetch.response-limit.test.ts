@@ -27,7 +27,7 @@ describe("web_fetch response size limits", () => {
 
     const tool = createWebFetchTool(baseToolConfig);
     const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
-
-    expect(result?.details?.warning).toContain("Response body truncated");
+    const details = result?.details as { warning?: string } | undefined;
+    expect(details?.warning).toContain("Response body truncated");
   });
 });
