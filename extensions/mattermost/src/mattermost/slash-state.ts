@@ -17,7 +17,7 @@ import { createSlashCommandHttpHandler } from "./slash-http.js";
 
 // ─── Per-account state ───────────────────────────────────────────────────────
 
-type SlashCommandAccountState = {
+export type SlashCommandAccountState = {
   /** Tokens from registered commands, used for validation. */
   commandTokens: Set<string>;
   /** Registered command IDs for cleanup on shutdown. */
@@ -32,6 +32,35 @@ type SlashCommandAccountState = {
 
 /** Map from accountId → per-account slash command state. */
 const accountStates = new Map<string, SlashCommandAccountState>();
+
+export function resolveSlashHandlerForToken(token: string): {
+  kind: "none" | "single" | "ambiguous";
+  handler?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  accountIds?: string[];
+} {
+  const matches: Array<{
+    accountId: string;
+    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  }> = [];
+
+  for (const [accountId, state] of accountStates) {
+    if (state.commandTokens.has(token) && state.handler) {
+      matches.push({ accountId, handler: state.handler });
+    }
+  }
+
+  if (matches.length === 0) {
+    return { kind: "none" };
+  }
+  if (matches.length === 1) {
+    return { kind: "single", handler: matches[0]!.handler, accountIds: [matches[0]!.accountId] };
+  }
+
+  return {
+    kind: "ambiguous",
+    accountIds: matches.map((entry) => entry.accountId),
+  };
+}
 
 /**
  * Get the slash command state for a specific account, or null if not activated.
@@ -224,20 +253,9 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       // parse failed — will be caught by handler
     }
 
-    // Find the account whose tokens include this one
-    let matchedHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null =
-      null;
+    const match = token ? resolveSlashHandlerForToken(token) : { kind: "none" as const };
 
-    if (token) {
-      for (const [, state] of accountStates) {
-        if (state.commandTokens.has(token) && state.handler) {
-          matchedHandler = state.handler;
-          break;
-        }
-      }
-    }
-
-    if (!matchedHandler) {
+    if (match.kind === "none") {
       // No matching account — reject
       res.statusCode = 401;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -249,6 +267,23 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       );
       return;
     }
+
+    if (match.kind === "ambiguous") {
+      api.logger.warn?.(
+        `mattermost: slash callback token matched multiple accounts (${match.accountIds?.join(", ")})`,
+      );
+      res.statusCode = 409;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(
+        JSON.stringify({
+          response_type: "ephemeral",
+          text: "Conflict: command token is not unique across accounts.",
+        }),
+      );
+      return;
+    }
+
+    const matchedHandler = match.handler!;
 
     // Replay: create a synthetic readable that re-emits the buffered body
     const { Readable } = await import("node:stream");
