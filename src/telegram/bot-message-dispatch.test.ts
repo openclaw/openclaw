@@ -47,7 +47,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       flush: vi.fn().mockResolvedValue(undefined),
       messageId: vi.fn().mockReturnValue(messageId),
       clear: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn(),
+      stop: vi.fn().mockResolvedValue(undefined),
       forceNewMessage: vi.fn(),
     };
   }
@@ -213,6 +213,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "Hello final", expect.any(Object));
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
+  it("edits the preview message created during stop() final flush", async () => {
+    let messageId: number | undefined;
+    const draftStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => messageId),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockImplementation(async () => {
+        messageId = 777;
+      }),
+      forceNewMessage: vi.fn(),
+    };
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Short final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "777" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 777, "Short final", expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalled();
     expect(draftStream.stop).toHaveBeenCalled();
   });
 

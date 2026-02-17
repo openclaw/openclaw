@@ -192,7 +192,6 @@ describe("draft stream initial message debounce", () => {
         api: api as any,
         chatId: 123,
         minInitialChars: 30,
-        maxInitialDelayMs: 5000, // long timeout to not interfere
       });
 
       stream.update("Processing"); // 10 chars, below 30
@@ -264,7 +263,7 @@ describe("draft stream initial message debounce", () => {
         // oxlint-disable-next-line typescript/no-explicit-any
         api: api as any,
         chatId: 123,
-        // no minInitialChars, idleMs, or maxInitialDelayMs
+        // no minInitialChars (backward-compatible behavior)
       });
 
       stream.update("Hi");
