@@ -14,10 +14,12 @@
 - Typed protocol frame foundation (`req`/`resp`/`event`) and method-family classification.
 - Gateway known-method registry plus first RPC dispatcher for:
   - `sessions.list`
+  - `sessions.preview`
   - `sessions.patch`
   - `sessions.resolve`
   - `sessions.reset`
   - `sessions.delete`
+  - `sessions.compact`
   - `sessions.history`
   - `sessions.send`
   - `session.status`

@@ -65,6 +65,12 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "sessions.preview",
+                    family: MethodFamily::Sessions,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "sessions.reset",
                     family: MethodFamily::Sessions,
                     requires_auth: true,
@@ -72,6 +78,12 @@ impl MethodRegistry {
                 },
                 MethodSpec {
                     name: "sessions.delete",
+                    family: MethodFamily::Sessions,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "sessions.compact",
                     family: MethodFamily::Sessions,
                     requires_auth: true,
                     min_role: "client",
@@ -168,10 +180,12 @@ impl RpcDispatcher {
     pub async fn handle_request(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
         match normalize(&req.method).as_str() {
             "sessions.list" => self.handle_sessions_list(req).await,
+            "sessions.preview" => self.handle_sessions_preview(req).await,
             "sessions.patch" => self.handle_sessions_patch(req).await,
             "sessions.resolve" => self.handle_sessions_resolve(req).await,
             "sessions.reset" => self.handle_sessions_reset(req).await,
             "sessions.delete" => self.handle_sessions_delete(req).await,
+            "sessions.compact" => self.handle_sessions_compact(req).await,
             "sessions.history" => self.handle_sessions_history(req).await,
             "sessions.send" => self.handle_sessions_send(req).await,
             "session.status" | "sessions.status" => self.handle_session_status(req).await,
@@ -195,6 +209,40 @@ impl RpcDispatcher {
         RpcDispatchOutcome::Handled(json!({
             "sessions": sessions,
             "count": sessions.len()
+        }))
+    }
+
+    async fn handle_sessions_preview(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SessionsPreviewParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
+        };
+        let keys = params
+            .keys
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| {
+                let normalized = v.trim().to_owned();
+                if normalized.is_empty() {
+                    None
+                } else {
+                    Some(normalized)
+                }
+            })
+            .take(64)
+            .collect::<Vec<_>>();
+        let limit = params.limit.unwrap_or(12).clamp(1, 256);
+        let max_chars = params.max_chars.unwrap_or(240).clamp(20, 4096);
+        if keys.is_empty() {
+            return RpcDispatchOutcome::Handled(json!({
+                "ts": now_ms(),
+                "previews": []
+            }));
+        }
+        let previews = self.sessions.preview(&keys, limit, max_chars).await;
+        RpcDispatchOutcome::Handled(json!({
+            "ts": now_ms(),
+            "previews": previews
         }))
     }
 
@@ -330,6 +378,31 @@ impl RpcDispatcher {
             "ok": true,
             "key": session_key,
             "deleted": deleted
+        }))
+    }
+
+    async fn handle_sessions_compact(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SessionsCompactParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
+        };
+        let session_key = params
+            .session_key
+            .or(params.key)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        let Some(session_key) = session_key else {
+            return RpcDispatchOutcome::bad_request("sessionKey|key is required");
+        };
+        let max_lines = params.max_lines.unwrap_or(64).clamp(1, 1_024);
+        let compacted = self.sessions.compact(&session_key, max_lines).await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "key": session_key,
+            "compacted": compacted.compacted,
+            "kept": compacted.kept,
+            "removed": compacted.removed,
+            "reason": compacted.reason
         }))
     }
 
@@ -612,6 +685,61 @@ impl SessionRegistry {
         merged
     }
 
+    async fn preview(
+        &self,
+        keys: &[String],
+        limit: usize,
+        max_chars: usize,
+    ) -> Vec<SessionPreviewEntry> {
+        let guard = self.entries.lock().await;
+        let lim = limit.clamp(1, 256);
+        keys.iter()
+            .map(|key| {
+                let Some(entry) = guard.get(key) else {
+                    return SessionPreviewEntry {
+                        key: key.clone(),
+                        status: "missing".to_owned(),
+                        items: Vec::new(),
+                    };
+                };
+                let items = entry
+                    .history
+                    .iter()
+                    .rev()
+                    .take(lim)
+                    .cloned()
+                    .map(|event| SessionPreviewItem {
+                        at_ms: event.at_ms,
+                        kind: event.kind,
+                        text: event
+                            .text
+                            .as_deref()
+                            .map(|v| truncate_text(v, max_chars))
+                            .filter(|v| !v.is_empty()),
+                        command: event
+                            .command
+                            .as_deref()
+                            .map(|v| truncate_text(v, max_chars))
+                            .filter(|v| !v.is_empty()),
+                        action: event.action,
+                        risk_score: event.risk_score,
+                        source: event.source,
+                        channel: event.channel,
+                    })
+                    .collect::<Vec<_>>();
+                SessionPreviewEntry {
+                    key: key.clone(),
+                    status: if items.is_empty() {
+                        "empty".to_owned()
+                    } else {
+                        "ok".to_owned()
+                    },
+                    items,
+                }
+            })
+            .collect()
+    }
+
     async fn reset(&self, session_key: &str, reason: String) -> SessionReset {
         let now = now_ms();
         let mut guard = self.entries.lock().await;
@@ -632,6 +760,39 @@ impl SessionRegistry {
     async fn delete(&self, session_key: &str) -> bool {
         let mut guard = self.entries.lock().await;
         guard.remove(session_key).is_some()
+    }
+
+    async fn compact(&self, session_key: &str, max_lines: usize) -> SessionCompactResult {
+        let mut guard = self.entries.lock().await;
+        let Some(entry) = guard.get_mut(session_key) else {
+            return SessionCompactResult {
+                compacted: false,
+                kept: 0,
+                removed: 0,
+                reason: Some("missing session".to_owned()),
+            };
+        };
+        let max_lines = max_lines.clamp(1, 1_024);
+        let before = entry.history.len();
+        if before <= max_lines {
+            return SessionCompactResult {
+                compacted: false,
+                kept: before,
+                removed: 0,
+                reason: Some("below limit".to_owned()),
+            };
+        }
+
+        while entry.history.len() > max_lines {
+            let _ = entry.history.pop_front();
+        }
+        entry.updated_at_ms = now_ms();
+        SessionCompactResult {
+            compacted: true,
+            kept: entry.history.len(),
+            removed: before.saturating_sub(entry.history.len()),
+            reason: None,
+        }
     }
 
     async fn summary(&self) -> SessionSummary {
@@ -717,6 +878,14 @@ struct SessionReset {
 }
 
 #[derive(Debug, Clone)]
+struct SessionCompactResult {
+    compacted: bool,
+    kept: usize,
+    removed: usize,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct SessionSend {
     session_key: String,
     request_id: Option<String>,
@@ -786,6 +955,32 @@ impl SessionHistoryRecord {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct SessionPreviewEntry {
+    key: String,
+    status: String,
+    items: Vec<SessionPreviewItem>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SessionPreviewItem {
+    #[serde(rename = "atMs")]
+    at_ms: u64,
+    kind: SessionHistoryKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<DecisionAction>,
+    #[serde(rename = "riskScore", skip_serializing_if = "Option::is_none")]
+    risk_score: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SendPolicyOverride {
@@ -833,6 +1028,15 @@ struct SessionsListParams {
     active_minutes: Option<u64>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SessionsPreviewParams {
+    keys: Option<Vec<String>>,
+    limit: Option<usize>,
+    #[serde(rename = "maxChars", alias = "max_chars")]
+    max_chars: Option<usize>,
+}
+
 #[derive(Debug, Deserialize)]
 struct SessionsPatchParams {
     #[serde(rename = "sessionKey", alias = "session_key")]
@@ -870,6 +1074,16 @@ struct SessionsDeleteParams {
     #[serde(rename = "sessionKey", alias = "session_key")]
     session_key: Option<String>,
     key: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SessionsCompactParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    key: Option<String>,
+    #[serde(rename = "maxLines", alias = "max_lines")]
+    max_lines: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -953,6 +1167,19 @@ fn normalize_optional_text(value: Option<String>, max_len: usize) -> Option<Stri
     let mut out = trimmed[..end].to_owned();
     out.push_str("...");
     Some(out)
+}
+
+fn truncate_text(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        return value.to_owned();
+    }
+    let mut end = max_len;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = value[..end].to_owned();
+    out.push_str("...");
+    out
 }
 
 fn normalize(method: &str) -> String {
@@ -1340,5 +1567,122 @@ mod tests {
         };
         let out = dispatcher.handle_request(&deny_main).await;
         assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_preview_returns_items_for_requested_keys() {
+        let dispatcher = RpcDispatcher::new();
+        let send = RpcRequestFrame {
+            id: "req-send-preview".to_owned(),
+            method: "sessions.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-preview",
+                "message": "preview payload that is long enough",
+                "requestId": "preview-1"
+            }),
+        };
+        let _ = dispatcher.handle_request(&send).await;
+
+        let preview = RpcRequestFrame {
+            id: "req-preview".to_owned(),
+            method: "sessions.preview".to_owned(),
+            params: serde_json::json!({
+                "keys": ["agent:main:discord:group:g-preview", "agent:main:discord:group:missing"],
+                "limit": 10,
+                "maxChars": 12
+            }),
+        };
+        let out = dispatcher.handle_request(&preview).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/previews/0/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("ok")
+                );
+                let preview_text = payload
+                    .pointer("/previews/0/items/0/text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert!(preview_text.starts_with("preview payload"));
+                assert!(preview_text.ends_with("..."));
+                assert_eq!(
+                    payload
+                        .pointer("/previews/1/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("missing")
+                );
+            }
+            _ => panic!("expected preview handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_compact_trims_history_buffer() {
+        let dispatcher = RpcDispatcher::new();
+        for idx in 0..5 {
+            let send = RpcRequestFrame {
+                id: format!("req-send-{idx}"),
+                method: "sessions.send".to_owned(),
+                params: serde_json::json!({
+                    "sessionKey": "agent:main:discord:group:g-compact",
+                    "message": format!("msg-{idx}"),
+                }),
+            };
+            let _ = dispatcher.handle_request(&send).await;
+        }
+
+        let compact = RpcRequestFrame {
+            id: "req-compact".to_owned(),
+            method: "sessions.compact".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-compact",
+                "maxLines": 2
+            }),
+        };
+        let out = dispatcher.handle_request(&compact).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/compacted")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload.pointer("/kept").and_then(serde_json::Value::as_u64),
+                    Some(2)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/removed")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(3)
+                );
+            }
+            _ => panic!("expected compact handled"),
+        }
+
+        let history = RpcRequestFrame {
+            id: "req-history-after-compact".to_owned(),
+            method: "sessions.history".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-compact",
+                "limit": 10
+            }),
+        };
+        let out = dispatcher.handle_request(&history).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/count")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(2)
+                );
+            }
+            _ => panic!("expected history handled"),
+        }
     }
 }
