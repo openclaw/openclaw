@@ -28,7 +28,7 @@ async function createBootstrapContext(params: {
   sessionKey: string;
   rootFiles: Array<{ name: string; content: string }>;
 }): Promise<AgentBootstrapHookContext> {
-  const bootstrapFiles = await Promise.all(
+  const bootstrapFiles = (await Promise.all(
     params.rootFiles.map(async (file) => ({
       name: file.name,
       path: await writeWorkspaceFile({
@@ -39,7 +39,7 @@ async function createBootstrapContext(params: {
       content: file.content,
       missing: false,
     })),
-  );
+  )) as AgentBootstrapHookContext["bootstrapFiles"];
   return {
     workspaceDir: params.workspaceDir,
     bootstrapFiles,

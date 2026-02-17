@@ -101,15 +101,13 @@ export function resolveTelegramThreadSpec(params: {
       scope: params.isForum ? "forum" : "none",
     };
   }
-  // DM with forum/topics enabled — treat like a forum, not a flat DM
-  if (params.isForum && params.messageThreadId != null) {
-    return { id: params.messageThreadId, scope: "forum" };
+  if (params.messageThreadId == null) {
+    return { scope: "dm" };
   }
-  // Preserve thread ID for non-forum DM threads (session routing, #8891)
-  if (params.messageThreadId != null) {
-    return { id: params.messageThreadId, scope: "dm" };
-  }
-  return { scope: "dm" };
+  return {
+    id: params.messageThreadId,
+    scope: "dm",
+  };
 }
 
 /**

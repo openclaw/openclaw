@@ -369,7 +369,6 @@ class RedactionError extends Error {
     super("internal error class---should never escape");
     this.key = key;
     this.name = "RedactionError";
-    Object.setPrototypeOf(this, RedactionError.prototype);
   }
 }
 

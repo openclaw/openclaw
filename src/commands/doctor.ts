@@ -124,18 +124,14 @@ export async function doctorCommand(
     note(gatewayDetails.remoteFallbackNote, "Gateway");
   }
   if (resolveMode(cfg) === "local") {
-    const gatewayBind = cfg.gateway?.bind ?? "loopback";
-    const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-    const requireGatewayAuth = gatewayBind !== "loopback" || tailscaleMode !== "off";
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
-      tailscaleMode,
+      tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     });
-    const needsToken =
-      requireGatewayAuth && auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
+    const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
     if (needsToken) {
       note(
-        "Gateway auth is off or missing a token. Token auth is recommended when the gateway is exposed beyond local loopback.",
+        "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
         "Gateway auth",
       );
       const shouldSetToken =
@@ -318,5 +314,4 @@ export async function doctorCommand(
   }
 
   outro("Doctor complete.");
-  runtime.exit(0);
 }

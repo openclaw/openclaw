@@ -23,15 +23,15 @@ beforeEach(() => {
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
 });
 
-const BASE_CFG = {
+const BASE_CFG: Config = {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-5",
+      model: { primary: "anthropic/claude-opus-4-5" },
       workspace: "/tmp/openclaw",
     },
   },
   session: { store: "/tmp/openclaw-sessions.json" },
-} as const;
+};
 
 const CATEGORY_GUILD_CFG = {
   ...BASE_CFG,
@@ -46,14 +46,13 @@ const CATEGORY_GUILD_CFG = {
       },
     },
   },
-  routing: { allowFrom: [] },
-} as Config;
+} satisfies Config;
 
 async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
   const { createDiscordMessageHandler } = await import("./monitor.js");
   return createDiscordMessageHandler({
     cfg: opts.cfg,
-    discordConfig: opts.cfg.channels.discord,
+    discordConfig: opts.cfg.channels?.discord,
     accountId: "default",
     token: "token",
     runtime: {
@@ -89,7 +88,7 @@ async function createCategoryGuildHandler() {
   const { createDiscordMessageHandler } = await import("./monitor.js");
   return createDiscordMessageHandler({
     cfg: CATEGORY_GUILD_CFG,
-    discordConfig: CATEGORY_GUILD_CFG.channels.discord,
+    discordConfig: CATEGORY_GUILD_CFG.channels?.discord,
     accountId: "default",
     token: "token",
     runtime: {

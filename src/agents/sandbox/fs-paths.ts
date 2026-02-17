@@ -61,34 +61,32 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
 }
 
 function splitBindSpec(spec: string): SplitBindSpec | null {
-  // Windows drive-letter host path: C:\\path:/container[:opts] or C:/path:/container[:opts]
-  if (/^[A-Za-z]:[\\/]/.test(spec)) {
-    const hostEnd = spec.indexOf(":", 2);
-    if (hostEnd === -1) {
-      return null;
-    }
-    const host = spec.slice(0, hostEnd);
-    const rest = spec.slice(hostEnd + 1);
-    const optionsStart = rest.indexOf(":");
-    if (optionsStart === -1) {
-      return { host, container: rest, options: "" };
-    }
-    return {
-      host,
-      container: rest.slice(0, optionsStart),
-      options: rest.slice(optionsStart + 1),
-    };
-  }
-
-  const parts = spec.split(":");
-  if (parts.length < 2) {
+  const separator = getHostContainerSeparatorIndex(spec);
+  if (separator === -1) {
     return null;
   }
+
+  const host = spec.slice(0, separator);
+  const rest = spec.slice(separator + 1);
+  const optionsStart = rest.indexOf(":");
+  if (optionsStart === -1) {
+    return { host, container: rest, options: "" };
+  }
   return {
-    host: parts[0] ?? "",
-    container: parts[1] ?? "",
-    options: parts.slice(2).join(":"),
+    host,
+    container: rest.slice(0, optionsStart),
+    options: rest.slice(optionsStart + 1),
   };
+}
+
+function getHostContainerSeparatorIndex(spec: string): number {
+  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(spec);
+  for (let i = hasDriveLetterPrefix ? 2 : 0; i < spec.length; i += 1) {
+    if (spec[i] === ":") {
+      return i;
+    }
+  }
+  return -1;
 }
 
 export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] {

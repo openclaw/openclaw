@@ -64,6 +64,20 @@ export type InputFileLimits = {
   pdf: InputPdfLimits;
 };
 
+export type InputFileLimitsConfig = {
+  allowUrl?: boolean;
+  allowedMimes?: string[];
+  maxBytes?: number;
+  maxChars?: number;
+  maxRedirects?: number;
+  timeoutMs?: number;
+  pdf?: {
+    maxPages?: number;
+    maxPixels?: number;
+    minTextChars?: number;
+  };
+};
+
 export type InputImageLimits = {
   allowUrl: boolean;
   urlAllowlist?: string[];
@@ -152,6 +166,22 @@ export function parseContentType(value: string | undefined): {
 export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
   return new Set(input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[]);
+}
+
+export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {
+  return {
+    allowUrl: config?.allowUrl ?? true,
+    allowedMimes: normalizeMimeList(config?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
+    maxBytes: config?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
+    maxChars: config?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
+    maxRedirects: config?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
+    timeoutMs: config?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
+    pdf: {
+      maxPages: config?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
+      maxPixels: config?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
+      minTextChars: config?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
+    },
+  };
 }
 
 export async function fetchWithGuard(params: {

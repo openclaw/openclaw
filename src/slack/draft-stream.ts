@@ -1,3 +1,4 @@
+import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
 
@@ -37,10 +38,6 @@ export function createSlackDraftStream(params: {
   let streamMessageId: string | undefined;
   let streamChannelId: string | undefined;
   let lastSentText = "";
-  let lastSentAt = 0;
-  let pendingText = "";
-  let inFlightPromise: Promise<void> | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
   const sendOrEditStreamMessage = async (text: string) => {
@@ -60,7 +57,6 @@ export function createSlackDraftStream(params: {
       return;
     }
     lastSentText = trimmed;
-    lastSentAt = Date.now();
     try {
       if (streamChannelId && streamMessageId) {
         await edit(streamChannelId, streamMessageId, trimmed, {
@@ -89,77 +85,20 @@ export function createSlackDraftStream(params: {
       );
     }
   };
-
-  const flush = async () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-    while (!stopped) {
-      if (inFlightPromise) {
-        await inFlightPromise;
-        continue;
-      }
-      const text = pendingText;
-      const trimmed = text.trim();
-      if (!trimmed) {
-        pendingText = "";
-        return;
-      }
-      pendingText = "";
-      const current = sendOrEditStreamMessage(text).finally(() => {
-        if (inFlightPromise === current) {
-          inFlightPromise = undefined;
-        }
-      });
-      inFlightPromise = current;
-      await current;
-      if (!pendingText) {
-        return;
-      }
-    }
-  };
-
-  const schedule = () => {
-    if (timer) {
-      return;
-    }
-    const delay = Math.max(0, throttleMs - (Date.now() - lastSentAt));
-    timer = setTimeout(() => {
-      void flush();
-    }, delay);
-  };
-
-  const update = (text: string) => {
-    if (stopped) {
-      return;
-    }
-    pendingText = text;
-    if (inFlightPromise) {
-      schedule();
-      return;
-    }
-    if (!timer && Date.now() - lastSentAt >= throttleMs) {
-      void flush();
-      return;
-    }
-    schedule();
-  };
+  const loop = createDraftStreamLoop({
+    throttleMs,
+    isStopped: () => stopped,
+    sendOrEditStreamMessage,
+  });
 
   const stop = () => {
     stopped = true;
-    pendingText = "";
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    loop.stop();
   };
 
   const clear = async () => {
     stop();
-    if (inFlightPromise) {
-      await inFlightPromise;
-    }
+    await loop.waitForInFlight();
     const channelId = streamChannelId;
     const messageId = streamMessageId;
     streamChannelId = undefined;
@@ -184,14 +123,14 @@ export function createSlackDraftStream(params: {
     streamMessageId = undefined;
     streamChannelId = undefined;
     lastSentText = "";
-    pendingText = "";
+    loop.resetPending();
   };
 
   params.log?.(`slack stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
-    update,
-    flush,
+    update: loop.update,
+    flush: loop.flush,
     clear,
     stop,
     forceNewMessage,

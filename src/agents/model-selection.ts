@@ -452,29 +452,10 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
-  // 1. Per-model thinkingDefault (highest priority)
-  // Normalize config keys via parseModelRef (consistent with buildModelAliasIndex,
-  // buildAllowedModelSet, etc.) so aliases like "anthropic/opus-4.6" resolve correctly.
-  const configModels = params.cfg.agents?.defaults?.models ?? {};
-  for (const [rawKey, entry] of Object.entries(configModels)) {
-    const parsed = parseModelRef(rawKey, params.provider);
-    if (
-      parsed &&
-      parsed.provider === params.provider &&
-      parsed.model === params.model &&
-      entry?.thinkingDefault
-    ) {
-      return entry.thinkingDefault as ThinkLevel;
-    }
-  }
-
-  // 2. Global thinkingDefault
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
   }
-
-  // 3. Auto-detect from model catalog (reasoning-capable → "low")
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );

@@ -236,6 +236,29 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("treats missing enabled/configured flags as managed accounts", async () => {
+    const manager = createMockChannelManager({
+      getRuntimeSnapshot: vi.fn(() =>
+        snapshotWith({
+          telegram: {
+            default: {
+              running: false,
+              lastError: "polling stopped unexpectedly",
+            },
+          },
+        }),
+      ),
+    });
+    const monitor = startChannelHealthMonitor({
+      channelManager: manager,
+      checkIntervalMs: 5_000,
+      startupGraceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(5_500);
+    expect(manager.startChannel).toHaveBeenCalledWith("telegram", "default");
+    monitor.stop();
+  });
+
   it("applies cooldown — skips recently restarted channels for 2 cycles", async () => {
     const manager = createMockChannelManager({
       getRuntimeSnapshot: vi.fn(() =>

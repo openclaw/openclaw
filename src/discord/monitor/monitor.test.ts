@@ -324,7 +324,10 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     const { interaction: secondInteraction } = createComponentButtonInteraction({
-      rawData: { channel_id: "dm-channel", id: "interaction-2" },
+      rawData: {
+        channel_id: "dm-channel",
+        id: "interaction-2",
+      } as unknown as ButtonInteraction["rawData"],
     });
     await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
 

@@ -21,6 +21,7 @@ const withTempHome = withTempCronHome;
 
 function makeDeps(): CliDeps {
   return {
+    sendMessageSlack: vi.fn(),
     sendMessageWhatsApp: vi.fn(),
     sendMessageTelegram: vi.fn(),
     sendMessageDiscord: vi.fn(),
@@ -383,7 +384,7 @@ describe("runCronIsolatedAgentTurn", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: "anthropic/claude-opus-4-5",
+              model: { primary: "anthropic/claude-opus-4-5" },
               models: {
                 "anthropic/claude-opus-4-5": { alias: "Opus" },
               },

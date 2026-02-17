@@ -13,6 +13,8 @@ vi.mock("../config.js", () => ({
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
+
 let fixtureRoot = "";
 let fixtureCount = 0;
 
@@ -122,6 +124,51 @@ describe("Integration: saveSessionStore with pruning", () => {
       entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
     );
     expect(archived).toHaveLength(1);
+  });
+
+  it("cleans up archived transcripts older than the prune window", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          maxEntries: 500,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const staleSessionId = "stale-session";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+
+    const oldArchived = path.join(
+      testDir,
+      `old-session.jsonl.deleted.${archiveTimestamp(now - 9 * DAY_MS)}`,
+    );
+    const recentArchived = path.join(
+      testDir,
+      `recent-session.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
+    );
+    const bakArchived = path.join(
+      testDir,
+      `bak-session.jsonl.bak.${archiveTimestamp(now - 20 * DAY_MS)}`,
+    );
+    await fs.writeFile(oldArchived, "old", "utf-8");
+    await fs.writeFile(recentArchived, "recent", "utf-8");
+    await fs.writeFile(bakArchived, "bak", "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    await expect(fs.stat(oldArchived)).rejects.toThrow();
+    await expect(fs.stat(recentArchived)).resolves.toBeDefined();
+    await expect(fs.stat(bakArchived)).resolves.toBeDefined();
   });
 
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {

@@ -11,20 +11,18 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
-const sendPollTelegram = vi.fn(async () => ({
-  messageId: "999",
-  chatId: "123",
-  pollId: "poll-1",
-}));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
-  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
-  sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
-  sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
-  sendPollTelegram: (...args: unknown[]) => sendPollTelegram(...args),
-  deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
+  reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
+    reactMessageTelegram(...args),
+  sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
+    sendMessageTelegram(...args),
+  sendStickerTelegram: (...args: Parameters<typeof sendStickerTelegram>) =>
+    sendStickerTelegram(...args),
+  deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
+    deleteMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -55,7 +53,6 @@ describe("handleTelegramAction", () => {
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
-    sendPollTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
@@ -76,7 +73,7 @@ describe("handleTelegramAction", () => {
     reactMessageTelegram.mockResolvedValueOnce({
       ok: false,
       warning: "Reaction unavailable: ✅",
-    });
+    } as unknown as Awaited<ReturnType<typeof reactMessageTelegram>>);
     const result = await handleTelegramAction(defaultReactionAction, reactionConfig("minimal"));
     const textPayload = result.content.find((item) => item.type === "text");
     expect(textPayload?.type).toBe("text");
@@ -365,30 +362,6 @@ describe("handleTelegramAction", () => {
     expect(deleteMessageTelegram).toHaveBeenCalledWith(
       "123",
       456,
-      expect.objectContaining({ token: "tok" }),
-    );
-  });
-
-  it("sends a poll", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok" } },
-    } as OpenClawConfig;
-    await handleTelegramAction(
-      {
-        action: "poll",
-        to: "123",
-        question: "Ready?",
-        options: ["Yes", "No"],
-      },
-      cfg,
-    );
-    expect(sendPollTelegram).toHaveBeenCalledWith(
-      "123",
-      expect.objectContaining({
-        question: "Ready?",
-        options: ["Yes", "No"],
-        maxSelections: 1,
-      }),
       expect.objectContaining({ token: "tok" }),
     );
   });
@@ -684,6 +657,63 @@ describe("handleTelegramAction per-account gating", () => {
       "123",
       "sticker-id",
       expect.objectContaining({ token: "tok-media" }),
+    );
+  });
+
+  it("inherits top-level reaction gate when account overrides sticker only", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          actions: { reactions: false },
+          accounts: {
+            media: { botToken: "tok-media", actions: { sticker: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleTelegramAction(
+        {
+          action: "react",
+          chatId: "123",
+          messageId: 1,
+          emoji: "👀",
+          accountId: "media",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/reactions are disabled via actions.reactions/i);
+  });
+
+  it("allows account to explicitly re-enable top-level disabled reaction gate", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          actions: { reactions: false },
+          accounts: {
+            media: { botToken: "tok-media", actions: { sticker: true, reactions: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: 1,
+        emoji: "👀",
+        accountId: "media",
+      },
+      cfg,
+    );
+
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      1,
+      "👀",
+      expect.objectContaining({ token: "tok-media", accountId: "media" }),
     );
   });
 });

@@ -133,6 +133,28 @@ export type SlackMediaResult = {
 
 const MAX_SLACK_MEDIA_FILES = 8;
 const MAX_SLACK_MEDIA_CONCURRENCY = 3;
+const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
+
+function isForwardedSlackAttachment(attachment: SlackAttachment): boolean {
+  // Narrow this parser to Slack's explicit "shared/forwarded" attachment payloads.
+  return attachment.is_share === true;
+}
+
+function resolveForwardedAttachmentImageUrl(attachment: SlackAttachment): string | null {
+  const rawUrl = attachment.image_url?.trim();
+  if (!rawUrl) {
+    return null;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "https:" || !isSlackHostname(parsed.hostname)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
 
 async function mapLimit<T, R>(
   items: T[],
@@ -230,10 +252,17 @@ export async function resolveSlackAttachmentContent(params: {
     return null;
   }
 
+  const forwardedAttachments = attachments
+    .filter((attachment) => isForwardedSlackAttachment(attachment))
+    .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS);
+  if (forwardedAttachments.length === 0) {
+    return null;
+  }
+
   const textBlocks: string[] = [];
   const allMedia: SlackMediaResult[] = [];
 
-  for (const att of attachments) {
+  for (const att of forwardedAttachments) {
     const text = att.text?.trim() || att.fallback?.trim();
     if (text) {
       const author = att.author_name;
@@ -241,7 +270,7 @@ export async function resolveSlackAttachmentContent(params: {
       textBlocks.push(`${heading}\n${text}`);
     }
 
-    const imageUrl = att.image_url;
+    const imageUrl = resolveForwardedAttachmentImageUrl(att);
     if (imageUrl) {
       try {
         const fetched = await fetchRemoteMedia({

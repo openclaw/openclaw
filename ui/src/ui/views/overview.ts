@@ -2,6 +2,7 @@ import { html } from "lit";
 import type { GatewayHelloOk } from "../gateway.ts";
 import type { AppMode } from "../navigation.ts";
 import type { UiSettings } from "../storage.ts";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import { formatNextRun } from "../presenter.ts";
 
@@ -26,10 +27,18 @@ export type OverviewProps = {
 
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
-    | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
+    | {
+        uptimeMs?: number;
+        policy?: { tickIntervalMs?: number };
+        authMode?: "none" | "token" | "password" | "trusted-proxy";
+      }
     | undefined;
-  const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : "n/a";
-  const tick = snapshot?.policy?.tickIntervalMs ? `${snapshot.policy.tickIntervalMs}ms` : "n/a";
+  const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
+  const tick = snapshot?.policy?.tickIntervalMs
+    ? `${snapshot.policy.tickIntervalMs}ms`
+    : t("common.na");
+  const authMode = snapshot?.authMode;
+  const isTrustedProxy = authMode === "trusted-proxy";
   const authHint = (() => {
     if (props.connected || !props.lastError) {
       return null;
@@ -187,6 +196,28 @@ export function renderOverview(props: OverviewProps) {
               placeholder="system or shared password"
             />
           </label>
+          ${
+            isTrustedProxy
+              ? ""
+              : html`
+                <label class="field">
+                  <span>${t("overview.access.token")}</span>
+                  <input
+                    .value=${props.settings.token}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onSettingsChange({ ...props.settings, token: v });
+                    }}
+                    placeholder="OPENCLAW_GATEWAY_TOKEN"
+                  />
+                </label>
+                  <span>${t("overview.access.password")}</span>
+                    type="password"
+                    .value=${props.password}
+                      props.onPasswordChange(v);
+                    placeholder="system or shared password"
+              `
+          }
           <label class="field">
             <span>Default Session Key</span>
             <input
@@ -319,6 +350,11 @@ export function renderOverview(props: OverviewProps) {
           <button class="btn" @click=${() => props.onConnect()}>Connect</button>
           <button class="btn" @click=${() => props.onRefresh()}>Refresh</button>
           <span class="muted">Click Connect to apply connection changes.</span>
+          <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
+          <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
+          <span class="muted">${
+            isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
+          }</span>
         </div>
       </div>
 

@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
-const agentSpy = vi.fn(async () => ({ runId: "run-main", status: "ok" }));
-const sessionsDeleteSpy = vi.fn();
-const readLatestAssistantReplyMock = vi.fn(async () => "raw subagent reply");
+type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
+type RequesterResolution = {
+  requesterSessionKey: string;
+  requesterOrigin?: Record<string, unknown>;
+} | null;
+
+const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
+const readLatestAssistantReplyMock = vi.fn(
+  async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
+);
 const embeddedRunMock = {
   isEmbeddedPiRunActive: vi.fn(() => false),
   isEmbeddedPiRunStreaming: vi.fn(() => false),
@@ -12,8 +20,8 @@ const embeddedRunMock = {
 };
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
-  countActiveDescendantRuns: vi.fn(() => 0),
-  resolveRequesterForChildSession: vi.fn(() => null),
+  countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
+  resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
 let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
@@ -827,6 +835,50 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.sessionKey).toBe("agent:main:main");
     // deliver=true because Jaris is main (user-facing)
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("discord");
+  });
+
+  it("falls back when parent session is missing a sessionId (#18037)", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:subagent:newton": {
+        sessionId: " ",
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+      "agent:main:subagent:newton:subagent:birdie": {
+        sessionId: "birdie-session-id",
+        inputTokens: 20,
+        outputTokens: 10,
+      },
+    };
+    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "discord" },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:newton:subagent:birdie",
+      childRunId: "run-birdie-empty-parent",
+      requesterSessionKey: "agent:main:subagent:newton",
+      requesterDisplayKey: "subagent:newton",
+      task: "QA task",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
     expect(call?.params?.deliver).toBe(true);
     expect(call?.params?.channel).toBe("discord");
   });

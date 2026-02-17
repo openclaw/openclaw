@@ -167,6 +167,28 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(onToolResult).not.toHaveBeenCalled();
   });
 
+  it("does NOT emit media for <media:audio> placeholder text", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "<media:audio> placeholder with successful preflight voice transcript",
+          },
+        ],
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
   it("emits media from details.path fallback when no MEDIA: text", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
