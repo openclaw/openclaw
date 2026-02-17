@@ -262,4 +262,130 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.store).toBe(false);
   });
+
+  it("applies cacheRetention for native Anthropic provider", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return { [Symbol.asyncIterator]: async function* () {} } as any;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: {
+                  cacheRetention: "long",
+                },
+              },
+            },
+          },
+        },
+      },
+      "anthropic",
+      "claude-opus-4-6",
+      undefined,
+      "anthropic-messages",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+  });
+
+  it("applies cacheRetention for non-Anthropic providers using anthropic-messages API", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return { [Symbol.asyncIterator]: async function* () {} } as any;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "xiaomi/mimo-v2-flash": {
+                params: {
+                  cacheRetention: "short",
+                },
+              },
+            },
+          },
+        },
+      },
+      "xiaomi",
+      "mimo-v2-flash",
+      undefined,
+      "anthropic-messages",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "xiaomi",
+      id: "mimo-v2-flash",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("short");
+  });
+
+  it("does not apply cacheRetention for non-Anthropic providers without anthropic-messages API", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return { [Symbol.asyncIterator]: async function* () {} } as any;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: {
+                  cacheRetention: "long",
+                },
+              },
+            },
+          },
+        },
+      },
+      "openai",
+      "gpt-5",
+      undefined,
+      "openai-responses",
+    );
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBeUndefined();
+  });
 });
