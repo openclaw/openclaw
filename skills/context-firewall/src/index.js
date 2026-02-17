@@ -1,8 +1,8 @@
-const fs = require('fs');
-const path = require('path');
-const { program } = require('commander');
+const fs = require("fs");
+const path = require("path");
+const { program } = require("commander");
 
-const MEMORY_FILE = path.join(__dirname, '..', 'firewall_db.json');
+const MEMORY_FILE = path.join(__dirname, "..", "firewall_db.json");
 
 // Initialize DB if not exists
 if (!fs.existsSync(MEMORY_FILE)) {
@@ -11,7 +11,7 @@ if (!fs.existsSync(MEMORY_FILE)) {
 
 function loadDb() {
   try {
-    return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf-8'));
+    return JSON.parse(fs.readFileSync(MEMORY_FILE, "utf-8"));
   } catch (e) {
     return { memories: [] };
   }
@@ -22,12 +22,12 @@ function saveDb(db) {
 }
 
 program
-  .command('store')
-  .description('Store a scoped memory')
-  .requiredOption('--text <text>', 'Text to store')
-  .requiredOption('--scope <scope>', 'Scope: private, group, public')
-  .option('--owner <ownerId>', 'Owner User ID')
-  .option('--group <groupId>', 'Group ID')
+  .command("store")
+  .description("Store a scoped memory")
+  .requiredOption("--text <text>", "Text to store")
+  .requiredOption("--scope <scope>", "Scope: private, group, public")
+  .option("--owner <ownerId>", "Owner User ID")
+  .option("--group <groupId>", "Group ID")
   .action((options) => {
     const db = loadDb();
     const memory = {
@@ -37,41 +37,47 @@ program
       ownerId: options.owner,
       groupId: options.group,
       timestamp: Date.now(),
-      tags: [] 
+      tags: [],
     };
     db.memories.push(memory);
     saveDb(db);
-    console.log(JSON.stringify({ status: 'success', id: memory.id, message: 'Memory stored securely.' }));
+    console.log(
+      JSON.stringify({
+        status: "success",
+        id: memory.id,
+        message: "Memory stored securely.",
+      }),
+    );
   });
 
 program
-  .command('retrieve')
-  .description('Retrieve memories accessible to the current context')
-  .requiredOption('--query <query>', 'Search query')
-  .requiredOption('--user <userId>', 'Current User ID')
-  .option('--group <groupId>', 'Current Group ID')
+  .command("retrieve")
+  .description("Retrieve memories accessible to the current context")
+  .requiredOption("--query <query>", "Search query")
+  .requiredOption("--user <userId>", "Current User ID")
+  .option("--group <groupId>", "Current Group ID")
   .action((options) => {
     const db = loadDb();
     const query = options.query.toLowerCase();
-    
-    const accessibleMemories = db.memories.filter(m => {
+
+    const accessibleMemories = db.memories.filter((m) => {
       // 1. Text match (simple keyword for now)
       if (!m.text.toLowerCase().includes(query)) return false;
 
       // 2. Permission Check
       // Public: everyone sees
-      if (m.scope === 'public') return true;
-      
+      if (m.scope === "public") return true;
+
       // Private: only owner sees
-      if (m.scope === 'private') {
+      if (m.scope === "private") {
         return m.ownerId === options.user;
       }
-      
+
       // Group: only group members (or specifically this group context) see
-      if (m.scope === 'group') {
+      if (m.scope === "group") {
         return m.groupId === options.group;
       }
-      
+
       return false;
     });
 
