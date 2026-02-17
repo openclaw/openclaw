@@ -603,6 +603,14 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    aiFabric: z
+      .object({
+        enabled: z.boolean().optional(),
+        projectId: z.string().optional(),
+        mcpConfigPath: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

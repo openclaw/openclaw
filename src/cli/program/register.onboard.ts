@@ -58,7 +58,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: setup-token|token|chutes|openai-codex|openai-api-key|xai-api-key|qianfan-api-key|openrouter-api-key|litellm-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|zai-coding-global|zai-coding-cn|zai-global|zai-cn|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|custom-api-key|skip|together-api-key",
+      "Auth: setup-token|token|chutes|openai-codex|openai-api-key|xai-api-key|qianfan-api-key|openrouter-api-key|litellm-api-key|ai-gateway-api-key|cloudflare-ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|zai-coding-global|zai-coding-cn|zai-global|zai-cn|xiaomi-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|custom-api-key|cloudru-fm-glm47|cloudru-fm-flash|cloudru-fm-qwen|skip|together-api-key",
     )
     .option(
       "--token-provider <id>",
@@ -90,6 +90,9 @@ export function registerOnboardCommand(program: Command) {
     .option("--xai-api-key <key>", "xAI API key")
     .option("--litellm-api-key <key>", "LiteLLM API key")
     .option("--qianfan-api-key <key>", "QIANFAN API key")
+    .option("--cloudru-api-key <key>", "Cloud.ru FM API key")
+    .option("--cloudru-project-id <id>", "Cloud.ru AI Fabric project ID for MCP auto-discovery")
+    .option("--skip-ai-fabric", "Skip AI Fabric MCP setup")
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -156,6 +159,9 @@ export function registerOnboardCommand(program: Command) {
             opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
             xaiApiKey: opts.xaiApiKey as string | undefined,
             litellmApiKey: opts.litellmApiKey as string | undefined,
+            cloudruApiKey: opts.cloudruApiKey as string | undefined,
+            cloudruProjectId: opts.cloudruProjectId as string | undefined,
+            skipAiFabric: Boolean(opts.skipAiFabric),
             customBaseUrl: opts.customBaseUrl as string | undefined,
             customApiKey: opts.customApiKey as string | undefined,
             customModelId: opts.customModelId as string | undefined,
