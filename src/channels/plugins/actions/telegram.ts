@@ -56,6 +56,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
+    if (gate("polls")) {
+      actions.add("poll");
+    }
     if (gate("reactions")) {
       actions.add("react");
     }
@@ -194,6 +197,38 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           query,
           limit: limit ?? undefined,
           accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", {
+        required: true,
+      });
+      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
+        integer: true,
+      });
+      const messageThreadId = readNumberParam(params, "messageThreadId", { integer: true });
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
+      return await handleTelegramAction(
+        {
+          action: "poll",
+          accountId: accountId ?? undefined,
+          to,
+          poll: {
+            question,
+            options,
+            maxSelections: allowMultiselect ? options.length : 1,
+            durationSeconds: durationSeconds ?? undefined,
+          },
+          messageThreadId: messageThreadId ?? undefined,
+          silent,
+          isAnonymous,
         },
         cfg,
       );
