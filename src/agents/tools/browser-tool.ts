@@ -360,7 +360,6 @@ export function createBrowserTool(opts?: {
             throw err;
           }
           const fallbackProfiles = buildCdpFallbackProfiles(normalizedInitial);
-          let lastError: unknown = err;
           for (const fallbackProfile of fallbackProfiles) {
             try {
               return await runForProfile(fallbackProfile);
@@ -368,7 +367,6 @@ export function createBrowserTool(opts?: {
               if (!isLikelyCdpUnavailableError(fallbackErr)) {
                 throw fallbackErr;
               }
-              lastError = fallbackErr;
             }
           }
           const triedProfiles = [normalizedInitial ?? "(default)", ...fallbackProfiles].join(", ");
