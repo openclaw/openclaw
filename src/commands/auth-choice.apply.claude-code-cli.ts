@@ -1,5 +1,5 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import {
   applyClaudeCodeCliDefaultConfig,
   applyClaudeCodeCliProviderConfig,
