@@ -4,6 +4,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { A2AContract, A2AStructuredMessage } from "./a2a-contracts.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -163,4 +164,36 @@ export function resolvePingPongTurns(cfg?: OpenClawConfig) {
   }
   const rounded = Math.floor(raw);
   return Math.max(0, Math.min(MAX_PING_PONG_TURNS, rounded));
+}
+
+// ---------------------------------------------------------------------------
+// A2A contract-aware context
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a system prompt fragment for a structured A2A contract invocation.
+ * Tells the target agent what contract was invoked and the expected output schema.
+ */
+export function buildAgentToAgentContractContext(params: {
+  structured: A2AStructuredMessage;
+  contract: A2AContract;
+}): string {
+  const lines = [`Structured A2A contract invocation: "${params.structured.contract}".`];
+  if (params.contract.description) {
+    lines.push(`Contract description: ${params.contract.description}`);
+  }
+  const payloadJson = JSON.stringify(params.structured.payload);
+  const truncatedPayload =
+    payloadJson.length > 4000 ? payloadJson.slice(0, 4000) + "... (truncated)" : payloadJson;
+  lines.push(`Input payload: ${truncatedPayload}`);
+  if (params.structured.correlationId) {
+    lines.push(`Correlation ID: ${params.structured.correlationId}`);
+  }
+  if (params.contract.output) {
+    lines.push(
+      "Expected output schema (respond with JSON matching this schema):",
+      JSON.stringify(params.contract.output, null, 2),
+    );
+  }
+  return lines.join("\n");
 }

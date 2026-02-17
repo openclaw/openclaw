@@ -9,6 +9,13 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import {
+  parseA2AMessage,
+  findContract,
+  validateContractInput,
+  listAgentContracts,
+} from "./a2a-contracts.js";
+import type { AgentA2AConfig } from "./a2a-contracts.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -21,7 +28,11 @@ import {
   resolveSandboxedSessionToolContext,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentMessageContext,
+  buildAgentToAgentContractContext,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -214,11 +225,76 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
+      // ── A2A contract validation ──────────────────────────────────
+      let contractContext: string | undefined;
+      const structured = parseA2AMessage(message);
+      if (structured) {
+        const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
+        const contract = findContract(cfg, targetAgentId, structured.contract);
+
+        if (!contract) {
+          // Check if agent has any contracts declared — if so, an unknown contract name is an error.
+          const agentContracts = listAgentContracts(cfg, targetAgentId);
+          if (agentContracts.length > 0) {
+            const contractNames = agentContracts.map((c) => c.contractName);
+            const displayNames =
+              contractNames.length > 10
+                ? contractNames.slice(0, 10).join(", ") + ` ... (${contractNames.length} total)`
+                : contractNames.join(", ");
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "error",
+              error: `Agent "${targetAgentId}" does not expose contract "${structured.contract}". Available: ${displayNames}`,
+              sessionKey: displayKey,
+            });
+          }
+          // Agent has no contracts declared — let structured messages through as best-effort.
+        }
+
+        if (contract) {
+          const validation = validateContractInput(contract.contract, structured.payload);
+          if (!validation.valid) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "error",
+              error: `Contract "${structured.contract}" input validation failed: ${validation.errors.join("; ")}`,
+              sessionKey: displayKey,
+            });
+          }
+          contractContext = buildAgentToAgentContractContext({
+            structured,
+            contract: contract.contract,
+          });
+        }
+      } else {
+        // Plain text message — check if target agent requires structured messages.
+        const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
+        const agents = cfg.agents?.list;
+        const targetAgent = Array.isArray(agents)
+          ? agents.find((a) => a.id === targetAgentId)
+          : undefined;
+        const a2aCfg = (targetAgent as Record<string, unknown> | undefined)?.a2a as
+          | AgentA2AConfig
+          | undefined;
+        if (a2aCfg?.allowFreeform === false) {
+          const available = listAgentContracts(cfg, targetAgentId);
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `Agent "${targetAgentId}" requires structured A2A messages (allowFreeform=false). Available contracts: ${available.map((c) => c.contractName).join(", ") || "none"}`,
+            sessionKey: displayKey,
+          });
+        }
+      }
+
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      const combinedContext = contractContext
+        ? `${agentMessageContext}\n\n${contractContext}`
+        : agentMessageContext;
       const sendParams = {
         message,
         sessionKey: resolvedKey,
@@ -226,7 +302,7 @@ export function createSessionsSendTool(opts?: {
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
-        extraSystemPrompt: agentMessageContext,
+        extraSystemPrompt: combinedContext,
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: opts?.agentSessionKey,
