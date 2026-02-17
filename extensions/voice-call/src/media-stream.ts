@@ -10,17 +10,19 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
-import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
+import type { ElevenLabsScribeSTTProvider } from "./providers/stt-elevenlabs-scribe.js";
+import type { RealtimeSTTSession } from "./providers/stt-openai-realtime.js";
+import type { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
+
+/** Any STT provider that can create realtime sessions. */
+type STTProvider = OpenAIRealtimeSTTProvider | ElevenLabsScribeSTTProvider;
 
 /**
  * Configuration for the media stream handler.
  */
 export interface MediaStreamConfig {
   /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  sttProvider: STTProvider;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */

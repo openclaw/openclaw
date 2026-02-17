@@ -347,7 +347,7 @@
           },
           "sttProvider": {
             "type": "string",
-            "enum": ["openai-realtime"]
+            "enum": ["openai-realtime", "elevenlabs-scribe"]
           },
           "openaiApiKey": {
             "type": "string"
@@ -382,6 +382,12 @@
           "maxConnections": {
             "type": "integer",
             "minimum": 1
+          },
+          "elevenlabsApiKey": {
+            "type": "string"
+          },
+          "elevenlabsLanguageCode": {
+            "type": "string"
           }
         }
       },
