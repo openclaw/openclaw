@@ -14,6 +14,7 @@ import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
+const MIN_TIMER_DELAY_MS = 500;
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -166,7 +167,9 @@ export function armTimer(state: CronServiceState) {
     return;
   }
   const now = state.deps.nowMs();
-  const delay = Math.max(nextAt - now, 0);
+  const rawDelay = Math.max(nextAt - now, 0);
+  // Guard against spin-loop when nextAt is in the past or nearly so.
+  const delay = rawDelay < MIN_TIMER_DELAY_MS ? MIN_TIMER_DELAY_MS : rawDelay;
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
   const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
