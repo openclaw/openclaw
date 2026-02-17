@@ -25,5 +25,5 @@
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "extensions/**/*.test.ts"]
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }
