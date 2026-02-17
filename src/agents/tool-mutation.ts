@@ -111,6 +111,10 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         .trim()
         .split(/\s+/)[0]
         .replace(/^.*\//, "");
+      // Only truly read-only commands that cannot mutate state regardless of
+      // flags. Commands like sed (-i), git (commit/push), python/node
+      // (arbitrary code), docker/kubectl (infra), npm/pip (packages),
+      // sqlite3/redis-cli (DB writes), etc. are intentionally excluded.
       const readOnlyCmds = new Set([
         "ls",
         "cat",
@@ -137,13 +141,10 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         "test",
         "true",
         "false",
-        "read",
         "sort",
         "uniq",
         "tr",
         "cut",
-        "sed",
-        "awk",
         "less",
         "more",
         "strings",
@@ -158,29 +159,9 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
         "free",
         "uptime",
         "ss",
-        "ip",
         "ping",
         "dig",
         "nslookup",
-        "git",
-        "python3",
-        "python",
-        "node",
-        "ruby",
-        "perl",
-        "cargo",
-        "npm",
-        "pnpm",
-        "pip",
-        "docker",
-        "kubectl",
-        "aws",
-        "sam",
-        "openclaw",
-        "pass",
-        "gpg",
-        "sqlite3",
-        "redis-cli",
       ]);
       if (readOnlyCmds.has(cmd)) {
         return false;
