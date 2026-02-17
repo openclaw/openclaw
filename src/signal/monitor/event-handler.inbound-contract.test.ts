@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 
 let capturedCtx: MsgContext | undefined;
 
@@ -45,9 +45,10 @@ describe("signal createSignalEventHandler inbound contract", () => {
 
     expect(capturedCtx).toBeTruthy();
     expectInboundContextContract(capturedCtx!);
+    const contextWithBody = capturedCtx as unknown as { Body?: string };
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
-    expect(String(capturedCtx?.Body ?? "")).toContain("Alice");
-    expect(String(capturedCtx?.Body ?? "")).toMatch(/Alice.*:/);
-    expect(String(capturedCtx?.Body ?? "")).not.toContain("[from:");
+    expect(String(contextWithBody.Body ?? "")).toContain("Alice");
+    expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
+    expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
   });
 });

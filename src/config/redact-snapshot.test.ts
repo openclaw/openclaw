@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { ConfigUiHints } from "./schema.js";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
 import { __test__ } from "./schema.hints.js";
+import type { ConfigUiHints } from "./schema.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const { mapSensitivePaths } = __test__;
@@ -33,7 +33,7 @@ function makeSnapshot<TConfig extends Record<string, unknown>>(
     issues: [],
     warnings: [],
     legacyIssues: [],
-  } as TestSnapshot<TConfig>;
+  } as unknown as TestSnapshot<TConfig>;
 }
 
 function restoreRedactedValues<TOriginal>(

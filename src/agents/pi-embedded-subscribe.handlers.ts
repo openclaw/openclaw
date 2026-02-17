@@ -1,7 +1,3 @@
-import type {
-  EmbeddedPiSubscribeContext,
-  EmbeddedPiSubscribeEvent,
-} from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleAgentEnd,
   handleAgentStart,
@@ -18,6 +14,10 @@ import {
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeEvent,
+} from "./pi-embedded-subscribe.handlers.types.js";
 
 export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeContext) {
   return (evt: EmbeddedPiSubscribeEvent) => {

@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { saveSessionStore } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -866,11 +867,11 @@ describe("applyResetModelOverride", () => {
   it("selects a model hint and strips it from the body", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -896,14 +897,14 @@ describe("applyResetModelOverride", () => {
   it("clears auth profile overrides when reset applies a model", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       authProfileOverride: "anthropic:default",
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: 2,
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -929,11 +930,11 @@ describe("applyResetModelOverride", () => {
   it("skips when resetTriggered is false", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 

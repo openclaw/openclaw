@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {

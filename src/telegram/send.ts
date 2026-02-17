@@ -5,8 +5,6 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
-import type { RetryConfig } from "../infra/retry.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -14,6 +12,7 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
+import type { RetryConfig } from "../infra/retry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -23,11 +22,11 @@ import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
-import { recordSentPoll } from "./poll-vote-cache.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
@@ -199,17 +198,6 @@ function isTelegramMessageNotModifiedError(err: unknown): boolean {
   return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
 }
 
-/**
- * Telegram private chats have positive numeric IDs.
- * Groups and supergroups have negative IDs (typically -100… for supergroups).
- * Private chats never support forum topics, so `message_thread_id` must
- * not be included in API calls targeting them (#17242).
- */
-function isTelegramPrivateChat(chatId: string): boolean {
-  const n = Number(chatId);
-  return Number.isFinite(n) && n > 0;
-}
-
 function hasMessageThreadIdParam(params?: Record<string, unknown>): boolean {
   if (!params) {
     return false;
@@ -242,13 +230,18 @@ function isTelegramHtmlParseError(err: unknown): boolean {
 function buildTelegramThreadReplyParams(params: {
   targetMessageThreadId?: number;
   messageThreadId?: number;
+  chatType?: "direct" | "group" | "unknown";
   replyToMessageId?: number;
   quoteText?: string;
 }): Record<string, unknown> {
   const messageThreadId =
     params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
+  const threadScope = params.chatType === "direct" ? ("dm" as const) : ("forum" as const);
+  // Never blanket-strip DM message_thread_id by chat-id sign.
+  // Telegram supports DM topics; stripping silently misroutes topic replies.
+  // Keep thread id and rely on thread-not-found retry fallback for plain DMs.
   const threadSpec =
-    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+    messageThreadId != null ? { id: messageThreadId, scope: threadScope } : undefined;
   const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
 
@@ -379,6 +372,8 @@ async function withTelegramThreadFallback<T>(
   try {
     return await attempt(params, label);
   } catch (err) {
+    // Do not widen this fallback to cover "chat not found".
+    // chat-not-found is routing/auth/membership/token; stripping thread IDs hides root cause.
     if (!hasMessageThreadIdParam(params) || !isTelegramThreadNotFoundError(err)) {
       throw err;
     }
@@ -442,10 +437,10 @@ export async function sendMessageTelegram(
   const mediaUrl = opts.mediaUrl?.trim();
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
-  const isPrivate = isTelegramPrivateChat(chatId);
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: isPrivate ? undefined : target.messageThreadId,
-    messageThreadId: isPrivate ? undefined : opts.messageThreadId,
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
     replyToMessageId: opts.replyToMessageId,
     quoteText: opts.quoteText,
   });
@@ -934,10 +929,10 @@ export async function sendStickerTelegram(
   const target = parseTelegramTarget(to);
   const chatId = normalizeChatId(target.chatId);
 
-  const isPrivate = isTelegramPrivateChat(chatId);
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: isPrivate ? undefined : target.messageThreadId,
-    messageThreadId: isPrivate ? undefined : opts.messageThreadId,
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
     replyToMessageId: opts.replyToMessageId,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
@@ -991,7 +986,7 @@ type TelegramPollOpts = {
   messageThreadId?: number;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
-  /** Whether votes are anonymous. Defaults to false (public poll). */
+  /** Whether votes are anonymous. Defaults to true (Telegram default). */
   isAnonymous?: boolean;
 };
 
@@ -1013,10 +1008,10 @@ export async function sendPollTelegram(
   // Normalize the poll input (validates question, options, maxSelections)
   const normalizedPoll = normalizePollInput(poll, { maxOptions: 10 });
 
-  const isPrivate = isTelegramPrivateChat(chatId);
   const threadParams = buildTelegramThreadReplyParams({
-    targetMessageThreadId: isPrivate ? undefined : target.messageThreadId,
-    messageThreadId: isPrivate ? undefined : opts.messageThreadId,
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
     replyToMessageId: opts.replyToMessageId,
   });
 
@@ -1050,7 +1045,7 @@ export async function sendPollTelegram(
   // sendPoll(chat_id, question, options, other?, signal?)
   const pollParams = {
     allows_multiple_answers: normalizedPoll.maxSelections > 1,
-    is_anonymous: opts.isAnonymous ?? false,
+    is_anonymous: opts.isAnonymous ?? true,
     ...(durationSeconds !== undefined ? { open_period: durationSeconds } : {}),
     ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
     ...(opts.silent === true ? { disable_notification: true } : {}),
@@ -1072,15 +1067,6 @@ export async function sendPollTelegram(
   const pollId = result?.poll?.id;
   if (result?.message_id) {
     recordSentMessage(chatId, result.message_id);
-  }
-  if (pollId) {
-    recordSentPoll({
-      pollId,
-      chatId: resolvedChatId,
-      question: normalizedPoll.question,
-      options: normalizedPoll.options,
-      accountId: account.accountId,
-    });
   }
 
   recordChannelActivity({

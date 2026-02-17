@@ -1,5 +1,5 @@
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
+import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 export { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 

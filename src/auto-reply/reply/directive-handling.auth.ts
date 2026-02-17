@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
@@ -11,6 +10,7 @@ import {
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 
 export type ModelAuthDetailMode = "compact" | "verbose";

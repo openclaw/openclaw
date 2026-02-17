@@ -20,7 +20,6 @@ import {
   resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk";
-import type { ZcaFriend, ZcaGroup, ZcaUserInfo } from "./types.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -34,6 +33,7 @@ import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
 import { sendMessageZalouser } from "./send.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
+import type { ZcaFriend, ZcaGroup, ZcaUserInfo } from "./types.js";
 import { checkZcaInstalled, parseJsonOutput, runZca, runZcaInteractive } from "./zca.js";
 
 const meta = {

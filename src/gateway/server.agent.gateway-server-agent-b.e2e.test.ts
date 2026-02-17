@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
@@ -306,9 +306,14 @@ describe("gateway server agent", () => {
 
     const ack = await ackP;
     const final = await finalP;
-    expect(ack.payload.runId).toBeDefined();
-    expect(final.payload.runId).toBe(ack.payload.runId);
-    expect(final.payload.status).toBe("ok");
+    const ackPayload = ack.payload;
+    const finalPayload = final.payload;
+    if (!ackPayload || !finalPayload) {
+      throw new Error("missing websocket payload");
+    }
+    expect(ackPayload.runId).toBeDefined();
+    expect(finalPayload.runId).toBe(ackPayload.runId);
+    expect(finalPayload.status).toBe("ok");
   });
 
   test("agent dedupes by idempotencyKey after completion", async () => {

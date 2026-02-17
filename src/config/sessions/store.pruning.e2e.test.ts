@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "./types.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
 vi.mock("../config.js", () => ({

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { getReplyFromConfig } from "../../auto-reply/reply.js";
-import type { sendMessageWhatsApp } from "../outbound.js";
 import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
+import type { sendMessageWhatsApp } from "../outbound.js";
 
 const state = vi.hoisted(() => ({
   visibility: { showAlerts: true, showOk: true, useIndicator: false },

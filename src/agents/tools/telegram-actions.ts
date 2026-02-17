@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import { createTelegramActionGate } from "../../telegram/accounts.js";
+import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -12,7 +12,6 @@ import {
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
-  sendPollTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
@@ -212,66 +211,6 @@ export async function handleTelegramAction(
     });
   }
 
-  if (action === "poll") {
-    if (!isActionEnabled("polls")) {
-      throw new Error("Telegram polls are disabled.");
-    }
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "question", { required: true });
-    const options = params.options ?? params.answers;
-    if (!Array.isArray(options)) {
-      throw new Error("options must be an array of strings");
-    }
-    const pollOptions = options.filter((option): option is string => typeof option === "string");
-    if (pollOptions.length !== options.length) {
-      throw new Error("options must be an array of strings");
-    }
-    const durationSeconds = readNumberParam(params, "durationSeconds", {
-      integer: true,
-    });
-    const durationHours = readNumberParam(params, "durationHours", {
-      integer: true,
-    });
-    const replyToMessageId = readNumberParam(params, "replyToMessageId", {
-      integer: true,
-    });
-    const messageThreadId = readNumberParam(params, "messageThreadId", {
-      integer: true,
-    });
-    const maxSelections =
-      typeof params.allowMultiselect === "boolean" && params.allowMultiselect ? 2 : 1;
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
-    const result = await sendPollTelegram(
-      to,
-      {
-        question,
-        options: pollOptions,
-        maxSelections,
-        durationSeconds: durationSeconds ?? undefined,
-        durationHours: durationHours ?? undefined,
-      },
-      {
-        token,
-        accountId: accountId ?? undefined,
-        replyToMessageId: replyToMessageId ?? undefined,
-        messageThreadId: messageThreadId ?? undefined,
-        silent: typeof params.silent === "boolean" ? params.silent : undefined,
-        isAnonymous: typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined,
-      },
-    );
-    return jsonResult({
-      ok: true,
-      messageId: result.messageId,
-      chatId: result.chatId,
-      pollId: result.pollId,
-    });
-  }
-
   if (action === "deleteMessage") {
     if (!isActionEnabled("deleteMessage")) {
       throw new Error("Telegram deleteMessage is disabled.");
@@ -398,43 +337,6 @@ export async function handleTelegramAction(
   if (action === "stickerCacheStats") {
     const stats = getCacheStats();
     return jsonResult({ ok: true, ...stats });
-  }
-
-  if (action === "sendPoll") {
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "question") ?? readStringParam(params, "pollQuestion");
-    if (!question) {
-      throw new Error("sendPoll requires 'question'");
-    }
-    const options = (params.options ?? params.pollOption) as string[] | undefined;
-    if (!options || options.length < 2) {
-      throw new Error("sendPoll requires at least 2 options");
-    }
-    const maxSelections =
-      typeof params.maxSelections === "number" ? params.maxSelections : undefined;
-    const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
-    const silent = typeof params.silent === "boolean" ? params.silent : undefined;
-    const replyToMessageId = readNumberParam(params, "replyTo");
-    const messageThreadId = readNumberParam(params, "threadId");
-    const pollAccountId = readStringParam(params, "accountId");
-
-    const res = await sendPollTelegram(
-      to,
-      { question, options, maxSelections },
-      {
-        accountId: pollAccountId?.trim() || undefined,
-        replyToMessageId,
-        messageThreadId,
-        isAnonymous,
-        silent,
-      },
-    );
-    return jsonResult({
-      ok: true,
-      messageId: res.messageId,
-      chatId: res.chatId,
-      pollId: res.pollId,
-    });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);

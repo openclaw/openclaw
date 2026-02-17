@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   Button,
   ChannelSelectMenu,
@@ -24,7 +25,6 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
-import crypto from "node:crypto";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";

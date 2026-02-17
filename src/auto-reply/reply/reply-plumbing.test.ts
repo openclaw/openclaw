@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { TemplateContext } from "../templating.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
+import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads.js";
 import {

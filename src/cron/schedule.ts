@@ -1,6 +1,6 @@
 import { Cron } from "croner";
-import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import type { CronSchedule } from "./types.js";
 
 function resolveCronTimezone(tz?: string) {
   const trimmed = typeof tz === "string" ? tz.trim() : "";

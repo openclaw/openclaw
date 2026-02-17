@@ -1,7 +1,7 @@
-import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { runEmbeddingBatchGroups } from "./batch-runner.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
+import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { hashText } from "./internal.js";
 
 export type GeminiBatchRequest = {

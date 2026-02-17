@@ -1,5 +1,5 @@
-import type { Context, Tool } from "@mariozechner/pi-ai/dist/types.js";
 import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
+import type { Context, Tool } from "@mariozechner/pi-ai/dist/types.js";
 import { describe, expect, it } from "vitest";
 import {
   asRecord,
@@ -24,7 +24,9 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(converted);
+    const params = getFirstToolParameters(
+      converted as Parameters<typeof getFirstToolParameters>[0],
+    );
 
     expect(params.type).toBeUndefined();
     expect(params.properties).toBeDefined();
@@ -64,7 +66,9 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(converted);
+    const params = getFirstToolParameters(
+      converted as Parameters<typeof getFirstToolParameters>[0],
+    );
     const properties = asRecord(params.properties);
     const mode = asRecord(properties.mode);
     const options = asRecord(properties.options);
@@ -105,7 +109,9 @@ describe("google-shared convertTools", () => {
     ] as unknown as Tool[];
 
     const converted = convertTools(tools);
-    const params = getFirstToolParameters(converted);
+    const params = getFirstToolParameters(
+      converted as Parameters<typeof getFirstToolParameters>[0],
+    );
     const config = asRecord(asRecord(params.properties).config);
     const configProps = asRecord(config.properties);
     const retries = asRecord(configProps.retries);

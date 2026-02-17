@@ -1,7 +1,7 @@
-import type { GatewayService } from "../../daemon/service.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
+import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isWSL } from "../../infra/wsl.js";
@@ -236,6 +236,7 @@ export async function runServiceRestart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
+  checkTokenDrift?: boolean;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
@@ -259,31 +260,33 @@ export async function runServiceRestart(params: {
     return false;
   }
 
-  // Check for token drift before restart (service token vs config token)
   const warnings: string[] = [];
-  try {
-    const command = await params.service.readCommand(process.env);
-    const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
-    const cfg = loadConfig();
-    const configToken =
-      cfg.gateway?.auth?.token ||
-      process.env.OPENCLAW_GATEWAY_TOKEN ||
-      process.env.CLAWDBOT_GATEWAY_TOKEN;
-    const driftIssue = checkTokenDrift({ serviceToken, configToken });
-    if (driftIssue) {
-      const warning = driftIssue.detail
-        ? `${driftIssue.message} ${driftIssue.detail}`
-        : driftIssue.message;
-      warnings.push(warning);
-      if (!json) {
-        defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
-        if (driftIssue.detail) {
-          defaultRuntime.log(`   ${driftIssue.detail}\n`);
+  if (params.checkTokenDrift) {
+    // Check for token drift before restart (service token vs config token)
+    try {
+      const command = await params.service.readCommand(process.env);
+      const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
+      const cfg = loadConfig();
+      const configToken =
+        cfg.gateway?.auth?.token ||
+        process.env.OPENCLAW_GATEWAY_TOKEN ||
+        process.env.CLAWDBOT_GATEWAY_TOKEN;
+      const driftIssue = checkTokenDrift({ serviceToken, configToken });
+      if (driftIssue) {
+        const warning = driftIssue.detail
+          ? `${driftIssue.message} ${driftIssue.detail}`
+          : driftIssue.message;
+        warnings.push(warning);
+        if (!json) {
+          defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
+          if (driftIssue.detail) {
+            defaultRuntime.log(`   ${driftIssue.detail}\n`);
+          }
         }
       }
+    } catch {
+      // Non-fatal: token drift check is best-effort
     }
-  } catch {
-    // Non-fatal: token drift check is best-effort
   }
 
   try {
