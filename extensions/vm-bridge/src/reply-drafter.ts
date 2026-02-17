@@ -100,18 +100,36 @@ export async function draftReply(
       return null;
     }
 
-    const draftResult = await bridge.createReplyDraft(contract.message_id, replyContent, account);
-    const draftData = draftResult.result as Record<string, unknown> | undefined;
-    const draftId = draftData?.draft_id as string | undefined;
-    if (draftId) {
+    // Clean up stale reply draft from previous attempt (non-fatal)
+    if (contract.reply_draft_id) {
       try {
-        await bridge.addAttachmentToDraft(draftId, screenshotPath, account);
+        await bridge.mcpCall("messages_delete_draft", { draft_id: contract.reply_draft_id, account });
       } catch (err) {
-        logger?.error(`[reply-drafter] Failed to attach screenshot for contract #${contract.id}: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
+        logger?.warn(`[reply-drafter] Failed to clean up old draft ${contract.reply_draft_id}: ${err instanceof Error ? err.message : String(err)}`);
       }
-      return { draftId, replyContent };
     }
+
+    // Create reply draft with retry (1 initial + 1 retry)
+    let draftId: string | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const draftResult = await bridge.createReplyDraft(contract.message_id, replyContent, account);
+      const draftData = draftResult.result as Record<string, unknown> | undefined;
+      draftId = draftData?.draft_id as string | undefined;
+      if (draftId) break;
+    }
+
+    if (!draftId) {
+      logger?.error(`[reply-drafter] Failed to create reply draft for contract #${contract.id} after 2 attempts`);
+      return null;
+    }
+
+    try {
+      await bridge.addAttachmentToDraft(draftId, screenshotPath, account);
+    } catch (err) {
+      logger?.error(`[reply-drafter] Failed to attach screenshot for contract #${contract.id}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+    return { draftId, replyContent };
   }
 
   // For Zoom, we'll draft as a direct message (no draft concept)

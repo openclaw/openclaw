@@ -1643,3 +1643,170 @@ describe("DB schema context in execution prompt", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Block 12: parseQaPassed — robust LLM output handling
+// ---------------------------------------------------------------------------
+
+describe("parseQaPassed: robust LLM output handling", () => {
+  it("handles extra whitespace and newlines between checks", () => {
+    const output = [
+      "CHECK  user_added:  PASS  - found",
+      "",
+      "",
+      "CHECK  correct_scope:  PASS",
+      "CHECK  existing_unchanged:  PASS",
+    ].join("\n");
+
+    expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(true);
+  });
+
+  it("handles markdown bold formatting around CHECK", () => {
+    const output = [
+      "**CHECK user_added: PASS** - found",
+      "**CHECK correct_scope: PASS**",
+      "**CHECK existing_unchanged: PASS**",
+    ].join("\n");
+
+    expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(true);
+  });
+
+  it("handles bullet-point prefixed CHECK lines", () => {
+    const output = [
+      "- CHECK user_added: PASS - found",
+      "- CHECK correct_scope: PASS",
+      "- CHECK existing_unchanged: PASS",
+    ].join("\n");
+
+    expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(true);
+  });
+
+  it("handles multi-line evidence after PASS/FAIL without breaking subsequent checks", () => {
+    const output = [
+      "CHECK user_added: PASS",
+      "  Evidence: found jshearer in 14 rows across 14 cities",
+      "  Count: 14",
+      "CHECK correct_scope: PASS",
+      "  All locations are Service dept",
+      "CHECK existing_unchanged: PASS",
+      "  cabarca unchanged at 50 rows",
+    ].join("\n");
+
+    expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(true);
+  });
+
+  it("rejects prose that mentions check IDs without structured CHECK format", () => {
+    const output =
+      "I verified user_added and it passed. correct_scope looks good. existing_unchanged confirmed.";
+
+    expect(parseQaPassed(output, STRUCTURED_QA_DOC)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Block 13: Screenshot during QA (not post-QA)
+// ---------------------------------------------------------------------------
+
+describe("screenshot during QA (not post-QA)", () => {
+  it("buildQaPrompt includes screenshot instruction", () => {
+    const contract = makeContract({ qa_doc: STRUCTURED_QA_DOC });
+    const prompt = buildQaPrompt(contract);
+
+    // The QA prompt should instruct the agent to take a screenshot during
+    // verification so evidence is captured at the moment of checking, not
+    // as a separate post-QA CDP call.
+    const lower = prompt.toLowerCase();
+    const hasScreenshotInstruction =
+      lower.includes("screenshot") || (lower.includes("capture") && lower.includes("page"));
+    expect(hasScreenshotInstruction).toBe(true);
+  });
+
+  it("QA output with screenshot path is used instead of bridge.screenshot()", async () => {
+    const contract = makeContract({
+      id: 100,
+      qa_doc: STRUCTURED_QA_DOC,
+    });
+    const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+    const qaOutputWithScreenshot = [
+      "CHECK user_added: PASS - jshearer@vvgtruck.com listed as Active",
+      "CHECK correct_scope: PASS - Only VTC USA Service locations checked",
+      "CHECK existing_unchanged: PASS - cabarca@vvgtruck.com still listed",
+      "OVERALL: PASS (3/3 passed)",
+      "SCREENSHOT: /tmp/cos-qa-100.png",
+    ].join("\n");
+
+    const taskMock = vi.fn()
+      // First call: execution (SSH)
+      .mockResolvedValueOnce({ success: true, result: "Execution complete." })
+      // Second call: QA (Chrome) — includes SCREENSHOT line
+      .mockResolvedValueOnce({ success: true, result: qaOutputWithScreenshot });
+
+    const bridge = createMockBridge({ task: taskMock });
+    const db = createMockDb({
+      pollContracts: vi.fn(async () => [contract]),
+      claimContract: vi.fn(async () => claimed),
+      getContract: vi.fn(async () => claimed),
+      updateContract: vi.fn(async () => claimed),
+    });
+    const logger = makeLogger();
+
+    const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+    await loop.start({ logger });
+
+    // bridge.screenshot() should NOT be called — QA agent already captured it
+    expect(bridge.screenshot).not.toHaveBeenCalled();
+
+    // qa_results.screenshot_path should come from the QA output, not CDP
+    const updateCalls = (db.updateContract as ReturnType<typeof vi.fn>).mock.calls;
+    const lastUpdate = updateCalls[updateCalls.length - 1];
+    expect(lastUpdate[1].state).toBe("DONE");
+    expect(lastUpdate[1].qa_results.screenshot_path).toBe("/tmp/cos-qa-100.png");
+
+    await loop.stop({ logger });
+  });
+
+  it("falls back to bridge.screenshot when QA output has no screenshot path", async () => {
+    const contract = makeContract({
+      id: 101,
+      qa_doc: STRUCTURED_QA_DOC,
+    });
+    const claimed = makeContract({ ...contract, state: "IMPLEMENTING", claimed_by: HOSTNAME });
+
+    const qaOutputNoScreenshot = [
+      "CHECK user_added: PASS - jshearer@vvgtruck.com listed as Active",
+      "CHECK correct_scope: PASS - Only VTC USA Service locations checked",
+      "CHECK existing_unchanged: PASS - cabarca@vvgtruck.com still listed",
+      "OVERALL: PASS (3/3 passed)",
+    ].join("\n");
+
+    const taskMock = vi.fn()
+      // First call: execution (SSH)
+      .mockResolvedValueOnce({ success: true, result: "Execution complete." })
+      // Second call: QA (Chrome) — no SCREENSHOT line
+      .mockResolvedValueOnce({ success: true, result: qaOutputNoScreenshot });
+
+    const bridge = createMockBridge({ task: taskMock });
+    const db = createMockDb({
+      pollContracts: vi.fn(async () => [contract]),
+      claimContract: vi.fn(async () => claimed),
+      getContract: vi.fn(async () => claimed),
+      updateContract: vi.fn(async () => claimed),
+    });
+    const logger = makeLogger();
+
+    const loop = createVmAgentLoop({ hostname: HOSTNAME, pollIntervalMs: POLL_MS, db, bridge });
+    await loop.start({ logger });
+
+    // bridge.screenshot() SHOULD be called as fallback (no SCREENSHOT in QA output)
+    expect(bridge.screenshot).toHaveBeenCalled();
+
+    // qa_results.screenshot_path comes from bridge.screenshot result
+    const updateCalls = (db.updateContract as ReturnType<typeof vi.fn>).mock.calls;
+    const lastUpdate = updateCalls[updateCalls.length - 1];
+    expect(lastUpdate[1].state).toBe("DONE");
+    expect(lastUpdate[1].qa_results.screenshot_path).toBe("/tmp/cos-qa-101.png");
+
+    await loop.stop({ logger });
+  });
+});

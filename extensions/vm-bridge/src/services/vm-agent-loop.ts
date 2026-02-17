@@ -192,22 +192,26 @@ export function createVmAgentLoop(options: VmAgentLoopOptions) {
       if (passed) {
         logEntries.push(`Attempt ${attemptCount}: QA PASSED — ${truncate(qaOutput, 200)}`);
 
-        // Take screenshot via CDP — retry once on failure
-        let screenshotPath: string | null = null;
-        const ssPath = `/tmp/cos-qa-${full.id}.png`;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const ssResult = await bridge.screenshot(ssPath, profile);
-            if (ssResult.success) {
-              screenshotPath = ssPath;
-              break;
-            }
-          } catch {
-            // Will retry or fall through
-          }
-        }
+        // Try to extract screenshot path from QA output (captured during QA)
+        let screenshotPath: string | null = parseScreenshotPath(qaOutput);
+
+        // Fallback: take screenshot via CDP if QA agent didn't capture one
         if (!screenshotPath) {
-          logger.warn(`[vm-agent-loop] screenshot failed for contract #${full.id} after 2 attempts`);
+          const ssPath = `/tmp/cos-qa-${full.id}.png`;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const ssResult = await bridge.screenshot(ssPath, profile);
+              if (ssResult.success) {
+                screenshotPath = ssPath;
+                break;
+              }
+            } catch {
+              // Will retry or fall through
+            }
+          }
+          if (!screenshotPath) {
+            logger.warn(`[vm-agent-loop] screenshot failed for contract #${full.id} after 2 attempts`);
+          }
         }
 
         await db.updateContract(full.id, {
@@ -454,6 +458,9 @@ export function buildQaPrompt(contract: Contract): string {
       parts.push(`CHECK ${check.id}: PASS|FAIL - <evidence>`);
     });
     parts.push(`OVERALL: PASS|FAIL (n/${checklist.length} passed)`);
+    parts.push("");
+    parts.push("Finally, take a screenshot of the current page showing the verification results.");
+    parts.push("Report the saved screenshot path as: SCREENSHOT: /path/to/file.png");
 
     return parts.join("\n");
   }
@@ -511,6 +518,11 @@ export function parseQaPassed(qaOutput: string, qaDoc?: string | null): boolean 
     return true;
   }
   return false;
+}
+
+export function parseScreenshotPath(qaOutput: string): string | null {
+  const match = qaOutput.match(/SCREENSHOT:\s*(\S+)/i);
+  return match ? match[1] : null;
 }
 
 function truncate(s: string, max: number): string {

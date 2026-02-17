@@ -253,3 +253,152 @@ describe("reply drafter: account-aware replies", () => {
     expect(attachCall[2]).toBe("xcellerate");
   });
 });
+
+describe("reply drafter: createReplyDraft retry", () => {
+  it("retries createReplyDraft once on failure, succeeds on second attempt", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    // First call: no draft_id (failure), second call: success
+    (bridge.createReplyDraft as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ success: true, result: { draft_id: null } })
+      .mockResolvedValueOnce({ success: true, result: { draft_id: "draft-retry-ok" } });
+
+    const result = await draftReply(contract, db, bridge);
+
+    expect(result).not.toBeNull();
+    expect(result!.draftId).toBe("draft-retry-ok");
+    expect(bridge.createReplyDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null after all createReplyDraft retries exhausted", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    // Both calls return no draft_id
+    (bridge.createReplyDraft as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ success: true, result: { draft_id: null } });
+
+    const result = await draftReply(contract, db, bridge);
+
+    expect(result).toBeNull();
+    expect(bridge.createReplyDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs error on final createReplyDraft failure", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const contract = makeContract({
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    // Both calls return no draft_id
+    (bridge.createReplyDraft as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ success: true, result: { draft_id: null } });
+
+    const result = await draftReply(contract, db, bridge, logger);
+
+    expect(result).toBeNull();
+    expect(bridge.createReplyDraft).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/create|draft|retry/i),
+    );
+  });
+});
+
+describe("reply drafter: old draft cleanup", () => {
+  it("deletes existing reply_draft_id before creating new draft", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      reply_draft_id: "old-draft-123",
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    const result = await draftReply(contract, db, bridge);
+
+    // Should have called mcpCall to discard the old draft before creating a new one
+    const mcpCalls = (bridge.mcpCall as ReturnType<typeof vi.fn>).mock.calls;
+    const cleanupCall = mcpCalls.find(
+      (call: unknown[]) =>
+        typeof call[1] === "object" &&
+        call[1] !== null &&
+        (call[1] as Record<string, unknown>).draft_id === "old-draft-123",
+    );
+    expect(cleanupCall).toBeDefined();
+
+    // createReplyDraft must still be called (new draft created after cleanup)
+    expect(bridge.createReplyDraft).toHaveBeenCalled();
+
+    expect(result).not.toBeNull();
+  });
+
+  it("skips cleanup when no existing reply_draft_id", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const contract = makeContract({
+      reply_draft_id: null,
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    const result = await draftReply(contract, db, bridge);
+
+    // mcpCall should NOT have been called with any draft_id for cleanup
+    const mcpCalls = (bridge.mcpCall as ReturnType<typeof vi.fn>).mock.calls;
+    const cleanupCall = mcpCalls.find(
+      (call: unknown[]) =>
+        typeof call[1] === "object" &&
+        call[1] !== null &&
+        "draft_id" in (call[1] as Record<string, unknown>),
+    );
+    expect(cleanupCall).toBeUndefined();
+
+    expect(result).not.toBeNull();
+  });
+
+  it("cleanup failure is non-fatal — still creates new draft", async () => {
+    const bridge = createMockBridge();
+    const db = createMockDb();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const contract = makeContract({
+      reply_draft_id: "old-draft-456",
+      message_platform: "outlook",
+      qa_results: { passed: true, screenshot_path: "/tmp/cos-qa-42.png" },
+    });
+
+    // Make mcpCall throw only for the cleanup call, succeed otherwise
+    (bridge.mcpCall as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_toolName: string, args: Record<string, unknown>) => {
+        if (
+          args &&
+          (args as Record<string, unknown>).draft_id === "old-draft-456"
+        ) {
+          throw new Error("Graph API: draft not found");
+        }
+        return { success: true };
+      },
+    );
+
+    const result = await draftReply(contract, db, bridge, logger);
+
+    // New draft should still be created despite cleanup failure
+    expect(result).not.toBeNull();
+
+    // Logger should warn about the failed cleanup
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("old-draft-456"),
+    );
+  });
+});
