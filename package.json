@@ -118,7 +118,6 @@
     "test:macmini": "OPENCLAW_TEST_VM_FORKS=0 OPENCLAW_TEST_PROFILE=serial node scripts/test-parallel.mjs",
     "test:ui": "pnpm --dir ui test",
     "test:watch": "vitest",
-    "tsgo:test": "tsgo -p tsconfig.test.json",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
