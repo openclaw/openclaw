@@ -122,6 +122,7 @@ function findContextFile(memoryDir, threadName) {
 
   // filename contains name tokens
   const byFilename = slug ? files.find((f) => path.basename(f).toLowerCase().includes(slug)) : null;
+  if (byFilename) return byFilename;
 
   // content contains thread name
   for (const f of files) {
