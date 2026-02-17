@@ -312,20 +312,25 @@ async function restoreState() {
         await ensureRelayConnection()
         for (const [tabId, tab] of tabs.entries()) {
           if (tab.state === 'connected' && tab.sessionId && tab.targetId) {
-            const info = /** @type {any} */ (
-              await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo')
-            )
-            sendToRelay({
-              method: 'forwardCDPEvent',
-              params: {
-                method: 'Target.attachedToTarget',
+            try {
+              const info = /** @type {any} */ (
+                await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo')
+              )
+              sendToRelay({
+                method: 'forwardCDPEvent',
                 params: {
-                  sessionId: tab.sessionId,
-                  targetInfo: { ...(info?.targetInfo || {}), attached: true },
-                  waitingForDebugger: false,
+                  method: 'Target.attachedToTarget',
+                  params: {
+                    sessionId: tab.sessionId,
+                    targetInfo: { ...(info?.targetInfo || {}), attached: true },
+                    waitingForDebugger: false,
+                  },
                 },
-              },
-            })
+              })
+            } catch (err) {
+              console.warn(`[OpenClaw Relay] restoreState: failed to re-announce tab ${tabId}:`, err)
+              cleanupTab(tabId)
+            }
           }
         }
       } catch {
