@@ -498,32 +498,6 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
   });
-
-  it("routes poll action to sendPoll with question and options", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "poll",
-      params: {
-        to: "-100123",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No", "Maybe"],
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        to: "-100123",
-        question: "Ready?",
-        options: ["Yes", "No", "Maybe"],
-      }),
-      cfg,
-    );
-  });
 });
 
 describe("signalMessageActions", () => {

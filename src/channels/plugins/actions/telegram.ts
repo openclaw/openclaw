@@ -56,9 +56,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (gate("poll")) {
-      actions.add("poll");
-    }
     if (gate("reactions")) {
       actions.add("react");
     }
