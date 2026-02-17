@@ -275,7 +275,7 @@ describe("channel-health-monitor", () => {
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(500);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    releaseStart?.();
+    (releaseStart as (() => void) | null)?.();
     await Promise.resolve();
     monitor.stop();
   });
