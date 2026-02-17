@@ -229,7 +229,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 }
 
 function allowsWrites(access: SandboxWorkspaceAccess): boolean {
-  return access === "rw";
+  // Allow writes for "rw" and "none" - only block "ro"
+  // This matches the logic in pi-tools.ts: allowWorkspaceWrites = workspaceAccess !== "ro"
+  return access !== "ro";
 }
 
 function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
