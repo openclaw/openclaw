@@ -15,6 +15,7 @@ import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
 import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
+import { getWsMetricsCollector } from "./ws-metrics.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -99,7 +100,10 @@ export function attachGatewayWsConnectionHandler(params: {
     buildRequestContext,
   } = params;
 
+  const metrics = getWsMetricsCollector();
+
   wss.on("connection", (socket, upgradeReq) => {
+    metrics.onConnection();
     let client: GatewayWsClient | null = null;
     let closed = false;
     const openedAt = Date.now();
@@ -152,7 +156,9 @@ export function attachGatewayWsConnectionHandler(params: {
 
     const send = (obj: unknown) => {
       try {
-        socket.send(JSON.stringify(obj));
+        const json = JSON.stringify(obj);
+        socket.send(json);
+        metrics.onMessageSent(connId, Buffer.byteLength(json, "utf-8"));
       } catch {
         /* ignore */
       }
@@ -198,6 +204,14 @@ export function attachGatewayWsConnectionHandler(params: {
       const logHost = sanitizeLogValue(requestHost);
       const logUserAgent = sanitizeLogValue(requestUserAgent);
       const logReason = sanitizeLogValue(reason?.toString());
+
+      // Record metrics for disconnect
+      if (client) {
+        metrics.onDisconnect(connId);
+      } else if (handshakeState === "failed") {
+        metrics.onHandshakeFailed();
+      }
+
       const closeContext = {
         cause: closeCause,
         handshake: handshakeState,
@@ -300,6 +314,7 @@ export function attachGatewayWsConnectionHandler(params: {
       setClient: (next) => {
         client = next;
         clients.add(next);
+        metrics.onHandshakeSuccess(next);
       },
       setHandshakeState: (next) => {
         handshakeState = next;
@@ -309,6 +324,7 @@ export function attachGatewayWsConnectionHandler(params: {
       logGateway,
       logHealth,
       logWsControl,
+      metrics,
     });
   });
 }

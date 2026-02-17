@@ -11,6 +11,8 @@ import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { WsClientStats, WsConnectionMetrics } from "../server/ws-metrics.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -83,6 +85,9 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  clients: Set<GatewayWsClient>;
+  getWsMetrics: (clients: Set<GatewayWsClient>) => WsConnectionMetrics;
+  getWsClientStats: () => WsClientStats[];
 };
 
 export type GatewayRequestOptions = {

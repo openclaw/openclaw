@@ -84,6 +84,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { getWsMetricsCollector } from "./server/ws-metrics.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -596,6 +597,9 @@ export async function startGatewayServer(
       markChannelLoggedOut,
       wizardRunner,
       broadcastVoiceWakeChanged,
+      clients,
+      getWsMetrics: (clientSet) => getWsMetricsCollector().getMetrics(clientSet),
+      getWsClientStats: () => getWsMetricsCollector().getClientStats(),
     },
   });
   logGatewayStartup({

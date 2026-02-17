@@ -58,6 +58,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
+import type { WsMetricsCollector } from "../ws-metrics.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
 
@@ -96,6 +97,7 @@ export function attachGatewayWsMessageHandler(params: {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
+  metrics: WsMetricsCollector;
 }) {
   const {
     socket,
@@ -127,6 +129,7 @@ export function attachGatewayWsMessageHandler(params: {
     logGateway,
     logHealth,
     logWsControl,
+    metrics,
   } = params;
 
   const configSnapshot = loadConfig();
@@ -174,6 +177,10 @@ export function attachGatewayWsMessageHandler(params: {
       return;
     }
     const text = rawDataToString(data);
+
+    // Record message received metrics
+    metrics.onMessageReceived(connId, Buffer.byteLength(text, "utf-8"));
+
     try {
       const parsed = JSON.parse(text);
       const frameType =
