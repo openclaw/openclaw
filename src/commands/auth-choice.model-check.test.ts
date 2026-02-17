@@ -59,7 +59,7 @@ describe("warnIfModelConfigLooksOff for CLI providers", () => {
   });
 
   it("skips API auth/catalog warnings for CLI providers", async () => {
-    const note = vi.fn(async () => {});
+    const note = vi.fn(async (_message: string, _title?: string) => {});
 
     await warnIfModelConfigLooksOff(
       {
@@ -73,7 +73,7 @@ describe("warnIfModelConfigLooksOff for CLI providers", () => {
   });
 
   it("warns when CLI backend command is not resolvable", async () => {
-    const note = vi.fn(async () => {});
+    const note = vi.fn(async (_message: string, _title?: string) => {});
     mocks.spawnSync.mockReturnValue({ status: 1, stdout: "" });
 
     await warnIfModelConfigLooksOff(
