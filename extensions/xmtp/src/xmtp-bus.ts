@@ -10,6 +10,7 @@ export interface XmtpBusOptions {
   dbEncryptionKey: string;
   env: "local" | "dev" | "production";
   dbPath?: string;
+  shouldAutoConsent?: (senderAddress: string) => boolean;
   onMessage: (params: {
     senderAddress: string;
     senderInboxId: string;
@@ -102,6 +103,7 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
     dbEncryptionKey,
     env,
     dbPath: configDbPath,
+    shouldAutoConsent,
     onMessage,
     onError,
     onConnect,
@@ -126,7 +128,14 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
   agent.on("conversation", async (ctx) => {
     try {
       if (ctx.isDM(ctx.conversation)) {
-        ctx.conversation.updateConsentState("allowed");
+        if (!shouldAutoConsent) {
+          ctx.conversation.updateConsentState("allowed");
+        } else {
+          const senderAddress = await (ctx as { getSenderAddress?: () => Promise<string | null> }).getSenderAddress?.();
+          if (senderAddress && shouldAutoConsent(senderAddress.toLowerCase())) {
+            ctx.conversation.updateConsentState("allowed");
+          }
+        }
       }
     } catch (err) {
       onError?.(err as Error, "auto-consent conversation");

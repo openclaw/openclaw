@@ -243,6 +243,16 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
         dbEncryptionKey: account.dbEncryptionKey,
         env: account.env,
         dbPath: account.config.dbPath,
+        shouldAutoConsent: (senderAddress: string) => {
+          const cfg = runtime.config.loadConfig() as OpenClawConfig;
+          const freshAccount = resolveXmtpAccount({ cfg, accountId: account.accountId });
+          const policy = freshAccount.config.dmPolicy ?? "pairing";
+          if (policy === "disabled") return false;
+          if (policy === "open" || policy === "pairing") return true;
+          // allowlist: only consent if sender is in the effective allowlist
+          const configuredAllow = normalizeAllowEntries(freshAccount.config.allowFrom ?? []);
+          return configuredAllow.includes(senderAddress) || configuredAllow.includes("*");
+        },
         onMessage: async ({ senderAddress, senderInboxId, conversationId, text, messageId }) => {
           const cfg = runtime.config.loadConfig() as OpenClawConfig;
 
