@@ -45,8 +45,6 @@ export type TaskLedger = {
   preamble: string[];
   /** Lines between active and completed sections */
   sectionSeparator: string[];
-  /** Lines after the completed section */
-  postamble: string[];
 };
 
 export type StaleTaskResult = {
@@ -71,9 +69,8 @@ export function parseTaskLedger(content: string): TaskLedger {
   const completedTasks: ParsedTask[] = [];
   const preamble: string[] = [];
   const sectionSeparator: string[] = [];
-  const postamble: string[] = [];
 
-  let currentSection: "preamble" | "active" | "completed" | "postamble" = "preamble";
+  let currentSection: "preamble" | "active" | "completed" = "preamble";
   let currentTask: ParsedTask | null = null;
 
   for (const line of lines) {
@@ -170,9 +167,6 @@ export function parseTaskLedger(content: string): TaskLedger {
       case "completed":
         sectionSeparator.push(line);
         break;
-      case "postamble":
-        postamble.push(line);
-        break;
     }
   }
 
@@ -181,7 +175,7 @@ export function parseTaskLedger(content: string): TaskLedger {
     pushTask(currentTask, activeTasks, completedTasks);
   }
 
-  return { activeTasks, completedTasks, preamble, sectionSeparator, postamble };
+  return { activeTasks, completedTasks, preamble, sectionSeparator };
 }
 
 function pushTask(task: ParsedTask, active: ParsedTask[], completed: ParsedTask[]) {
@@ -306,7 +300,7 @@ export function serializeTask(task: ParsedTask): string[] {
 
 /**
  * Serialize the full task ledger back to markdown.
- * Preserves preamble, section separators, and postamble from the original parse.
+ * Preserves preamble and section separators from the original parse.
  */
 export function serializeTaskLedger(ledger: TaskLedger): string {
   const lines: string[] = [];
@@ -338,11 +332,6 @@ export function serializeTaskLedger(ledger: TaskLedger): string {
   for (const task of ledger.completedTasks) {
     lines.push(...serializeTask(task));
     lines.push("");
-  }
-
-  // Preserve postamble
-  if (ledger.postamble.length > 0) {
-    lines.push(...ledger.postamble);
   }
 
   return lines.join("\n").trimEnd() + "\n";

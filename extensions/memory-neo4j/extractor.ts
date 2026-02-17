@@ -564,6 +564,21 @@ export async function runBackgroundExtraction(
         `${result.entities.length} entities, ${result.relationships.length} rels, ${result.tags.length} tags` +
         (result.category ? `, category=${result.category}` : ""),
     );
+
+    // Post-extraction quality gate: auto-captured user messages classified as
+    // "decision" or "other" are almost always contextual instructions (e.g.,
+    // "Can you fix the dashboard"), not reusable knowledge. Invalidate them.
+    if (result.category === "decision" || result.category === "other") {
+      const source = await db.getMemoryField(memoryId, "source");
+      if (source === "auto-capture") {
+        await db.invalidateMemory(memoryId);
+        logger.info(
+          `memory-neo4j: post-extraction gate — invalidated auto-capture "${text.slice(0, 60)}..." (category=${result.category})`,
+        );
+        return { success: true, memoryId };
+      }
+    }
+
     return { success: true, memoryId };
   } catch (err) {
     // Unexpected error during graph operations — treat as transient if retry budget remains

@@ -1713,6 +1713,27 @@ export class Neo4jMemoryClient {
     }
   }
 
+  /**
+   * Get a single field value from a Memory node.
+   * Returns undefined if the memory or field doesn't exist.
+   */
+  async getMemoryField(id: string, field: string): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(`MATCH (m:Memory {id: $id}) RETURN m[$field] AS value`, {
+        id,
+        field,
+      });
+      const record = result.records[0];
+      if (!record) return undefined;
+      const value = record.get("value");
+      return value != null ? String(value) : undefined;
+    } finally {
+      await session.close();
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Reindex: re-embed all Memory and Entity nodes
   // --------------------------------------------------------------------------

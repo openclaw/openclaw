@@ -340,7 +340,6 @@ describe("serializeTaskLedger", () => {
       ],
       preamble: [],
       sectionSeparator: [],
-      postamble: [],
     };
 
     const serialized = serializeTaskLedger(ledger);

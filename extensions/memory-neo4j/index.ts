@@ -982,7 +982,7 @@ async function runAutoCapture(
 
     for (const text of retained) {
       allTexts.push(text);
-      allMeta.push({ text, source: "auto-capture", threshold: 0.65, discount: 1.0 });
+      allMeta.push({ text, source: "auto-capture", threshold: 0.75, discount: 1.0 });
     }
     for (const text of retainedAssistant) {
       allTexts.push(text);

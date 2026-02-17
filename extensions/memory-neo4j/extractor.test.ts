@@ -140,8 +140,9 @@ describe("passesAttentionGate", () => {
 
   it("should accept substantive messages with enough words", () => {
     expect(passesAttentionGate("I noticed the LinkedIn posts are not auto-liking")).toBe(true);
+    // "Please update..." is now correctly blocked by the imperative instruction filter
     expect(passesAttentionGate("Please update the deployment script for the new server")).toBe(
-      true,
+      false,
     );
     expect(passesAttentionGate("The database migration failed on the staging environment")).toBe(
       true,
