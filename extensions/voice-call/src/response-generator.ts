@@ -60,7 +60,7 @@ export async function generateVoiceResponse(
   // Build voice-specific session key based on phone number
   const normalizedPhone = from.replace(/\D/g, "");
   const sessionKey = `voice:${normalizedPhone}`;
-  const agentId = "main";
+  const agentId = voiceConfig.responseAgent || "main";
 
   // Resolve paths
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
@@ -90,7 +90,13 @@ export async function generateVoiceResponse(
   });
 
   // Resolve model from config
-  const modelRef = voiceConfig.responseModel || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
+  // Use configured responseModel, then agent primary model, then built-in default
+  const agents = coreConfig?.agents as Record<string, unknown> | undefined;
+  const agentDefaults = (agents?.defaults ?? {}) as Record<string, unknown>;
+  const agentModel = (agentDefaults?.model ?? {}) as Record<string, unknown>;
+  const agentPrimary = agentModel?.primary as string | undefined;
+  const modelRef =
+    voiceConfig.responseModel || agentPrimary || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
   const slashIndex = modelRef.indexOf("/");
   const provider = slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
   const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
@@ -106,6 +112,14 @@ export async function generateVoiceResponse(
   const basePrompt =
     voiceConfig.responseSystemPrompt ??
     `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.
+
+IMPORTANT: Your responses will be read aloud by a text-to-speech engine. Write everything as it should be spoken:
+- Numbers: "13 degrees Celsius" not "13°C", "5 percent" not "5%"
+- Times: "2 thirty PM" not "14:30" or "2:30 PM"
+- Dates: "February 5th" not "2026-02-05"
+- URLs/paths: skip or describe them, don't read raw URLs
+- Abbreviations: spell out or use spoken form
+- No markdown, bullet points, or special formatting
 
 When the conversation is naturally over or the caller says goodbye, say a brief farewell and end your response with the exact tag [END_CALL]. This signals the system to hang up the phone after your farewell is spoken.`;
 
