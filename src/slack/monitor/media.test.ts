@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import type { SavedMedia } from "../../media/store.js";
 import * as mediaStore from "../../media/store.js";
 import {
   fetchWithSlackAuth,
@@ -11,6 +12,12 @@ import {
 // Store original fetch
 const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn>;
+const createSavedMedia = (filePath: string, contentType: string): SavedMedia => ({
+  id: "saved-media-id",
+  path: filePath,
+  size: 128,
+  contentType,
+});
 
 describe("fetchWithSlackAuth", () => {
   beforeEach(() => {
@@ -180,10 +187,9 @@ describe("resolveSlackMedia", () => {
   });
 
   it("prefers url_private_download over url_private", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/test.jpg",
-      contentType: "image/jpeg",
-    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
 
     const mockResponse = new Response(Buffer.from("image data"), {
       status: 200,
@@ -247,10 +253,9 @@ describe("resolveSlackMedia", () => {
     // saveMediaBuffer re-detects MIME from buffer bytes, so it may return
     // video/mp4 for MP4 containers.  Verify resolveSlackMedia preserves
     // the overridden audio/* type in its return value despite this.
-    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/voice.mp4",
-      contentType: "video/mp4",
-    });
+    const saveMediaBufferMock = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValue(createSavedMedia("/tmp/voice.mp4", "video/mp4"));
 
     const mockResponse = new Response(Buffer.from("audio data"), {
       status: 200,
@@ -286,10 +291,9 @@ describe("resolveSlackMedia", () => {
   });
 
   it("preserves original MIME for non-voice Slack files", async () => {
-    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/video.mp4",
-      contentType: "video/mp4",
-    });
+    const saveMediaBufferMock = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValue(createSavedMedia("/tmp/video.mp4", "video/mp4"));
 
     const mockResponse = new Response(Buffer.from("video data"), {
       status: 200,
@@ -321,10 +325,9 @@ describe("resolveSlackMedia", () => {
   });
 
   it("falls through to next file when first file returns error", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/test.jpg",
-      contentType: "image/jpeg",
-    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
 
     // First file: 404
     const errorResponse = new Response("Not Found", { status: 404 });
@@ -351,15 +354,15 @@ describe("resolveSlackMedia", () => {
   });
 
   it("returns all successfully downloaded files as an array", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async (buffer) => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async (buffer, _contentType) => {
       const text = Buffer.from(buffer).toString("utf8");
       if (text.includes("image a")) {
-        return { path: "/tmp/a.jpg", contentType: "image/jpeg" };
+        return createSavedMedia("/tmp/a.jpg", "image/jpeg");
       }
       if (text.includes("image b")) {
-        return { path: "/tmp/b.png", contentType: "image/png" };
+        return createSavedMedia("/tmp/b.png", "image/png");
       }
-      return { path: "/tmp/unknown", contentType: "application/octet-stream" };
+      return createSavedMedia("/tmp/unknown", "application/octet-stream");
     });
 
     mockFetch.mockImplementation(async (input) => {
@@ -396,10 +399,9 @@ describe("resolveSlackMedia", () => {
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
-    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/x.jpg",
-      contentType: "image/jpeg",
-    });
+    const saveMediaBufferMock = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValue(createSavedMedia("/tmp/x.jpg", "image/jpeg"));
 
     mockFetch.mockImplementation(async () => {
       return new Response(Buffer.from("image data"), {
@@ -499,10 +501,9 @@ describe("resolveSlackAttachmentContent", () => {
   });
 
   it("downloads Slack-hosted images from forwarded shared attachments", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/forwarded.jpg",
-      contentType: "image/jpeg",
-    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/forwarded.jpg", "image/jpeg"),
+    );
 
     mockFetch.mockResolvedValueOnce(
       new Response(Buffer.from("forwarded image"), {
@@ -556,7 +557,7 @@ describe("resolveSlackThreadHistory", () => {
       });
     const client = {
       conversations: { replies },
-    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
 
     const result = await resolveSlackThreadHistory({
       channelId: "C1",
@@ -606,7 +607,7 @@ describe("resolveSlackThreadHistory", () => {
     });
     const client = {
       conversations: { replies },
-    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
 
     const result = await resolveSlackThreadHistory({
       channelId: "C1",
@@ -624,7 +625,7 @@ describe("resolveSlackThreadHistory", () => {
     const replies = vi.fn();
     const client = {
       conversations: { replies },
-    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
 
     const result = await resolveSlackThreadHistory({
       channelId: "C1",
@@ -641,7 +642,7 @@ describe("resolveSlackThreadHistory", () => {
     const replies = vi.fn().mockRejectedValueOnce(new Error("slack down"));
     const client = {
       conversations: { replies },
-    } as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
 
     const result = await resolveSlackThreadHistory({
       channelId: "C1",

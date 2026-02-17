@@ -187,35 +187,6 @@ export async function createVoiceCallRuntime(params: {
       twilioProvider.setMediaStreamHandler(mediaHandler);
       log.info("[voice-call] Media stream handler wired to provider");
     }
-
-    // Pre-cache inbound greeting TTS for instant playback on connect
-    if (config.inboundGreeting && ttsRuntime?.textToSpeechTelephony) {
-      try {
-        const greetingTts = createTelephonyTtsProvider({
-          coreConfig,
-          ttsOverride: config.tts,
-          runtime: ttsRuntime,
-        });
-        greetingTts
-          .synthesizeForTelephony(config.inboundGreeting)
-          .then((audio) => {
-            twilioProvider.setCachedGreetingAudio(audio);
-          })
-          .catch((err) => {
-            log.warn(
-              `[voice-call] Failed to pre-cache greeting: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
-          });
-      } catch (err) {
-        log.warn(
-          `[voice-call] Failed to init greeting TTS: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
-    }
   }
 
   manager.initialize(provider, webhookUrl);

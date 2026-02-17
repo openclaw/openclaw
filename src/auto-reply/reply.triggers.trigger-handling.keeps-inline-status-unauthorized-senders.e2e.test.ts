@@ -143,7 +143,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Send policy set to off");
 
-      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const storeRaw = await fs.readFile(cfg.session!.store, "utf-8");
       const store = JSON.parse(storeRaw) as Record<string, { sendPolicy?: string }>;
       expect(store[MAIN_SESSION_KEY]?.sendPolicy).toBe("deny");
     });
