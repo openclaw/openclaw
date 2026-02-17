@@ -6,7 +6,7 @@ export type AuthProfileConfig = {
    * - oauth: refreshable OAuth credentials (access+refresh+expires)
    * - token: static bearer-style token (optionally expiring; no refresh)
    */
-  mode: "api_key" | "oauth" | "token";
+  mode: "api_key" | "oauth" | "token" | "claude-sdk";
   email?: string;
 };
 

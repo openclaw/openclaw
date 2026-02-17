@@ -7,6 +7,7 @@ export type BuiltInAuthChoice =
   | "oauth"
   | "setup-token"
   | "claude-cli"
+  | "claude-sdk"
   | "token"
   | "chutes"
   | "openai-codex"

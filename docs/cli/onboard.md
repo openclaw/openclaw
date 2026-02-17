@@ -29,6 +29,12 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 For plaintext private-network `ws://` targets (trusted networks only), set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 
+Non-interactive Claude SDK (subscription via Claude CLI):
+
+```bash
+openclaw onboard --non-interactive --auth-choice claude-sdk
+```
+
 Non-interactive custom provider:
 
 ```bash

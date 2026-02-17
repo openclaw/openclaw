@@ -34,8 +34,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "anthropic",
     label: "Anthropic",
-    hint: "setup-token + API key",
-    choices: ["token", "apiKey"],
+    hint: "Claude SDK (subscription) + setup-token + API key",
+    choices: ["claude-sdk", "token", "apiKey"],
   },
   {
     value: "chutes",
@@ -219,6 +219,11 @@ function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
 }
 
 const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
+  {
+    value: "claude-sdk",
+    label: "Claude SDK (subscription)",
+    hint: "uses `claude login` — no API key needed",
+  },
   {
     value: "token",
     label: "Anthropic token (paste setup-token)",

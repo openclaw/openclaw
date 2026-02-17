@@ -1,5 +1,6 @@
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import { readClaudeCliCredentials } from "../agents/cli-credentials.js";
 import {
   normalizeSecretInputModeInput,
   ensureApiKeyFromOptionEnvOrPrompt,
@@ -16,6 +17,27 @@ const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
 export async function applyAuthChoiceAnthropic(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
+  if (params.authChoice === "claude-sdk") {
+    const creds = readClaudeCliCredentials();
+    if (!creds) {
+      await params.prompter.note(
+        ["Claude CLI is not logged in.", "Run `claude login` first, then re-run onboarding."].join(
+          "\n",
+        ),
+        "Claude SDK",
+      );
+      return null;
+    }
+    let nextConfig = params.config;
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "anthropic:sdk",
+      provider: "anthropic",
+      mode: "claude-sdk",
+    });
+    await params.prompter.note("Claude CLI login detected — SDK auth configured.", "Claude SDK");
+    return { config: nextConfig };
+  }
+
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
   if (
     params.authChoice === "setup-token" ||

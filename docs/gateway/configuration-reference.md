@@ -2784,11 +2784,12 @@ Notes:
 {
   auth: {
     profiles: {
+      "anthropic:sdk": { provider: "anthropic", mode: "claude-sdk" },
       "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
     },
     order: {
-      anthropic: ["anthropic:me@example.com", "anthropic:work"],
+      anthropic: ["anthropic:sdk", "anthropic:me@example.com", "anthropic:work"],
     },
   },
 }

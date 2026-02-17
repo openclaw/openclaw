@@ -1,5 +1,5 @@
 ---
-summary: "Model authentication: OAuth, API keys, and setup-token"
+summary: "Model authentication: OAuth, API keys, Claude SDK, and setup-token"
 read_when:
   - Debugging model auth or OAuth expiry
   - Documenting authentication or credential storage
@@ -10,7 +10,9 @@ title: "Authentication"
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
 hosts, API keys are usually the most predictable option. Subscription/OAuth
-flows are also supported when they match your provider account model.
+flows are also supported when they match your provider account model. For Claude
+subscription access, use the **Claude SDK** (`claude login`) or the long‑lived
+token created by `claude setup-token`.
 
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
@@ -54,6 +56,48 @@ API keys for daemon use: `openclaw onboard`.
 
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.openclaw/.env`, systemd/launchd).
+
+## Anthropic: Claude SDK (subscription auth)
+
+If you have a Claude Max or Pro subscription, the simplest path is the Claude
+SDK. It uses your existing `claude login` session — no API key or setup-token
+needed.
+
+1. Log in with the Claude CLI (if you haven't already):
+
+```bash
+claude login
+```
+
+2. Run onboarding:
+
+```bash
+openclaw onboard --auth-choice claude-sdk
+```
+
+Or configure manually — the wizard writes an auth profile like:
+
+```json5
+{
+  auth: {
+    profiles: {
+      "anthropic:sdk": { provider: "anthropic", mode: "claude-sdk" },
+    },
+    order: {
+      anthropic: ["anthropic:sdk"],
+    },
+  },
+}
+```
+
+Then verify:
+
+```bash
+openclaw models status
+```
+
+> Claude SDK auth requires the Claude CLI to be installed and logged in
+> (`claude login`).
 
 ## Anthropic: setup-token (subscription auth)
 
@@ -161,8 +205,8 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 
 ### “No credentials found”
 
-If the Anthropic token profile is missing, run `claude setup-token` on the
-**gateway host**, then re-check:
+If the Anthropic token profile is missing, run `claude login` (for SDK auth)
+or `claude setup-token` on the **gateway host**, then re-check:
 
 ```bash
 openclaw models status
@@ -175,5 +219,5 @@ is missing, rerun `claude setup-token` and paste the token again.
 
 ## Requirements
 
-- Anthropic subscription account (for `claude setup-token`)
+- Claude Max or Pro subscription (for `claude login` or `claude setup-token`)
 - Claude Code CLI installed (`claude` command available)

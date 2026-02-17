@@ -56,6 +56,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { runSdkAttempt } from "../sdk/run-sdk-attempt.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -605,7 +606,7 @@ export async function runEmbeddedPiAgent(
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
-          if (apiKeyInfo.mode !== "aws-sdk") {
+          if (apiKeyInfo.mode !== "aws-sdk" && apiKeyInfo.mode !== "claude-sdk") {
             throw new Error(
               `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
             );
@@ -848,7 +849,9 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
-          const attempt = await runEmbeddedAttempt({
+          const useClaudeSdk = normalizeProviderId(provider) === "anthropic";
+          const runAttempt = useClaudeSdk ? runSdkAttempt : runEmbeddedAttempt;
+          const attempt = await runAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             trigger: params.trigger,
