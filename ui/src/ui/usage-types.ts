@@ -75,6 +75,11 @@ export type SessionsUsageEntry = {
       uniqueTools: number;
       tools: Array<{ name: string; count: number }>;
     };
+    filesRead?: {
+      totalReads: number;
+      uniqueFiles: number;
+      files: Array<{ path: string; count: number }>;
+    };
     modelUsage?: Array<{
       provider?: string;
       model?: string;
@@ -153,6 +158,11 @@ export type SessionsUsageResult = {
       count: number;
       totals: SessionsUsageTotals;
     }>;
+    filesRead?: {
+      totalReads: number;
+      uniqueFiles: number;
+      files: Array<{ path: string; count: number }>;
+    };
     byAgent: Array<{ agentId: string; totals: SessionsUsageTotals }>;
     byChannel: Array<{ channel: string; totals: SessionsUsageTotals }>;
     latency?: {

@@ -675,14 +675,21 @@ export const usageStylesPart1 = `
     gap: 12px;
     font-size: 12px;
     color: var(--text);
-    align-items: flex-start;
+    align-items: baseline;
+  }
+  .usage-list-item > span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
   .usage-list-value {
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
+    align-items: baseline;
+    gap: 4px;
     text-align: right;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .usage-list-sub {
     font-size: 11px;
