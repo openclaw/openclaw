@@ -8,6 +8,20 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 
+/**
+ * Prompt for agents using OpenMemory backend
+ */
+export const OPENMEMORY_MEMORY_FLUSH_PROMPT = [
+  "Pre-compaction memory flush.",
+  "Store durable memories using the memory_add tool.",
+  "Extract key facts, decisions, preferences, and events from this session.",
+  "Use memory_add with tags like: decision, fact, preference, todo, lesson.",
+  `If nothing important to remember, reply with ${SILENT_REPLY_TOKEN}.`,
+].join(" ");
+
+/**
+ * Prompt for agents using builtin/file-based backend
+ */
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
   "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
@@ -55,6 +69,16 @@ export function resolveMemoryFlushPromptForRun(params: {
   return `${withDate}\n${timeLine}`;
 }
 
+/**
+ * System prompt for OpenMemory backend
+ */
+export const OPENMEMORY_MEMORY_FLUSH_SYSTEM_PROMPT = [
+  "Pre-compaction memory flush turn.",
+  "The session is near auto-compaction; capture durable memories to OpenMemory via memory_add tool.",
+  "Use the memory_add tool to store important facts, decisions, and preferences.",
+  `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
+].join(" ");
+
 export type MemoryFlushSettings = {
   enabled: boolean;
   softThresholdTokens: number;
@@ -71,6 +95,13 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
   return int >= 0 ? int : null;
 };
 
+/**
+ * Check if OpenMemory backend is configured
+ */
+function isOpenMemoryBackend(cfg?: OpenClawConfig): boolean {
+  return cfg?.memory?.backend === "openmemory";
+}
+
 export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSettings | null {
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   const enabled = defaults?.enabled ?? true;
@@ -79,8 +110,16 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   }
   const softThresholdTokens =
     normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
-  const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
-  const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
+
+  // Use OpenMemory prompts if backend is openmemory
+  const isOpenMemory = isOpenMemoryBackend(cfg);
+  const defaultPrompt = isOpenMemory ? OPENMEMORY_MEMORY_FLUSH_PROMPT : DEFAULT_MEMORY_FLUSH_PROMPT;
+  const defaultSystemPrompt = isOpenMemory
+    ? OPENMEMORY_MEMORY_FLUSH_SYSTEM_PROMPT
+    : DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
+
+  const prompt = defaults?.prompt?.trim() || defaultPrompt;
+  const systemPrompt = defaults?.systemPrompt?.trim() || defaultSystemPrompt;
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;

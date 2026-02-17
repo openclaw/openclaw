@@ -1,6 +1,11 @@
 import { createRequire } from "node:module";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
-import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
+import {
+  createMemoryAddTool,
+  createMemoryGetTool,
+  createMemoryRelatedTool,
+  createMemorySearchTool,
+} from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
   chunkByNewline,
@@ -332,6 +337,13 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       recordSessionMetaFromInbound,
       recordInboundSession,
       updateLastRoute,
+    },
+    tools: {
+      createMemoryAddTool,
+      createMemoryGetTool,
+      createMemoryRelatedTool,
+      createMemorySearchTool,
+      registerMemoryCli,
     },
     mentions: {
       buildMentionRegexes,

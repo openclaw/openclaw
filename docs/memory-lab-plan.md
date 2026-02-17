@@ -222,26 +222,56 @@ const TEST_QUERIES = [
 Not compression — embedding search doesn't need summaries.  
 Analysis — what can we learn from reviewing past periods?
 
+### Dual-Layer Memory Architecture
+
+| Layer            | Storage     | Purpose                                                  | Decay          |
+| ---------------- | ----------- | -------------------------------------------------------- | -------------- |
+| **MEMORY.md**    | Local file  | Pinned/eternal memories (facts about Dom, critical info) | None           |
+| **memory/\*.md** | Local files | Daily episodic notes                                     | Manual archive |
+| **OpenMemory**   | SQLite DB   | Ephemeral memories (session context, temp info)          | Auto-decay     |
+
+### How It Works
+
+1. **Session start** → reads MEMORY.md (always available)
+2. **Memory flush** → writes to OpenMemory (ephemeral)
+3. **Weekly review** → analyzes patterns, suggests MEMORY.md updates
+4. **Search** → queries OpenMemory for additional context
+
+### Why This Architecture?
+
+- **MEMORY.md = eternal** - Works even if OpenMemory is down, never decays
+- **OpenMemory = ephemeral** - Auto-fades old session context
+- **Weekly review** - Human-approved updates to MEMORY.md
+- **Simple** - No complex decay tracking, just file + database
+
 ### Outputs
 
-| Output                    | Purpose                               |
-| ------------------------- | ------------------------------------- |
-| **Patterns**              | "X discussed 4 times this week"       |
-| **Contradictions**        | "Monday said A, Wednesday said not-A" |
-| **Gaps**                  | "Discussed Y but no outcome recorded" |
-| **MEMORY.md suggestions** | Add/update/remove facts               |
-| **Importance boosts**     | Increase scores for recurring items   |
+| Output                | Purpose                                              |
+| --------------------- | ---------------------------------------------------- |
+| **Patterns**          | "X discussed 4 times this week"                      |
+| **Contradictions**    | "Monday said A, Wednesday said not-A"                |
+| **Gaps**              | "Discussed Y but no outcome recorded"                |
+| **MEMORY.md updates** | I auto-append significant insights (you can correct) |
 
 ### Architecture
 
 ```
 Cron: Sunday 21:00 UTC
   → Isolated session
-  → Read: past week's daily files
+  → Read: past week's OpenMemory queries + daily files
   → Analyze: patterns, contradictions, gaps
   → Output: memory/reviews/weekly-YYYY-WXX.md
-  → Suggest: MEMORY.md changes (I review, Dom approves if needed)
+  → Auto-update: I append significant insights to MEMORY.md
+  → You can correct me if wrong
 ```
+
+### Manual Updates
+
+I can also explicitly update MEMORY.md anytime:
+
+- "Always remember that I prefer direct communication"
+- "Remember: [important fact]"
+- **Autonomous**: After weekly review, I auto-append significant insights to MEMORY.md (you can correct me if wrong)
 
 ### Review Format
 
@@ -281,9 +311,26 @@ Cron: Sunday 21:00 UTC
 2. [x] **Add config schema** for backend selection ✅
 3. [x] **Implement routing** in memory_search ✅
 4. [x] **Configure Hamfast** to use `backend: "openmemory"` ✅
-5. [x] **Fix Zod schema deployment** - Rebuilt Docker from scratch ✅
-6. [ ] **Run comparison tests** - Hamfast vs Production
-7. [ ] **Document results**
+5. [x] **Add memory_add tool** - Write to OpenMemory ✅
+6. [x] **Add temporal filters** - Search by date range ✅
+7. [x] **Add memory_related tool** - Waypoint graph queries ✅
+8. [ ] **Set up weekly review cron** (Sunday 21:00 UTC)
+9. [ ] **Configure Samwise (production)** to use OpenMemory backend
+10. [ ] **Test production migration**
+
+## Weekly Review Cron
+
+```
+Schedule: Sunday 21:00 UTC (via OpenClaw cron)
+Session type: isolated
+Payload:
+  - Analyze past week's memory events
+  - Detect patterns and contradictions
+  - Output: memory/reviews/weekly-YYYY-WXX.md
+  - Suggest: MEMORY.md changes (Dom approves)
+```
+
+Manual update anytime: "Remember: [fact]" → appends to MEMORY.md
 
 ## Files & Locations
 
@@ -315,6 +362,14 @@ Cron: Sunday 21:00 UTC
 
 ## Changelog
 
+- **v4.2 (2026-02-16):** Phase 1-3 complete
+  - Added `memory_add` tool for writing to OpenMemory
+  - Added temporal filters (startDate/endDate) to memory_search
+  - Added `memory_related` tool for waypoint graph queries
+  - Updated memory_flush to use memory_add for OpenMemory backend
+  - Added `/memory/related/:id` API to OpenMemory
+  - Defined dual-layer architecture: MEMORY.md (eternal) + OpenMemory (ephemeral)
+  - Hamfast running with new image (memory-write)
 - **v4.1 (2026-02-15):** Updated with implementation progress
   - Deployed OpenMemory directly (not Docker)
   - Using OpenAI embeddings (1536 dim)
