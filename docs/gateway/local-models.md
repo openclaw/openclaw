@@ -110,6 +110,57 @@ Swap the primary and fallback order; keep the same providers block and `models.m
 - Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned endpoints (e.g., US-hosted). Pick the regional variant there to keep traffic in your chosen jurisdiction while still using `models.mode: "merge"` for Anthropic/OpenAI fallbacks.
 - Local-only remains the strongest privacy path; hosted regional routing is the middle ground when you need provider features but want control over data flow.
 
+## Local models for heartbeats only
+
+You don't need a $30k GPU rig to benefit from local models. A single Mac Mini (M4, 16 GB) can run a small 3-4B model for **heartbeat polling only**, while a hosted provider (MiniMax, Anthropic, etc.) handles real agent work. This is the most cost-effective hybrid setup.
+
+Recommended heartbeat models (16 GB Apple Silicon):
+
+| Model | Response time | Heartbeat stability |
+| --- | --- | --- |
+| Qwen 3 4B | ~30 sec | Best for tool-use routing |
+| Gemma 3 4B | ~21 sec | Strong instruction following |
+| Qwen 2.5 3B | ~10 sec | Fastest, simpler logic |
+| Gemma 2 3B | ~15 sec | Solid stability |
+
+Configure a dedicated heartbeat model with intentionally small context (heartbeats don't need large windows):
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "minimax/MiniMax-M2.1" },
+      heartbeat: {
+        model: "lmstudio/heartbeat-local",
+      },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      lmstudio: {
+        baseUrl: "http://127.0.0.1:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-responses",
+        models: [
+          {
+            id: "heartbeat-local",
+            name: "Local Heartbeat",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 8192,
+            maxTokens: 1024,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+For a complete walkthrough of this pattern, see [Local Setup (Budget)](/start/local-setup).
+
 ## Other OpenAI-compatible local proxies
 
 vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style `/v1` endpoint. Replace the provider block above with your endpoint and model ID:

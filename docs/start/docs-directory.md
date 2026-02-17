@@ -22,6 +22,7 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Pairing (DM and nodes)](/channels/pairing)
 - [Nix mode](/install/nix)
 - [OpenClaw assistant setup](/start/openclaw)
+- [Local Setup (Budget)](/start/local-setup)
 - [Skills](/tools/skills)
 - [Skills config](/tools/skills-config)
 - [Workspace templates](/reference/templates/AGENTS)

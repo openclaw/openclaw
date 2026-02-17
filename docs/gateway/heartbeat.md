@@ -357,6 +357,61 @@ is managing multiple sessions/codexes and you want to see why it decided to ping
 you — but it can also leak more internal detail than you want. Prefer keeping it
 off in group chats.
 
+## Cost optimization: local heartbeat models
+
+Heartbeats are simple check-in tasks — the model only needs to decide whether
+there is work to do. This makes heartbeats ideal for offloading to a free local
+model via LM Studio while keeping your paid model for real conversations.
+
+Use `heartbeat.model` to route heartbeats to a local model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "minimax/MiniMax-M2.1" }, // paid model for real work
+      heartbeat: {
+        every: "30m",
+        model: "lmstudio/heartbeat-local", // free local model for heartbeats
+        target: "last",
+      },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      lmstudio: {
+        baseUrl: "http://127.0.0.1:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-responses",
+        models: [
+          {
+            id: "heartbeat-local",
+            name: "Local Heartbeat",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 8192,
+            maxTokens: 1024,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Recommended local models for heartbeats (16 GB Apple Silicon):
+
+- **Qwen 3 4B** — best stability for tool-use and routing tasks.
+- **Gemma 3 4B** — strong instruction following.
+- **Qwen 2.5 3B** or **Gemma 2 3B** — faster but less capable.
+
+These 3-4B models handle "is there work to do?" checks reliably at zero cost.
+Keep `contextWindow` small (8192) since heartbeat prompts are short.
+
+For a complete budget setup guide, see [Local Setup (Budget)](/start/local-setup).
+
 ## Cost awareness
 
 Heartbeats run full agent turns. Shorter intervals burn more tokens. Keep

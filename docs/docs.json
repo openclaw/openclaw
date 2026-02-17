@@ -327,6 +327,10 @@
       "destination": "/gateway/gateway-lock"
     },
     {
+      "source": "/local-setup",
+      "destination": "/start/local-setup"
+    },
+    {
       "source": "/getting-started",
       "destination": "/start/getting-started"
     },
@@ -805,7 +809,7 @@
               },
               {
                 "group": "Guides",
-                "pages": ["start/openclaw"]
+                "pages": ["start/openclaw", "start/local-setup"]
               }
             ]
           },
