@@ -1,9 +1,10 @@
+import JSON5 from "json5";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import JSON5 from "json5";
+import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -38,7 +39,6 @@ import { applyMergePatch } from "./merge-patch.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
-import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -1003,6 +1003,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         encoding: "utf-8",
         mode: 0o600,
       });
+
+      // Validate written file before committing (issue #19239)
+      const written = await deps.fs.promises.readFile(tmp, "utf-8");
+      if (written.length !== json.length) {
+        throw new Error(
+          `Config write truncation detected: expected ${json.length} bytes, wrote ${written.length} bytes`,
+        );
+      }
+      try {
+        deps.json5.parse(written);
+      } catch (parseErr) {
+        throw new Error(
+          `Config write corruption detected: written file is not valid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+          { cause: parseErr },
+        );
+      }
 
       if (deps.fs.existsSync(configPath)) {
         await rotateConfigBackups(configPath, deps.fs.promises);
