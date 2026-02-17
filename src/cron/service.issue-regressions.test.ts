@@ -642,6 +642,62 @@ describe("Cron issue regressions", () => {
     expect(job!.state.nextRunAtMs).toBeGreaterThanOrEqual(minNext);
   });
 
+  it("treats timeoutSeconds=0 as no timeout for isolated agentTurn jobs", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    const cronJob: CronJob = {
+      id: "no-timeout-0",
+      name: "no-timeout",
+      enabled: true,
+      createdAtMs: scheduledAt - 86_400_000,
+      updatedAtMs: scheduledAt - 86_400_000,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0 },
+      delivery: { mode: "announce" },
+      state: { nextRunAtMs: scheduledAt },
+    };
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({ version: 1, jobs: [cronJob] }, null, 2),
+      "utf-8",
+    );
+
+    let now = scheduledAt;
+    const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        const result = await deferredRun.promise;
+        now += 5;
+        return result;
+      }),
+    });
+
+    const timerPromise = onTimer(state);
+    let settled = false;
+    void timerPromise.finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    deferredRun.resolve({ status: "ok", summary: "done" });
+    await timerPromise;
+
+    const job = state.store?.jobs.find((j) => j.id === "no-timeout-0");
+    expect(job?.state.lastStatus).toBe("ok");
+  });
+
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
     const cronJob: CronJob = {

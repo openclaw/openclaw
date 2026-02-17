@@ -300,6 +300,18 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.allowUnsafeExternalContent).toBe(true);
   });
 
+  it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy no-timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
+      timeoutSeconds: 0,
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.timeoutSeconds).toBe(0);
+  });
+
   it("coerces sessionTarget and wakeMode casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "casing",
