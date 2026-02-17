@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -u
 
 if command -v git >/dev/null 2>&1; then
   ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
@@ -35,22 +35,40 @@ fi
 : "${OPENCLAW_NOSTR_PLUGIN_PATH:=extensions/nostr}"
 : "${OPENCLAW_NOSTR_RELAYS:=[\"wss://relay.damus.io\",\"wss://relay.primal.net\",\"wss://relay.wine\"]}"
 
-if [[ -z "${OPENCLAW_NOSTR_PRIVATE_KEY:-}" ]]; then
+generate_random_nostr_private_key() {
+  local generated=""
   if command -v openssl >/dev/null 2>&1; then
-    OPENCLAW_NOSTR_PRIVATE_KEY="$(openssl rand -hex 32)"
-  else
-    if command -v node >/dev/null 2>&1; then
-      OPENCLAW_NOSTR_PRIVATE_KEY="$(node -e 'console.log(require(\"crypto\").randomBytes(32).toString(\"hex\"));')"
-    else
-      echo "No crypto source for key generation (need openssl or node)." >&2
-      exit 1
-    fi
+    generated="$(openssl rand -hex 32)"
   fi
+  if [[ -z "$generated" ]] && command -v node >/dev/null 2>&1; then
+    generated="$(node -e 'console.log(require(\"crypto\").randomBytes(32).toString(\"hex\"));' 2>/dev/null || true)"
+  fi
+  if [[ -z "$generated" ]]; then
+    generated="$(LC_CTYPE=C tr -dc '0-9a-f' < /dev/urandom | head -c 64)"
+  fi
+  printf '%s' "$generated"
+}
+
+if [[ -z "${OPENCLAW_NOSTR_PRIVATE_KEY:-}" ]]; then
+  OPENCLAW_NOSTR_PRIVATE_KEY="$(generate_random_nostr_private_key)"
+fi
+
+if [[ -z "${OPENCLAW_NOSTR_PRIVATE_KEY:-}" ]]; then
+  OPENCLAW_NOSTR_PRIVATE_KEY="0000000000000000000000000000000000000000000000000000000000000000"
 fi
 
 if [[ ! "$OPENCLAW_NOSTR_PRIVATE_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
-  echo "Invalid OPENCLAW_NOSTR_PRIVATE_KEY. It must be 64 hex chars." >&2
-  exit 1
+  echo "Invalid OPENCLAW_NOSTR_PRIVATE_KEY ($OPENCLAW_NOSTR_PRIVATE_KEY); generating a new throwaway key." >&2
+  OPENCLAW_NOSTR_PRIVATE_KEY="$(generate_random_nostr_private_key)"
+fi
+if [[ ! "$OPENCLAW_NOSTR_PRIVATE_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  OPENCLAW_NOSTR_PRIVATE_KEY="$(printf '%064s' "$OPENCLAW_NOSTR_PRIVATE_KEY" | tr ' ' '0')"
+  if [[ ${#OPENCLAW_NOSTR_PRIVATE_KEY} -gt 64 ]]; then
+    OPENCLAW_NOSTR_PRIVATE_KEY="${OPENCLAW_NOSTR_PRIVATE_KEY:0:64}"
+  fi
+  OPENCLAW_NOSTR_PRIVATE_KEY="$(printf '%064s' "$OPENCLAW_NOSTR_PRIVATE_KEY" | tr ' ' '0')"
+  OPENCLAW_NOSTR_PRIVATE_KEY="$(echo "$OPENCLAW_NOSTR_PRIVATE_KEY" | tr -cd '0-9a-fA-F' | tr 'A-F' 'a-f')"
+  OPENCLAW_NOSTR_PRIVATE_KEY="${OPENCLAW_NOSTR_PRIVATE_KEY:0:64}"
 fi
 
 OPENCLAW_NOSTR_PRIVATE_KEY="$(echo "$OPENCLAW_NOSTR_PRIVATE_KEY" | tr 'A-F' 'a-f')"
@@ -58,12 +76,15 @@ OPENCLAW_NOSTR_PUBLIC_KEY=""
 
 NOSTR_TOOLS_PATH="$ROOT_DIR/extensions/nostr/node_modules/nostr-tools/lib/cjs/index.js"
 if [[ -f "$NOSTR_TOOLS_PATH" ]] && command -v node >/dev/null 2>&1; then
-  derived_public="$(
+  if derived_public="$(
     OPENCLAW_TOOLS_PATH="$NOSTR_TOOLS_PATH" \
     OPENCLAW_NOSTR_PRIVATE_KEY="$OPENCLAW_NOSTR_PRIVATE_KEY" \
       node -e 'const nt = require(process.env.OPENCLAW_TOOLS_PATH); const pub = nt.getPublicKey(nt.utils.hexToBytes(process.env.OPENCLAW_NOSTR_PRIVATE_KEY)); process.stdout.write(pub);'
-  )"
-  OPENCLAW_NOSTR_PUBLIC_KEY="${derived_public:-}"
+  )"; then
+    OPENCLAW_NOSTR_PUBLIC_KEY="${derived_public:-}"
+  else
+    OPENCLAW_NOSTR_PUBLIC_KEY=""
+  fi
 fi
 
 export OPENCLAW_ONBOARD_HOME
