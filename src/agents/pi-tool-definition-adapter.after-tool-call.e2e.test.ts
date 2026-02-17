@@ -150,14 +150,25 @@ describe("pi tool definition adapter after_tool_call", () => {
       name: "bash",
       label: "Bash",
       description: "throws",
-      parameters: {},
+      parameters: Type.Object({}),
       execute: vi.fn(async () => {
         throw new Error("boom");
       }),
-    } satisfies AgentTool<unknown, unknown>;
+    } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const result = await defs[0].execute("call-err-adjusted", { cmd: "ls" }, undefined, undefined);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
+    const result = await execute(
+      "call-err-adjusted",
+      { cmd: "ls" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
 
     expect(result.details).toMatchObject({
       status: "error",

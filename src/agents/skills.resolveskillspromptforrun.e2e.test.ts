@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SkillEntry } from "./skills.js";
 import { resolveSkillsPromptForRun } from "./skills.js";
-import type { SkillEntry } from "./skills/types.js";
 
 describe("resolveSkillsPromptForRun", () => {
   it("prefers snapshot prompt when available", () => {
@@ -39,6 +38,7 @@ describe("resolveSkillsPromptForRun", () => {
         filePath: "/app/skills/demo-skill/SKILL.md",
         baseDir: "/app/skills/demo-skill",
         source: "openclaw-bundled",
+        disableModelInvocation: false,
       },
     ];
     const prompt = resolveSkillsPromptForRun({

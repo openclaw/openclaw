@@ -66,7 +66,9 @@ describe("normalizeModelCompat", () => {
       compat: { supportsDeveloperRole: false },
     };
     const normalized = normalizeModelCompat(model);
-    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
     expect(normalized.input).toEqual(expect.arrayContaining(["image"]));
   });
 });
