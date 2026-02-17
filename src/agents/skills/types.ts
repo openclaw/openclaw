@@ -54,6 +54,8 @@ export type SkillCommandSpec = {
   description: string;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
+  /** True when this command originates from a bundled skill. */
+  bundled?: boolean;
 };
 
 export type SkillsInstallPreferences = {
