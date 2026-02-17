@@ -178,4 +178,27 @@ describe("applyJobPatch", () => {
     ).not.toThrow();
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
   });
+
+  it("updates and clears sessionKey", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-origin-session",
+      name: "job-origin-session",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+      state: {},
+    };
+
+    expect(() => applyJobPatch(job, { sessionKey: "  agent:main:wecom:dm:alice  " })).not.toThrow();
+    expect(job.sessionKey).toBe("agent:main:wecom:dm:alice");
+
+    expect(() => applyJobPatch(job, { sessionKey: null })).not.toThrow();
+    expect(job.sessionKey).toBeUndefined();
+  });
 });
