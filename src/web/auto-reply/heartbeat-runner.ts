@@ -173,7 +173,9 @@ export async function runWebHeartbeatOnce(opts: {
       { isHeartbeat: true },
       cfg,
     );
-    const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    const replyPayload = resolveHeartbeatReplyPayload(
+      Array.isArray(replyResult) ? replyResult.filter((p) => !p.isError) : replyResult,
+    );
 
     if (
       !replyPayload ||
