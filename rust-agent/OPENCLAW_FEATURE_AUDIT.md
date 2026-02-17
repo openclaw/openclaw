@@ -37,6 +37,7 @@ Status legend:
 | Host integrity defense | Baseline hashing and tamper detection on protected paths | `Implemented` | `host_guard.rs` checks hash drift/missing files. |
 | VirusTotal integration | External URL/file reputation signal | `Implemented` | `virustotal.rs` supports URL/file hash lookup and risk mapping. |
 | Decision policy engine | Risk aggregation -> `allow/review/block` with thresholds | `Implemented` | `security/mod.rs` classifier with `audit_only` override. |
+| Tool/channel policy controls | Per-tool policy floors and channel-aware risk weighting | `Implemented` | `tool_policies`, `tool_risk_bonus`, and `channel_risk_bonus` are configurable in TOML. |
 | Quarantine records | Persist blocked action payloads for forensics | `Implemented` | Append-only JSON files in configured quarantine directory. |
 | Backpressure + memory controls | Bounded worker concurrency, queue cap, eval timeout, memory metrics | `Implemented` | Semaphore + channel bounds + timeout + Linux RSS sampler. |
 | Test coverage (Rust) | Unit/integration validation for core safety/runtime behavior | `Partial` | Core security and bridge path covered; no end-to-end Gateway/channel matrix yet. |

@@ -46,8 +46,9 @@ impl GatewayBridge {
 
     async fn run_once(&self, evaluator: Arc<dyn ActionEvaluator>) -> Result<()> {
         info!("connecting to gateway {}", self.gateway.url);
-        let (stream, _resp) =
-            connect_async(&self.gateway.url).await.with_context(|| "failed websocket connect")?;
+        let (stream, _resp) = connect_async(&self.gateway.url)
+            .await
+            .with_context(|| "failed websocket connect")?;
         let (mut write, mut read) = stream.split();
         let (decision_tx, mut decision_rx) = mpsc::channel::<serde_json::Value>(self.max_queue);
         let inflight = Arc::new(Semaphore::new(self.max_queue));
@@ -180,7 +181,10 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
             let connect_txt = connect.to_text()?;
             let connect_json: Value = serde_json::from_str(connect_txt)?;
-            assert_eq!(connect_json.get("method").and_then(Value::as_str), Some("connect"));
+            assert_eq!(
+                connect_json.get("method").and_then(Value::as_str),
+                Some("connect")
+            );
 
             let action = json!({
                 "type": "event",
@@ -199,7 +203,10 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("missing decision frame"))??;
             let decision_txt = decision.to_text()?;
             let decision_json: Value = serde_json::from_str(decision_txt)?;
-            assert_eq!(decision_json.get("event").and_then(Value::as_str), Some("security.decision"));
+            assert_eq!(
+                decision_json.get("event").and_then(Value::as_str),
+                Some("security.decision")
+            );
             assert_eq!(
                 decision_json
                     .pointer("/payload/requestId")

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionAction {
     Allow,
@@ -26,6 +26,7 @@ pub struct ActionRequest {
     pub prompt: Option<String>,
     pub command: Option<String>,
     pub tool_name: Option<String>,
+    pub channel: Option<String>,
     pub url: Option<String>,
     pub file_path: Option<String>,
     pub raw: Value,
@@ -41,15 +42,38 @@ impl ActionRequest {
         let prompt = find_first_string(root, &["prompt", "message", "text", "input"]);
         let command = find_first_string(root, &["command", "shell", "bash", "exec"]);
         let tool_name = find_first_string(root, &["tool", "tool_name", "toolName"]);
+        let channel = find_first_string(
+            root,
+            &[
+                "channel",
+                "channel_name",
+                "channelName",
+                "platform",
+                "provider",
+            ],
+        );
         let url = find_first_string(root, &["url", "artifact_url", "artifactUrl"]);
-        let file_path = find_first_string(root, &["file_path", "filePath", "artifact_path", "artifactPath"]);
+        let file_path = find_first_string(
+            root,
+            &["file_path", "filePath", "artifact_path", "artifactPath"],
+        );
 
         if prompt.is_none() && command.is_none() && url.is_none() && file_path.is_none() {
             return None;
         }
 
-        let id = find_first_string(root, &["id", "request_id", "requestId", "runId", "action_id", "actionId"])
-            .unwrap_or_else(|| "unknown".to_owned());
+        let id = find_first_string(
+            root,
+            &[
+                "id",
+                "request_id",
+                "requestId",
+                "runId",
+                "action_id",
+                "actionId",
+            ],
+        )
+        .unwrap_or_else(|| "unknown".to_owned());
         let session_id = find_first_string(root, &["session_id", "sessionId"]);
         let source = frame
             .get("event")
@@ -65,6 +89,7 @@ impl ActionRequest {
             prompt,
             command,
             tool_name,
+            channel,
             url,
             file_path,
             raw: root.clone(),
@@ -72,12 +97,20 @@ impl ActionRequest {
     }
 }
 
-pub fn decision_event_frame(event_name: &str, request: &ActionRequest, decision: &Decision) -> Value {
+pub fn decision_event_frame(
+    event_name: &str,
+    request: &ActionRequest,
+    decision: &Decision,
+) -> Value {
     let mut payload = Map::new();
     payload.insert("requestId".to_owned(), Value::String(request.id.clone()));
     payload.insert("sessionId".to_owned(), opt_str(&request.session_id));
     payload.insert("source".to_owned(), Value::String(request.source.clone()));
-    payload.insert("decision".to_owned(), serde_json::to_value(decision).unwrap_or(Value::Null));
+    payload.insert("channel".to_owned(), opt_str(&request.channel));
+    payload.insert(
+        "decision".to_owned(),
+        serde_json::to_value(decision).unwrap_or(Value::Null),
+    );
 
     let mut out = Map::new();
     out.insert("type".to_owned(), Value::String("event".to_owned()));
@@ -99,7 +132,8 @@ fn find_first_string(root: &Value, keys: &[&str]) -> Option<String> {
             if let Some(v) = find_map_string(map, keys) {
                 return Some(v);
             }
-            map.values().find_map(|child| find_first_string(child, keys))
+            map.values()
+                .find_map(|child| find_first_string(child, keys))
         }
         Value::Array(items) => items.iter().find_map(|item| find_first_string(item, keys)),
         _ => None,
@@ -135,6 +169,7 @@ mod tests {
                 "id": "req-1",
                 "sessionId": "s-123",
                 "tool": "exec",
+                "channel": "discord",
                 "command": "git status",
                 "input": "run a safe command"
             }
@@ -146,6 +181,7 @@ mod tests {
         assert_eq!(req.command.as_deref(), Some("git status"));
         assert_eq!(req.prompt.as_deref(), Some("run a safe command"));
         assert_eq!(req.tool_name.as_deref(), Some("exec"));
+        assert_eq!(req.channel.as_deref(), Some("discord"));
         assert_eq!(req.source, "agent");
     }
 

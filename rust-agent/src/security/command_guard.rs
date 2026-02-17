@@ -72,7 +72,10 @@ mod tests {
     fn blocks_known_destructive_patterns() {
         let guard = CommandGuard::new(
             &["git ".to_owned()],
-            &[r"(?i)\brm\s+-rf\s+/".to_owned(), r"(?i)\bcurl\s+[^|]*\|\s*sh\b".to_owned()],
+            &[
+                r"(?i)\brm\s+-rf\s+/".to_owned(),
+                r"(?i)\bcurl\s+[^|]*\|\s*sh\b".to_owned(),
+            ],
         )
         .expect("guard");
 

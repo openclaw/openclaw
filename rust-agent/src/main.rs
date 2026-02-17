@@ -54,6 +54,9 @@ async fn main() -> Result<()> {
 
 fn init_logging(filter: &str) -> Result<()> {
     let env = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter));
-    tracing_subscriber::fmt().with_env_filter(env).with_target(false).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(env)
+        .with_target(false)
+        .init();
     Ok(())
 }

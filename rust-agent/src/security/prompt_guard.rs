@@ -72,10 +72,9 @@ mod tests {
 
     #[test]
     fn keeps_safe_prompt_low_risk() {
-        let guard = PromptInjectionGuard::new(&[
-            r"(?i)ignore\s+all\s+previous\s+instructions".to_owned(),
-        ])
-        .expect("guard");
+        let guard =
+            PromptInjectionGuard::new(&[r"(?i)ignore\s+all\s+previous\s+instructions".to_owned()])
+                .expect("guard");
 
         let (score, tags, reasons) = guard.score("Summarize this changelog in 4 bullet points.");
         assert_eq!(score, 0);

@@ -69,6 +69,9 @@ systemctl --user status openclaw-agent-rs.service
 - `security.review_threshold`: minimum risk for "review".
 - `security.block_threshold`: minimum risk for "block".
 - `security.protect_paths`: files to hash and verify at runtime.
+- `security.tool_policies`: per-tool floor action (`allow`, `review`, `block`).
+- `security.tool_risk_bonus`: per-tool additive risk scoring.
+- `security.channel_risk_bonus`: per-channel additive risk scoring.
 
 ## Planned migration phases
 

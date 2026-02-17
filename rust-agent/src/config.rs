@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +39,20 @@ pub struct SecurityConfig {
     pub allowed_command_prefixes: Vec<String>,
     pub blocked_command_patterns: Vec<String>,
     pub prompt_injection_patterns: Vec<String>,
+    #[serde(default)]
+    pub tool_policies: HashMap<String, PolicyAction>,
+    #[serde(default = "default_tool_risk_bonus")]
+    pub tool_risk_bonus: HashMap<String, u8>,
+    #[serde(default = "default_channel_risk_bonus")]
+    pub channel_risk_bonus: HashMap<String, u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyAction {
+    Allow,
+    Review,
+    Block,
 }
 
 impl Default for Config {
@@ -61,8 +76,15 @@ impl Default for Config {
                 virustotal_api_key: None,
                 virustotal_timeout_ms: 1_400,
                 quarantine_dir: PathBuf::from(".openclaw-rs/quarantine"),
-                protect_paths: vec![PathBuf::from("./openclaw.mjs"), PathBuf::from("./dist/index.js")],
-                allowed_command_prefixes: vec!["git ".to_owned(), "ls".to_owned(), "rg ".to_owned()],
+                protect_paths: vec![
+                    PathBuf::from("./openclaw.mjs"),
+                    PathBuf::from("./dist/index.js"),
+                ],
+                allowed_command_prefixes: vec![
+                    "git ".to_owned(),
+                    "ls".to_owned(),
+                    "rg ".to_owned(),
+                ],
                 blocked_command_patterns: vec![
                     r"(?i)\brm\s+-rf\s+/".to_owned(),
                     r"(?i)\bmkfs\b".to_owned(),
@@ -76,6 +98,9 @@ impl Default for Config {
                     r"(?i)override\s+developer\s+instructions".to_owned(),
                     r"(?i)disable\s+safety".to_owned(),
                 ],
+                tool_policies: HashMap::new(),
+                tool_risk_bonus: default_tool_risk_bonus(),
+                channel_risk_bonus: default_channel_risk_bonus(),
             },
         }
     }
@@ -173,5 +198,30 @@ fn split_csv(input: &str) -> Vec<String> {
 }
 
 fn parse_bool(s: &str) -> bool {
-    matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn default_tool_risk_bonus() -> HashMap<String, u8> {
+    HashMap::from([
+        ("exec".to_owned(), 20),
+        ("bash".to_owned(), 20),
+        ("process".to_owned(), 10),
+        ("apply_patch".to_owned(), 12),
+        ("browser".to_owned(), 8),
+        ("gateway".to_owned(), 20),
+        ("nodes".to_owned(), 20),
+    ])
+}
+
+fn default_channel_risk_bonus() -> HashMap<String, u8> {
+    HashMap::from([
+        ("discord".to_owned(), 10),
+        ("slack".to_owned(), 8),
+        ("telegram".to_owned(), 6),
+        ("whatsapp".to_owned(), 6),
+        ("webchat".to_owned(), 8),
+    ])
 }

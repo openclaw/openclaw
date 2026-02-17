@@ -33,7 +33,9 @@ impl VirusTotalClient {
         headers.insert("x-apikey", HeaderValue::from_str(&api_key)?);
         let client = Client::builder()
             .default_headers(headers)
-            .timeout(Duration::from_millis(cfg.security.virustotal_timeout_ms.max(500)))
+            .timeout(Duration::from_millis(
+                cfg.security.virustotal_timeout_ms.max(500),
+            ))
             .build()?;
         Ok(Some(Self { client }))
     }
