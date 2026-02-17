@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { StoreMemoryInput } from "./schema.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
+import type { StoreMemoryInput } from "./schema.js";
 import { fuseWithConfidenceRRF } from "./search.js";
 import { parseTaskLedger } from "./task-ledger.js";
 

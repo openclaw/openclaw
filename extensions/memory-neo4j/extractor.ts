@@ -14,9 +14,9 @@
 import { randomUUID } from "node:crypto";
 import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
+import { callOpenRouter, callOpenRouterStream, isTransientError } from "./llm-client.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
 import type { EntityType, ExtractionResult, Logger, MemoryCategory } from "./schema.js";
-import { callOpenRouter, callOpenRouterStream, isTransientError } from "./llm-client.js";
 import { ALLOWED_RELATIONSHIP_TYPES, ENTITY_TYPES, MEMORY_CATEGORIES } from "./schema.js";
 
 // ============================================================================

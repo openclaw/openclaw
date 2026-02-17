@@ -6,11 +6,11 @@
  * This allows parallel updates without blocking.
  */
 
-import JSON5 from "json5";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SessionEntry } from "./types.js";
+import JSON5 from "json5";
 import { resolveSessionTranscriptsDirForAgent } from "./paths.js";
+import type { SessionEntry } from "./types.js";
 
 const META_SUFFIX = ".meta.json";
 

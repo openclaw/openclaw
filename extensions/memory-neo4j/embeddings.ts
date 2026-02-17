@@ -8,8 +8,8 @@
 import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import type { EmbeddingProvider } from "./config.js";
-import type { Logger } from "./schema.js";
 import { contextLengthForModel } from "./config.js";
+import type { Logger } from "./schema.js";
 
 /**
  * Simple LRU cache for embedding vectors.
