@@ -162,6 +162,7 @@ export async function getStatusSummary(
           model,
           contextTokens,
           flags: buildFlags(entry),
+          systemPromptReport: entry?.systemPromptReport,
         } satisfies SessionStatus;
       })
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
