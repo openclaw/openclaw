@@ -38,6 +38,8 @@ export type HookMappingConfig = {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
+  responseUrl?: string;
+  responseSecret?: string;
   transform?: HookMappingTransform;
 };
 

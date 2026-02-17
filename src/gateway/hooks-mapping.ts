@@ -220,6 +220,8 @@ function normalizeHookMapping(
     model: mapping.model,
     thinking: mapping.thinking,
     timeoutSeconds: mapping.timeoutSeconds,
+    responseUrl: mapping.responseUrl,
+    responseSecret: mapping.responseSecret,
     transform,
   };
 }
@@ -271,6 +273,8 @@ function buildActionFromMapping(
       model: renderOptional(mapping.model, ctx),
       thinking: renderOptional(mapping.thinking, ctx),
       timeoutSeconds: mapping.timeoutSeconds,
+      responseUrl: renderOptional(mapping.responseUrl, ctx),
+      responseSecret: mapping.responseSecret,
     },
   };
 }
@@ -312,6 +316,8 @@ function mergeAction(
     model: override.model ?? baseAgent?.model,
     thinking: override.thinking ?? baseAgent?.thinking,
     timeoutSeconds: override.timeoutSeconds ?? baseAgent?.timeoutSeconds,
+    responseUrl: baseAgent?.responseUrl,
+    responseSecret: baseAgent?.responseSecret,
   });
 }
 
