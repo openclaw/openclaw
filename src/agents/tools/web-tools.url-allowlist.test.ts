@@ -71,6 +71,22 @@ describe("web-search urlAllowlist", () => {
       expect(result).toHaveLength(2); // blocked.org + entry without URL
       expect(result.map((r) => r.url)).toContain("https://blocked.org/page");
     });
+
+    it("blocks entries with unparseable URLs when allowlist is set", () => {
+      const resultsWithInvalid = [
+        { url: "https://example.com/page", siteName: "example.com" },
+        { url: "not-a-valid-url", siteName: "invalid" },
+        { url: "://invalid.com", siteName: "invalid2" },
+        { url: undefined, siteName: "unknown" }, // entry without URL - should be kept
+      ];
+      const result = filterResultsByAllowlist(resultsWithInvalid, ["example.com"]);
+      // Should keep example.com and undefined URL, but block the invalid URLs
+      expect(result).toHaveLength(2);
+      expect(result.map((r) => r.url)).toContain("https://example.com/page");
+      expect(result.map((r) => r.url)).toContain(undefined);
+      expect(result.map((r) => r.url)).not.toContain("not-a-valid-url");
+      expect(result.map((r) => r.url)).not.toContain("://invalid.com");
+    });
   });
 });
 
