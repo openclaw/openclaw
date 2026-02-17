@@ -437,6 +437,9 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
+/** Property names that must never be traversed to prevent prototype pollution. */
+const BLOCKED_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -463,6 +466,9 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       }
       current = current[part] as unknown;
       continue;
+    }
+    if (BLOCKED_PATH_SEGMENTS.has(part)) {
+      return undefined;
     }
     if (typeof current !== "object") {
       return undefined;

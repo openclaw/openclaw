@@ -294,6 +294,66 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("blocks __proto__ in template path resolution", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "proto-test",
+          messageTemplate: "Got: {{__proto__.polluted}}",
+        }),
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.message).toBe("Got: ");
+    }
+  });
+
+  it("blocks constructor in template path resolution", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "constructor-test",
+          messageTemplate: "Got: {{constructor.name}}",
+        }),
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.message).toBe("Got: ");
+    }
+  });
+
+  it("blocks prototype in nested template path", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "nested-proto-test",
+          messageTemplate: "Got: {{messages.prototype.polluted}}",
+        }),
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.message).toBe("Got: ");
+    }
+  });
+
+  it("allows legitimate deep paths after prototype pollution guard", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "legit-deep",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+        }),
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.message).toBe("Subject: Hello");
+    }
+  });
+
   it("rejects missing message", async () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
