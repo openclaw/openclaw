@@ -22,15 +22,22 @@ import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
+function isFiniteTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function resolveEveryAnchorMs(params: {
   schedule: { everyMs: number; anchorMs?: number };
   fallbackAnchorMs: number;
 }) {
   const raw = params.schedule.anchorMs;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
+  if (isFiniteTimestamp(raw)) {
     return Math.max(0, Math.floor(raw));
   }
-  return Math.max(0, Math.floor(params.fallbackAnchorMs));
+  if (isFiniteTimestamp(params.fallbackAnchorMs)) {
+    return Math.max(0, Math.floor(params.fallbackAnchorMs));
+  }
+  return 0;
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
@@ -72,11 +79,13 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return undefined;
   }
   if (job.schedule.kind === "every") {
+    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
     const anchorMs = resolveEveryAnchorMs({
       schedule: job.schedule,
-      fallbackAnchorMs: job.createdAtMs,
+      fallbackAnchorMs,
     });
-    return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
+    const next = computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
+    return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
     // One-shot jobs stay due until they successfully finish.
@@ -95,7 +104,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
           : typeof schedule.at === "string"
             ? parseAbsoluteTimeMs(schedule.at)
             : null;
-    return atMs !== null ? atMs : undefined;
+    return atMs !== null && Number.isFinite(atMs) ? atMs : undefined;
   }
   const next = computeNextRunAtMs(job.schedule, nowMs);
   // Guard against the scheduler returning a time within the same second as
@@ -106,9 +115,10 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   // ensures we always land on the *next* occurrence.  (See #17821)
   if (next === undefined && job.schedule.kind === "cron") {
     const nextSecondMs = (Math.floor(nowMs / 1000) + 1) * 1000;
-    return computeNextRunAtMs(job.schedule, nextSecondMs);
+    const retried = computeNextRunAtMs(job.schedule, nextSecondMs);
+    return isFiniteTimestamp(retried) ? retried : undefined;
   }
-  return next;
+  return isFiniteTimestamp(next) ? next : undefined;
 }
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
@@ -165,6 +175,11 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       changed = true;
     }
     return { changed, skip: true };
+  }
+
+  if (!isFiniteTimestamp(job.state.nextRunAtMs) && job.state.nextRunAtMs !== undefined) {
+    job.state.nextRunAtMs = undefined;
+    changed = true;
   }
 
   const runningAt = job.state.runningAtMs;
@@ -232,7 +247,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
     const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = nextRun === undefined || now >= nextRun;
+    const isDueOrMissing = !isFiniteTimestamp(nextRun) || now >= nextRun;
     if (isDueOrMissing) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
@@ -255,7 +270,7 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
     // Only compute missing nextRunAtMs, do NOT recompute existing ones.
     // If a job was past-due but not found by findDueJobs, recomputing would
     // cause it to be silently skipped.
-    if (job.state.nextRunAtMs === undefined) {
+    if (!isFiniteTimestamp(job.state.nextRunAtMs)) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
       }
@@ -266,13 +281,13 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
+  const enabled = jobs.filter((j) => j.enabled && isFiniteTimestamp(j.state.nextRunAtMs));
   if (enabled.length === 0) {
     return undefined;
   }
   return enabled.reduce(
-    (min, j) => Math.min(min, j.state.nextRunAtMs as number),
-    enabled[0].state.nextRunAtMs as number,
+    (min, j) => Math.min(min, j.state.nextRunAtMs),
+    enabled[0].state.nextRunAtMs,
   );
 }
 
