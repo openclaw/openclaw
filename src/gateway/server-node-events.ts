@@ -13,6 +13,8 @@ import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseMessageWithAttachments } from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import {
   loadSessionEntry,
   pruneLegacyStoreKeys,
@@ -346,6 +348,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey?: string | null;
         thinking?: string | null;
         deliver?: boolean;
+        attachments?: Array<{
+          type?: string;
+          mimeType?: string;
+          fileName?: string;
+          content?: unknown;
+        }> | null;
         receipt?: boolean;
         receiptText?: string | null;
         to?: string | null;
@@ -359,7 +367,23 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       } catch {
         return;
       }
-      const message = (link?.message ?? "").trim();
+      let message = (link?.message ?? "").trim();
+      const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
+        link?.attachments ?? undefined,
+      );
+      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      if (normalizedAttachments.length > 0) {
+        try {
+          const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
+            maxBytes: 5_000_000,
+            log: ctx.logGateway,
+          });
+          message = parsed.message.trim();
+          images = parsed.images;
+        } catch {
+          return;
+        }
+      }
       if (!message) {
         return;
       }
@@ -430,6 +454,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       void agentCommand(
         {
           message,
+          images,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,

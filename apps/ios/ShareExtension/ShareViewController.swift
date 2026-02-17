@@ -5,6 +5,18 @@ import UIKit
 import UniformTypeIdentifiers
 
 final class ShareViewController: UIViewController {
+    private struct ShareAttachment: Codable {
+        var type: String
+        var mimeType: String
+        var fileName: String
+        var content: String
+    }
+
+    private struct ExtractedShareContent {
+        var payload: SharedContentPayload
+        var attachments: [ShareAttachment]
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw.ios", category: "ShareExtension")
     private var statusLabel: UILabel?
     private let draftTextView = UITextView()
@@ -12,6 +24,7 @@ final class ShareViewController: UIViewController {
     private let cancelButton = UIButton(type: .system)
     private var didPrepareDraft = false
     private var isSending = false
+    private var pendingAttachments: [ShareAttachment] = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -73,9 +86,11 @@ final class ShareViewController: UIViewController {
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
         self.showStatus("Preparing share…")
         self.logger.info("share begin trace=\(traceId, privacy: .public)")
-        let payload = await self.extractSharedContent()
+        let extracted = await self.extractSharedContent()
+        let payload = extracted.payload
+        self.pendingAttachments = extracted.attachments
         self.logger.info(
-            "share payload trace=\(traceId, privacy: .public) titleChars=\(payload.title?.count ?? 0) textChars=\(payload.text?.count ?? 0) hasURL=\(payload.url != nil)"
+            "share payload trace=\(traceId, privacy: .public) titleChars=\(payload.title?.count ?? 0) textChars=\(payload.text?.count ?? 0) hasURL=\(payload.url != nil) imageAttachments=\(self.pendingAttachments.count)"
         )
         let message = self.composeDraft(from: payload)
         await MainActor.run {
@@ -120,8 +135,9 @@ final class ShareViewController: UIViewController {
         self.showStatus("Sending to OpenClaw gateway…")
         ShareGatewayRelaySettings.saveLastEvent("Sending to gateway…")
         do {
-            try await self.sendMessageToGateway(trimmed)
-            ShareGatewayRelaySettings.saveLastEvent("Sent to gateway (\(trimmed.count) chars).")
+            try await self.sendMessageToGateway(trimmed, attachments: self.pendingAttachments)
+            ShareGatewayRelaySettings.saveLastEvent(
+                "Sent to gateway (\(trimmed.count) chars, \(self.pendingAttachments.count) attachment(s)).")
             self.showStatus("Sent to OpenClaw.")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                 self.extensionContext?.completeRequest(returningItems: nil)
@@ -138,7 +154,7 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    private func sendMessageToGateway(_ message: String) async throws {
+    private func sendMessageToGateway(_ message: String, attachments: [ShareAttachment]) async throws {
         guard let config = ShareGatewayRelaySettings.loadConfig() else {
             throw NSError(
                 domain: "OpenClawShare",
@@ -213,6 +229,7 @@ final class ShareViewController: UIViewController {
             var sessionKey: String?
             var thinking: String
             var deliver: Bool
+            var attachments: [ShareAttachment]?
             var receipt: Bool
             var receiptText: String?
             var to: String?
@@ -226,6 +243,7 @@ final class ShareViewController: UIViewController {
             sessionKey: config.sessionKey,
             thinking: "low",
             deliver: true,
+            attachments: attachments.isEmpty ? nil : attachments,
             receipt: true,
             receiptText: "Just received your iOS share + request, working on it.",
             to: config.deliveryTo,
@@ -316,9 +334,11 @@ final class ShareViewController: UIViewController {
         return cleaned.isEmpty ? nil : cleaned
     }
 
-    private func extractSharedContent() async -> SharedContentPayload {
+    private func extractSharedContent() async -> ExtractedShareContent {
         guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
-            return SharedContentPayload(title: nil, url: nil, text: nil)
+            return ExtractedShareContent(
+                payload: SharedContentPayload(title: nil, url: nil, text: nil),
+                attachments: [])
         }
 
         var title: String?
@@ -328,6 +348,8 @@ final class ShareViewController: UIViewController {
         var videoCount = 0
         var fileCount = 0
         var unknownCount = 0
+        var attachments: [ShareAttachment] = []
+        let maxImageAttachments = 3
 
         for item in items {
             if title == nil {
@@ -345,6 +367,11 @@ final class ShareViewController: UIViewController {
 
                 if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
                     imageCount += 1
+                    if attachments.count < maxImageAttachments,
+                       let attachment = await self.loadImageAttachment(from: provider, index: attachments.count)
+                    {
+                        attachments.append(attachment)
+                    }
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
                     videoCount += 1
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -364,7 +391,62 @@ final class ShareViewController: UIViewController {
         _ = fileCount
         _ = unknownCount
 
-        return SharedContentPayload(title: title, url: sharedURL, text: sharedText)
+        return ExtractedShareContent(
+            payload: SharedContentPayload(title: title, url: sharedURL, text: sharedText),
+            attachments: attachments)
+    }
+
+    private func loadImageAttachment(from provider: NSItemProvider, index: Int) async -> ShareAttachment? {
+        let imageUTI = self.preferredImageTypeIdentifier(from: provider) ?? UTType.image.identifier
+        guard let rawData = await self.loadDataValue(from: provider, typeIdentifier: imageUTI) else {
+            return nil
+        }
+
+        let maxBytes = 5_000_000
+        var data = rawData
+        var mimeType: String
+        var fileExt: String
+        if let image = UIImage(data: rawData), let normalized = self.normalizedJPEGData(from: image, maxBytes: maxBytes) {
+            data = normalized
+            mimeType = "image/jpeg"
+            fileExt = "jpg"
+        } else {
+            let utType = UTType(imageUTI)
+            mimeType = utType?.preferredMIMEType ?? "application/octet-stream"
+            fileExt = utType?.preferredFilenameExtension ?? "bin"
+            if data.count > maxBytes {
+                data = Data(data.prefix(maxBytes))
+            }
+        }
+
+        return ShareAttachment(
+            type: "image",
+            mimeType: mimeType,
+            fileName: "shared-image-\(index + 1).\(fileExt)",
+            content: data.base64EncodedString())
+    }
+
+    private func preferredImageTypeIdentifier(from provider: NSItemProvider) -> String? {
+        for identifier in provider.registeredTypeIdentifiers {
+            guard let utType = UTType(identifier) else { continue }
+            if utType.conforms(to: .image) {
+                return identifier
+            }
+        }
+        return nil
+    }
+
+    private func normalizedJPEGData(from image: UIImage, maxBytes: Int) -> Data? {
+        var quality: CGFloat = 0.9
+        while quality >= 0.4 {
+            if let data = image.jpegData(compressionQuality: quality), data.count <= maxBytes {
+                return data
+            }
+            quality -= 0.1
+        }
+        guard let fallback = image.jpegData(compressionQuality: 0.35) else { return nil }
+        if fallback.count <= maxBytes { return fallback }
+        return Data(fallback.prefix(maxBytes))
     }
 
     private func loadURL(from provider: NSItemProvider) async -> URL? {
@@ -441,6 +523,14 @@ final class ShareViewController: UIViewController {
                     return
                 }
                 continuation.resume(returning: nil)
+            }
+        }
+    }
+
+    private func loadDataValue(from provider: NSItemProvider, typeIdentifier: String) async -> Data? {
+        await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                continuation.resume(returning: data)
             }
         }
     }
