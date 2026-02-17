@@ -40,6 +40,7 @@ const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src",
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
+  ALLOW_DATA_ATTR: true,
   ADD_DATA_URI_TAGS: ["img"],
 };
 
@@ -132,6 +133,18 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
 const htmlEscapeRenderer = new marked.Renderer();
 htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
 
+// Emit mermaid code blocks as inert placeholders. The actual rendering is
+// performed asynchronously by a MutationObserver installed via
+// initMermaidRenderer().
+const originalCode = htmlEscapeRenderer.code.bind(htmlEscapeRenderer);
+htmlEscapeRenderer.code = function (token: Parameters<typeof originalCode>[0]) {
+  if (token.lang === "mermaid") {
+    const encoded = encodeMermaidAttr(token.text);
+    return `<div class="mermaid-placeholder" data-mermaid-code="${encoded}"></div>`;
+  }
+  return originalCode(token);
+};
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -141,13 +154,103 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/** Encode mermaid source for use in an HTML data-attribute value.
+ *  We use URI-encoding (encodeURIComponent) because DOMPurify 3.x strips
+ *  attributes whose decoded value contains `-->` (mutation-XSS guard).
+ *  URI-encoding avoids this entirely since `>` becomes `%3E`. */
+function encodeMermaidAttr(value: string): string {
+  return encodeURIComponent(value);
+}
+
+/* ── Mermaid DOM renderer ────────────────────────────── */
+
+function decodeMermaidAttr(value: string): string {
+  return decodeURIComponent(value);
+}
+
+// Lazy-loaded mermaid instance. The library is optional — when it is not
+// installed the placeholders simply stay inert.
+let mermaidPromise: Promise<{
+  default: {
+    initialize: (cfg: object) => void;
+    render: (id: string, code: string) => Promise<{ svg: string }>;
+  };
+}> | null = null;
+
+function loadMermaid() {
+  if (!mermaidPromise) {
+    // Wrap in a variable so Rollup/Vite does not attempt static resolution.
+    const specifier = "mermaid";
+    mermaidPromise = import(/* @vite-ignore */ specifier);
+  }
+  return mermaidPromise;
+}
+
+let mermaidInitialised = false;
+
+async function renderMermaidPlaceholder(el: Element): Promise<void> {
+  const code = el.getAttribute("data-mermaid-code");
+  if (!code) {
+    return;
+  }
+  const decoded = decodeMermaidAttr(code);
+  try {
+    const mermaidModule = await loadMermaid();
+    const mermaid = mermaidModule.default;
+    if (!mermaidInitialised) {
+      mermaidInitialised = true;
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "default",
+        securityLevel: "strict",
+        fontFamily: "inherit",
+      });
+    }
+    const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    const { svg } = await mermaid.render(id, decoded);
+    el.classList.remove("mermaid-placeholder");
+    el.classList.add("mermaid-diagram");
+    el.removeAttribute("data-mermaid-code");
+    el.innerHTML = svg;
+  } catch {
+    el.classList.remove("mermaid-placeholder");
+    el.classList.add("mermaid-error");
+    el.textContent = decoded;
+  }
+}
+
+function processMermaidPlaceholders(root: ParentNode = document): void {
+  const placeholders = root.querySelectorAll(".mermaid-placeholder[data-mermaid-code]");
+  for (const el of placeholders) {
+    void renderMermaidPlaceholder(el);
+  }
+}
+
 /**
  * Watch the DOM for `<pre class="mermaid">` placeholders and render them.
  * Mermaid is loaded lazily on first match to avoid bloating the initial bundle.
  * If the mermaid package is not installed, this is a no-op.
  */
 export function initMermaidRenderer(): void {
-  // No-op until mermaid is added as a dependency. The observer pattern is
-  // ready to activate once `pnpm --filter openclaw-control-ui add mermaid`
-  // is run and the dynamic import below can resolve.
+  // Render any placeholders already in the DOM.
+  processMermaidPlaceholders();
+
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (!(node instanceof HTMLElement)) {
+          continue;
+        }
+        if (
+          node.classList.contains("mermaid-placeholder") &&
+          node.hasAttribute("data-mermaid-code")
+        ) {
+          void renderMermaidPlaceholder(node);
+        }
+        processMermaidPlaceholders(node);
+      }
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
 }

@@ -117,6 +117,7 @@ describe("chat view", () => {
     render(
       renderChat(
         createProps({
+          sending: true,
           canAbort: true,
           onAbort,
         }),
@@ -124,34 +125,26 @@ describe("chat view", () => {
       container,
     );
 
-    const stopButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Stop",
-    );
-    expect(stopButton).not.toBeUndefined();
+    const stopButton = container.querySelector<HTMLButtonElement>(".compose-send--stop");
+    expect(stopButton).not.toBeNull();
+    expect(stopButton?.getAttribute("aria-label")).toBe("Stop");
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("New session");
   });
 
-  it("shows a new session button when aborting is unavailable", () => {
+  it("hides stop button when aborting is unavailable", () => {
     const container = document.createElement("div");
-    const onNewSession = vi.fn();
     render(
       renderChat(
         createProps({
+          sending: true,
           canAbort: false,
-          onNewSession,
         }),
       ),
       container,
     );
 
-    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "New session",
-    );
-    expect(newSessionButton).not.toBeUndefined();
-    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onNewSession).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("Stop");
+    const stopButton = container.querySelector(".compose-send--stop");
+    expect(stopButton).toBeNull();
   });
 });
