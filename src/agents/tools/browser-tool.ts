@@ -620,10 +620,13 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = readActRequestParam(params);
-          if (!request) {
+          const rawRequest = readActRequestParam(params);
+          if (!rawRequest) {
             throw new Error("request required");
           }
+          // Merge top-level targetId into the request body so it reaches
+          // the CDP endpoint even when the model passes it outside `request`.
+          const request = targetId ? { ...rawRequest, targetId } : rawRequest;
           return await executeActAction({
             request,
             baseUrl,
