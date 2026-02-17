@@ -31,6 +31,7 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
+    throw new Error("unreachable");
   }
   return value;
 }

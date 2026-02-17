@@ -88,7 +88,8 @@ export async function handlePortError(
       logDebug(`stderr: ${stderr.trim()}`);
     }
   }
-  return runtime.exit(1);
+  runtime.exit(1);
+  throw new Error("unreachable");
 }
 
 export { PortInUseError };
