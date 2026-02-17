@@ -9,9 +9,11 @@ import { CLOUDRU_MCP_CONFIG_FILENAME } from "./write-mcp-config.js";
 
 // Mock the simple client
 const mockListMcpServers = vi.fn();
+const mockListAgents = vi.fn().mockResolvedValue({ items: [], total: 0 });
 vi.mock("../ai-fabric/cloudru-client-simple.js", () => ({
   CloudruSimpleClient: class {
     listMcpServers = mockListMcpServers;
+    listAgents = mockListAgents;
   },
 }));
 
@@ -87,7 +89,7 @@ describe("setupAiFabric (interactive)", () => {
     const result = await setupAiFabric({
       config: BASE_CONFIG,
       prompter,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       workspaceDir: tmpDir,
     });
 
@@ -107,7 +109,7 @@ describe("setupAiFabric (interactive)", () => {
     const result = await setupAiFabric({
       config: BASE_CONFIG,
       prompter,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       workspaceDir: tmpDir,
     });
 
@@ -137,7 +139,7 @@ describe("setupAiFabric (interactive)", () => {
     const result = await setupAiFabric({
       config: BASE_CONFIG,
       prompter,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       workspaceDir: tmpDir,
     });
 
@@ -160,7 +162,7 @@ describe("setupAiFabric (interactive)", () => {
     const result = await setupAiFabric({
       config: BASE_CONFIG,
       prompter,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       workspaceDir: tmpDir,
     });
 
@@ -183,7 +185,7 @@ describe("setupAiFabric (interactive)", () => {
     const result = await setupAiFabric({
       config: BASE_CONFIG,
       prompter,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       workspaceDir: tmpDir,
     });
 
@@ -224,7 +226,7 @@ describe("setupAiFabricNonInteractive", () => {
 
     const result = await setupAiFabricNonInteractive({
       config: BASE_CONFIG,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       projectId: "proj-ni",
       workspaceDir: tmpDir,
     });
@@ -244,7 +246,7 @@ describe("setupAiFabricNonInteractive", () => {
 
     const result = await setupAiFabricNonInteractive({
       config: BASE_CONFIG,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       projectId: "proj-fail",
       workspaceDir: tmpDir,
     });
@@ -258,7 +260,7 @@ describe("setupAiFabricNonInteractive", () => {
 
     const result = await setupAiFabricNonInteractive({
       config: BASE_CONFIG,
-      apiKey: "test-key",
+      auth: { keyId: "test-key", secret: "test-secret" },
       projectId: "proj-empty",
       workspaceDir: tmpDir,
     });

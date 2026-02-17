@@ -14,6 +14,8 @@ import type {
   PaginatedResult,
   McpServer,
   ListMcpServersParams,
+  Agent,
+  ListAgentsParams,
 } from "./types.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { resolveRetryConfig, retryAsync } from "../infra/retry.js";
@@ -134,6 +136,16 @@ export class CloudruSimpleClient {
   async listMcpServers(params?: ListMcpServersParams): Promise<PaginatedResult<McpServer>> {
     return this.get<PaginatedResult<McpServer>>("/mcpServers", {
       search: params?.search,
+      limit: params?.limit ?? CLOUDRU_DEFAULT_PAGE_SIZE,
+      offset: params?.offset ?? 0,
+    });
+  }
+
+  /** List AI Agents available in the project. */
+  async listAgents(params?: ListAgentsParams): Promise<PaginatedResult<Agent>> {
+    return this.get<PaginatedResult<Agent>>("/agents", {
+      search: params?.search,
+      status: params?.status,
       limit: params?.limit ?? CLOUDRU_DEFAULT_PAGE_SIZE,
       offset: params?.offset ?? 0,
     });

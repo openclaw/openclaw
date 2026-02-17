@@ -8,8 +8,9 @@
  * Uses IAM token exchange (keyId + secret) for authentication.
  */
 
-import type { CloudruAuthConfig, McpServer } from "../ai-fabric/types.js";
+import type { CloudruAuthConfig, McpServer, Agent } from "../ai-fabric/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AiFabricAgentEntry } from "../config/types.ai-fabric.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { CloudruAuthError } from "../ai-fabric/cloudru-auth.js";
 import { CloudruSimpleClient } from "../ai-fabric/cloudru-client-simple.js";
@@ -66,60 +67,82 @@ export async function setupAiFabric(params: SetupAiFabricParams): Promise<SetupA
     validate: (v) => (v.trim() ? undefined : "Project ID is required"),
   });
 
-  const servers = await discoverMcpServers({
-    auth,
-    projectId: projectId.trim(),
-    prompter,
-  });
+  const trimmedProjectId = projectId.trim();
+  const client = new CloudruSimpleClient({ projectId: trimmedProjectId, auth });
 
-  if (!servers || servers.length === 0) {
+  // --- MCP Server Discovery ---
+  const servers = await discoverMcpServers({ client, prompter });
+  let mcpConfigPath: string | undefined;
+
+  if (servers && servers.length > 0) {
+    const options = servers.map((s) => ({
+      value: s,
+      label: s.name,
+      hint: `${s.tools.length} tool${s.tools.length === 1 ? "" : "s"} — ${s.status}`,
+    }));
+
+    const selected = await prompter.multiselect<McpServer>({
+      message: `Select MCP servers to connect (${servers.length} available)`,
+      options,
+      initialValues: servers.filter((s) => s.status === "RUNNING" || s.status === "AVAILABLE"),
+    });
+
+    if (selected.length > 0) {
+      mcpConfigPath = await writeMcpConfigFile({ workspaceDir, servers: selected });
+      await ensureGitignoreEntries({ workspaceDir, entries: [CLOUDRU_MCP_CONFIG_FILENAME] });
+
+      const toolCount = selected.reduce((sum, s) => sum + s.tools.length, 0);
+      await prompter.note(
+        `Connected ${selected.length} MCP server${selected.length === 1 ? "" : "s"} (${toolCount} tools).\n` +
+          `Config: ${CLOUDRU_MCP_CONFIG_FILENAME}`,
+        "AI Fabric — MCP",
+      );
+    }
+  } else {
     await prompter.note(
       "No MCP servers found in this project. You can add them later in Cloud.ru console.",
       "AI Fabric",
     );
-    config = applyAiFabricConfig(config, { projectId: projectId.trim(), keyId: auth.keyId });
-    return { config, configured: false };
   }
 
-  const options = servers.map((s) => ({
-    value: s,
-    label: s.name,
-    hint: `${s.tools.length} tool${s.tools.length === 1 ? "" : "s"} — ${s.status}`,
-  }));
+  // --- Agent Discovery ---
+  const agents = await discoverAgents({ client, prompter });
+  let selectedAgents: AiFabricAgentEntry[] | undefined;
 
-  const selected = await prompter.multiselect<McpServer>({
-    message: `Select MCP servers to connect (${servers.length} available)`,
-    options,
-    initialValues: servers.filter((s) => s.status === "RUNNING" || s.status === "AVAILABLE"),
-  });
+  if (agents.length > 0) {
+    const agentOptions = agents.map((a) => ({
+      value: a,
+      label: a.name,
+      hint: a.endpoint,
+    }));
 
-  if (selected.length === 0) {
-    await prompter.note(
-      "No servers selected. You can re-run onboarding to connect MCP servers later.",
-      "AI Fabric",
-    );
-    config = applyAiFabricConfig(config, { projectId: projectId.trim(), keyId: auth.keyId });
-    return { config, configured: false };
+    selectedAgents = await prompter.multiselect<AiFabricAgentEntry>({
+      message: `Select AI Agents for A2A communication (${agents.length} available)`,
+      options: agentOptions,
+      initialValues: agents,
+    });
+
+    if (selectedAgents.length > 0) {
+      await prompter.note(
+        `Selected ${selectedAgents.length} agent${selectedAgents.length === 1 ? "" : "s"} for A2A.`,
+        "AI Fabric — Agents",
+      );
+    }
   }
 
-  const mcpConfigPath = await writeMcpConfigFile({ workspaceDir, servers: selected });
-  await ensureGitignoreEntries({ workspaceDir, entries: [CLOUDRU_MCP_CONFIG_FILENAME] });
-
+  // --- Apply Config ---
   config = applyAiFabricConfig(config, {
-    projectId: projectId.trim(),
+    projectId: trimmedProjectId,
     keyId: auth.keyId,
     mcpConfigPath,
+    agents: selectedAgents,
   });
-  config = applyMcpArgsToCliBackend(config, mcpConfigPath);
+  if (mcpConfigPath) {
+    config = applyMcpArgsToCliBackend(config, mcpConfigPath);
+  }
 
-  const toolCount = selected.reduce((sum, s) => sum + s.tools.length, 0);
-  await prompter.note(
-    `Connected ${selected.length} MCP server${selected.length === 1 ? "" : "s"} (${toolCount} tools).\n` +
-      `Config: ${CLOUDRU_MCP_CONFIG_FILENAME}`,
-    "AI Fabric ready",
-  );
-
-  return { config, configured: true };
+  const configured = !!mcpConfigPath || (selectedAgents != null && selectedAgents.length > 0);
+  return { config, configured };
 }
 
 export type SetupAiFabricNonInteractiveParams = {
@@ -140,28 +163,42 @@ export async function setupAiFabricNonInteractive(
   const { auth, projectId, workspaceDir } = params;
   let config = params.config;
 
-  let servers: McpServer[];
+  const client = new CloudruSimpleClient({ projectId, auth });
+
+  // --- MCP Servers ---
+  let mcpConfigPath: string | undefined;
   try {
-    const client = new CloudruSimpleClient({ projectId, auth });
     const result = await client.listMcpServers();
-    servers = result.items.filter((s) => s.status === "RUNNING" || s.status === "AVAILABLE");
+    const servers = result.items.filter((s) => s.status === "RUNNING" || s.status === "AVAILABLE");
+    if (servers.length > 0) {
+      mcpConfigPath = await writeMcpConfigFile({ workspaceDir, servers });
+      await ensureGitignoreEntries({ workspaceDir, entries: [CLOUDRU_MCP_CONFIG_FILENAME] });
+    }
   } catch {
-    config = applyAiFabricConfig(config, { projectId, keyId: auth.keyId });
-    return { config, configured: false };
+    // MCP discovery failed — continue with agent discovery
   }
 
-  if (servers.length === 0) {
-    config = applyAiFabricConfig(config, { projectId, keyId: auth.keyId });
-    return { config, configured: false };
+  // --- Agents ---
+  let agents: AiFabricAgentEntry[] | undefined;
+  try {
+    const result = await client.listAgents({ status: "RUNNING" });
+    agents = result.items
+      .filter((a): a is Agent & { endpoint: string } => a.endpoint != null)
+      .map((a) => ({ id: a.id, name: a.name, endpoint: a.endpoint }));
+    if (agents.length === 0) {
+      agents = undefined;
+    }
+  } catch {
+    // Agent discovery failed — continue
   }
 
-  const mcpConfigPath = await writeMcpConfigFile({ workspaceDir, servers });
-  await ensureGitignoreEntries({ workspaceDir, entries: [CLOUDRU_MCP_CONFIG_FILENAME] });
+  config = applyAiFabricConfig(config, { projectId, keyId: auth.keyId, mcpConfigPath, agents });
+  if (mcpConfigPath) {
+    config = applyMcpArgsToCliBackend(config, mcpConfigPath);
+  }
 
-  config = applyAiFabricConfig(config, { projectId, keyId: auth.keyId, mcpConfigPath });
-  config = applyMcpArgsToCliBackend(config, mcpConfigPath);
-
-  return { config, configured: true };
+  const configured = !!mcpConfigPath || agents != null;
+  return { config, configured };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,17 +206,12 @@ export async function setupAiFabricNonInteractive(
 // ---------------------------------------------------------------------------
 
 async function discoverMcpServers(params: {
-  auth: CloudruAuthConfig;
-  projectId: string;
+  client: CloudruSimpleClient;
   prompter: WizardPrompter;
 }): Promise<McpServer[] | null> {
   const spinner = params.prompter.progress("Discovering MCP servers...");
   try {
-    const client = new CloudruSimpleClient({
-      projectId: params.projectId,
-      auth: params.auth,
-    });
-    const result = await client.listMcpServers();
+    const result = await params.client.listMcpServers();
     spinner.stop(`Found ${result.items.length} MCP server${result.items.length === 1 ? "" : "s"}`);
     return result.items;
   } catch (err) {
@@ -198,9 +230,36 @@ async function discoverMcpServers(params: {
   }
 }
 
+async function discoverAgents(params: {
+  client: CloudruSimpleClient;
+  prompter: WizardPrompter;
+}): Promise<AiFabricAgentEntry[]> {
+  const spinner = params.prompter.progress("Discovering AI Agents...");
+  try {
+    const result = await params.client.listAgents({ status: "RUNNING" });
+    const agents = result.items
+      .filter((a): a is Agent & { endpoint: string } => a.endpoint != null)
+      .map((a) => ({ id: a.id, name: a.name, endpoint: a.endpoint }));
+    spinner.stop(
+      agents.length > 0
+        ? `Found ${agents.length} agent${agents.length === 1 ? "" : "s"}`
+        : "No agents found",
+    );
+    return agents;
+  } catch {
+    spinner.stop("Agent discovery failed (continuing without agents)");
+    return [];
+  }
+}
+
 function applyAiFabricConfig(
   config: OpenClawConfig,
-  params: { projectId: string; keyId?: string; mcpConfigPath?: string },
+  params: {
+    projectId: string;
+    keyId?: string;
+    mcpConfigPath?: string;
+    agents?: AiFabricAgentEntry[];
+  },
 ): OpenClawConfig {
   return {
     ...config,
@@ -209,6 +268,7 @@ function applyAiFabricConfig(
       projectId: params.projectId,
       ...(params.keyId ? { keyId: params.keyId } : {}),
       ...(params.mcpConfigPath ? { mcpConfigPath: params.mcpConfigPath } : {}),
+      ...(params.agents?.length ? { agents: params.agents } : {}),
     },
   };
 }

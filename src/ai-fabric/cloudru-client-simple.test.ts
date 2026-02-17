@@ -185,6 +185,46 @@ describe("CloudruSimpleClient", () => {
     expect(result.total).toBe(2);
   });
 
+  it("listAgents returns paginated result with status filter", async () => {
+    const agents = [
+      {
+        id: "agent-1",
+        name: "code-assistant",
+        status: "RUNNING",
+        endpoint: "https://agent-1.example.com",
+        createdAt: "2026-01-01",
+        updatedAt: "2026-01-01",
+      },
+      {
+        id: "agent-2",
+        name: "search-agent",
+        status: "RUNNING",
+        endpoint: "https://agent-2.example.com",
+        createdAt: "2026-01-02",
+        updatedAt: "2026-01-02",
+      },
+    ];
+    const fetchImpl = createMockFetch([
+      { status: 200, body: IAM_TOKEN_RESPONSE },
+      { status: 200, body: { items: agents, total: 2 } },
+    ]);
+
+    const client = new CloudruSimpleClient({
+      ...BASE_CONFIG,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await client.listAgents({ status: "RUNNING" });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].name).toBe("code-assistant");
+    expect(result.items[0].endpoint).toBe("https://agent-1.example.com");
+    expect(result.total).toBe(2);
+
+    const [url] = fetchImpl.mock.calls[1] as [string];
+    expect(url).toContain("/proj-123/agents");
+    expect(url).toContain("status=RUNNING");
+  });
+
   it("omits undefined query values", async () => {
     const fetchImpl = createMockFetch([
       { status: 200, body: IAM_TOKEN_RESPONSE },
