@@ -338,10 +338,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const startTime =
           typeof durationMs === "number" ? Date.now() - Math.max(0, durationMs) : undefined;
         let ctx = context.active();
-        if (parentTraceContext?.traceId) {
+        if (parentTraceContext?.traceId && parentTraceContext.parentSpanId) {
           const parentSpanContext: SpanContext = {
             traceId: parentTraceContext.traceId,
-            spanId: parentTraceContext.parentSpanId || "0000000000000000",
+            spanId: parentTraceContext.parentSpanId,
             traceFlags: TraceFlags.SAMPLED,
             isRemote: true,
           };
