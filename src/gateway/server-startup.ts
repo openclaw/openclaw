@@ -1,3 +1,4 @@
+import { initAuthStoreBackend } from "../agents/auth-profiles/backend-init.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -57,6 +58,16 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+  }
+
+  // Initialize auth store backend (DB if AUTH_ENCRYPTION_KEY set, else file).
+  try {
+    const authBackend = await initAuthStoreBackend();
+    if (authBackend === "db") {
+      params.log.info("auth store: using encrypted DB backend");
+    }
+  } catch (err) {
+    params.log.warn(`auth store backend init failed (using file backend): ${String(err)}`);
   }
 
   // Start OpenClaw browser control server (unless disabled via config).
