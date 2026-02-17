@@ -12,6 +12,8 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { buildChannelAccountBindings } from "../../routing/bindings.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -24,11 +26,13 @@ export async function resolveDeliveryTarget(
   channel: Exclude<OutboundChannel, "none">;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
   mode: "explicit" | "implicit";
   error?: Error;
 }> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -40,7 +44,7 @@ export async function resolveDeliveryTarget(
     entry: main,
     requestedChannel,
     explicitTo,
-    allowMismatchedLastTo: true,
+    allowMismatchedLastTo,
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
@@ -59,7 +63,7 @@ export async function resolveDeliveryTarget(
         requestedChannel,
         explicitTo,
         fallbackChannel,
-        allowMismatchedLastTo: true,
+        allowMismatchedLastTo,
         mode: preliminary.mode,
       })
     : preliminary;
@@ -68,21 +72,51 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   const toCandidate = resolved.to;
 
+  // When the session has no lastAccountId (e.g. first-run isolated cron
+  // session), fall back to the agent's bound account from bindings config.
+  // This ensures the message tool in isolated sessions resolves the correct
+  // bot token for multi-account setups.
+  let accountId = resolved.accountId;
+  if (!accountId && channel) {
+    const bindings = buildChannelAccountBindings(cfg);
+    const byAgent = bindings.get(channel);
+    const boundAccounts = byAgent?.get(normalizeAgentId(agentId));
+    if (boundAccounts && boundAccounts.length > 0) {
+      accountId = boundAccounts[0];
+    }
+  }
+
+  // Only carry threadId when delivering to the same recipient as the session's
+  // last conversation. This prevents stale thread IDs (e.g. from a Telegram
+  // supergroup topic) from being sent to a different target (e.g. a private
+  // chat) where they would cause API errors.
+  const threadId =
+    resolved.threadId && resolved.to && resolved.to === resolved.lastTo
+      ? resolved.threadId
+      : undefined;
+
   if (!toCandidate) {
-    return { channel, to: undefined, accountId: resolved.accountId, mode };
+    return {
+      channel,
+      to: undefined,
+      accountId,
+      threadId,
+      mode,
+    };
   }
 
   const docked = resolveOutboundTarget({
     channel,
     to: toCandidate,
     cfg,
-    accountId: resolved.accountId,
+    accountId,
     mode,
   });
   return {
     channel,
     to: docked.ok ? docked.to : undefined,
-    accountId: resolved.accountId,
+    accountId,
+    threadId,
     mode,
     error: docked.ok ? undefined : docked.error,
   };

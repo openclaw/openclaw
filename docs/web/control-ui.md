@@ -19,7 +19,7 @@ It speaks **directly to the Gateway WebSocket** on the same port.
 
 If the Gateway is running on the same computer, open:
 
-- http://127.0.0.1:18789/ (or http://localhost:18789/)
+- [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/))
 
 If the page fails to load, start the Gateway first: `openclaw gateway`.
 
@@ -79,15 +79,29 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
 
+Cron jobs panel notes:
+
+- For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
+- Channel/target fields appear when announce is selected.
+- Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
+- For main-session jobs, webhook and none delivery modes are available.
+- Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
+- Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
+
 ## Chat behavior
 
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
+- `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - Stop:
   - Click **Stop** (calls `chat.abort`)
   - Type `/stop` (or `stop|esc|abort|wait|exit|interrupt`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
+- Abort partial retention:
+  - When a run is aborted, partial assistant text can still be shown in the UI
+  - Gateway persists aborted partial assistant text into transcript history when buffered output exists
+  - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
 
 ## Tailnet access (recommended)
 
@@ -196,6 +210,23 @@ Notes:
 
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
 - `token` is stored in localStorage; `password` is kept in memory only.
+- When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
+  Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
+- `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
+- For cross-origin dev setups (e.g. `pnpm ui:dev` to a remote Gateway), add the UI
+  origin to `gateway.controlUi.allowedOrigins`.
+
+Example:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      allowedOrigins: ["http://localhost:5173"],
+    },
+  },
+}
+```
 
 Remote access setup details: [Remote access](/gateway/remote).

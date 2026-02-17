@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "vitest";
-import type { OpenClawConfig, ModelProviderConfig } from "../config/types.js";
+import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
@@ -401,6 +401,7 @@ function buildLiveGatewayConfig(params: {
     ...providerOverrides,
   };
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
+  const baseModels = params.cfg.models;
   return {
     ...params.cfg,
     agents: {
@@ -418,7 +419,9 @@ function buildLiveGatewayConfig(params: {
       },
     },
     models:
-      Object.keys(providers).length > 0 ? { ...params.cfg.models, providers } : params.cfg.models,
+      Object.keys(providers).length > 0
+        ? ({ ...baseModels, providers } as ModelsConfig)
+        : baseModels,
   };
 }
 
@@ -1149,10 +1152,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
     const port = await getFreeGatewayPort();
-    const server = await startGatewayServer({
-      configPath: cfg.__meta?.path,
-      port,
-      token,
+    const server = await startGatewayServer(port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
     });
 
     const client = await connectClient({

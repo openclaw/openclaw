@@ -1,11 +1,12 @@
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
+import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 
 export type CacheTraceStage =
   | "session:loaded"
@@ -69,10 +70,7 @@ type CacheTraceConfig = {
   includeSystem: boolean;
 };
 
-type CacheTraceWriter = {
-  filePath: string;
-  write: (line: string) => void;
-};
+type CacheTraceWriter = QueuedFileWriter;
 
 const writers = new Map<string, CacheTraceWriter>();
 
@@ -101,27 +99,7 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 }
 
 function getWriter(filePath: string): CacheTraceWriter {
-  const existing = writers.get(filePath);
-  if (existing) {
-    return existing;
-  }
-
-  const dir = path.dirname(filePath);
-  const ready = fs.mkdir(dir, { recursive: true }).catch(() => undefined);
-  let queue = Promise.resolve();
-
-  const writer: CacheTraceWriter = {
-    filePath,
-    write: (line: string) => {
-      queue = queue
-        .then(() => ready)
-        .then(() => fs.appendFile(filePath, line, "utf8"))
-        .catch(() => undefined);
-    },
-  };
-
-  writers.set(filePath, writer);
-  return writer;
+  return getQueuedFileWriter(writers, filePath);
 }
 
 function stableStringify(value: unknown): string {
@@ -177,28 +155,6 @@ function summarizeMessages(messages: AgentMessage[]): {
     messageFingerprints,
     messagesDigest: digest(messageFingerprints.join("|")),
   };
-}
-
-function safeJsonStringify(value: unknown): string | null {
-  try {
-    return JSON.stringify(value, (_key, val) => {
-      if (typeof val === "bigint") {
-        return val.toString();
-      }
-      if (typeof val === "function") {
-        return "[Function]";
-      }
-      if (val instanceof Error) {
-        return { name: val.name, message: val.message, stack: val.stack };
-      }
-      if (val instanceof Uint8Array) {
-        return { type: "Uint8Array", data: Buffer.from(val).toString("base64") };
-      }
-      return val;
-    });
-  } catch {
-    return null;
-  }
 }
 
 export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {

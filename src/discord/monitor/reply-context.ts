@@ -1,13 +1,19 @@
 import type { Guild, Message, User } from "@buape/carbon";
-import { formatAgentEnvelope, type EnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { resolveTimestampMs } from "./format.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
+
+export type DiscordReplyContext = {
+  id: string;
+  channelId: string;
+  sender: string;
+  body: string;
+  timestamp?: number;
+};
 
 export function resolveReplyContext(
   message: Message,
   resolveDiscordMessageText: (message: Message, options?: { includeForwarded?: boolean }) => string,
-  options?: { envelope?: EnvelopeFormatOptions },
-): string | null {
+): DiscordReplyContext | null {
   const referenced = message.referencedMessage;
   if (!referenced?.author) {
     return null;
@@ -22,15 +28,13 @@ export function resolveReplyContext(
     author: referenced.author,
     pluralkitInfo: null,
   });
-  const fromLabel = referenced.author ? buildDirectLabel(referenced.author, sender.tag) : "Unknown";
-  const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${sender.tag ?? sender.label} user id:${sender.id}]`;
-  return formatAgentEnvelope({
-    channel: "Discord",
-    from: fromLabel,
+  return {
+    id: referenced.id,
+    channelId: referenced.channelId,
+    sender: sender.tag ?? sender.label ?? "unknown",
+    body: referencedText,
     timestamp: resolveTimestampMs(referenced.timestamp),
-    body,
-    envelope: options?.envelope,
-  });
+  };
 }
 
 export function buildDirectLabel(author: User, tagOverride?: string) {
@@ -39,7 +43,11 @@ export function buildDirectLabel(author: User, tagOverride?: string) {
   return `${username ?? "unknown"} user id:${author.id}`;
 }
 
-export function buildGuildLabel(params: { guild?: Guild; channelName: string; channelId: string }) {
+export function buildGuildLabel(params: {
+  guild?: Guild<true> | Guild;
+  channelName: string;
+  channelId: string;
+}) {
   const { guild, channelName, channelId } = params;
   return `${guild?.name ?? "Guild"} #${channelName} channel id:${channelId}`;
 }

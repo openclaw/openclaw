@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { callGateway } from "../gateway/call.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -12,6 +13,7 @@ type DevicesRpcOpts = {
   password?: string;
   timeout?: string;
   json?: boolean;
+  latest?: boolean;
   device?: string;
   role?: string;
   scope?: string[];
@@ -49,23 +51,6 @@ type DevicePairingList = {
   paired?: PairedDevice[];
 };
 
-function formatAge(msAgo: number) {
-  const s = Math.max(0, Math.floor(msAgo / 1000));
-  if (s < 60) {
-    return `${s}s`;
-  }
-  const m = Math.floor(s / 60);
-  if (m < 60) {
-    return `${m}m`;
-  }
-  const h = Math.floor(m / 60);
-  if (h < 24) {
-    return `${h}h`;
-  }
-  const d = Math.floor(h / 24);
-  return `${d}d`;
-}
-
 const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -100,6 +85,17 @@ function parseDevicePairingList(value: unknown): DevicePairingList {
     pending: Array.isArray(obj.pending) ? (obj.pending as PendingDevice[]) : [],
     paired: Array.isArray(obj.paired) ? (obj.paired as PairedDevice[]) : [],
   };
+}
+
+function selectLatestPendingRequest(pending: PendingDevice[] | undefined) {
+  if (!pending?.length) {
+    return null;
+  }
+  return pending.reduce((latest, current) => {
+    const latestTs = typeof latest.ts === "number" ? latest.ts : 0;
+    const currentTs = typeof current.ts === "number" ? current.ts : 0;
+    return currentTs > latestTs ? current : latest;
+  });
 }
 
 function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
@@ -147,7 +143,7 @@ export function registerDevicesCli(program: Command) {
                 Device: req.displayName || req.deviceId,
                 Role: req.role ?? "",
                 IP: req.remoteIp ?? "",
-                Age: typeof req.ts === "number" ? `${formatAge(Date.now() - req.ts)} ago` : "",
+                Age: typeof req.ts === "number" ? formatTimeAgo(Date.now() - req.ts) : "",
                 Flags: req.isRepair ? "repair" : "",
               })),
             }).trimEnd(),
@@ -188,15 +184,31 @@ export function registerDevicesCli(program: Command) {
     devices
       .command("approve")
       .description("Approve a pending device pairing request")
-      .argument("<requestId>", "Pending request id")
-      .action(async (requestId: string, opts: DevicesRpcOpts) => {
-        const result = await callGatewayCli("device.pair.approve", opts, { requestId });
+      .argument("[requestId]", "Pending request id")
+      .option("--latest", "Approve the most recent pending request", false)
+      .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
+        let resolvedRequestId = requestId?.trim();
+        if (!resolvedRequestId || opts.latest) {
+          const listResult = await callGatewayCli("device.pair.list", opts, {});
+          const latest = selectLatestPendingRequest(parseDevicePairingList(listResult).pending);
+          resolvedRequestId = latest?.requestId?.trim();
+        }
+        if (!resolvedRequestId) {
+          defaultRuntime.error("No pending device pairing requests to approve");
+          defaultRuntime.exit(1);
+          return;
+        }
+        const result = await callGatewayCli("device.pair.approve", opts, {
+          requestId: resolvedRequestId,
+        });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
-        defaultRuntime.log(`${theme.success("Approved")} ${theme.command(deviceId ?? "ok")}`);
+        defaultRuntime.log(
+          `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${resolvedRequestId})`)}`,
+        );
       }),
   );
 

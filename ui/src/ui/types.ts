@@ -302,20 +302,20 @@ export type ConfigSchemaResponse = {
 };
 
 export type PresenceEntry = {
-  deviceFamily?: string | null;
-  host?: string | null;
   instanceId?: string | null;
+  host?: string | null;
   ip?: string | null;
-  lastInputSeconds?: number | null;
-  mode?: string | null;
-  modelIdentifier?: string | null;
+  version?: string | null;
   platform?: string | null;
+  deviceFamily?: string | null;
+  modelIdentifier?: string | null;
+  roles?: string[] | null;
+  scopes?: string[] | null;
+  mode?: string | null;
+  lastInputSeconds?: number | null;
   reason?: string | null;
-  roles?: Array<string | null> | null;
-  scopes?: Array<string | null> | null;
   text?: string | null;
   ts?: number | null;
-  version?: string | null;
 };
 
 export type GatewaySessionsDefaults = {
@@ -424,8 +424,18 @@ export type SessionsPatchResult = {
   };
 };
 
+export type {
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./usage-types.ts";
+
 export type CronSchedule =
-  | { kind: "at"; atMs: number }
+  | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string };
 
@@ -439,22 +449,13 @@ export type CronPayload =
       message: string;
       thinking?: string;
       timeoutSeconds?: number;
-      deliver?: boolean;
-      provider?:
-        | "last"
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "msteams";
-      to?: string;
-      bestEffortDeliver?: boolean;
     };
 
-export type CronIsolation = {
-  postToMainPrefix?: string;
+export type CronDelivery = {
+  mode: "none" | "announce" | "webhook";
+  channel?: string;
+  to?: string;
+  bestEffort?: boolean;
 };
 
 export type CronJobState = {
@@ -479,7 +480,7 @@ export type CronJob = {
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
-  isolation?: CronIsolation;
+  delivery?: CronDelivery;
   state?: CronJobState;
 };
 
@@ -496,11 +497,12 @@ export type CronRunLogEntry = {
   durationMs?: number;
   error?: string;
   summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 export type SkillsStatusConfigCheck = {
   path: string;
-  value: unknown;
   satisfied: boolean;
 };
 
@@ -515,10 +517,10 @@ export type SkillStatusEntry = {
   name: string;
   description: string;
   source: string;
-  bundled?: boolean;
   filePath: string;
   baseDir: string;
   skillKey: string;
+  bundled?: boolean;
   primaryEnv?: string;
   emoji?: string;
   homepage?: string;

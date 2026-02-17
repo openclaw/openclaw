@@ -6,6 +6,33 @@ import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-s
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
 
+type SeenIdEntry = {
+  candidate: PluginCandidate;
+  recordIndex: number;
+};
+
+// Precedence: config > workspace > global > bundled
+const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
+  config: 0,
+  workspace: 1,
+  global: 2,
+  bundled: 3,
+};
+
+function safeRealpathSync(rootDir: string, cache: Map<string, string>): string | null {
+  const cached = cache.get(rootDir);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const resolved = fs.realpathSync(rootDir);
+    cache.set(rootDir, resolved);
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
 export type PluginManifestRecord = {
   id: string;
   name?: string;
@@ -33,6 +60,10 @@ export type PluginManifestRegistry = {
 const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
 
 const DEFAULT_MANIFEST_CACHE_MS = 200;
+
+export function clearPluginManifestRegistryCache(): void {
+  registryCache.clear();
+}
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
@@ -62,7 +93,14 @@ function buildCacheKey(params: {
   plugins: NormalizedPluginsConfig;
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
+  // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
+  const loadPaths = params.plugins.loadPaths
+    .map((p) => resolveUserPath(p))
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .toSorted();
+  return `${workspaceKey}::${JSON.stringify(loadPaths)}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
@@ -138,7 +176,8 @@ export function loadPluginManifestRegistry(params: {
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
-  const seenIds = new Set<string>();
+  const seenIds = new Map<string, SeenIdEntry>();
+  const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
     const manifestRes = loadPluginManifest(candidate.rootDir);
@@ -161,7 +200,35 @@ export function loadPluginManifestRegistry(params: {
       });
     }
 
-    if (seenIds.has(manifest.id)) {
+    const configSchema = manifest.configSchema;
+    const manifestMtime = safeStatMtimeMs(manifestRes.manifestPath);
+    const schemaCacheKey = manifestMtime
+      ? `${manifestRes.manifestPath}:${manifestMtime}`
+      : manifestRes.manifestPath;
+
+    const existing = seenIds.get(manifest.id);
+    if (existing) {
+      // Check whether both candidates point to the same physical directory
+      // (e.g. via symlinks or different path representations). If so, this
+      // is a false-positive duplicate and can be silently skipped.
+      const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
+      const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
+      const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
+      if (samePlugin) {
+        // Prefer higher-precedence origins even if candidates are passed in
+        // an unexpected order (config > workspace > global > bundled).
+        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+          records[existing.recordIndex] = buildRecord({
+            manifest,
+            candidate,
+            manifestPath: manifestRes.manifestPath,
+            schemaCacheKey,
+            configSchema,
+          });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
+        continue;
+      }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
@@ -169,14 +236,8 @@ export function loadPluginManifestRegistry(params: {
         message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
       });
     } else {
-      seenIds.add(manifest.id);
+      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
-
-    const configSchema = manifest.configSchema;
-    const manifestMtime = safeStatMtimeMs(manifestRes.manifestPath);
-    const schemaCacheKey = manifestMtime
-      ? `${manifestRes.manifestPath}:${manifestMtime}`
-      : manifestRes.manifestPath;
 
     records.push(
       buildRecord({

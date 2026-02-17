@@ -24,8 +24,7 @@ enum OpenClawPaths {
             }
         }
         let home = FileManager().homeDirectoryForCurrentUser
-        let preferred = home.appendingPathComponent(".openclaw", isDirectory: true)
-        return preferred
+        return home.appendingPathComponent(".openclaw", isDirectory: true)
     }
 
     private static func resolveConfigCandidate(in dir: URL) -> URL? {

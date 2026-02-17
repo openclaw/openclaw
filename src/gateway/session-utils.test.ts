@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -9,6 +10,7 @@ import {
   deriveSessionTitle,
   listSessionsFromStore,
   parseGroupKey,
+  pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
 } from "./session-utils.js";
@@ -50,6 +52,9 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe("agent:ops:work");
+    // Mixed-case main alias must also resolve to the configured mainKey (idempotent)
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:MAIN" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "MAIN" })).toBe("agent:ops:work");
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {
@@ -62,6 +67,42 @@ describe("gateway session utils", () => {
     );
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
       "agent:alpha:main",
+    );
+  });
+
+  test("resolveSessionStoreKey falls back to first list entry when no agent is marked default", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops" }, { id: "review" }] },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
+  });
+
+  test("resolveSessionStoreKey falls back to main when agents.list is missing", () => {
+    const cfg = {
+      session: { mainKey: "work" },
+    } as OpenClawConfig;
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
+  });
+
+  test("resolveSessionStoreKey normalizes session key casing", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    // Bare keys with different casing must resolve to the same canonical key
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "CoP" })).toBe(
+      resolveSessionStoreKey({ cfg, sessionKey: "cop" }),
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "MySession" })).toBe("agent:ops:mysession");
+    // Prefixed agent keys with mixed-case rest must also normalize
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:CoP" })).toBe("agent:ops:cop");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:MySession" })).toBe(
+      "agent:alpha:mysession",
     );
   });
 
@@ -91,6 +132,89 @@ describe("gateway session utils", () => {
     expect(target.canonicalKey).toBe("agent:ops:main");
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
+  });
+
+  test("resolveGatewaySessionStoreTarget includes legacy mixed-case store key", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-case-"));
+    const storePath = path.join(dir, "sessions.json");
+    // Simulate a legacy store with a mixed-case key
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ "agent:ops:MySession": { sessionId: "s1", updatedAt: 1 } }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "main", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    // Client passes the lowercased canonical key (as returned by sessions.list)
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
+    expect(target.canonicalKey).toBe("agent:ops:mysession");
+    // storeKeys must include the legacy mixed-case key from the on-disk store
+    expect(target.storeKeys).toEqual(
+      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
+    );
+    // The legacy key must resolve to the actual entry in the store
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const found = target.storeKeys.some((k) => Boolean(store[k]));
+    expect(found).toBe(true);
+  });
+
+  test("resolveGatewaySessionStoreTarget includes all case-variant duplicate keys", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-dupes-"));
+    const storePath = path.join(dir, "sessions.json");
+    // Simulate a store with both canonical and legacy mixed-case entries
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:mysession": { sessionId: "s-lower", updatedAt: 2 },
+        "agent:ops:MySession": { sessionId: "s-mixed", updatedAt: 1 },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "main", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
+    // storeKeys must include BOTH variants so delete/reset/patch can clean up all duplicates
+    expect(target.storeKeys).toEqual(
+      expect.arrayContaining(["agent:ops:mysession", "agent:ops:MySession"]),
+    );
+  });
+
+  test("resolveGatewaySessionStoreTarget finds legacy main alias key when mainKey is customized", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-alias-"));
+    const storePath = path.join(dir, "sessions.json");
+    // Legacy store has entry under "agent:ops:MAIN" but mainKey is "work"
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ "agent:ops:MAIN": { sessionId: "s1", updatedAt: 1 } }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "work", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:main" });
+    expect(target.canonicalKey).toBe("agent:ops:work");
+    // storeKeys must include the legacy mixed-case alias key
+    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
+  });
+
+  test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
+    const store: Record<string, unknown> = {
+      "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
+      "agent:ops:MAIN": { sessionId: "legacy-upper", updatedAt: 1 },
+      "agent:ops:Main": { sessionId: "legacy-mixed", updatedAt: 2 },
+      "agent:ops:main": { sessionId: "legacy-lower", updatedAt: 4 },
+    };
+    pruneLegacyStoreKeys({
+      store,
+      canonicalKey: "agent:ops:work",
+      candidates: ["agent:ops:work", "agent:ops:main"],
+    });
+    expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
   });
 });
 
@@ -330,5 +454,71 @@ describe("listSessionsFromStore search", () => {
       opts: { search: "  personal  " },
     });
     expect(result.sessions.length).toBe(1);
+  });
+
+  test("hides cron run alias session keys from sessions list", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:cron:job-1": {
+        sessionId: "run-abc",
+        updatedAt: now,
+        label: "Cron: job-1",
+      } as SessionEntry,
+      "agent:main:cron:job-1:run:run-abc": {
+        sessionId: "run-abc",
+        updatedAt: now,
+        label: "Cron: job-1",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:cron:job-1"]);
+  });
+
+  test("exposes unknown totals when freshness is stale or missing", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:fresh": {
+        sessionId: "sess-fresh",
+        updatedAt: now,
+        totalTokens: 1200,
+        totalTokensFresh: true,
+      } as SessionEntry,
+      "agent:main:stale": {
+        sessionId: "sess-stale",
+        updatedAt: now - 1000,
+        totalTokens: 2200,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      "agent:main:missing": {
+        sessionId: "sess-missing",
+        updatedAt: now - 2000,
+        inputTokens: 100,
+        outputTokens: 200,
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const fresh = result.sessions.find((row) => row.key === "agent:main:fresh");
+    const stale = result.sessions.find((row) => row.key === "agent:main:stale");
+    const missing = result.sessions.find((row) => row.key === "agent:main:missing");
+    expect(fresh?.totalTokens).toBe(1200);
+    expect(fresh?.totalTokensFresh).toBe(true);
+    expect(stale?.totalTokens).toBeUndefined();
+    expect(stale?.totalTokensFresh).toBe(false);
+    expect(missing?.totalTokens).toBeUndefined();
+    expect(missing?.totalTokensFresh).toBe(false);
   });
 });

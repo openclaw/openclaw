@@ -16,9 +16,15 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import {
+  buildEmbeddedContextFromTemplate,
+  buildTemplateSenderContext,
+  resolveRunAuthProfile,
+} from "./agent-runner-utils.js";
+import { resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
@@ -106,42 +112,31 @@ export async function runMemoryFlushIfNeeded(params: {
         resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
       ),
       run: (provider, model) => {
-        const authProfileId =
-          provider === params.followupRun.run.provider
-            ? params.followupRun.run.authProfileId
-            : undefined;
+        const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
+        const embeddedContext = buildEmbeddedContextFromTemplate({
+          run: params.followupRun.run,
+          sessionCtx: params.sessionCtx,
+          hasRepliedRef: params.opts?.hasRepliedRef,
+        });
+        const senderContext = buildTemplateSenderContext(params.sessionCtx);
         return runEmbeddedPiAgent({
-          sessionId: params.followupRun.run.sessionId,
-          sessionKey: params.sessionKey,
-          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-          agentAccountId: params.sessionCtx.AccountId,
-          messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-          messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
-          // Provider threading context for tool auto-injection
-          ...buildThreadingToolContext({
-            sessionCtx: params.sessionCtx,
-            config: params.followupRun.run.config,
-            hasRepliedRef: params.opts?.hasRepliedRef,
-          }),
-          senderId: params.sessionCtx.SenderId?.trim() || undefined,
-          senderName: params.sessionCtx.SenderName?.trim() || undefined,
-          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
+          ...embeddedContext,
+          ...senderContext,
           sessionFile: params.followupRun.run.sessionFile,
           workspaceDir: params.followupRun.run.workspaceDir,
           agentDir: params.followupRun.run.agentDir,
           config: params.followupRun.run.config,
           skillsSnapshot: params.followupRun.run.skillsSnapshot,
-          prompt: memoryFlushSettings.prompt,
+          prompt: resolveMemoryFlushPromptForRun({
+            prompt: memoryFlushSettings.prompt,
+            cfg: params.cfg,
+          }),
           extraSystemPrompt: flushSystemPrompt,
           ownerNumbers: params.followupRun.run.ownerNumbers,
           enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
           provider,
           model,
-          authProfileId,
-          authProfileIdSource: authProfileId
-            ? params.followupRun.run.authProfileIdSource
-            : undefined,
+          ...authProfile,
           thinkLevel: params.followupRun.run.thinkLevel,
           verboseLevel: params.followupRun.run.verboseLevel,
           reasoningLevel: params.followupRun.run.reasoningLevel,
@@ -152,8 +147,7 @@ export async function runMemoryFlushIfNeeded(params: {
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              const willRetry = Boolean(evt.data.willRetry);
-              if (phase === "end" && !willRetry) {
+              if (phase === "end") {
                 memoryCompactionCompleted = true;
               }
             }

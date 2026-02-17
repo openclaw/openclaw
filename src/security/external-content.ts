@@ -67,6 +67,8 @@ export type ExternalContentSource =
   | "email"
   | "webhook"
   | "api"
+  | "browser"
+  | "channel_metadata"
   | "web_search"
   | "web_fetch"
   | "unknown";
@@ -75,14 +77,30 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   email: "Email",
   webhook: "Webhook",
   api: "API",
+  browser: "Browser",
+  channel_metadata: "Channel metadata",
   web_search: "Web Search",
   web_fetch: "Web Fetch",
   unknown: "External",
 };
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
-const FULLWIDTH_LEFT_ANGLE = 0xff1c;
-const FULLWIDTH_RIGHT_ANGLE = 0xff1e;
+
+// Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
+const ANGLE_BRACKET_MAP: Record<number, string> = {
+  0xff1c: "<", // fullwidth <
+  0xff1e: ">", // fullwidth >
+  0x2329: "<", // left-pointing angle bracket
+  0x232a: ">", // right-pointing angle bracket
+  0x3008: "<", // CJK left angle bracket
+  0x3009: ">", // CJK right angle bracket
+  0x2039: "<", // single left-pointing angle quotation mark
+  0x203a: ">", // single right-pointing angle quotation mark
+  0x27e8: "<", // mathematical left angle bracket
+  0x27e9: ">", // mathematical right angle bracket
+  0xfe64: "<", // small less-than sign
+  0xfe65: ">", // small greater-than sign
+};
 
 function foldMarkerChar(char: string): string {
   const code = char.charCodeAt(0);
@@ -92,17 +110,18 @@ function foldMarkerChar(char: string): string {
   if (code >= 0xff41 && code <= 0xff5a) {
     return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
   }
-  if (code === FULLWIDTH_LEFT_ANGLE) {
-    return "<";
-  }
-  if (code === FULLWIDTH_RIGHT_ANGLE) {
-    return ">";
+  const bracket = ANGLE_BRACKET_MAP[code];
+  if (bracket) {
+    return bracket;
   }
   return char;
 }
 
 function foldMarkerText(input: string): string {
-  return input.replace(/[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E]/g, (char) => foldMarkerChar(char));
+  return input.replace(
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65]/g,
+    (char) => foldMarkerChar(char),
+  );
 }
 
 function replaceMarkers(content: string): string {

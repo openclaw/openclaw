@@ -14,6 +14,26 @@ export type DirectoryConfigParams = {
   limit?: number | null;
 };
 
+function addAllowFromAndDmsIds(
+  ids: Set<string>,
+  allowFrom: readonly unknown[] | undefined,
+  dms: Record<string, unknown> | undefined,
+) {
+  for (const entry of allowFrom ?? []) {
+    const raw = String(entry).trim();
+    if (!raw || raw === "*") {
+      continue;
+    }
+    ids.add(raw);
+  }
+  for (const id of Object.keys(dms ?? {})) {
+    const trimmed = id.trim();
+    if (trimmed) {
+      ids.add(trimmed);
+    }
+  }
+}
+
 export async function listSlackDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
@@ -21,19 +41,7 @@ export async function listSlackDirectoryPeersFromConfig(
   const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
 
-  for (const entry of account.dm?.allowFrom ?? []) {
-    const raw = String(entry).trim();
-    if (!raw || raw === "*") {
-      continue;
-    }
-    ids.add(raw);
-  }
-  for (const id of Object.keys(account.config.dms ?? {})) {
-    const trimmed = id.trim();
-    if (trimmed) {
-      ids.add(trimmed);
-    }
-  }
+  addAllowFromAndDmsIds(ids, account.config.allowFrom ?? account.dm?.allowFrom, account.config.dms);
   for (const channel of Object.values(account.config.channels ?? {})) {
     for (const user of channel.users ?? []) {
       const raw = String(user).trim();
@@ -84,19 +92,11 @@ export async function listDiscordDirectoryPeersFromConfig(
   const q = params.query?.trim().toLowerCase() || "";
   const ids = new Set<string>();
 
-  for (const entry of account.config.dm?.allowFrom ?? []) {
-    const raw = String(entry).trim();
-    if (!raw || raw === "*") {
-      continue;
-    }
-    ids.add(raw);
-  }
-  for (const id of Object.keys(account.config.dms ?? {})) {
-    const trimmed = id.trim();
-    if (trimmed) {
-      ids.add(trimmed);
-    }
-  }
+  addAllowFromAndDmsIds(
+    ids,
+    account.config.allowFrom ?? account.config.dm?.allowFrom,
+    account.config.dms,
+  );
   for (const guild of Object.values(account.config.guilds ?? {})) {
     for (const entry of guild.users ?? []) {
       const raw = String(entry).trim();

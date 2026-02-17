@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 
@@ -25,13 +26,6 @@ export type GatewayProbeResult = {
   presence: SystemPresence[] | null;
   configSnapshot: unknown;
 };
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
 
 export async function probeGateway(opts: {
   url: string;
@@ -65,7 +59,7 @@ export async function probeGateway(opts: {
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
       onConnectError: (err) => {
-        connectError = formatError(err);
+        connectError = formatErrorMessage(err);
       },
       onClose: (code, reason) => {
         close = { code, reason };
@@ -93,7 +87,7 @@ export async function probeGateway(opts: {
           settle({
             ok: false,
             connectLatencyMs,
-            error: formatError(err),
+            error: formatErrorMessage(err),
             close,
             health: null,
             status: null,

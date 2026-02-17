@@ -82,10 +82,10 @@ describe("markdownToSlackMrkdwn", () => {
     expect(res).toBe("> Quote");
   });
 
-  it("handles adjacent list items", () => {
+  it("handles nested list items", () => {
     const res = markdownToSlackMrkdwn("- item\n  - nested");
-    // markdown-it treats indented items as continuation, not nesting
-    expect(res).toBe("• item  • nested");
+    // markdown-it correctly parses this as a nested list
+    expect(res).toBe("• item\n  • nested");
   });
 
   it("handles complex message with multiple elements", () => {

@@ -42,23 +42,42 @@ export function parseOAuthCallbackInput(
     return { error: "No input provided" };
   }
 
+  // Manual flow must validate CSRF state; require URL (or querystring) that includes `state`.
+  let url: URL;
   try {
-    const url = new URL(trimmed);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    if (!code) {
-      return { error: "Missing 'code' parameter in URL" };
-    }
-    if (!state) {
-      return { error: "Missing 'state' parameter. Paste the full URL." };
-    }
-    return { code, state };
+    url = new URL(trimmed);
   } catch {
-    if (!expectedState) {
-      return { error: "Paste the full redirect URL, not just the code." };
+    // Code-only paste (common) is no longer accepted because it defeats state validation.
+    if (
+      !/\s/.test(trimmed) &&
+      !trimmed.includes("://") &&
+      !trimmed.includes("?") &&
+      !trimmed.includes("=")
+    ) {
+      return { error: "Paste the full redirect URL (must include code + state)." };
     }
-    return { code: trimmed, state: expectedState };
+
+    // Users sometimes paste only the query string: `?code=...&state=...` or `code=...&state=...`
+    const qs = trimmed.startsWith("?") ? trimmed : `?${trimmed}`;
+    try {
+      url = new URL(`http://localhost/${qs}`);
+    } catch {
+      return { error: "Paste the full redirect URL (must include code + state)." };
+    }
   }
+
+  const code = url.searchParams.get("code")?.trim();
+  const state = url.searchParams.get("state")?.trim();
+  if (!code) {
+    return { error: "Missing 'code' parameter in URL" };
+  }
+  if (!state) {
+    return { error: "Missing 'state' parameter. Paste the full redirect URL." };
+  }
+  if (state !== expectedState) {
+    return { error: "OAuth state mismatch - possible CSRF attack. Please retry login." };
+  }
+  return { code, state };
 }
 
 function coerceExpiresAt(expiresInSeconds: number, now: number): number {

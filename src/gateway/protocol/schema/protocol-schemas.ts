@@ -11,6 +11,10 @@ import {
 } from "./agent.js";
 import {
   AgentSummarySchema,
+  AgentsCreateParamsSchema,
+  AgentsCreateResultSchema,
+  AgentsDeleteParamsSchema,
+  AgentsDeleteResultSchema,
   AgentsFileEntrySchema,
   AgentsFilesGetParamsSchema,
   AgentsFilesGetResultSchema,
@@ -20,6 +24,8 @@ import {
   AgentsFilesSetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
+  AgentsUpdateParamsSchema,
+  AgentsUpdateResultSchema,
   ModelChoiceSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
@@ -31,6 +37,8 @@ import {
 } from "./agents-models-skills.js";
 import {
   ChannelsLogoutParamsSchema,
+  TalkConfigParamsSchema,
+  TalkConfigResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   TalkModeParamsSchema,
@@ -96,6 +104,14 @@ import {
   LogsTailResultSchema,
 } from "./logs-chat.js";
 import {
+  MeshPlanAutoParamsSchema,
+  MeshPlanParamsSchema,
+  MeshRetryParamsSchema,
+  MeshRunParamsSchema,
+  MeshStatusParamsSchema,
+  MeshWorkflowPlanSchema,
+} from "./mesh.js";
+import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
   NodeInvokeParamsSchema,
@@ -117,6 +133,7 @@ import {
   SessionsPreviewParamsSchema,
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
+  SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
@@ -168,6 +185,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   SessionsResetParams: SessionsResetParamsSchema,
   SessionsDeleteParams: SessionsDeleteParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
+  SessionsUsageParams: SessionsUsageParamsSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,
@@ -183,12 +201,20 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   WizardStartResult: WizardStartResultSchema,
   WizardStatusResult: WizardStatusResultSchema,
   TalkModeParams: TalkModeParamsSchema,
+  TalkConfigParams: TalkConfigParamsSchema,
+  TalkConfigResult: TalkConfigResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,
   AgentSummary: AgentSummarySchema,
+  AgentsCreateParams: AgentsCreateParamsSchema,
+  AgentsCreateResult: AgentsCreateResultSchema,
+  AgentsUpdateParams: AgentsUpdateParamsSchema,
+  AgentsUpdateResult: AgentsUpdateResultSchema,
+  AgentsDeleteParams: AgentsDeleteParamsSchema,
+  AgentsDeleteResult: AgentsDeleteResultSchema,
   AgentsFileEntry: AgentsFileEntrySchema,
   AgentsFilesListParams: AgentsFilesListParamsSchema,
   AgentsFilesListResult: AgentsFilesListResultSchema,
@@ -236,6 +262,12 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,
   ChatEvent: ChatEventSchema,
+  MeshPlanParams: MeshPlanParamsSchema,
+  MeshPlanAutoParams: MeshPlanAutoParamsSchema,
+  MeshWorkflowPlan: MeshWorkflowPlanSchema,
+  MeshRunParams: MeshRunParamsSchema,
+  MeshStatusParams: MeshStatusParamsSchema,
+  MeshRetryParams: MeshRetryParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
