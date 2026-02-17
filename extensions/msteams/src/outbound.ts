@@ -14,11 +14,12 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     const result = await send(to, text);
     return { channel: "msteams", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, deps }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, buffer, deps }) => {
     const send =
       deps?.sendMSTeams ??
-      ((to, text, opts) => sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }));
-    const result = await send(to, text, { mediaUrl });
+      ((to, text, opts) =>
+        sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl, buffer: opts?.buffer }));
+    const result = await send(to, text, { mediaUrl, buffer });
     return { channel: "msteams", ...result };
   },
   sendPoll: async ({ cfg, to, poll }) => {

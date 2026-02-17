@@ -28,6 +28,8 @@ export type SendMSTeamsMessageParams = {
   text: string;
   /** Optional media URL */
   mediaUrl?: string;
+  /** Optional base64-encoded buffer for inline media (e.g., data:image/png;base64,...) */
+  buffer?: string;
 };
 
 export type SendMSTeamsMessageResult = {
@@ -93,7 +95,7 @@ export type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl } = params;
+  const { cfg, to, text, mediaUrl, buffer } = params;
   const tableMode = getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -111,24 +113,48 @@ export async function sendMessageMSTeams(
     sharePointSiteId,
   } = ctx;
 
-  log.debug?.("sending proactive message", {
-    conversationId,
-    conversationType,
-    textLength: messageText.length,
-    hasMedia: Boolean(mediaUrl),
-  });
-
   // Handle media if present
-  if (mediaUrl) {
+  if (mediaUrl || buffer) {
     const mediaMaxBytes =
       resolveChannelMediaMaxBytes({
         cfg,
         resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
       }) ?? MSTEAMS_MAX_MEDIA_BYTES;
-    const media = await loadWebMedia(mediaUrl, mediaMaxBytes);
+
+    let media: {
+      buffer: Buffer;
+      contentType?: string;
+      fileName?: string;
+    };
+
+    if (buffer && !mediaUrl) {
+      // Inline buffer: decode directly to avoid loadWebMedia data URL issues
+      let base64 = buffer;
+      let contentType = "image/png"; // Default
+      if (buffer.startsWith("data:")) {
+        const matches = buffer.match(/^data:([^;]+);base64,(.+)$/);
+        if (matches && matches[2]) {
+          contentType = matches[1] ?? "image/png";
+          base64 = matches[2];
+        } else {
+          // Fallback for malformed data URLs or non-base64
+          base64 = buffer.split(",")[1] ?? buffer;
+        }
+      }
+      media = {
+        buffer: Buffer.from(base64, "base64"),
+        contentType,
+      };
+    } else if (mediaUrl) {
+      // URL: use loadWebMedia
+      media = await loadWebMedia(mediaUrl, mediaMaxBytes);
+    } else {
+      // Should not happen due to outer check
+      throw new Error("No media provided");
+    }
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
-    const fallbackFileName = await extractFilename(mediaUrl);
+    const fallbackFileName = mediaUrl ? await extractFilename(mediaUrl) : "file";
     const fileName = media.fileName ?? fallbackFileName;
 
     log.debug?.("processing media", {

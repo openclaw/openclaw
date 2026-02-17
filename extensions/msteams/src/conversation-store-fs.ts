@@ -113,21 +113,21 @@ export function createMSTeamsConversationStoreFs(params?: {
     return store.conversations[normalizeConversationId(conversationId)] ?? null;
   };
 
-  const findByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry | null> => {
+  const findAllByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry[]> => {
     const target = id.trim();
     if (!target) {
-      return null;
+      return [];
     }
-    for (const entry of await list()) {
-      const { conversationId, reference } = entry;
-      if (reference.user?.aadObjectId === target) {
-        return { conversationId, reference };
-      }
-      if (reference.user?.id === target) {
-        return { conversationId, reference };
-      }
-    }
-    return null;
+    const store = await list();
+    return store.filter((entry) => {
+      const { reference } = entry;
+      return reference.user?.aadObjectId === target || reference.user?.id === target;
+    });
+  };
+
+  const findByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry | null> => {
+    const all = await findAllByUserId(id);
+    return all[0] ?? null;
   };
 
   const upsert = async (
@@ -161,5 +161,5 @@ export function createMSTeamsConversationStoreFs(params?: {
     });
   };
 
-  return { upsert, get, list, remove, findByUserId };
+  return { upsert, get, list, remove, findByUserId, findAllByUserId };
 }

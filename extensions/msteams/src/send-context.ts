@@ -67,6 +67,8 @@ function parseRecipient(to: string): {
 
 /**
  * Find a stored conversation reference for the given recipient.
+ * When multiple references exist for a user, prefers "personal" conversation type
+ * to avoid stale group/channel conversations that may cause 403 errors.
  */
 async function findConversationReference(recipient: {
   type: "conversation" | "user";
@@ -84,11 +86,25 @@ async function findConversationReference(recipient: {
     return null;
   }
 
-  const found = await recipient.store.findByUserId(recipient.id);
-  if (!found) {
+  // For user lookups, get all conversations and prefer "personal" type
+  // to avoid stale group/channel references that cause 403 BotNotInConversationRoster
+  const userConversations = await recipient.store.findAllByUserId(recipient.id);
+
+  if (userConversations.length === 0) {
     return null;
   }
-  return { conversationId: found.conversationId, ref: found.reference };
+
+  // Prefer personal conversations first (they work reliably for proactive messaging)
+  const personal = userConversations.find(
+    (e) => e.reference.conversation?.conversationType?.toLowerCase() === "personal",
+  );
+  if (personal) {
+    return { conversationId: personal.conversationId, ref: personal.reference };
+  }
+
+  // Fall back to first available (group or channel)
+  const first = userConversations[0];
+  return { conversationId: first.conversationId, ref: first.reference };
 }
 
 export async function resolveMSTeamsSendContext(params: {

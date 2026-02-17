@@ -38,4 +38,5 @@ export type MSTeamsConversationStore = {
   list: () => Promise<MSTeamsConversationStoreEntry[]>;
   remove: (conversationId: string) => Promise<boolean>;
   findByUserId: (id: string) => Promise<MSTeamsConversationStoreEntry | null>;
+  findAllByUserId: (id: string) => Promise<MSTeamsConversationStoreEntry[]>;
 };

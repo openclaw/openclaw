@@ -76,6 +76,8 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  /** Base64-encoded buffer for inline media (e.g., data:image/png;base64,...) */
+  buffer?: string;
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   replyToId?: string | null;
