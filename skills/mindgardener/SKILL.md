@@ -1,6 +1,6 @@
 ---
 name: mindgardener
-description: Long-term memory for AI agents. Reads chat logs and builds a wiki of people, projects & events. No database — just text files.
+description: "Your AI agent's personal Wikipedia — automatically built and updated from daily conversations. No database, just files."
 homepage: https://github.com/widingmarcus-cyber/mindgardener
 metadata:
   {
@@ -24,7 +24,7 @@ metadata:
 
 # MindGardener
 
-Long-term memory for AI agents. Reads your agent's daily logs and automatically builds a wiki of everyone and everything it encounters. No database needed — just text files.
+Your AI agent's personal Wikipedia — automatically built and updated from daily conversations. Every chat adds to a growing wiki of people, projects, and events. No database needed, just text files.
 
 "Your agent forgets everything between sessions. MindGardener fixes that."
 
