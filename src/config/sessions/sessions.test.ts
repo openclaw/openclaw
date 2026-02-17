@@ -34,8 +34,10 @@ describe("session path safety", () => {
   });
 
   it("accepts absolute sessionFile paths for sibling agents in multi-agent setups", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const siblingSessionFile = "/tmp/openclaw/agents/eva-public/sessions/abc-123.jsonl";
+    const sessionsDir = path.resolve("/tmp/openclaw/agents/main/sessions");
+    const siblingSessionFile = path.resolve(
+      "/tmp/openclaw/agents/eva-public/sessions/abc-123.jsonl",
+    );
 
     expect(
       resolveSessionFilePath("sess-1", { sessionFile: siblingSessionFile }, { sessionsDir }),
@@ -43,12 +45,12 @@ describe("session path safety", () => {
   });
 
   it("rejects absolute sessionFile paths outside known agent sessions dirs", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+    const sessionsDir = path.resolve("/tmp/openclaw/agents/main/sessions");
 
     expect(() =>
       resolveSessionFilePath(
         "sess-1",
-        { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
+        { sessionFile: path.resolve("/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl") },
         { sessionsDir },
       ),
     ).toThrow(/within sessions directory/);
