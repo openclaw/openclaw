@@ -452,6 +452,24 @@ export const AgentToolsSchema = z
   })
   .optional();
 
+export const CompactionSchema = z
+  .object({
+    mode: z.union([z.literal("default"), z.literal("safeguard"), z.literal("off")]).optional(),
+    reserveTokensFloor: z.number().int().nonnegative().optional(),
+    maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
+    memoryFlush: z
+      .object({
+        enabled: z.boolean().optional(),
+        softThresholdTokens: z.number().int().nonnegative().optional(),
+        prompt: z.string().optional(),
+        systemPrompt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -609,6 +627,13 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    compaction: CompactionSchema,
+    contextPruning: z
+      .object({
+        mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),
       })
       .strict()
       .optional(),
