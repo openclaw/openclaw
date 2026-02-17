@@ -170,7 +170,7 @@ describe("connectGateway", () => {
 });
 
 describe("handleGatewayEvent", () => {
-  it("resets sessionKey to main after /new completes", () => {
+  it("resets sessionKey to main after /new completes", async () => {
     const host = createHost() as Record<string, unknown>;
     const runId = "run-123";
     host.sessionKey = "agent:main:direct:user456";
@@ -183,6 +183,30 @@ describe("handleGatewayEvent", () => {
     };
 
     handleGatewayEvent(host as unknown as Parameters<typeof handleGatewayEvent>[0], {
+      type: "event",
+      event: "chat",
+      payload: { runId, state: "final" },
+    });
+
+    expect(host.sessionKey).toBe("agent:main:main");
+
+    const { setLastActiveSessionKey } = await import("./app-settings.ts");
+    expect(vi.mocked(setLastActiveSessionKey)).toHaveBeenCalledWith(
+      expect.anything(),
+      "agent:main:main",
+    );
+  });
+
+  it("falls back to default main session key when sessionDefaults are missing", () => {
+    const host = createHost() as Record<string, unknown>;
+    const runId = "run-456";
+    host.sessionKey = "agent:main:direct:user789";
+    host.chatRunId = runId;
+    (host.refreshSessionsAfterChat as Set<string>).add(runId);
+    host.hello = { snapshot: {} };
+
+    handleGatewayEvent(host as unknown as Parameters<typeof handleGatewayEvent>[0], {
+      type: "event",
       event: "chat",
       payload: { runId, state: "final" },
     });
