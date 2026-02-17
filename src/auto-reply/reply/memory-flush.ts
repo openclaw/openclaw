@@ -1,8 +1,8 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
@@ -119,8 +119,6 @@ export function shouldRunMemoryFlush(params: {
   reserveTokensFloor: number;
   softThresholdTokens: number;
 }): boolean {
-  // Prefer fresh totals, but fall back to stale totals as a lower bound to avoid
-  // skipping the flush when compaction is imminent but freshness metadata is missing.
   const totalTokens = resolveFreshSessionTotalTokens(params.entry) ?? params.entry?.totalTokens;
   if (!totalTokens || totalTokens <= 0) {
     return false;
