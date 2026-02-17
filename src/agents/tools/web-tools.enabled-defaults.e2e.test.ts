@@ -100,16 +100,17 @@ describe("web_search country and language parameters", () => {
       ui_lang: string;
       freshness: string;
     }>,
-    config?: { baseUrl?: string },
+    config?: { baseUrl?: string; apiKey?: string },
   ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({
-      config: config?.baseUrl
+      config: config?.baseUrl || config?.apiKey
         ? {
             tools: {
               web: {
                 search: {
-                  baseUrl: config.baseUrl,
+                  ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+                  ...(config.apiKey ? { apiKey: config.apiKey } : {}),
                 },
               },
             },
@@ -143,8 +144,35 @@ describe("web_search country and language parameters", () => {
   });
 
   it("uses configured Brave baseUrl", async () => {
-    const url = await runBraveSearchAndGetUrl({}, { baseUrl: "https://proxy.example/brave" });
+    const url = await runBraveSearchAndGetUrl(
+      {},
+      { baseUrl: "https://proxy.example/brave", apiKey: "config-key" },
+    );
     expect(url.toString().startsWith("https://proxy.example/brave/res/v1/web/search?")).toBe(true);
+  });
+
+  it("blocks non-loopback custom Brave baseUrl when using BRAVE_API_KEY from env", async () => {
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              baseUrl: "https://proxy.example/brave",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "unsafe_brave_baseurl" });
+  });
+
+  it("allows loopback custom Brave baseUrl when using BRAVE_API_KEY from env", async () => {
+    const url = await runBraveSearchAndGetUrl({}, { baseUrl: "http://127.0.0.1:9100/brave" });
+    expect(url.toString().startsWith("http://127.0.0.1:9100/brave/res/v1/web/search?")).toBe(true);
   });
 });
 

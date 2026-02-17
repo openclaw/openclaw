@@ -95,6 +95,7 @@ type PerplexityConfig = {
   model?: string;
 };
 
+type BraveApiKeySource = "config" | "env" | "none";
 type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
 
 type GrokConfig = {
@@ -180,13 +181,22 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
   return true;
 }
 
-function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
+function resolveSearchApiKey(search?: WebSearchConfig): {
+  apiKey?: string;
+  source: BraveApiKeySource;
+} {
   const fromConfig =
     search && "apiKey" in search && typeof search.apiKey === "string"
       ? normalizeSecretInput(search.apiKey)
       : "";
+  if (fromConfig) {
+    return { apiKey: fromConfig, source: "config" };
+  }
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
-  return fromConfig || fromEnv || undefined;
+  if (fromEnv) {
+    return { apiKey: fromEnv, source: "env" };
+  }
+  return { apiKey: undefined, source: "none" };
 }
 
 function resolveBraveBaseUrl(search?: WebSearchConfig): string {
@@ -213,6 +223,42 @@ function resolveBraveSearchEndpoint(baseUrl: string): string {
     return normalizedBase;
   }
   return `${normalizedBase}/${BRAVE_SEARCH_PATH}`;
+}
+
+function isLoopbackUrl(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function usesCustomBraveBaseUrl(baseUrl: string): boolean {
+  const defaultBase = DEFAULT_BRAVE_BASE_URL.replace(/\/+$/, "").toLowerCase();
+  const endpoint = resolveBraveSearchEndpoint(baseUrl).toLowerCase();
+  return !endpoint.startsWith(`${defaultBase}/`);
+}
+
+function validateBraveBaseUrlWithApiKeySource(params: {
+  baseUrl: string;
+  apiKeySource: BraveApiKeySource;
+}): { error: string; message: string; docs: string } | undefined {
+  if (params.apiKeySource !== "env") {
+    return undefined;
+  }
+  if (!usesCustomBraveBaseUrl(params.baseUrl)) {
+    return undefined;
+  }
+  if (isLoopbackUrl(params.baseUrl)) {
+    return undefined;
+  }
+  return {
+    error: "unsafe_brave_baseurl",
+    message:
+      "For security, web_search does not send BRAVE_API_KEY env credentials to non-loopback custom tools.web.search.baseUrl values. Use localhost/127.0.0.1/::1 for local proxies, or set tools.web.search.apiKey explicitly when using remote endpoints.",
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
 }
 
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
@@ -759,17 +805,28 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
+      const braveAuth = provider === "brave" ? resolveSearchApiKey(search) : undefined;
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+      const braveBaseUrl = resolveBraveBaseUrl(search);
       const apiKey =
         provider === "perplexity"
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+            : braveAuth?.apiKey;
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
+      }
+      if (provider === "brave") {
+        const validationError = validateBraveBaseUrlWithApiKeySource({
+          baseUrl: braveBaseUrl,
+          apiKeySource: braveAuth?.source ?? "none",
+        });
+        if (validationError) {
+          return jsonResult(validationError);
+        }
       }
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
@@ -802,7 +859,7 @@ export function createWebSearchTool(options?: {
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
-        braveBaseUrl: resolveBraveBaseUrl(search),
+        braveBaseUrl,
         country,
         search_lang,
         ui_lang,
@@ -822,8 +879,10 @@ export function createWebSearchTool(options?: {
 }
 
 export const __testing = {
+  resolveSearchApiKey,
   resolveBraveBaseUrl,
   resolveBraveSearchEndpoint,
+  validateBraveBaseUrlWithApiKeySource,
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   isDirectPerplexityBaseUrl,

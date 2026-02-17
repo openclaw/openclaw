@@ -3,8 +3,10 @@ import { withEnv } from "../../test-utils/env.js";
 import { __testing } from "./web-search.js";
 
 const {
+  resolveSearchApiKey,
   resolveBraveBaseUrl,
   resolveBraveSearchEndpoint,
+  validateBraveBaseUrlWithApiKeySource,
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   isDirectPerplexityBaseUrl,
@@ -41,6 +43,30 @@ describe("web_search brave baseUrl", () => {
     expect(resolveBraveSearchEndpoint("res/v1/web/search")).toBe(
       "https://api.search.brave.com/res/v1/web/search",
     );
+  });
+
+  it("treats BRAVE_API_KEY as env-sourced when config key is missing", () => {
+    withEnv({ BRAVE_API_KEY: "env-key" }, () => {
+      expect(resolveSearchApiKey(undefined)).toEqual({ apiKey: "env-key", source: "env" });
+    });
+  });
+
+  it("rejects non-loopback custom Brave baseUrl when key is env-sourced", () => {
+    expect(
+      validateBraveBaseUrlWithApiKeySource({
+        baseUrl: "https://proxy.example/brave",
+        apiKeySource: "env",
+      }),
+    ).toMatchObject({ error: "unsafe_brave_baseurl" });
+  });
+
+  it("allows loopback custom Brave baseUrl when key is env-sourced", () => {
+    expect(
+      validateBraveBaseUrlWithApiKeySource({
+        baseUrl: "http://127.0.0.1:9100/brave",
+        apiKeySource: "env",
+      }),
+    ).toBeUndefined();
   });
 });
 

@@ -151,6 +151,7 @@ Search the web using your configured provider.
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
 - Optional Brave endpoint override: `tools.web.search.baseUrl`
+  - Security: when using `BRAVE_API_KEY` from environment, custom Brave `baseUrl` is limited to loopback (`localhost`, `127.0.0.1`, `::1`) to prevent key exfiltration via config tampering.
 
 ### Config
 
