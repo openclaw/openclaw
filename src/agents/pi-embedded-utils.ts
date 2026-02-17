@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { stripCallTagsFromText, stripHistoricalContextText } from "./custom-context-to-blocks.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
