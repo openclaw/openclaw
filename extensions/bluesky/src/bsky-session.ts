@@ -15,9 +15,7 @@ export interface BlueskySession {
  * Create an authenticated AT Protocol session using app password.
  * The AtpAgent handles session refresh automatically.
  */
-export async function createBlueskySession(
-  opts: BlueskySessionOptions,
-): Promise<BlueskySession> {
+export async function createBlueskySession(opts: BlueskySessionOptions): Promise<BlueskySession> {
   const agent = new AtpAgent({ service: opts.service });
 
   const response = await agent.login({

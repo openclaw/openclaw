@@ -45,9 +45,7 @@ function withChatProxy(agent: AtpAgent): Record<string, string> {
  * Start the Bluesky chat polling bus.
  * Polls for new DMs and delivers them via onMessage callback.
  */
-export async function startBlueskyChat(
-  opts: BleskyChatOptions,
-): Promise<BleskyChatHandle> {
+export async function startBlueskyChat(opts: BleskyChatOptions): Promise<BleskyChatHandle> {
   const session: BlueskySession = await createBlueskySession({
     identifier: opts.identifier,
     appPassword: opts.appPassword,
@@ -150,10 +148,7 @@ export async function startBlueskyChat(
         }
       }
     } catch (err) {
-      opts.onError?.(
-        err instanceof Error ? err : new Error(String(err)),
-        "listConvos",
-      );
+      opts.onError?.(err instanceof Error ? err : new Error(String(err)), "listConvos");
     }
 
     // Schedule next poll
@@ -165,11 +160,7 @@ export async function startBlueskyChat(
   /**
    * Send a message to an existing conversation.
    */
-  async function sendMessageToConvo(
-    agent: AtpAgent,
-    convoId: string,
-    text: string,
-  ): Promise<void> {
+  async function sendMessageToConvo(agent: AtpAgent, convoId: string, text: string): Promise<void> {
     await agent.api.chat.bsky.convo.sendMessage(
       { convoId, message: { text } },
       {
@@ -226,10 +217,7 @@ export async function startBlueskyChat(
       }
     }
   } catch (err) {
-    opts.onError?.(
-      err instanceof Error ? err : new Error(String(err)),
-      "initial message seeding",
-    );
+    opts.onError?.(err instanceof Error ? err : new Error(String(err)), "initial message seeding");
   }
 
   // Begin the poll loop

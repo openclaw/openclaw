@@ -45,16 +45,16 @@ openclaw plugins install @openclaw/bluesky
 
 ## Configuration
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `identifier` | string | required | Bluesky handle or DID |
-| `appPassword` | string | required | App password (with DM scope) |
-| `service` | string | `"https://bsky.social"` | PDS service URL |
-| `pollIntervalMs` | number | `5000` | DM polling interval (ms) |
-| `dmPolicy` | string | `"pairing"` | Access control: `pairing`, `allowlist`, `open`, `disabled` |
-| `allowFrom` | string[] | `[]` | Allowed sender DIDs or handles |
-| `enabled` | boolean | `true` | Enable/disable the channel |
-| `name` | string | - | Display name for the account |
+| Key              | Type     | Default                 | Description                                                |
+| ---------------- | -------- | ----------------------- | ---------------------------------------------------------- |
+| `identifier`     | string   | required                | Bluesky handle or DID                                      |
+| `appPassword`    | string   | required                | App password (with DM scope)                               |
+| `service`        | string   | `"https://bsky.social"` | PDS service URL                                            |
+| `pollIntervalMs` | number   | `5000`                  | DM polling interval (ms)                                   |
+| `dmPolicy`       | string   | `"pairing"`             | Access control: `pairing`, `allowlist`, `open`, `disabled` |
+| `allowFrom`      | string[] | `[]`                    | Allowed sender DIDs or handles                             |
+| `enabled`        | boolean  | `true`                  | Enable/disable the channel                                 |
+| `name`           | string   | -                       | Display name for the account                               |
 
 ## Access Control
 

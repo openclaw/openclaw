@@ -6,8 +6,8 @@ import {
   formatPairingApproveHint,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
-import { BlueskyConfigSchema } from "./config-schema.js";
 import { startBlueskyChat, type BleskyChatHandle } from "./bsky-chat.js";
+import { BlueskyConfigSchema } from "./config-schema.js";
 import { getBlueskyRuntime } from "./runtime.js";
 import {
   listBlueskyAccountIds,
@@ -46,7 +46,11 @@ function looksLikeBlueskyId(input: string): boolean {
     return true;
   }
   // Handle format: user.bsky.social or custom domains
-  if (/^@?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(trimmed)) {
+  if (
+    /^@?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(
+      trimmed,
+    )
+  ) {
     return true;
   }
   return false;
@@ -206,9 +210,7 @@ export const blueskyPlugin: ChannelPlugin<ResolvedBlueskyAccount> = {
         service: account.service,
         pollIntervalMs: account.config.pollIntervalMs,
         onMessage: async (senderDid, text, reply) => {
-          ctx.log?.debug?.(
-            `[${account.accountId}] DM from ${senderDid}: ${text.slice(0, 50)}...`,
-          );
+          ctx.log?.debug?.(`[${account.accountId}] DM from ${senderDid}: ${text.slice(0, 50)}...`);
 
           await (
             runtime.channel.reply as {
@@ -227,22 +229,16 @@ export const blueskyPlugin: ChannelPlugin<ResolvedBlueskyAccount> = {
           });
         },
         onError: (error, context) => {
-          ctx.log?.error?.(
-            `[${account.accountId}] Bluesky error (${context}): ${error.message}`,
-          );
+          ctx.log?.error?.(`[${account.accountId}] Bluesky error (${context}): ${error.message}`);
         },
         onConnect: () => {
-          ctx.log?.info(
-            `[${account.accountId}] Bluesky provider connected, polling for DMs`,
-          );
+          ctx.log?.info(`[${account.accountId}] Bluesky provider connected, polling for DMs`);
         },
       });
 
       activeChats.set(account.accountId, chat);
 
-      ctx.log?.info(
-        `[${account.accountId}] Bluesky provider started for ${account.identifier}`,
-      );
+      ctx.log?.info(`[${account.accountId}] Bluesky provider started for ${account.identifier}`);
 
       return {
         stop: () => {
