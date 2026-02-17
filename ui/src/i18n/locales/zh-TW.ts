@@ -61,6 +61,7 @@ export const zh_TW: TranslationMap = {
       sessionKey: "默認會話密鑰",
       language: "語言",
       connectHint: "點擊連接以應用連接更改。",
+      trustedProxy: "通過受信任代理身份驗證。",
     },
     snapshot: {
       title: "快照",
