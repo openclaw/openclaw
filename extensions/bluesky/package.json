@@ -1,0 +1,33 @@
+{
+  "name": "@openclaw/bluesky",
+  "version": "2026.2.17",
+  "description": "OpenClaw Bluesky channel plugin for AT Protocol DMs",
+  "type": "module",
+  "dependencies": {
+    "@atproto/api": "^0.13.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "bluesky",
+      "label": "Bluesky",
+      "selectionLabel": "Bluesky (AT Protocol DMs)",
+      "docsPath": "/channels/bluesky",
+      "docsLabel": "bluesky",
+      "blurb": "Direct messages via AT Protocol on Bluesky.",
+      "order": 56,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/bluesky",
+      "localPath": "extensions/bluesky",
+      "defaultChoice": "npm"
+    }
+  }
+}
