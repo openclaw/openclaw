@@ -873,15 +873,12 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
-
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : braveMode === "llm-context"
-          ? "Search the web using Brave LLM Context API. Returns pre-extracted, relevance-scored web content optimized for LLM consumption — full text snippets, tables, and code blocks."
-          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : "Search the web using Brave Search API. Mode depends on config: standard web search returns titles, URLs, and snippets; llm-context mode returns pre-extracted content optimized for LLM consumption.";
 
   return {
     label: "Web Search",
