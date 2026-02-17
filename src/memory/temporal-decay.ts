@@ -144,20 +144,26 @@ export function isImportantChunk(params: {
   config: ImportanceBoostConfig;
 }): boolean {
   const { filePath, snippet, config } = params;
-  if (!config.enabled) return false;
+  if (!config.enabled) {
+    return false;
+  }
   const patterns = { ...DEFAULT_IMPORTANCE_BOOST_CONFIG.patterns, ...config.patterns };
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "").toLowerCase();
 
   if (patterns.filePatterns) {
     for (const fp of patterns.filePatterns) {
-      if (normalized.includes(fp.toLowerCase())) return true;
+      if (normalized.includes(fp.toLowerCase())) {
+        return true;
+      }
     }
   }
 
   if (snippet && patterns.contentMarkers) {
     const lower = snippet.toLowerCase();
     for (const marker of patterns.contentMarkers) {
-      if (lower.includes(marker.toLowerCase())) return true;
+      if (lower.includes(marker.toLowerCase())) {
+        return true;
+      }
     }
   }
 
