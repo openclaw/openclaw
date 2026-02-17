@@ -2011,6 +2011,62 @@
   margin-top: 2px;
 }
 
+.agentic-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.agentic-goal {
+  grid-column: 1 / -1;
+}
+
+.agentic-goal textarea {
+  min-height: 96px;
+  resize: vertical;
+  font-family: var(--font-body);
+}
+
+.agentic-workflow-list {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.agentic-workflow-option {
+  text-align: left;
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background-color var(--duration-fast) ease;
+}
+
+.agentic-workflow-option:hover {
+  border-color: var(--border-strong);
+}
+
+.agentic-workflow-option.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+
+.agentic-workflow-option-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.agentic-workflow-option-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .agent-skills-groups {
   display: grid;
   gap: 16px;
@@ -2101,6 +2157,10 @@
   }
 
   .agent-tools-list {
+    grid-template-columns: 1fr;
+  }
+
+  .agentic-grid {
     grid-template-columns: 1fr;
   }
 }

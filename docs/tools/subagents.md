@@ -47,6 +47,7 @@ Tool params:
 - `task` (required)
 - `label?` (optional)
 - `agentId?` (optional; spawn under another agent id if allowed)
+- `template?` (optional; built-in role template for sub-agent behavior + tool policy)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (default `0`; when set, the sub-agent run is aborted after N seconds)
@@ -59,6 +60,18 @@ Allowlist:
 Discovery:
 
 - Use `agents_list` to see which agent ids are currently allowed for `sessions_spawn`.
+- `agents_list` also returns built-in sub-agent templates you can pass in `sessions_spawn.template`.
+
+Built-in templates:
+
+- `researcher`: read-only investigation role (facts, risks, options)
+- `coder`: implementation role (edits + validation)
+- `reviewer`: verification role (bugs, regressions, missing tests)
+- `bug-triager`: classify bug reports, impact, and likely root causes
+- `reproducer`: create deterministic reproduction steps and failing cases
+- `test-builder`: design and add focused deterministic tests
+- `profiler`: identify bottlenecks and baseline performance
+- `security-researcher`: threat-focused analysis and remediation guidance
 
 Auto-archive:
 

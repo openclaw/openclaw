@@ -77,6 +77,7 @@ Text + native (when enabled):
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/whoami` (show your sender id; alias: `/id`)
+- `/workflow list|run|status` (list Agentic Engineering workflows or dispatch one from chat)
 - `/subagents list|kill|log|info|send|steer` (inspect, kill, log, or steer sub-agent runs for the current session)
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)

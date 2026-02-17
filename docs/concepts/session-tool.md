@@ -150,6 +150,7 @@ Parameters:
 - `task` (required)
 - `label?` (optional; used for logs/UI)
 - `agentId?` (optional; spawn under another agent id if allowed)
+- `template?` (optional; built-in role template that shapes sub-agent prompt + tool policy)
 - `model?` (optional; overrides the sub-agent model; invalid values error)
 - `runTimeoutSeconds?` (default 0; when set, aborts the sub-agent run after N seconds)
 - `cleanup?` (`delete|keep`, default `keep`)
@@ -161,6 +162,9 @@ Allowlist:
 Discovery:
 
 - Use `agents_list` to discover which agent ids are allowed for `sessions_spawn`.
+- `agents_list` also includes built-in templates for `sessions_spawn.template`
+  (for example: `researcher`, `coder`, `reviewer`, `bug-triager`, `reproducer`,
+  `test-builder`, `profiler`, `security-researcher`).
 
 Behavior:
 

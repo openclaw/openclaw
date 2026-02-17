@@ -1,4 +1,11 @@
 import { html, nothing } from "lit";
+import {
+  AGENTIC_TEMPLATE_OPTIONS,
+  AGENTIC_WORKFLOW_OPTIONS,
+  type AgenticTemplateId,
+  type AgenticWorkflowId,
+  resolveAgenticWorkflowDefinition,
+} from "../app-chat.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -28,7 +35,14 @@ import {
   resolveModelPrimary,
 } from "./agents-utils.ts";
 
-export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+export type AgentsPanel =
+  | "overview"
+  | "agentic"
+  | "files"
+  | "tools"
+  | "skills"
+  | "channels"
+  | "cron";
 
 export type AgentsProps = {
   loading: boolean;
@@ -63,6 +77,14 @@ export type AgentsProps = {
   agentSkillsError: string | null;
   agentSkillsAgentId: string | null;
   skillsFilter: string;
+  agenticGoal: string;
+  agenticTemplate: AgenticTemplateId;
+  agenticWorkflow: AgenticWorkflowId;
+  agenticLabel: string;
+  agenticRunTimeoutSeconds: string;
+  agenticCleanup: "keep" | "delete";
+  agenticRunning: boolean;
+  agenticStatusMessage: string | null;
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
@@ -84,6 +106,14 @@ export type AgentsProps = {
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
+  onAgenticGoalChange: (next: string) => void;
+  onAgenticTemplateChange: (next: AgenticTemplateId) => void;
+  onAgenticWorkflowChange: (next: AgenticWorkflowId) => void;
+  onAgenticLabelChange: (next: string) => void;
+  onAgenticRunTimeoutSecondsChange: (next: string) => void;
+  onAgenticCleanupChange: (next: "keep" | "delete") => void;
+  onRunAgenticWorker: (agentId: string) => void;
+  onRunAgenticWorkflow: (agentId: string) => void;
 };
 
 export type AgentContext = {
@@ -180,6 +210,29 @@ export function renderAgents(props: AgentsProps) {
                         onConfigSave: props.onConfigSave,
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
+                      })
+                    : nothing
+                }
+                ${
+                  props.activePanel === "agentic"
+                    ? renderAgenticEngineering({
+                        agentId: selectedAgent.id,
+                        goal: props.agenticGoal,
+                        template: props.agenticTemplate,
+                        workflow: props.agenticWorkflow,
+                        label: props.agenticLabel,
+                        runTimeoutSeconds: props.agenticRunTimeoutSeconds,
+                        cleanup: props.agenticCleanup,
+                        running: props.agenticRunning,
+                        statusMessage: props.agenticStatusMessage,
+                        onGoalChange: props.onAgenticGoalChange,
+                        onTemplateChange: props.onAgenticTemplateChange,
+                        onWorkflowChange: props.onAgenticWorkflowChange,
+                        onLabelChange: props.onAgenticLabelChange,
+                        onRunTimeoutSecondsChange: props.onAgenticRunTimeoutSecondsChange,
+                        onCleanupChange: props.onAgenticCleanupChange,
+                        onRunWorker: props.onRunAgenticWorker,
+                        onRunWorkflow: props.onRunAgenticWorkflow,
                       })
                     : nothing
                 }
@@ -314,6 +367,7 @@ function renderAgentHeader(
 function renderAgentTabs(active: AgentsPanel, onSelect: (panel: AgentsPanel) => void) {
   const tabs: Array<{ id: AgentsPanel; label: string }> = [
     { id: "overview", label: "Overview" },
+    { id: "agentic", label: "Agentic Engineering" },
     { id: "files", label: "Files" },
     { id: "tools", label: "Tools" },
     { id: "skills", label: "Skills" },
@@ -483,6 +537,130 @@ function renderAgentOverview(params: {
             ${configSaving ? "Saving…" : "Save"}
           </button>
         </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderAgenticEngineering(params: {
+  agentId: string;
+  goal: string;
+  template: AgenticTemplateId;
+  workflow: AgenticWorkflowId;
+  label: string;
+  runTimeoutSeconds: string;
+  cleanup: "keep" | "delete";
+  running: boolean;
+  statusMessage: string | null;
+  onGoalChange: (next: string) => void;
+  onTemplateChange: (next: AgenticTemplateId) => void;
+  onWorkflowChange: (next: AgenticWorkflowId) => void;
+  onLabelChange: (next: string) => void;
+  onRunTimeoutSecondsChange: (next: string) => void;
+  onCleanupChange: (next: "keep" | "delete") => void;
+  onRunWorker: (agentId: string) => void;
+  onRunWorkflow: (agentId: string) => void;
+}) {
+  const canRun = params.goal.trim().length > 0 && !params.running;
+  const workflowLabel = resolveAgenticWorkflowDefinition(params.workflow).label;
+  return html`
+    <section class="card">
+      <div class="card-title">Agentic Engineering</div>
+      <div class="card-sub">
+        Orchestrate temporary task workers. This differs from persistent Agents profiles:
+        workers are short-lived runs for one job.
+      </div>
+      ${
+        params.statusMessage
+          ? html`<div class="callout info" style="margin-top: 12px;">${params.statusMessage}</div>`
+          : nothing
+      }
+
+      <div class="agentic-grid" style="margin-top: 16px;">
+        <label class="field agentic-goal">
+          <span>Goal</span>
+          <textarea
+            .value=${params.goal}
+            rows="4"
+            placeholder="Example: Improve tool-call reliability and reduce retries by 30%."
+            @input=${(e: Event) => params.onGoalChange((e.target as HTMLTextAreaElement).value)}
+          ></textarea>
+        </label>
+        <div class="field full">
+          <span>Workflow</span>
+          <div class="agentic-workflow-list">
+            ${AGENTIC_WORKFLOW_OPTIONS.map((workflow) => {
+              const selected = workflow.id === params.workflow;
+              const stepCount = resolveAgenticWorkflowDefinition(workflow.id).steps.length;
+              return html`
+                <button
+                  type="button"
+                  class="agentic-workflow-option ${selected ? "active" : ""}"
+                  @click=${() => params.onWorkflowChange(workflow.id)}
+                >
+                  <span class="agentic-workflow-option-title">${workflow.label}</span>
+                  <span class="agentic-workflow-option-sub">${stepCount} steps</span>
+                </button>
+              `;
+            })}
+          </div>
+        </div>
+        <label class="field">
+          <span>Worker Type</span>
+          <select
+            .value=${params.template}
+            @change=${(e: Event) =>
+              params.onTemplateChange((e.target as HTMLSelectElement).value as AgenticTemplateId)}
+          >
+            ${AGENTIC_TEMPLATE_OPTIONS.map(
+              (template) => html`<option value=${template.id}>${template.label}</option>`,
+            )}
+          </select>
+        </label>
+        <label class="field">
+          <span>Label Prefix (optional)</span>
+          <input
+            .value=${params.label}
+            placeholder="mesh-reliability"
+            @input=${(e: Event) => params.onLabelChange((e.target as HTMLInputElement).value)}
+          />
+        </label>
+        <label class="field">
+          <span>Timeout Seconds (optional)</span>
+          <input
+            .value=${params.runTimeoutSeconds}
+            inputmode="numeric"
+            placeholder="0"
+            @input=${(e: Event) =>
+              params.onRunTimeoutSecondsChange((e.target as HTMLInputElement).value)}
+          />
+        </label>
+        <label class="field">
+          <span>Cleanup</span>
+          <select
+            .value=${params.cleanup}
+            @change=${(e: Event) =>
+              params.onCleanupChange(
+                ((e.target as HTMLSelectElement).value as "keep" | "delete") ?? "keep",
+              )}
+          >
+            <option value="keep">keep</option>
+            <option value="delete">delete</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row" style="gap: 8px; margin-top: 14px; flex-wrap: wrap;">
+        <button class="btn" ?disabled=${!canRun} @click=${() => params.onRunWorker(params.agentId)}>
+          ${params.running ? "Running…" : "Run Worker"}
+        </button>
+        <button
+          class="btn primary"
+          ?disabled=${!canRun}
+          @click=${() => params.onRunWorkflow(params.agentId)}
+        >
+          ${params.running ? "Running…" : `Run ${workflowLabel}`}
+        </button>
       </div>
     </section>
   `;

@@ -1,11 +1,11 @@
+import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
-import { listChannelDocks } from "../channels/dock.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import { listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
@@ -245,6 +245,33 @@ function buildChatCommands(): ChatCommandDefinition[] {
       description: "Show your sender id.",
       textAlias: "/whoami",
       category: "status",
+    }),
+    defineChatCommand({
+      key: "workflow",
+      nativeName: "workflow",
+      description: "List and run Agentic Engineering workflows.",
+      textAlias: "/workflow",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "list | run | status | help",
+          type: "string",
+          choices: ["list", "run", "status", "help"],
+        },
+        {
+          name: "workflow",
+          description: "Workflow id (for run)",
+          type: "string",
+        },
+        {
+          name: "goal",
+          description: "Goal text (for run)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "subagents",

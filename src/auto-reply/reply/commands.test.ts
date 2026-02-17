@@ -2,16 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildCommandsPaginationKeyboard } from "./commands-info.js";
@@ -876,6 +876,62 @@ describe("handleCommands context", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Context breakdown (detailed)");
     expect(result.reply?.text).toContain("Top tools (schema size):");
+  });
+});
+
+describe("handleCommands workflow", () => {
+  it("lists available workflows", async () => {
+    callGatewayMock.mockReset();
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/workflow list", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Available workflows:");
+    expect(result.reply?.text).toContain("research-code-review");
+    expect(result.reply?.text).toContain("bug-triage");
+    expect(result.reply?.text).toContain("security-patch");
+  });
+
+  it("dispatches a workflow run via agent call", async () => {
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ runId: "workflow-run-123" });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams(
+      "/workflow run research-code-review Improve retry behavior in sessions patch",
+      cfg,
+    );
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain('Dispatched workflow "Research -> Code -> Review"');
+    expect(result.reply?.text).toContain("workflow-run-123");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          timeout: 0,
+          deliver: false,
+          sessionKey: "agent:main:main",
+        }),
+      }),
+    );
+  });
+
+  it("returns usage for /workflow run without goal", async () => {
+    callGatewayMock.mockReset();
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/workflow run bug-triage", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Usage: /workflow run bug-triage <goal>");
   });
 });
 
