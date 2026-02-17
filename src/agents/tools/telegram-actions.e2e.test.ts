@@ -15,10 +15,14 @@ const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
-  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegram(...args),
-  sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
-  sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
-  deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
+  reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
+    reactMessageTelegram(...args),
+  sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
+    sendMessageTelegram(...args),
+  sendStickerTelegram: (...args: Parameters<typeof sendStickerTelegram>) =>
+    sendStickerTelegram(...args),
+  deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
+    deleteMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
