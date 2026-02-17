@@ -82,8 +82,13 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
-  /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
-  suppressToolErrors?: boolean;
+  /**
+   * Suppress ⚠️ tool-error warnings from being shown to the user.
+   * - `true`: suppress non-mutating tool errors only
+   * - `"all"`: suppress ALL tool errors including mutating (exec, write, edit)
+   * Default: false.
+   */
+  suppressToolErrors?: boolean | "all";
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };

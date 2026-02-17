@@ -36,4 +36,24 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it('accepts suppressToolErrors "all" mode', () => {
+    const res = validateConfigObject({
+      messages: {
+        suppressToolErrors: "all",
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts suppressToolErrors boolean true", () => {
+    const res = validateConfigObject({
+      messages: {
+        suppressToolErrors: true,
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

@@ -47,10 +47,13 @@ function isRecoverableToolError(error: string | undefined): boolean {
 function shouldShowToolErrorWarning(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
-  suppressToolErrors: boolean;
+  suppressToolErrors: boolean | "all";
   suppressToolErrorWarnings?: boolean;
 }): boolean {
   if (params.suppressToolErrorWarnings) {
+    return false;
+  }
+  if (params.suppressToolErrors === "all") {
     return false;
   }
   const isMutatingToolError =
@@ -251,7 +254,10 @@ export function buildEmbeddedRunPayloads(params: {
     const shouldShowToolError = shouldShowToolErrorWarning({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
-      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+      suppressToolErrors:
+        params.config?.messages?.suppressToolErrors === "all"
+          ? "all"
+          : Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
     });
 

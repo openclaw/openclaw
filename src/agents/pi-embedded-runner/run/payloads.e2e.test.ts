@@ -261,6 +261,24 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it('suppresses mutating tool errors when suppressToolErrors is "all"', () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command not found", mutatingAction: true },
+      config: { messages: { suppressToolErrors: "all" } },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it('suppresses non-mutating tool errors when suppressToolErrors is "all"', () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "browser", error: "timeout" },
+      config: { messages: { suppressToolErrors: "all" } },
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("shows recoverable tool errors for mutating tools", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "message", meta: "reply", error: "text required" },
