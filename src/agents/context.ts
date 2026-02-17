@@ -6,13 +6,20 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
+
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
 };
+
 type ConfigModelEntry = { id?: string; contextWindow?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
+
+/** Build a provider-qualified cache key to prevent cross-provider collisions. */
+function makeModelCacheKey(provider: string, modelId: string): string {
+  return `${provider}/${modelId}`;
+}
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -44,7 +51,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerName, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -55,7 +62,7 @@ export function applyConfiguredContextWindows(params: {
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
-      params.cache.set(modelId, contextWindow);
+      params.cache.set(makeModelCacheKey(providerName, modelId), contextWindow);
     }
   }
 }
@@ -101,11 +108,26 @@ const loadPromise = (async () => {
   // Keep lookup best-effort.
 });
 
-export function lookupContextTokens(modelId?: string): number | undefined {
+export function lookupContextTokens(params: {
+  provider?: string;
+  modelId?: string;
+}): number | undefined {
+  const { provider, modelId } = params;
   if (!modelId) {
     return undefined;
   }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
+
+  // Try provider-qualified lookup first
+  if (provider) {
+    const qualified = MODEL_CACHE.get(makeModelCacheKey(provider, modelId));
+    if (qualified !== undefined) {
+      return qualified;
+    }
+  }
+
+  // Fallback: model-id-only lookup for callers without provider context
+  // and for discovered models (which are keyed by bare model id).
   return MODEL_CACHE.get(modelId);
 }
