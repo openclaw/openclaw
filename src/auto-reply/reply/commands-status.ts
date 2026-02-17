@@ -1,104 +1,30 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry, SessionScope } from "../../config/sessions.js";
-import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
-import type { CommandContext } from "./commands-types.js";
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import {
-  ensureAuthProfileStore,
-  resolveAuthProfileDisplayLabel,
-  resolveAuthProfileOrder,
-} from "../../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
+import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { buildStatusMessage } from "../status.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
+import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
-
-function formatApiKeySnippet(apiKey: string): string {
-  const compact = apiKey.replace(/\s+/g, "");
-  if (!compact) {
-    return "unknown";
-  }
-  const edge = compact.length >= 12 ? 6 : 4;
-  const head = compact.slice(0, edge);
-  const tail = compact.slice(-edge);
-  return `${head}…${tail}`;
-}
-
-function resolveModelAuthLabel(
-  provider?: string,
-  cfg?: OpenClawConfig,
-  sessionEntry?: SessionEntry,
-  agentDir?: string,
-): string | undefined {
-  const resolved = provider?.trim();
-  if (!resolved) {
-    return undefined;
-  }
-
-  const providerKey = normalizeProviderId(resolved);
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const profileOverride = sessionEntry?.authProfileOverride?.trim();
-  const order = resolveAuthProfileOrder({
-    cfg,
-    store,
-    provider: providerKey,
-    preferredProfile: profileOverride,
-  });
-  const candidates = [profileOverride, ...order].filter(Boolean) as string[];
-
-  for (const profileId of candidates) {
-    const profile = store.profiles[profileId];
-    if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
-      continue;
-    }
-    const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-    if (profile.type === "oauth") {
-      return `oauth${label ? ` (${label})` : ""}`;
-    }
-    if (profile.type === "token") {
-      const snippet = formatApiKeySnippet(profile.token);
-      return `token ${snippet}${label ? ` (${label})` : ""}`;
-    }
-    const snippet = formatApiKeySnippet(profile.key ?? "");
-    return `api-key ${snippet}${label ? ` (${label})` : ""}`;
-  }
-
-  const envKey = resolveEnvApiKey(providerKey);
-  if (envKey?.apiKey) {
-    if (envKey.source.includes("OAUTH_TOKEN")) {
-      return `oauth (${envKey.source})`;
-    }
-    return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
-  }
-
-  const customKey = getCustomProviderApiKey(cfg, providerKey);
-  if (customKey) {
-    return `api-key ${formatApiKeySnippet(customKey)} (models.json)`;
-  }
-
-  return "unknown";
-}
 
 export async function buildStatusReply(params: {
   cfg: OpenClawConfig;
@@ -234,7 +160,12 @@ export async function buildStatusReply(params: {
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
-    modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry, statusAgentDir),
+    modelAuth: resolveModelAuthLabel({
+      provider,
+      cfg,
+      sessionEntry,
+      agentDir: statusAgentDir,
+    }),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

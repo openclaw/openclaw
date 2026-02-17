@@ -10,7 +10,9 @@ enum SoundEffectCatalog {
         return ["Glass"] + sorted
     }
 
-    static func displayName(for raw: String) -> String { raw }
+    static func displayName(for raw: String) -> String {
+        raw
+    }
 
     static func url(for name: String) -> URL? {
         self.discoveredSoundMap[name]

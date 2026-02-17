@@ -100,6 +100,13 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint)
 - `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
 
+Security notes:
+
+- Bonjour/mDNS TXT records are **unauthenticated**. Clients must not treat TXT as authoritative routing.
+- Clients should route using the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
+- TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin.
+- iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require explicit user confirmation before trusting a first-time fingerprint.
+
 ## Debugging on macOS
 
 Useful built‑in tools:

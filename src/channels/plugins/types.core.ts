@@ -344,4 +344,18 @@ export type ChannelPollContext = {
   poll: PollInput;
   accountId?: string | null;
   threadId?: string | null;
+  silent?: boolean;
+  isAnonymous?: boolean;
+};
+
+/** Minimal base for all channel probe results. Channel-specific probes extend this. */
+export type BaseProbeResult<TError = string | null> = {
+  ok: boolean;
+  error?: TError;
+};
+
+/** Minimal base for token resolution results. */
+export type BaseTokenResolution = {
+  token: string;
+  source: string;
 };

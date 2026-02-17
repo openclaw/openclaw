@@ -1,27 +1,35 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
   recordIndex: number;
 };
 
-function pluginOriginRank(origin: PluginOrigin): number {
-  // Precedence: config > workspace > global > bundled
-  switch (origin) {
-    case "config":
-      return 0;
-    case "workspace":
-      return 1;
-    case "global":
-      return 2;
-    case "bundled":
-      return 3;
+// Precedence: config > workspace > global > bundled
+const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
+  config: 0,
+  workspace: 1,
+  global: 2,
+  bundled: 3,
+};
+
+function safeRealpathSync(rootDir: string, cache: Map<string, string>): string | null {
+  const cached = cache.get(rootDir);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const resolved = fs.realpathSync(rootDir);
+    cache.set(rootDir, resolved);
+    return resolved;
+  } catch {
+    return null;
   }
 }
 
@@ -53,6 +61,10 @@ const registryCache = new Map<string, { expiresAt: number; registry: PluginManif
 
 const DEFAULT_MANIFEST_CACHE_MS = 200;
 
+export function clearPluginManifestRegistryCache(): void {
+  registryCache.clear();
+}
+
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
   if (raw === "" || raw === "0") {
@@ -81,7 +93,14 @@ function buildCacheKey(params: {
   plugins: NormalizedPluginsConfig;
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
+  // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
+  const loadPaths = params.plugins.loadPaths
+    .map((p) => resolveUserPath(p))
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .toSorted();
+  return `${workspaceKey}::${JSON.stringify(loadPaths)}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
@@ -158,6 +177,7 @@ export function loadPluginManifestRegistry(params: {
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
+  const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
     const manifestRes = loadPluginManifest(candidate.rootDir);
@@ -191,17 +211,13 @@ export function loadPluginManifestRegistry(params: {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
-      let samePlugin = false;
-      try {
-        samePlugin =
-          fs.realpathSync(existing.candidate.rootDir) === fs.realpathSync(candidate.rootDir);
-      } catch {
-        // If either path is inaccessible, fall through to duplicate warning
-      }
+      const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
+      const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
+      const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (pluginOriginRank(candidate.origin) < pluginOriginRank(existing.candidate.origin)) {
+        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = buildRecord({
             manifest,
             candidate,

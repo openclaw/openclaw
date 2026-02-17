@@ -221,7 +221,7 @@ If you run multiple accounts on the same channel, use `per-account-channel-peer`
 
 OpenClaw has two separate “who can trigger me?” layers:
 
-- **DM allowlist** (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
+- **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
   - When `dmPolicy="pairing"`, approvals are written to `~/.openclaw/credentials/<channel>-allowFrom.json` (merged with config allowlists).
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
@@ -577,6 +577,11 @@ You can already build a read-only profile by combining:
 
 We may add a single `readOnlyMode` flag later to simplify this configuration.
 
+Additional hardening options:
+
+- `tools.exec.applyPatch.workspaceOnly: true` (default): ensures `apply_patch` cannot write/delete outside the workspace directory even when sandboxing is off. Set to `false` only if you intentionally want `apply_patch` to touch files outside the workspace.
+- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths to the workspace directory (useful if you allow absolute paths today and want a single guardrail).
+
 ### 5) Secure baseline (copy/paste)
 
 One “safe default” config that keeps the Gateway private, requires DM pairing, and avoids always-on group bots:
@@ -705,7 +710,11 @@ Common use cases:
           scope: "agent",
           workspaceAccess: "none",
         },
+        // Session tools can reveal sensitive data from transcripts. By default OpenClaw limits these tools
+        // to the current session + spawned subagent sessions, but you can clamp further if needed.
+        // See `tools.sessions.visibility` in the configuration reference.
         tools: {
+          sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
             "sessions_history",

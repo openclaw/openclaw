@@ -1,93 +1,48 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import { describe, expect, it, vi } from "vitest";
+import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
 
-const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0]));
-const embedQuery = vi.fn(async () => [0, 1, 0]);
-
-vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async () => ({
-    requestedProvider: "openai",
-    provider: {
-      id: "mock",
-      model: "mock-embed",
-      embedQuery,
-      embedBatch,
+const fx = installEmbeddingManagerFixture({
+  fixturePrefix: "openclaw-mem-",
+  largeTokens: 1250,
+  smallTokens: 200,
+  createCfg: ({ workspaceDir, indexPath, tokens }) => ({
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+        memorySearch: {
+          provider: "openai",
+          model: "mock-embed",
+          store: { path: indexPath, vector: { enabled: false } },
+          chunking: { tokens, overlap: 0 },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+          query: { minScore: 0, hybrid: { enabled: false } },
+        },
+      },
+      list: [{ id: "main", default: true }],
     },
   }),
-}));
+});
+const { embedBatch } = fx;
 
 describe("memory embedding batches", () => {
-  let fixtureRoot: string;
-  let caseId = 0;
-  let workspaceDir: string;
-  let indexPath: string;
-  let manager: MemoryIndexManager | null = null;
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
-  });
-
-  afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  beforeEach(async () => {
-    embedBatch.mockClear();
-    embedQuery.mockClear();
-    workspaceDir = path.join(fixtureRoot, `case-${++caseId}`);
-    indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-  });
-
-  afterEach(async () => {
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
-  });
-
   it("splits large files across multiple embedding batches", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerLarge = fx.getManagerLarge();
     // Keep this small but above the embedding batch byte threshold (8k) so we
     // exercise multi-batch behavior without generating lots of chunks/DB rows.
-    const line = "a".repeat(5000);
+    const line = "a".repeat(4200);
     const content = [line, line].join("\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-03.md"), content);
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath },
-            chunking: { tokens: 1250, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
+    await fs.writeFile(path.join(memoryDir, "2026-01-03.md"), content);
     const updates: Array<{ completed: number; total: number; label?: string }> = [];
-    await manager.sync({
-      force: true,
+    await managerLarge.sync({
       progress: (update) => {
         updates.push(update);
       },
     });
 
-    const status = manager.status();
+    const status = managerLarge.status();
     const totalTexts = embedBatch.mock.calls.reduce((sum, call) => sum + (call[0]?.length ?? 0), 0);
     expect(totalTexts).toBe(status.chunks);
     expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
@@ -99,42 +54,22 @@ describe("memory embedding batches", () => {
   });
 
   it("keeps small files in a single embedding batch", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
     const line = "b".repeat(120);
     const content = Array.from({ length: 4 }, () => line).join("\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-04.md"), content);
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath },
-            chunking: { tokens: 200, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    await manager.sync({ force: true });
+    await fs.writeFile(path.join(memoryDir, "2026-01-04.md"), content);
+    await managerSmall.sync({ reason: "test" });
 
     expect(embedBatch.mock.calls.length).toBe(1);
   });
 
   it("retries embeddings on transient rate limit and 5xx errors", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
     const line = "d".repeat(120);
     const content = Array.from({ length: 4 }, () => line).join("\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-06.md"), content);
+    await fs.writeFile(path.join(memoryDir, "2026-01-06.md"), content);
 
     const transientErrors = [
       "openai embeddings failed: 429 rate limit",
@@ -162,32 +97,8 @@ describe("memory embedding batches", () => {
       }
       return realSetTimeout(handler, delay, ...args);
     }) as typeof setTimeout);
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath },
-            chunking: { tokens: 200, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
     try {
-      await manager.sync({ force: true });
+      await managerSmall.sync({ reason: "test" });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -196,31 +107,10 @@ describe("memory embedding batches", () => {
   }, 10000);
 
   it("skips empty chunks so embeddings input stays valid", async () => {
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), "\n\n\n");
-
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            query: { minScore: 0 },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    };
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
-    }
-    manager = result.manager;
-    await manager.sync({ force: true });
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), "\n\n\n");
+    await managerSmall.sync({ reason: "test" });
 
     const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
     expect(inputs).not.toContain("");
