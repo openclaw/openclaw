@@ -77,9 +77,28 @@ type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
-  sendPayload?: (payload: ReplyPayload) => Promise<OutboundDeliveryResult>;
-  sendText: (text: string) => Promise<OutboundDeliveryResult>;
-  sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
+  sendPayload?: (
+    payload: ReplyPayload,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+    },
+  ) => Promise<OutboundDeliveryResult>;
+  sendText: (
+    text: string,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+    },
+  ) => Promise<OutboundDeliveryResult>;
+  sendMedia: (
+    caption: string,
+    mediaUrl: string,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+    },
+  ) => Promise<OutboundDeliveryResult>;
 };
 
 type ChannelHandlerParams = {
@@ -118,27 +137,35 @@ function createPluginHandler(
   const sendMedia = outbound.sendMedia;
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
+  const resolveCtx = (overrides?: {
+    replyToId?: string | null;
+    threadId?: string | number | null;
+  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
+    ...baseCtx,
+    replyToId: overrides?.replyToId ?? baseCtx.replyToId,
+    threadId: overrides?.threadId ?? baseCtx.threadId,
+  });
   return {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     sendPayload: outbound.sendPayload
-      ? async (payload) =>
+      ? async (payload, overrides) =>
           outbound.sendPayload!({
-            ...baseCtx,
+            ...resolveCtx(overrides),
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
             payload,
           })
       : undefined,
-    sendText: async (text) =>
+    sendText: async (text, overrides) =>
       sendText({
-        ...baseCtx,
+        ...resolveCtx(overrides),
         text,
       }),
-    sendMedia: async (caption, mediaUrl) =>
+    sendMedia: async (caption, mediaUrl, overrides) =>
       sendMedia({
-        ...baseCtx,
+        ...resolveCtx(overrides),
         text: caption,
         mediaUrl,
       }),
@@ -302,10 +329,13 @@ async function deliverOutboundPayloadsCore(
       })
     : undefined;
 
-  const sendTextChunks = async (text: string) => {
+  const sendTextChunks = async (
+    text: string,
+    overrides?: { replyToId?: string | null; threadId?: string | number | null },
+  ) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text));
+      results.push(await handler.sendText(text, overrides));
       return;
     }
     if (chunkMode === "newline") {
@@ -325,7 +355,7 @@ async function deliverOutboundPayloadsCore(
         }
         for (const chunk of chunks) {
           throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk));
+          results.push(await handler.sendText(chunk, overrides));
         }
       }
       return;
@@ -333,7 +363,7 @@ async function deliverOutboundPayloadsCore(
     const chunks = handler.chunker(text, textLimit);
     for (const chunk of chunks) {
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(chunk));
+      results.push(await handler.sendText(chunk, overrides));
     }
   };
 
@@ -469,8 +499,12 @@ async function deliverOutboundPayloadsCore(
       }
 
       params.onPayload?.(payloadSummary);
+      const sendOverrides = {
+        replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
+        threadId: params.threadId ?? undefined,
+      };
       if (handler.sendPayload && effectivePayload.channelData) {
-        results.push(await handler.sendPayload(effectivePayload));
+        results.push(await handler.sendPayload(effectivePayload, sendOverrides));
         emitMessageSent(true);
         continue;
       }
@@ -478,7 +512,7 @@ async function deliverOutboundPayloadsCore(
         if (isSignalChannel) {
           await sendSignalTextChunks(payloadSummary.text);
         } else {
-          await sendTextChunks(payloadSummary.text);
+          await sendTextChunks(payloadSummary.text, sendOverrides);
         }
         emitMessageSent(true);
         continue;
@@ -492,7 +526,7 @@ async function deliverOutboundPayloadsCore(
         if (isSignalChannel) {
           results.push(await sendSignalMedia(caption, url));
         } else {
-          results.push(await handler.sendMedia(caption, url));
+          results.push(await handler.sendMedia(caption, url, sendOverrides));
         }
       }
       emitMessageSent(true);

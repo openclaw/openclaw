@@ -263,7 +263,7 @@ describe("voice transcript events", () => {
         sessionKey: "voice-store-fail-session",
       }),
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session-store update failed"));
