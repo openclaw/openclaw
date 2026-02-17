@@ -73,6 +73,26 @@ export function buildCappedTelegramMenuCommands(params: {
   return { commandsToRegister, totalCommands, maxCommands, overflowCount };
 }
 
+export function filterTelegramMenuCommands(params: {
+  commands: TelegramMenuCommand[];
+  include?: string[];
+  exclude?: string[];
+}): TelegramMenuCommand[] {
+  const { commands, include, exclude } = params;
+
+  if (include && include.length > 0) {
+    const includeSet = new Set(include.map((name) => normalizeTelegramCommandName(name)));
+    return commands.filter((cmd) => includeSet.has(cmd.command.toLowerCase()));
+  }
+
+  if (exclude && exclude.length > 0) {
+    const excludeSet = new Set(exclude.map((name) => normalizeTelegramCommandName(name)));
+    return commands.filter((cmd) => !excludeSet.has(cmd.command.toLowerCase()));
+  }
+
+  return commands;
+}
+
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;

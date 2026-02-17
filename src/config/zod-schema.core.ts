@@ -515,6 +515,18 @@ export const ProviderCommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional(),
     nativeSkills: NativeCommandsSettingSchema.optional(),
+    include: z.array(z.string()).optional(),
+    exclude: z.array(z.string()).optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (value.include && value.include.length > 0 && value.exclude && value.exclude.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["exclude"],
+        message:
+          "commands.include and commands.exclude are mutually exclusive; include takes priority, exclude will be ignored.",
+      });
+    }
+  })
   .optional();

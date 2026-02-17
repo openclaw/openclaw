@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  filterTelegramMenuCommands,
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 
@@ -75,5 +76,90 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(callOrder).toEqual(["delete", "set"]);
+  });
+});
+
+describe("filterTelegramMenuCommands", () => {
+  const commands = [
+    { command: "start", description: "Start the bot" },
+    { command: "help", description: "Show help" },
+    { command: "settings", description: "Open settings" },
+    { command: "status", description: "Show status" },
+  ];
+
+  it("returns all commands when no include or exclude is set", () => {
+    const result = filterTelegramMenuCommands({ commands });
+    expect(result).toEqual(commands);
+  });
+
+  it("returns all commands when include is an empty array", () => {
+    const result = filterTelegramMenuCommands({ commands, include: [] });
+    expect(result).toEqual(commands);
+  });
+
+  it("returns all commands when exclude is an empty array", () => {
+    const result = filterTelegramMenuCommands({ commands, exclude: [] });
+    expect(result).toEqual(commands);
+  });
+
+  it("filters to only included commands (whitelist)", () => {
+    const result = filterTelegramMenuCommands({
+      commands,
+      include: ["start", "help"],
+    });
+    expect(result).toEqual([
+      { command: "start", description: "Start the bot" },
+      { command: "help", description: "Show help" },
+    ]);
+  });
+
+  it("excludes specified commands (blacklist)", () => {
+    const result = filterTelegramMenuCommands({
+      commands,
+      exclude: ["settings", "status"],
+    });
+    expect(result).toEqual([
+      { command: "start", description: "Start the bot" },
+      { command: "help", description: "Show help" },
+    ]);
+  });
+
+  it("include takes priority over exclude", () => {
+    const result = filterTelegramMenuCommands({
+      commands,
+      include: ["start"],
+      exclude: ["start"],
+    });
+    expect(result).toEqual([{ command: "start", description: "Start the bot" }]);
+  });
+
+  it("normalizes command names by stripping / prefix", () => {
+    const result = filterTelegramMenuCommands({
+      commands,
+      include: ["/start", "/help"],
+    });
+    expect(result).toEqual([
+      { command: "start", description: "Start the bot" },
+      { command: "help", description: "Show help" },
+    ]);
+  });
+
+  it("normalizes command names to lowercase", () => {
+    const result = filterTelegramMenuCommands({
+      commands,
+      include: ["START", "Help"],
+    });
+    expect(result).toEqual([
+      { command: "start", description: "Start the bot" },
+      { command: "help", description: "Show help" },
+    ]);
+  });
+
+  it("returns empty array when include has no matching commands", () => {
+    const result = filterTelegramMenuCommands({
+      commands,
+      include: ["nonexistent"],
+    });
+    expect(result).toEqual([]);
   });
 });

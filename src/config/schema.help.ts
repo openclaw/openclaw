@@ -335,12 +335,24 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
     'Override native skill commands for Discord (bool or "auto").',
+  "channels.discord.commands.include":
+    "Whitelist of command names to register in Discord menu (include takes priority over exclude).",
+  "channels.discord.commands.exclude":
+    "Blacklist of command names to hide from Discord menu (ignored when include is set).",
   "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
   "channels.telegram.commands.nativeSkills":
     'Override native skill commands for Telegram (bool or "auto").',
+  "channels.telegram.commands.include":
+    "Whitelist of command names to register in Telegram menu (include takes priority over exclude).",
+  "channels.telegram.commands.exclude":
+    "Blacklist of command names to hide from Telegram menu (ignored when include is set).",
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',
+  "channels.slack.commands.include":
+    "Whitelist of command names to register in Slack menu (include takes priority over exclude).",
+  "channels.slack.commands.exclude":
+    "Blacklist of command names to hide from Slack menu (ignored when include is set).",
   "channels.slack.streamMode":
     "Live stream preview mode for Slack replies (replace | status_final | append).",
   "session.agentToAgent.maxPingPongTurns":

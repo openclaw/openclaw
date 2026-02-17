@@ -145,7 +145,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands).toHaveLength(100);
     expect(registeredCommands).toEqual(customCommands.slice(0, 100));
     expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or use commands.include/exclude to filter.",
     );
   });
 
@@ -205,5 +205,82 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
+  it("include filters menu registration but not handler registration", () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: false },
+    };
+    const customCommands = [
+      { command: "alpha", description: "Alpha cmd" },
+      { command: "beta", description: "Beta cmd" },
+      { command: "gamma", description: "Gamma cmd" },
+    ];
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const commandHandler = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...buildParams(cfg),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: commandHandler,
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      telegramCfg: {
+        customCommands,
+        commands: { include: ["alpha", "gamma"] },
+      } as unknown as TelegramAccountConfig,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+
+    const registeredMenuCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(registeredMenuCommands).toEqual([
+      { command: "alpha", description: "Alpha cmd" },
+      { command: "gamma", description: "Gamma cmd" },
+    ]);
+  });
+
+  it("exclude filters commands from menu registration", () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: false },
+    };
+    const customCommands = [
+      { command: "alpha", description: "Alpha cmd" },
+      { command: "beta", description: "Beta cmd" },
+      { command: "gamma", description: "Gamma cmd" },
+    ];
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+
+    registerTelegramNativeCommands({
+      ...buildParams(cfg),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      telegramCfg: {
+        customCommands,
+        commands: { exclude: ["beta"] },
+      } as unknown as TelegramAccountConfig,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+
+    const registeredMenuCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(registeredMenuCommands).toEqual([
+      { command: "alpha", description: "Alpha cmd" },
+      { command: "gamma", description: "Gamma cmd" },
+    ]);
   });
 });

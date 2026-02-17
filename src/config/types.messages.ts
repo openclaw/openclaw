@@ -132,4 +132,8 @@ export type ProviderCommandsConfig = {
   native?: NativeCommandsSetting;
   /** Override native skill command registration for this provider (bool or "auto"). */
   nativeSkills?: NativeCommandsSetting;
+  /** Whitelist of command names to register in the provider menu (takes priority over exclude). */
+  include?: string[];
+  /** Blacklist of command names to hide from the provider menu (ignored when include is set). */
+  exclude?: string[];
 };
