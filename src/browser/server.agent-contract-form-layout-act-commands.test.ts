@@ -26,7 +26,7 @@ describe("browser control server", () => {
     async () => {
       const base = await startServerAndBase();
 
-      const select = await postJson(`${base}/act`, {
+      const select = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "select",
         ref: "5",
         values: ["a", "b"],
@@ -39,7 +39,7 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
 
-      const fill = await postJson(`${base}/act`, {
+      const fill = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "fill",
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
       });
@@ -50,7 +50,7 @@ describe("browser control server", () => {
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
       });
 
-      const resize = await postJson(`${base}/act`, {
+      const resize = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "resize",
         width: 800,
         height: 600,
@@ -63,7 +63,7 @@ describe("browser control server", () => {
         height: 600,
       });
 
-      const wait = await postJson(`${base}/act`, {
+      const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
         timeMs: 5,
       });
@@ -76,7 +76,7 @@ describe("browser control server", () => {
         textGone: undefined,
       });
 
-      const evalRes = await postJson(`${base}/act`, {
+      const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
         kind: "evaluate",
         fn: "() => 1",
       });
@@ -101,14 +101,14 @@ describe("browser control server", () => {
       setBrowserControlServerEvaluateEnabled(false);
       const base = await startServerAndBase();
 
-      const waitRes = await postJson(`${base}/act`, {
+      const waitRes = await postJson<{ error?: string }>(`${base}/act`, {
         kind: "wait",
         fn: "() => window.ready === true",
       });
       expect(waitRes.error).toContain("browser.evaluateEnabled=false");
       expect(pwMocks.waitForViaPlaywright).not.toHaveBeenCalled();
 
-      const res = await postJson(`${base}/act`, {
+      const res = await postJson<{ error?: string }>(`${base}/act`, {
         kind: "evaluate",
         fn: "() => 1",
       });
@@ -185,11 +185,11 @@ describe("browser control server", () => {
     expect(consoleRes.ok).toBe(true);
     expect(Array.isArray(consoleRes.messages)).toBe(true);
 
-    const pdf = await postJson(`${base}/pdf`, {});
+    const pdf = await postJson<{ ok: boolean; path?: string }>(`${base}/pdf`, {});
     expect(pdf.ok).toBe(true);
     expect(typeof pdf.path).toBe("string");
 
-    const shot = await postJson(`${base}/screenshot`, {
+    const shot = await postJson<{ ok: boolean; path?: string }>(`${base}/screenshot`, {
       element: "body",
       type: "jpeg",
     });
