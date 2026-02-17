@@ -246,13 +246,6 @@ html.theme-transition::view-transition-new(theme) {
   }
 }
 
-openclaw-app {
-  display: block;
-  position: relative;
-  z-index: 1;
-  min-height: 100vh;
-}
-
 a {
   color: var(--accent);
   text-decoration: none;

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "astro build",
+    "check": "astro check",
     "dev": "astro dev",
     "preview": "astro preview",
     "test": "vitest run --config vitest.config.ts"
