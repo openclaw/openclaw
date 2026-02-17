@@ -223,29 +223,14 @@ export function buildEmbeddedRunPayloads(params: {
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  let hasUserFacingAssistantReply = false;
-  for (const text of answerTexts) {
-    const {
-      text: cleanedText,
-      mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
-      continue;
-    }
-    replyItems.push({
-      text: cleanedText,
-      media: mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    });
-    hasUserFacingAssistantReply = true;
-  }
+  // Pre-compute whether assistant texts contain user-facing content so the
+  // tool-error decision can be made before assistant items are appended.
+  // This lets us place tool warnings BEFORE the final reply in the output
+  // array so the assistant's answer is always the last (most visible) item.
+  const hasUserFacingAssistantReply = answerTexts.some((text) => {
+    const { text: cleaned, mediaUrls, audioAsVoice } = parseReplyDirectives(text);
+    return Boolean(cleaned) || Boolean(mediaUrls && mediaUrls.length > 0) || Boolean(audioAsVoice);
+  });
 
   if (params.lastToolError) {
     const shouldShowToolError = shouldShowToolErrorWarning({
@@ -266,7 +251,7 @@ export function buildEmbeddedRunPayloads(params: {
       const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
-      const duplicateWarning = normalizedWarning
+      const duplicateInExisting = normalizedWarning
         ? replyItems.some((item) => {
             if (!item.text) {
               return false;
@@ -275,13 +260,42 @@ export function buildEmbeddedRunPayloads(params: {
             return normalizedExisting.length > 0 && normalizedExisting === normalizedWarning;
           })
         : false;
-      if (!duplicateWarning) {
+      const duplicateInAnswers =
+        normalizedWarning && !duplicateInExisting
+          ? answerTexts.some((text) => {
+              const normalized = normalizeTextForComparison(text);
+              return normalized.length > 0 && normalized === normalizedWarning;
+            })
+          : false;
+      if (!duplicateInExisting && !duplicateInAnswers) {
         replyItems.push({
           text: warningText,
           isError: true,
         });
       }
     }
+  }
+
+  for (const text of answerTexts) {
+    const {
+      text: cleanedText,
+      mediaUrls,
+      audioAsVoice,
+      replyToId,
+      replyToTag,
+      replyToCurrent,
+    } = parseReplyDirectives(text);
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+      continue;
+    }
+    replyItems.push({
+      text: cleanedText,
+      media: mediaUrls,
+      audioAsVoice,
+      replyToId,
+      replyToTag,
+      replyToCurrent,
+    });
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
