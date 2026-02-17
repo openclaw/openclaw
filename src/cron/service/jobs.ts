@@ -138,7 +138,12 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
             : null;
     return atMs !== null ? atMs : undefined;
   }
-  return computeStaggeredCronNextRunAtMs(job, nowMs);
+  const next = computeStaggeredCronNextRunAtMs(job, nowMs);
+  if (next === undefined && job.schedule.kind === "cron") {
+    const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+    return computeStaggeredCronNextRunAtMs(job, nextSecondMs);
+  }
+  return next;
 }
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
