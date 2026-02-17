@@ -1,9 +1,38 @@
-import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type {
+  BlockStreamingCoalesceConfig,
+  DmPolicy,
+  GroupPolicy,
+  MarkdownConfig,
+} from "./types.base.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
-export type SignalAccountConfig = CommonChannelMessagingConfig & {
+export type SignalGroupConfig = {
+  requireMention?: boolean;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  enabled?: boolean;
+  allowFrom?: Array<string | number>;
+  systemPrompt?: string;
+  /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
+  ingest?: boolean;
+};
+
+export type SignalAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
+  /** Markdown formatting overrides (tables). */
+  markdown?: MarkdownConfig;
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
+  /** If false, do not start this Signal account. Default: true. */
+  enabled?: boolean;
   /** Optional explicit E.164 account for signal-cli. */
   account?: string;
   /** Optional account UUID for signal-cli (used for loop protection). */
@@ -24,6 +53,25 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
+  allowFrom?: Array<string | number>;
+  /** Optional allowlist for Signal group senders (E.164). */
+  groupAllowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open": groups bypass allowFrom, no extra gating
+   * - "disabled": block all group messages
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
+  groups?: Record<string, SignalGroupConfig>;
+  /** Max group messages to keep as history context (0 disables). */
+  historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
