@@ -10,6 +10,14 @@ function parseInboundMetaPayload(text: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
+function parseConversationInfoPayload(text: string): Record<string, unknown> {
+  const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  if (!match?.[1]) {
+    throw new Error("missing conversation info json block");
+  }
+  return JSON.parse(match[1]) as Record<string, unknown>;
+}
+
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes trusted message and routing ids for tool actions", () => {
     const prompt = buildInboundMetaSystemPrompt({
@@ -126,5 +134,25 @@ describe("buildInboundUserContextPrefix", () => {
 
     expect(text).toContain("Conversation info (untrusted metadata):");
     expect(text).toContain('"conversation_label": "ops-room"');
+  });
+
+  it("includes sender identifier in conversation info", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      SenderE164: " +15551234567 ",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toBe("+15551234567");
+  });
+
+  it("falls back to SenderId when sender phone is missing", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      SenderId: " user@example.com ",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toBe("user@example.com");
   });
 });
