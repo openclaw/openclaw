@@ -32,6 +32,22 @@ data class GatewayTlsConfig(
   val hostnameVerifier: HostnameVerifier,
 )
 
+/**
+ * Builds a TLS configuration for gateway connections.
+ *
+ * Security Model:
+ * - Fingerprint Pinning: If `expectedFingerprint` is provided, ONLY certificates matching the
+ *   SHA-256 fingerprint are trusted. This is the most secure option.
+ * - TOFU (Trust On First Use): If `allowTOFU` is true, the first certificate is trusted and its
+ *   fingerprint is stored via `onStore`. Subsequent connections must match this fingerprint.
+ *   WARNING: Only use TOFU in controlled environments (e.g., internal networks), as the first
+ *   connection is vulnerable to MITM.
+ * - Fallback: If neither pinning nor TOFU is used, the system's default trust manager is used.
+ *
+ * Hostname Verification:
+ * - Disabled for pinned/TOFU connections because service discovery often returns IPs.
+ * - Uses the system's default verifier otherwise.
+ */
 fun buildGatewayTlsConfig(
   params: GatewayTlsParams?,
   onStore: ((String) -> Unit)? = null,
@@ -65,7 +81,8 @@ fun buildGatewayTlsConfig(
       override fun getAcceptedIssuers(): Array<X509Certificate> = defaultTrust.acceptedIssuers
     }
 
-  val context = SSLContext.getInstance("TLS")
+  // Explicitly enforce TLSv1.2 to address SonarCloud warning and future-proof the implementation
+  val context = SSLContext.getInstance("TLSv1.2")
   context.init(null, arrayOf(trustManager), SecureRandom())
   val verifier =
     if (expected != null || params.allowTOFU) {
@@ -81,6 +98,12 @@ fun buildGatewayTlsConfig(
   )
 }
 
+/**
+ * Probes a server's TLS fingerprint for diagnostic purposes.
+ *
+ * WARNING: This function uses a TrustAllX509TrustManager and MUST NOT be used
+ * in production. It is ONLY for fingerprint discovery in controlled environments.
+ */
 suspend fun probeGatewayTlsFingerprint(
   host: String,
   port: Int,
@@ -101,7 +124,8 @@ suspend fun probeGatewayTlsFingerprint(
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
       }
 
-    val context = SSLContext.getInstance("TLS")
+    // Explicitly enforce TLSv1.2 for diagnostic connections as well
+    val context = SSLContext.getInstance("TLSv1.2")
     context.init(null, arrayOf(trustAll), SecureRandom())
 
     val socket = (context.socketFactory.createSocket() as SSLSocket)
