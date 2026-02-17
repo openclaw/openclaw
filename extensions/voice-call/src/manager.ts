@@ -77,7 +77,7 @@ export class CallManager {
   private rememberProcessedEventId(eventId: string): void {
     this.processedEventIds.add(eventId);
     while (this.processedEventIds.size > this.maxProcessedEventIds) {
-      const oldest = this.processedEventIds.values().next().value as string | undefined;
+      const oldest = this.processedEventIds.values().next().value;
       if (!oldest) {
         break;
       }
