@@ -119,15 +119,26 @@ cd ./extensions/voice-call && pnpm install
 
 ## 通话的 TTS
 
-Voice Call 使用核心 `messages.tts` 配置（OpenAI 或 ElevenLabs）进行通话中的流式语音。你可以在插件配置下使用**相同的结构**覆盖它——它会与 `messages.tts` 深度合并。
+Voice Call **仅**使用 `plugins.entries.voice-call.config.tts` 进行通话语音。
+它**不会**读取或合并核心 `messages.tts` 配置（后者用于消息渠道的 TTS）。
+
+示例：
 
 ```json5
 {
-  tts: {
-    provider: "elevenlabs",
-    elevenlabs: {
-      voiceId: "pMsXgVXv3BLzUgSXRplE",
-      modelId: "eleven_multilingual_v2",
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tts: {
+            provider: "openai", // 或 "elevenlabs"
+            openai: {
+              voice: "alloy",
+              // apiKey 可在此设置，或通过 OPENAI_API_KEY 提供
+            },
+          },
+        },
+      },
     },
   },
 }
@@ -136,66 +147,8 @@ Voice Call 使用核心 `messages.tts` 配置（OpenAI 或 ElevenLabs）进行�
 注意事项：
 
 - **语音通话忽略 Edge TTS**（电话音频需要 PCM；Edge 输出不可靠）。
-- 当启用 Twilio 媒体流时使用核心 TTS；否则通话回退到提供商原生语音。
-
-### 更多示例
-
-仅使用核心 TTS（无覆盖）：
-
-```json5
-{
-  messages: {
-    tts: {
-      provider: "openai",
-      openai: { voice: "alloy" },
-    },
-  },
-}
-```
-
-仅为通话覆盖为 ElevenLabs（其他地方保持核心默认）：
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          tts: {
-            provider: "elevenlabs",
-            elevenlabs: {
-              apiKey: "elevenlabs_key",
-              voiceId: "pMsXgVXv3BLzUgSXRplE",
-              modelId: "eleven_multilingual_v2",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-仅为通话覆盖 OpenAI 模型（深度合并示例）：
-
-```json5
-{
-  plugins: {
-    entries: {
-      "voice-call": {
-        config: {
-          tts: {
-            openai: {
-              model: "gpt-4o-mini-tts",
-              voice: "marin",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
+- 仅当启用 **Twilio 媒体流** 时才使用电话 TTS；否则通话回退到提供商原生语音。
+- 若要使用 **ElevenLabs 流式**，请设置 `tts.elevenlabs.apiKey` + `tts.elevenlabs.voiceId`。（如果只设置 `ELEVENLABS_API_KEY`，插件可能回退到非流式合成。）
 
 ## 入站通话
 
