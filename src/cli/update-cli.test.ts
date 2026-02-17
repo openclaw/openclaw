@@ -312,7 +312,43 @@ describe("update-cli", () => {
     expect(parsed.channel.value).toBe("stable");
   });
 
-  it("defaults to dev channel for git installs when unset", async () => {
+  it("defaults to stable channel for tagged git installs when unset", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await updateCommand({});
+
+    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+    expect(call?.channel).toBe("stable");
+  });
+
+  it("defaults to dev channel for untagged git branch installs", async () => {
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/test/path",
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root: "/test/path",
+        sha: "abcdef1234567890",
+        tag: null,
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: "/test/path/pnpm-lock.yaml",
+        markerPath: "/test/path/node_modules",
+      },
+    });
     vi.mocked(runGatewayUpdate).mockResolvedValue({
       status: "ok",
       mode: "git",
@@ -324,6 +360,42 @@ describe("update-cli", () => {
 
     const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
     expect(call?.channel).toBe("dev");
+  });
+
+  it("defaults to beta channel for beta-tagged git installs", async () => {
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/test/path",
+      installKind: "git",
+      packageManager: "pnpm",
+      git: {
+        root: "/test/path",
+        sha: "abcdef1234567890",
+        tag: "v2026.2.15-beta.1",
+        branch: "main",
+        upstream: "origin/main",
+        dirty: false,
+        ahead: 0,
+        behind: 0,
+        fetchOk: true,
+      },
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: "/test/path/pnpm-lock.yaml",
+        markerPath: "/test/path/node_modules",
+      },
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await updateCommand({});
+
+    const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
+    expect(call?.channel).toBe("beta");
   });
 
   it("defaults to stable channel for package installs when unset", async () => {
