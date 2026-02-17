@@ -407,15 +407,12 @@ export function createOpenClawCodingTools(options?: {
           error: `exec command blocked by policy: ${command.slice(0, 50)}${command.length > 50 ? "..." : ""}`,
         });
       }
-      if (command !== rawCommand) {
-        return execTool.execute(
-          toolCallId,
-          { ...(params as Record<string, unknown>), command },
-          signal,
-          onUpdate,
-        );
-      }
-      return execTool.execute(toolCallId, params, signal, onUpdate);
+      return execTool.execute(
+        toolCallId,
+        { ...(params as Record<string, unknown>), command },
+        signal,
+        onUpdate,
+      );
     },
   } as AnyAgentTool;
   const applyPatchTool =
