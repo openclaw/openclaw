@@ -163,7 +163,7 @@ describe("subscribeEmbeddedPiSession", () => {
             arguments: { url: "https://example.com" },
           },
         ],
-      } as AssistantMessage,
+      } as unknown as AssistantMessage,
     });
 
     expect(subscription.assistantTexts).toEqual(["Recovered final answer from fallback"]);
