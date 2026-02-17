@@ -1,0 +1,23 @@
+name: Trigger Railway Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trigger-deploy:
+    runs-on: ubuntu-latest
+    # Only run in the fork, not upstream openclaw
+    if: github.repository == 'as3445/openclaw'
+    steps:
+      - name: Push version bump to template repo
+        run: |
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/as3445/openclaw-railway-template.git /tmp/tpl
+          cd /tmp/tpl
+          git config user.email "nox@openclaw.ai"
+          git config user.name "Nox (CI)"
+          echo "${{ github.sha }}" > .openclaw-version
+          git add .openclaw-version
+          git diff --cached --quiet && echo "No change" && exit 0
+          git commit -m "deploy: openclaw $(echo ${{ github.sha }} | cut -c1-8)"
+          git push
