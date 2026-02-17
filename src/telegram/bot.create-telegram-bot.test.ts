@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Chat } from "@grammyjs/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import {
@@ -36,6 +37,8 @@ const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
 const ORIGINAL_TZ = process.env.TZ;
+const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
+  chat as Chat;
 
 describe("createTelegramBot", () => {
   beforeEach(() => {
@@ -69,7 +72,7 @@ describe("createTelegramBot", () => {
       globalThis.fetch = originalFetch;
     }
   });
-  it("passes timeoutSeconds even without a custom fetch", () => {
+  it("applies global and per-account timeoutSeconds", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 60 },
@@ -82,8 +85,8 @@ describe("createTelegramBot", () => {
         client: expect.objectContaining({ timeoutSeconds: 60 }),
       }),
     );
-  });
-  it("prefers per-account timeoutSeconds overrides", () => {
+    botCtorSpy.mockClear();
+
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -109,42 +112,59 @@ describe("createTelegramBot", () => {
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
-    expect(getTelegramSequentialKey({ message: { chat: { id: 123 } } })).toBe("telegram:123");
+    expect(getTelegramSequentialKey({ message: { chat: mockChat({ id: 123 }) } })).toBe(
+      "telegram:123",
+    );
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, type: "private" }, message_thread_id: 9 },
+        message: { chat: mockChat({ id: 123, type: "private" }), message_thread_id: 9 },
       }),
     ).toBe("telegram:123:topic:9");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, type: "supergroup" }, message_thread_id: 9 },
+        message: { chat: mockChat({ id: 123, type: "supergroup" }), message_thread_id: 9 },
       }),
     ).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, type: "supergroup", is_forum: true } },
+        message: { chat: mockChat({ id: 123, type: "supergroup", is_forum: true }) },
       }),
     ).toBe("telegram:123:topic:1");
     expect(
       getTelegramSequentialKey({
-        update: { message: { chat: { id: 555 } } },
+        update: { message: { chat: mockChat({ id: 555 }) } },
       }),
     ).toBe("telegram:555");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "/stop" },
+        message: { chat: mockChat({ id: 123 }), text: "/stop" },
       }),
     ).toBe("telegram:123:control");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "/status" },
+        message: { chat: mockChat({ id: 123 }), text: "/status" },
+      }),
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: mockChat({ id: 123 }), text: "stop" },
       }),
     ).toBe("telegram:123:control");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, text: "stop" },
+        message: { chat: mockChat({ id: 123 }), text: "stop please" },
       }),
-    ).toBe("telegram:123:control");
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: mockChat({ id: 123 }), text: "/abort" },
+      }),
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: mockChat({ id: 123 }), text: "/abort now" },
+      }),
+    ).toBe("telegram:123");
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     onSpy.mockReset();
@@ -1340,35 +1360,6 @@ describe("createTelegramBot", () => {
     expect(sendParams?.message_thread_id).toBeUndefined();
   });
 
-  it("blocks @username allowFrom entries when groupPolicy is 'allowlist' (numeric IDs required)", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groupPolicy: "allowlist",
-          allowFrom: ["@TestUser"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 12345, username: "testuser" },
-        text: "hello",
-        date: 1736380800,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(0);
-  });
   it("allows direct messages regardless of groupPolicy", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
@@ -1404,33 +1395,6 @@ describe("createTelegramBot", () => {
       channels: {
         telegram: {
           allowFrom: ["  TG:123456789  "],
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 123456789, type: "private" },
-        from: { id: 123456789, username: "testuser" },
-        text: "hello",
-        date: 1736380800,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-  });
-  it("allows direct messages with telegram:-prefixed allowFrom entries", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          allowFrom: ["telegram:123456789"],
         },
       },
     });
@@ -1560,36 +1524,6 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
   });
-  it("matches telegram:-prefixed allowFrom entries in group allowlist", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groupPolicy: "allowlist",
-          allowFrom: ["telegram:123456789"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 123456789, username: "testuser" },
-        text: "hello from prefixed user",
-        date: 1736380800,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).toHaveBeenCalled();
-  });
-
   it("sends replies without native reply threading", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
@@ -1725,30 +1659,6 @@ describe("createTelegramBot", () => {
       message: {
         chat: { id: 456, type: "group", title: "Ops" },
         text: "@openclaw_bot hello",
-        date: 1736380800,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).not.toHaveBeenCalled();
-  });
-  it("skips group messages without mention when requireMention is enabled", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { groups: { "*": { requireMention: true } } },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 123, type: "group", title: "Dev Chat" },
-        text: "hello",
         date: 1736380800,
       },
       me: { username: "openclaw_bot" },

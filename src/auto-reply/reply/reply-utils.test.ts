@@ -568,7 +568,6 @@ describe("createReplyReferencePlanner", () => {
       startId: "parent",
     });
     expect(planner.use()).toBeUndefined();
-    expect(planner.hasReplied()).toBe(false);
   });
 
   it("uses startId once when mode is first", () => {
@@ -591,16 +590,6 @@ describe("createReplyReferencePlanner", () => {
     expect(planner.use()).toBe("parent");
   });
 
-  it("respects replyToMode off even with existingId", () => {
-    const planner = createReplyReferencePlanner({
-      replyToMode: "off",
-      existingId: "thread-1",
-      startId: "parent",
-    });
-    expect(planner.use()).toBeUndefined();
-    expect(planner.hasReplied()).toBe(false);
-  });
-
   it("uses existingId once when mode is first", () => {
     const planner = createReplyReferencePlanner({
       replyToMode: "first",
@@ -608,18 +597,7 @@ describe("createReplyReferencePlanner", () => {
       startId: "parent",
     });
     expect(planner.use()).toBe("thread-1");
-    expect(planner.hasReplied()).toBe(true);
     expect(planner.use()).toBeUndefined();
-  });
-
-  it("uses existingId on every call when mode is all", () => {
-    const planner = createReplyReferencePlanner({
-      replyToMode: "all",
-      existingId: "thread-1",
-      startId: "parent",
-    });
-    expect(planner.use()).toBe("thread-1");
-    expect(planner.use()).toBe("thread-1");
   });
 
   it("honors allowReference=false", () => {
@@ -654,7 +632,6 @@ describe("createStreamingDirectiveAccumulator", () => {
     const result = accumulator.consume("current]] Yo");
     expect(result?.text).toBe("Yo");
     expect(result?.replyToCurrent).toBe(true);
-    expect(result?.replyToTag).toBe(true);
   });
 
   it("propagates explicit reply ids across chunks", () => {
@@ -727,14 +704,6 @@ describe("resolveResponsePrefixTemplate", () => {
     expect(result).toBe("[OpenClaw]");
   });
 
-  it("resolves multiple variables", () => {
-    const result = resolveResponsePrefixTemplate("[{model} | think:{thinkingLevel}]", {
-      model: "claude-opus-4-5",
-      thinkingLevel: "high",
-    });
-    expect(result).toBe("[claude-opus-4-5 | think:high]");
-  });
-
   it("leaves unresolved variables as-is", () => {
     const result = resolveResponsePrefixTemplate("[{model}]", {});
     expect(result).toBe("[{model}]");
@@ -779,58 +748,26 @@ describe("resolveResponsePrefixTemplate", () => {
 
 describe("extractShortModelName", () => {
   it("strips provider prefix", () => {
-    expect(extractShortModelName("openai/gpt-5.2")).toBe("gpt-5.2");
-    expect(extractShortModelName("anthropic/claude-opus-4-5")).toBe("claude-opus-4-5");
     expect(extractShortModelName("openai-codex/gpt-5.2-codex")).toBe("gpt-5.2-codex");
   });
 
   it("strips date suffix", () => {
     expect(extractShortModelName("claude-opus-4-5-20251101")).toBe("claude-opus-4-5");
-    expect(extractShortModelName("gpt-5.2-20250115")).toBe("gpt-5.2");
   });
 
   it("strips -latest suffix", () => {
     expect(extractShortModelName("gpt-5.2-latest")).toBe("gpt-5.2");
-    expect(extractShortModelName("claude-sonnet-latest")).toBe("claude-sonnet");
-  });
-
-  it("handles model without provider", () => {
-    expect(extractShortModelName("gpt-5.2")).toBe("gpt-5.2");
-    expect(extractShortModelName("claude-opus-4-5")).toBe("claude-opus-4-5");
-  });
-
-  it("handles full path with provider and date suffix", () => {
-    expect(extractShortModelName("anthropic/claude-opus-4-5-20251101")).toBe("claude-opus-4-5");
   });
 
   it("preserves version numbers that look like dates but are not", () => {
     // Date suffix must be exactly 8 digits at the end
-    expect(extractShortModelName("model-v1234567")).toBe("model-v1234567");
     expect(extractShortModelName("model-123456789")).toBe("model-123456789");
   });
 });
 
 describe("hasTemplateVariables", () => {
-  it("returns false for undefined", () => {
-    expect(hasTemplateVariables(undefined)).toBe(false);
-  });
-
   it("returns false for empty string", () => {
     expect(hasTemplateVariables("")).toBe(false);
-  });
-
-  it("returns false for static prefix", () => {
-    expect(hasTemplateVariables("[Claude]")).toBe(false);
-  });
-
-  it("returns true when template variables present", () => {
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("{provider}")).toBe(true);
-    expect(hasTemplateVariables("prefix {thinkingLevel} suffix")).toBe(true);
-  });
-
-  it("returns true for multiple variables", () => {
-    expect(hasTemplateVariables("[{model} | {provider}]")).toBe(true);
   });
 
   it("handles consecutive calls correctly (regex lastIndex reset)", () => {

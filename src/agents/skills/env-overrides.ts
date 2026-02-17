@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SkillEntry, SkillSnapshot } from "./types.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import type { SkillEntry, SkillSnapshot } from "./types.js";
 
 type EnvUpdate = { key: string; prev: string | undefined };
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;

@@ -12,16 +12,16 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
 
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand } from "./agent.js";
 
@@ -59,6 +59,14 @@ function mockConfig(
     session: { store: storePath, mainKey: "main" },
     telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
   });
+}
+
+function writeSessionStoreSeed(
+  storePath: string,
+  sessions: Record<string, Record<string, unknown>>,
+) {
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
 }
 
 beforeEach(() => {
@@ -114,21 +122,13 @@ describe("agentCommand", () => {
   it("resumes when session-id is provided", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      fs.mkdirSync(path.dirname(store), { recursive: true });
-      fs.writeFileSync(
-        store,
-        JSON.stringify(
-          {
-            foo: {
-              sessionId: "session-123",
-              updatedAt: Date.now(),
-              systemSent: true,
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      writeSessionStoreSeed(store, {
+        foo: {
+          sessionId: "session-123",
+          updatedAt: Date.now(),
+          systemSent: true,
+        },
+      });
       mockConfig(home, store);
 
       await agentCommand({ message: "resume me", sessionId: "session-123" }, runtime);
@@ -199,22 +199,14 @@ describe("agentCommand", () => {
   it("uses default fallback list for session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      fs.mkdirSync(path.dirname(store), { recursive: true });
-      fs.writeFileSync(
-        store,
-        JSON.stringify(
-          {
-            "agent:main:subagent:test": {
-              sessionId: "session-subagent",
-              updatedAt: Date.now(),
-              providerOverride: "anthropic",
-              modelOverride: "claude-opus-4-5",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:test": {
+          sessionId: "session-subagent",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+        },
+      });
 
       mockConfig(home, store, {
         model: {
@@ -264,20 +256,12 @@ describe("agentCommand", () => {
   it("keeps explicit sessionKey even when sessionId exists elsewhere", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      fs.mkdirSync(path.dirname(store), { recursive: true });
-      fs.writeFileSync(
-        store,
-        JSON.stringify(
-          {
-            "agent:main:main": {
-              sessionId: "sess-main",
-              updatedAt: Date.now(),
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      writeSessionStoreSeed(store, {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      });
       mockConfig(home, store);
 
       await agentCommand(

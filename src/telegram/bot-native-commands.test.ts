@@ -1,9 +1,9 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { STATE_DIR } from "../config/paths.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { STATE_DIR } from "../config/paths.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
 const { listSkillCommandsForAgents } = vi.hoisted(() => ({
@@ -18,9 +18,13 @@ const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));
 
-vi.mock("../auto-reply/skill-commands.js", () => ({
-  listSkillCommandsForAgents,
-}));
+vi.mock("../auto-reply/skill-commands.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/skill-commands.js")>();
+  return {
+    ...actual,
+    listSkillCommandsForAgents,
+  };
+});
 vi.mock("../plugins/commands.js", () => ({
   getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
   matchPluginCommand: pluginCommandMocks.matchPluginCommand,

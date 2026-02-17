@@ -1,4 +1,3 @@
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
   createActionGate,
   jsonResult,
@@ -8,10 +7,13 @@ import {
   readStringParam,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
+import type { TelegramActionConfig } from "../../../config/types.telegram.js";
+import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 import { sendPollTelegram, TELEGRAM_MAX_POLL_OPTIONS } from "../../../telegram/send.js";
 import { resolveTelegramToken } from "../../../telegram/token.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
 
@@ -48,13 +50,22 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return [];
     }
-    const gate = createActionGate(cfg.channels?.telegram?.actions);
+    // Union of all accounts' action gates (any account enabling an action makes it available)
+    const gates = accounts.map((a) => createActionGate(a.config.actions));
+    const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
+      gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
+    if (gate("poll")) {
+      actions.add("poll");
+    }
     if (gate("reactions")) {
       actions.add("react");
     }
     if (gate("deleteMessage")) {
       actions.add("delete");
+    }
+    if (gate("polls")) {
+      actions.add("poll");
     }
     if (gate("editMessage")) {
       actions.add("edit");
@@ -80,16 +91,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     );
   },
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
+    return extractToolSend(args, "sendMessage");
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
