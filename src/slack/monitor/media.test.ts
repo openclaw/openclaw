@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import * as mediaStore from "../../media/store.js";
-import { fetchWithSlackAuth, resolveSlackMedia, resolveSlackThreadHistory } from "./media.js";
+import {
+  fetchWithSlackAuth,
+  resolveSlackAttachmentContent,
+  resolveSlackMedia,
+  resolveSlackThreadHistory,
+} from "./media.js";
 
 // Store original fetch
 const originalFetch = globalThis.fetch;
@@ -419,6 +424,109 @@ describe("resolveSlackMedia", () => {
     expect(result).toHaveLength(8);
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
+  });
+});
+
+describe("resolveSlackAttachmentContent", () => {
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    globalThis.fetch = mockFetch as typeof fetch;
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("ignores non-forwarded attachments", async () => {
+    const result = await resolveSlackAttachmentContent({
+      attachments: [
+        {
+          text: "unfurl text",
+          is_msg_unfurl: true,
+          image_url: "https://example.com/unfurl.jpg",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("extracts text from forwarded shared attachments", async () => {
+    const result = await resolveSlackAttachmentContent({
+      attachments: [
+        {
+          is_share: true,
+          author_name: "Bob",
+          text: "Please review this",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual({
+      text: "[Forwarded message from Bob]\nPlease review this",
+      media: [],
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("skips forwarded image URLs on non-Slack hosts", async () => {
+    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
+
+    const result = await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, image_url: "https://example.com/forwarded.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("downloads Slack-hosted images from forwarded shared attachments", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/forwarded.jpg",
+      contentType: "image/jpeg",
+    });
+
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("forwarded image"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+    const result = await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual({
+      text: "",
+      media: [
+        {
+          path: "/tmp/forwarded.jpg",
+          contentType: "image/jpeg",
+          placeholder: "[Forwarded image: forwarded.jpg]",
+        },
+      ],
+    });
   });
 });
 
