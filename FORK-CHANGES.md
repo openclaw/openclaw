@@ -135,6 +135,10 @@ Operational checklist when running this fork with [OpenClaw-Foundry](https://git
 - **Connection health watchdog**
   - The Discord monitor now tracks a `lastSuccessfulHeartbeat` timestamp using gateway `metrics` events and runs a periodic watchdog timer (every 2 minutes) inside `monitorDiscordProvider`.
   - When no metrics/heartbeat activity is observed for >5 minutes, the monitor logs a warning (`discord: gateway heartbeat stale for <N>s (no metrics events)`), giving an early signal for stalled or zombie gateway connections without changing shutdown semantics.
+- **Empty payload validation (HTTP 400 fix)**
+  - Fixed a bug where empty Discord message payloads could be sent, resulting in HTTP 400 Bad Request errors. Added validation in `sendDiscordText` to ensure payloads always have at least one valid field (content, embeds, files, sticker_ids, or components) before sending to Discord.
+  - The validation catches edge cases where payloads become empty after processing (e.g., when v2 components are present but invalid, or when text becomes empty after chunking/processing). The existing `sendDiscordText` check for empty text provides the primary guard, with payload validation as a safety net.
+  - Tests in `src/discord/send.sends-basic-channel-messages.test.ts` verify that empty payloads are rejected and that files can be sent without content.
 - **Tests**
   - `src/discord/monitor/provider.proxy.test.ts` asserts that the gateway plugin’s `reconnect.maxAttempts` is `Infinity` and keeps covering proxy behavior.
   - `src/discord/monitor/provider.supervisor.test.ts` verifies that `monitorDiscordProviderWithSupervisor` returns immediately when the provided `abortSignal` is already aborted, ensuring the supervisor respects shutdown and does not spin up a new Discord session during gateway teardown.

@@ -307,13 +307,17 @@ export function buildDiscordMessagePayload(params: {
   const payload: MessagePayloadObject = {};
   const hasV2 = hasV2Components(params.components);
   const trimmed = params.text.trim();
+  // Carbon/Discord doesn't allow content with v2 components.
+  // Only include content when there are no v2 components.
   if (!hasV2 && trimmed) {
     payload.content = params.text;
   }
   if (params.components?.length) {
     payload.components = params.components;
   }
-  if (!hasV2 && params.embeds?.length) {
+  // Embeds can coexist with v2 components.
+  // Always include embeds when present, regardless of v2 components.
+  if (params.embeds?.length) {
     payload.embeds = params.embeds;
   }
   if (params.flags !== undefined) {
@@ -360,6 +364,28 @@ async function sendDiscordText(
       embeds: chunkEmbeds,
       flags,
     });
+    // Discord requires at least one of: content, embeds, files, sticker_ids, or components.
+    // Validate that the payload isn't completely empty before serialization.
+    const hasContent = Boolean(payload.content);
+    const hasEmbeds = Boolean(
+      payload.embeds && Array.isArray(payload.embeds) && payload.embeds.length > 0,
+    );
+    const hasFiles = Boolean(
+      payload.files && Array.isArray(payload.files) && payload.files.length > 0,
+    );
+    const hasStickers = Boolean(
+      (payload as { sticker_ids?: unknown[] }).sticker_ids &&
+      Array.isArray((payload as { sticker_ids?: unknown[] }).sticker_ids) &&
+      (payload as { sticker_ids?: unknown[] }).sticker_ids!.length > 0,
+    );
+    const hasComponents = Boolean(
+      payload.components && Array.isArray(payload.components) && payload.components.length > 0,
+    );
+    if (!hasContent && !hasEmbeds && !hasFiles && !hasStickers && !hasComponents) {
+      throw new Error(
+        "Discord message payload is empty: must include at least one of content, embeds, files, sticker_ids, or components",
+      );
+    }
     const body = stripUndefinedFields({
       ...serializePayload(payload),
       ...(isFirst && messageReference ? { message_reference: messageReference } : {}),
