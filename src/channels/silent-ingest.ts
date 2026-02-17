@@ -98,7 +98,9 @@ export async function runSilentMessageIngest(params: {
 
   const result = await Promise.race([trackedHook, timeoutPromise]);
   if ("timeout" in result) {
-    params.log(`${params.logPrefix}: ingest hook failed: Hook timeout`);
+    params.log(
+      `${params.logPrefix}: ingest hook timed out while waiting (hook may still complete in background)`,
+    );
     return false;
   }
   if (!result.ok) {
