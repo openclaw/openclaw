@@ -1,6 +1,4 @@
 import type { Client } from "@buape/carbon";
-import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
-import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
@@ -8,7 +6,10 @@ import {
 } from "../../auto-reply/inbound-debounce.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import { registerFanOutAgent } from "./fanout-coordinator.js";
+import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 import {
   hasDiscordMessageStickers,
@@ -82,6 +83,9 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
+        if (await tryFanOutRoute(ctx, params)) {
+          return;
+        }
         // Fire-and-forget: don't block the event listener (WebSocket heartbeat)
         void processDiscordMessage(ctx).catch((err) => {
           params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
@@ -129,6 +133,9 @@ export function createDiscordMessageHandler(
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
+      if (await tryFanOutRoute(ctx, params)) {
+        return;
+      }
       // Fire-and-forget: don't block the event listener (WebSocket heartbeat)
       void processDiscordMessage(ctx).catch((err) => {
         params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
@@ -138,6 +145,36 @@ export function createDiscordMessageHandler(
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
     },
   });
+
+  async function tryFanOutRoute(
+    ctx: Awaited<ReturnType<typeof preflightDiscordMessage>> & {},
+    handlerParams: DiscordMessageHandlerParams,
+  ): Promise<boolean> {
+    const channelFanOut = ctx.channelConfig?.fanOut ?? ctx.guildInfo?.fanOut ?? false;
+    if (!channelFanOut) {
+      return false;
+    }
+    if (!handlerParams.botUserId) {
+      return false;
+    }
+
+    const mentionedUserIds = (ctx.message.mentionedUsers ?? []).map((u: { id: string }) => u.id);
+    const triggerBotUserId = ctx.author.bot ? ctx.author.id : undefined;
+    const maxRounds =
+      ctx.channelConfig?.fanOutMaxRounds ?? ctx.guildInfo?.fanOutMaxRounds ?? undefined;
+
+    return registerFanOutAgent({
+      channelId: ctx.messageChannelId,
+      messageId: ctx.message.id,
+      accountId: handlerParams.accountId,
+      botUserId: handlerParams.botUserId,
+      triggerBotUserId,
+      mentionedUserIds,
+      ctx,
+      processMessage: processDiscordMessage,
+      maxRounds,
+    });
+  }
 
   return async (data, client) => {
     try {
