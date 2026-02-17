@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import type { HookMessageChannel } from "./hooks.js";
+import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -437,6 +437,8 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
+const BLOCKED_TRAVERSE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -463,6 +465,9 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       }
       current = current[part] as unknown;
       continue;
+    }
+    if (BLOCKED_TRAVERSE_KEYS.has(part)) {
+      return undefined;
     }
     if (typeof current !== "object") {
       return undefined;
