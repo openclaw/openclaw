@@ -1,8 +1,13 @@
 import { Type, type Static } from "@sinclair/typebox";
 
+const AccountField = Type.Optional(
+  Type.String({ description: "Feishu account ID. Omit to use the default account." }),
+);
+
 export const FeishuWikiSchema = Type.Union([
   Type.Object({
     action: Type.Literal("spaces"),
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("nodes"),
@@ -10,15 +15,18 @@ export const FeishuWikiSchema = Type.Union([
     parent_node_token: Type.Optional(
       Type.String({ description: "Parent node token (optional, omit for root)" }),
     ),
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("get"),
     token: Type.String({ description: "Wiki node token (from URL /wiki/XXX)" }),
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("search"),
     query: Type.String({ description: "Search query" }),
     space_id: Type.Optional(Type.String({ description: "Limit search to this space (optional)" })),
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("create"),
@@ -32,6 +40,7 @@ export const FeishuWikiSchema = Type.Union([
     parent_node_token: Type.Optional(
       Type.String({ description: "Parent node token (optional, omit for root)" }),
     ),
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("move"),
@@ -43,12 +52,14 @@ export const FeishuWikiSchema = Type.Union([
     target_parent_token: Type.Optional(
       Type.String({ description: "Target parent node token (optional, root if omitted)" }),
     ),
+    account: AccountField,
   }),
   Type.Object({
     action: Type.Literal("rename"),
     space_id: Type.String({ description: "Knowledge space ID" }),
     node_token: Type.String({ description: "Node token to rename" }),
     title: Type.String({ description: "New title" }),
+    account: AccountField,
   }),
 ]);
 
