@@ -319,6 +319,10 @@ describe("telegram media groups", () => {
 });
 
 describe("telegram forwarded bursts", () => {
+  afterEach(() => {
+    vi.clearAllTimers();
+  });
+
   const FORWARD_BURST_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
 
   it(

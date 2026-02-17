@@ -65,6 +65,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     loadConfig: () => ({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      messages: { inbound: { debounceMs: 80 } },
     }),
   };
 });
