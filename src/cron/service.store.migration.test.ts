@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
+import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import { loadCronStore } from "./store.js";
 
 const noopLogger = {
@@ -133,6 +134,70 @@ describe("cron store migration", () => {
     const schedule = migrated.schedule as Record<string, unknown>;
     expect(schedule.kind).toBe("every");
     expect(schedule.anchorMs).toBe(createdAtMs);
+
+    await store.cleanup();
+  });
+
+  it("adds default staggerMs to legacy recurring top-of-hour cron schedules", async () => {
+    const store = await makeStorePath();
+    const createdAtMs = 1_700_000_000_000;
+    const legacyJob = {
+      id: "job-cron-legacy",
+      agentId: undefined,
+      name: "Legacy cron",
+      description: null,
+      enabled: true,
+      deleteAfterRun: false,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "tick",
+      },
+      state: {},
+    };
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
+
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
+    const schedule = migrated.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+
+    await store.cleanup();
+  });
+
+  it("adds default staggerMs to legacy 6-field top-of-hour cron schedules", async () => {
+    const store = await makeStorePath();
+    const createdAtMs = 1_700_000_000_000;
+    const legacyJob = {
+      id: "job-cron-seconds-legacy",
+      agentId: undefined,
+      name: "Legacy cron seconds",
+      description: null,
+      enabled: true,
+      deleteAfterRun: false,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      schedule: { kind: "cron", expr: "0 0 */3 * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "tick",
+      },
+      state: {},
+    };
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
+
+    const migrated = await migrateAndLoadFirstJob(store.storePath);
+    const schedule = migrated.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
 
     await store.cleanup();
   });
