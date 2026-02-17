@@ -430,17 +430,31 @@ async function captureTranscriptState(params: {
   }
 }
 
+function stripLeadingHeartbeatResponsePrefix(
+  text: string,
+  responsePrefix: string | undefined,
+): string {
+  const normalizedPrefix = responsePrefix?.trim();
+  if (!normalizedPrefix) {
+    return text;
+  }
+
+  // Require a boundary after the configured prefix so short prefixes like "Hi"
+  // do not strip the beginning of normal words like "History".
+  const prefixPattern = new RegExp(
+    `^${escapeRegExp(normalizedPrefix)}(?=$|\\s|[\\p{P}\\p{S}])\\s*`,
+    "iu",
+  );
+  return text.replace(prefixPattern, "");
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
-
-  const prefixPattern = responsePrefix?.trim()
-    ? new RegExp(`^${escapeRegExp(responsePrefix.trim())}\\s*`, "i")
-    : null;
-  const textForStrip = prefixPattern ? rawText.replace(prefixPattern, "") : rawText;
+  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
   const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
