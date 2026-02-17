@@ -233,8 +233,9 @@ export const registerTelegramHandlers = ({
         ? `${storedOverride.provider}/${storedOverride.model}`
         : storedOverride.model;
     }
-    const provider = entry?.modelProvider?.trim();
-    const model = entry?.model?.trim();
+    const provider =
+      typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : undefined;
+    const model = typeof entry?.model === "string" ? entry.model.trim() : undefined;
     if (provider && model) {
       return `${provider}/${model}`;
     }

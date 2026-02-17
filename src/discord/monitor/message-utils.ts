@@ -237,10 +237,10 @@ export function resolveDiscordMessageText(
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
   const baseText =
-    message.content?.trim() ||
+    (typeof message.content === "string" ? message.content.trim() : "") ||
     buildDiscordAttachmentPlaceholder(message.attachments) ||
-    message.embeds?.[0]?.description ||
-    options?.fallbackText?.trim() ||
+    (typeof message.embeds?.[0]?.description === "string" ? message.embeds[0].description : "") ||
+    (typeof options?.fallbackText === "string" ? options.fallbackText.trim() : "") ||
     "";
   if (!options?.includeForwarded) {
     return baseText;

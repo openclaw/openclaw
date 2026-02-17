@@ -159,7 +159,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>({
     debounceMs: inboundDebounceMs,
     buildKey: (entry) => {
-      const sender = entry.message.sender?.trim();
+      const sender =
+        typeof entry.message.sender === "string" ? entry.message.sender.trim() : undefined;
       if (!sender) {
         return null;
       }
@@ -170,7 +171,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
     shouldDebounce: (entry) => {
-      const text = entry.message.text?.trim() ?? "";
+      const text = typeof entry.message.text === "string" ? entry.message.text.trim() : "";
       if (!text) {
         return false;
       }
