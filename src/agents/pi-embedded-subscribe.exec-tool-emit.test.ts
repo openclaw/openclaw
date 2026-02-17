@@ -8,9 +8,7 @@ import { describe, expect, it } from "vitest";
  */
 describe("exec tool emission suppression", () => {
   it("subscribeEmbeddedPiSession suppresses exec tool delivery", async () => {
-    const { subscribeEmbeddedPiSession } = await import(
-      "./pi-embedded-subscribe.js"
-    );
+    const { subscribeEmbeddedPiSession } = await import("./pi-embedded-subscribe.js");
 
     // subscribeEmbeddedPiSession is complex to set up, so we verify
     // the behavioral contract here.  The actual integration path is:
