@@ -17,7 +17,9 @@ type GuardableTransformContext = (
   signal: AbortSignal,
 ) => AgentMessage[] | Promise<AgentMessage[]>;
 
-type GuardableAgent = {
+type GuardableAgent = object;
+
+type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
 };
 
@@ -177,9 +179,7 @@ function truncateTextToBudget(text: string, maxChars: number): string {
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   const content = (msg as { content?: unknown }).content;
   const replacementContent =
-    typeof content === "string" || content === undefined
-      ? text
-      : [{ type: "text", text }];
+    typeof content === "string" || content === undefined ? text : [{ type: "text", text }];
 
   return {
     ...(msg as unknown as Record<string, unknown>),
@@ -297,16 +297,17 @@ export function installToolResultContextGuard(params: {
   );
   const maxSingleToolResultChars = Math.max(
     1_024,
-    Math.floor(
-      contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
-    ),
+    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE),
   );
 
-  const originalTransformContext = params.agent.transformContext;
+  // Agent.transformContext is private in pi-coding-agent, so access it via a
+  // narrow runtime view to keep callsites type-safe while preserving behavior.
+  const mutableAgent = params.agent as GuardableAgentRecord;
+  const originalTransformContext = mutableAgent.transformContext;
 
-  params.agent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
-      ? await originalTransformContext.call(params.agent, messages, signal)
+      ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
 
     const contextMessages = Array.isArray(transformed) ? transformed : messages;
@@ -320,6 +321,6 @@ export function installToolResultContextGuard(params: {
   }) as GuardableTransformContext;
 
   return () => {
-    params.agent.transformContext = originalTransformContext;
+    mutableAgent.transformContext = originalTransformContext;
   };
 }

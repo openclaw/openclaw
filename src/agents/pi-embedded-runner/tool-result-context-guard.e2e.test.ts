@@ -75,8 +75,8 @@ describe("installToolResultContextGuard", () => {
     );
 
     expect(transformed).toBe(contextForNextCall);
-    const oldResultText = getToolResultText(contextForNextCall[1] as AgentMessage);
-    const newResultText = getToolResultText(contextForNextCall[2] as AgentMessage);
+    const oldResultText = getToolResultText(contextForNextCall[1]);
+    const newResultText = getToolResultText(contextForNextCall[2]);
 
     expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
@@ -100,9 +100,9 @@ describe("installToolResultContextGuard", () => {
 
     await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 
-    const first = getToolResultText(contextForNextCall[1] as AgentMessage);
-    const second = getToolResultText(contextForNextCall[2] as AgentMessage);
-    const third = getToolResultText(contextForNextCall[3] as AgentMessage);
+    const first = getToolResultText(contextForNextCall[1]);
+    const second = getToolResultText(contextForNextCall[2]);
+    const third = getToolResultText(contextForNextCall[3]);
 
     expect(first).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(second).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
@@ -144,7 +144,7 @@ describe("installToolResultContextGuard", () => {
 
     await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 
-    const newResultText = getToolResultText(contextForNextCall[0] as AgentMessage);
+    const newResultText = getToolResultText(contextForNextCall[0]);
     expect(newResultText.length).toBeLessThan(5_000);
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
@@ -165,8 +165,8 @@ describe("installToolResultContextGuard", () => {
 
     await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 
-    const oldResultText = getToolResultText(contextForNextCall[1] as AgentMessage);
-    const newResultText = getToolResultText(contextForNextCall[2] as AgentMessage);
+    const oldResultText = getToolResultText(contextForNextCall[1]);
+    const newResultText = getToolResultText(contextForNextCall[2]);
 
     expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
@@ -175,9 +175,12 @@ describe("installToolResultContextGuard", () => {
 
   it("wraps an existing transformContext and guards the transformed output", async () => {
     const agent = makeGuardableAgent((messages) => {
-      return messages.map((msg) => ({
-        ...(msg as unknown as Record<string, unknown>),
-      })) as AgentMessage[];
+      return messages.map(
+        (msg) =>
+          ({
+            ...(msg as unknown as Record<string, unknown>),
+          }) as AgentMessage,
+      );
     });
 
     installToolResultContextGuard({
@@ -198,7 +201,7 @@ describe("installToolResultContextGuard", () => {
 
     expect(transformed).not.toBe(contextForNextCall);
     const transformedMessages = transformed as AgentMessage[];
-    const oldResultText = getToolResultText(transformedMessages[1] as AgentMessage);
+    const oldResultText = getToolResultText(transformedMessages[1]);
     expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 

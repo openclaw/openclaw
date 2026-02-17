@@ -13,6 +13,7 @@ export type IMessageSendOpts = {
   service?: IMessageService;
   region?: string;
   accountId?: string;
+  replyToId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   maxBytes?: number;
@@ -32,6 +33,23 @@ export type IMessageSendOpts = {
 export type IMessageSendResult = {
   messageId: string;
 };
+
+const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
+
+function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
+  const resolvedReplyToId = replyToId?.trim();
+  if (!resolvedReplyToId) {
+    return message;
+  }
+  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
+  const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
+  if (existingLeadingTag) {
+    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
+    return remainder ? `${replyTag} ${remainder}` : replyTag;
+  }
+  const trimmedMessage = message.trimStart();
+  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
+}
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
   if (!result) {
@@ -101,6 +119,7 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
+  message = prependReplyTagIfNeeded(message, opts.replyToId);
 
   const params: Record<string, unknown> = {
     text: message,
