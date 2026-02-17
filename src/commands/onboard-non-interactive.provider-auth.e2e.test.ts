@@ -377,6 +377,23 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("infers MegaNova auth choice from --meganova-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-meganova-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        meganovaApiKey: "meganova-test-key",
+      });
+
+      expect(cfg.auth?.profiles?.["meganova:default"]?.provider).toBe("meganova");
+      expect(cfg.auth?.profiles?.["meganova:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("meganova/zai-org/GLM-5");
+      await expectApiKeyProfile({
+        profileId: "meganova:default",
+        provider: "meganova",
+        key: "meganova-test-key",
+      });
+    });
+  }, 60_000);
+
   it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-qianfan-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

@@ -39,6 +39,7 @@ describe("buildAuthChoiceOptions", () => {
     ["Vercel AI Gateway auth choice", ["ai-gateway-api-key"]],
     ["Cloudflare AI Gateway auth choice", ["cloudflare-ai-gateway-api-key"]],
     ["Together AI auth choice", ["together-api-key"]],
+    ["MegaNova AI auth choice", ["meganova-api-key"]],
     ["Synthetic auth choice", ["synthetic-api-key"]],
     ["Chutes OAuth auth choice", ["chutes"]],
     ["Qwen auth choice", ["qwen-portal"]],

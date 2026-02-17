@@ -151,6 +151,12 @@ describe("cli program (smoke)", () => {
         field: "togetherApiKey",
       },
       {
+        authChoice: "meganova-api-key",
+        flag: "--meganova-api-key",
+        key: "sk-meganova-test",
+        field: "meganovaApiKey",
+      },
+      {
         authChoice: "moonshot-api-key-cn",
         flag: "--moonshot-api-key",
         key: "sk-moonshot-cn-test",
