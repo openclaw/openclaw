@@ -272,11 +272,12 @@ describe("compaction-safeguard runtime registry", () => {
 
   it("stores and retrieves model from runtime (fallback for compact.ts workflow)", () => {
     const sm = {};
-    const model = {
+    const model: Model<Api> = {
       id: "claude-opus-4-5",
       name: "Claude Opus 4.5",
       provider: "anthropic",
       api: "anthropic" as const,
+      baseUrl: "https://api.anthropic.com",
       contextWindow: 200000,
       maxTokens: 4096,
       reasoning: false,
@@ -297,11 +298,12 @@ describe("compaction-safeguard runtime registry", () => {
 
   it("stores and retrieves combined runtime values", () => {
     const sm = {};
-    const model = {
+    const model: Model<Api> = {
       id: "claude-opus-4-5",
       name: "Claude Opus 4.5",
       provider: "anthropic",
       api: "anthropic" as const,
+      baseUrl: "https://api.anthropic.com",
       contextWindow: 200000,
       maxTokens: 4096,
       reasoning: false,
@@ -332,6 +334,7 @@ describe("compaction-safeguard extension model fallback", () => {
       name: "Claude Opus 4.5",
       provider: "anthropic",
       api: "anthropic" as const,
+      baseUrl: "https://api.anthropic.com",
       contextWindow: 200000,
       maxTokens: 4096,
       reasoning: false,
@@ -380,16 +383,20 @@ describe("compaction-safeguard extension model fallback", () => {
     };
 
     const getApiKeyMock = vi.fn().mockResolvedValue(null);
+    // oxlint-disable-next-line typescript/no-explicit-any
     const mockContext = {
       model: undefined, // ctx.model is undefined (simulates compact.ts workflow)
       sessionManager,
       modelRegistry: {
         getApiKey: getApiKeyMock, // No API key, should use fallback
       },
-    } as Partial<ExtensionContext>;
+    } as unknown as Partial<ExtensionContext>;
 
     // Call the handler and wait for result
-    const result = await compactionHandler(mockEvent, mockContext);
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    const result = (await compactionHandler!(mockEvent, mockContext)) as {
+      compaction?: { summary?: string; firstKeptEntryId?: string };
+    };
     const compactionResult = result?.compaction;
 
     // Verify that compaction returned a result (even with null API key, should use fallback)
@@ -446,15 +453,19 @@ describe("compaction-safeguard extension model fallback", () => {
     };
 
     const getApiKeyMock = vi.fn().mockResolvedValue(null);
+    // oxlint-disable-next-line typescript/no-explicit-any
     const mockContext = {
       model: undefined, // ctx.model is undefined
       sessionManager,
       modelRegistry: {
         getApiKey: getApiKeyMock, // Should NOT be called (early return)
       },
-    } as Partial<ExtensionContext>;
+    } as unknown as Partial<ExtensionContext>;
 
-    const result = await compactionHandler(mockEvent, mockContext);
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    const result = (await compactionHandler!(mockEvent, mockContext)) as {
+      compaction?: { summary?: string; firstKeptEntryId?: string };
+    };
     const compactionResult = result?.compaction;
 
     expect(compactionResult).toBeDefined();
