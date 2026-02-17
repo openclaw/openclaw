@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import {
+  clearDeviceAuthToken,
+  loadDeviceAuthToken,
+  storeDeviceAuthToken,
+} from "../infra/device-auth-store.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { loadDeviceAuthToken, storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -150,6 +154,16 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
+      // If closed due to device token mismatch, clear the stored token so next attempt can get a fresh one
+      if (
+        code === 1008 &&
+        reasonText.includes("device token mismatch") &&
+        this.opts.deviceIdentity
+      ) {
+        const role = this.opts.role ?? "operator";
+        clearDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role });
+        logDebug(`cleared stale device-auth token for device ${this.opts.deviceIdentity.deviceId}`);
+      }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       this.scheduleReconnect();
       this.opts.onClose?.(code, reasonText);

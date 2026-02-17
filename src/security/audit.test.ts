@@ -25,7 +25,7 @@ function stubChannelPlugin(params: {
       blurb: "test stub",
     },
     capabilities: {
-      chatTypes: ["dm", "group"],
+      chatTypes: ["direct", "group"],
     },
     security: {},
     config: {
@@ -484,6 +484,48 @@ describe("security audit", () => {
     });
 
     expect(res.findings.some((f) => f.checkId === "sandbox.docker_config_mode_off")).toBe(false);
+  });
+
+  it("flags dangerous sandbox docker config (binds/network/seccomp/apparmor)", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            docker: {
+              binds: ["/etc/passwd:/mnt/passwd:ro", "/run:/run"],
+              network: "host",
+              seccompProfile: "unconfined",
+              apparmorProfile: "unconfined",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "sandbox.dangerous_bind_mount", severity: "critical" }),
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_network_mode",
+          severity: "critical",
+        }),
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_seccomp_profile",
+          severity: "critical",
+        }),
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_apparmor_profile",
+          severity: "critical",
+        }),
+      ]),
+    );
   });
 
   it("flags ineffective gateway.nodes.denyCommands entries", async () => {
@@ -1202,8 +1244,8 @@ describe("security audit", () => {
       },
     });
 
-    expect(res.deep?.gateway.ok).toBe(false);
-    expect(res.deep?.gateway.error).toContain("probe boom");
+    expect(res.deep?.gateway?.ok).toBe(false);
+    expect(res.deep?.gateway?.error).toContain("probe boom");
     expect(res.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ checkId: "gateway.probe_failed", severity: "warn" }),

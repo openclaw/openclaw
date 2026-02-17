@@ -13,27 +13,46 @@ function isObjectWithStringId(value: unknown): value is Record<string, unknown> 
   return typeof value.id === "string" && value.id.length > 0;
 }
 
-function mergeObjectArraysById(base: unknown[], patch: unknown[], options: MergePatchOptions) {
-  if (!base.every(isObjectWithStringId) || !patch.every(isObjectWithStringId)) {
+/**
+ * Merge arrays of object-like entries keyed by `id`.
+ *
+ * Contract:
+ * - Base array must be fully id-keyed; otherwise return undefined (caller should replace).
+ * - Patch entries with valid id merge by id (or append when the id is new).
+ * - Patch entries without valid id append as-is, avoiding destructive full-array replacement.
+ */
+function mergeObjectArraysById(
+  base: unknown[],
+  patch: unknown[],
+  options: MergePatchOptions,
+): unknown[] | undefined {
+  if (!base.every(isObjectWithStringId)) {
     return undefined;
   }
-  const merged = [...base] as Array<Record<string, unknown> & { id: string }>;
+
+  const merged: unknown[] = [...base];
   const indexById = new Map<string, number>();
   for (const [index, entry] of merged.entries()) {
+    if (!isObjectWithStringId(entry)) {
+      return undefined;
+    }
     indexById.set(entry.id, index);
   }
 
-  for (const entry of patch) {
-    const existingIndex = indexById.get(entry.id);
-    if (existingIndex === undefined) {
-      merged.push(structuredClone(entry));
-      indexById.set(entry.id, merged.length - 1);
+  for (const patchEntry of patch) {
+    if (!isObjectWithStringId(patchEntry)) {
+      merged.push(structuredClone(patchEntry));
       continue;
     }
-    merged[existingIndex] = applyMergePatch(merged[existingIndex], entry, options) as Record<
-      string,
-      unknown
-    > & { id: string };
+
+    const existingIndex = indexById.get(patchEntry.id);
+    if (existingIndex === undefined) {
+      merged.push(structuredClone(patchEntry));
+      indexById.set(patchEntry.id, merged.length - 1);
+      continue;
+    }
+
+    merged[existingIndex] = applyMergePatch(merged[existingIndex], patchEntry, options);
   }
 
   return merged;

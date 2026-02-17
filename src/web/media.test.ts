@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { sendVoiceMessageDiscord } from "../discord/send.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
+import { captureEnv } from "../test-utils/env.js";
 import { loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } from "./media.js";
 
 let fixtureRoot = "";
@@ -19,7 +21,7 @@ let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
 let fallbackPngFile = "";
 let fallbackPngCap = 0;
-let previousStateDir: string | undefined;
+let stateDirSnapshot: ReturnType<typeof captureEnv>;
 
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
   const file = path.join(fixtureRoot, `media-${fixtureFileCount++}${ext}`);
@@ -100,7 +102,7 @@ describe("web media loading", () => {
   beforeAll(() => {
     // Ensure state dir is stable and not influenced by other tests that stub OPENCLAW_STATE_DIR.
     // Also keep it outside os.tmpdir() so tmpdir localRoots doesn't accidentally make all state readable.
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = path.join(
       path.parse(os.tmpdir()).root,
       "var",
@@ -110,11 +112,7 @@ describe("web media loading", () => {
   });
 
   afterAll(() => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    stateDirSnapshot.restore();
   });
 
   beforeAll(() => {
@@ -130,45 +128,14 @@ describe("web media loading", () => {
   });
 
   it("strips MEDIA: prefix before reading local file", async () => {
-    const buffer = await sharp({
-      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
-    })
-      .png()
-      .toBuffer();
-
-    const file = await writeTempFile(buffer, ".png");
-
-    const result = await loadWebMedia(`MEDIA:${file}`, 1024 * 1024);
-
-    expect(result.kind).toBe("image");
-    expect(result.buffer.length).toBeGreaterThan(0);
-  });
-
-  it("strips MEDIA: prefix with whitespace after colon", async () => {
-    const buffer = await sharp({
-      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
-    })
-      .png()
-      .toBuffer();
-
-    const file = await writeTempFile(buffer, ".png");
-
-    const result = await loadWebMedia(`MEDIA: ${file}`, 1024 * 1024);
+    const result = await loadWebMedia(`MEDIA:${tinyPngFile}`, 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
   it("strips MEDIA: prefix with extra whitespace (LLM-friendly)", async () => {
-    const buffer = await sharp({
-      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
-    })
-      .png()
-      .toBuffer();
-
-    const file = await writeTempFile(buffer, ".png");
-
-    const result = await loadWebMedia(`  MEDIA :  ${file}`, 1024 * 1024);
+    const result = await loadWebMedia(`  MEDIA :  ${tinyPngFile}`, 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
@@ -220,7 +187,7 @@ describe("web media loading", () => {
       status: 404,
       statusText: "Not Found",
       url: "https://example.com/missing.jpg",
-    } as Response);
+    } as unknown as Response);
 
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
@@ -258,7 +225,7 @@ describe("web media loading", () => {
       arrayBuffer: async () => Buffer.alloc(2048).buffer,
       headers: { get: () => "image/png" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
       /exceeds maxBytes 1024/i,
@@ -284,7 +251,7 @@ describe("web media loading", () => {
         },
       },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
@@ -307,7 +274,7 @@ describe("web media loading", () => {
         gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
       headers: { get: () => "image/gif" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
     const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 
@@ -333,6 +300,27 @@ describe("web media loading", () => {
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(fallbackPngCap);
+  });
+});
+
+describe("Discord voice message input hardening", () => {
+  it("rejects local paths outside allowed media roots", async () => {
+    const candidate = path.join(process.cwd(), "package.json");
+    await expect(sendVoiceMessageDiscord("channel:123", candidate)).rejects.toThrow(
+      /Local media path is not under an allowed directory/i,
+    );
+  });
+
+  it("blocks SSRF targets when given a private-network URL", async () => {
+    await expect(
+      sendVoiceMessageDiscord("channel:123", "http://127.0.0.1/voice.ogg"),
+    ).rejects.toThrow(/Failed to fetch media|Blocked|private|internal/i);
+  });
+
+  it("rejects non-http URL schemes", async () => {
+    await expect(
+      sendVoiceMessageDiscord("channel:123", "rtsp://example.com/voice.ogg"),
+    ).rejects.toThrow(/Local media path is not under an allowed directory|ENOENT|no such file/i);
   });
 });
 

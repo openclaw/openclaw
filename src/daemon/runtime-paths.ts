@@ -152,10 +152,24 @@ export async function resolvePreferredNodePath(params: {
   runtime?: string;
   platform?: NodeJS.Platform;
   execFile?: ExecFileAsync;
+  execPath?: string;
 }): Promise<string | undefined> {
   if (params.runtime !== "node") {
     return undefined;
   }
+
+  // Prefer the node that is currently running `openclaw gateway install`.
+  // This respects the user's active version manager (fnm/nvm/volta/etc.).
+  const currentExecPath = params.execPath ?? process.execPath;
+  if (currentExecPath) {
+    const execFileImpl = params.execFile ?? execFileAsync;
+    const version = await resolveNodeVersion(currentExecPath, execFileImpl);
+    if (isSupportedNodeVersion(version)) {
+      return currentExecPath;
+    }
+  }
+
+  // Fall back to system node.
   const systemNode = await resolveSystemNodeInfo(params);
   if (!systemNode?.supported) {
     return undefined;

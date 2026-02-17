@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async () => ({
   release: vi.fn(async () => {}),
@@ -7,7 +9,7 @@ const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
-const waitForActiveTasks = vi.fn(async () => ({ drained: true }));
+const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
@@ -97,11 +99,14 @@ describe("runGatewayLoop", () => {
     );
 
     const { runGatewayLoop } = await import("./run-loop.js");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
     const loopPromise = runGatewayLoop({
-      start,
-      runtime: {
-        exit: vi.fn(),
-      } as { exit: (code: number) => never },
+      start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+      runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
     });
 
     try {
@@ -138,5 +143,37 @@ describe("runGatewayLoop", () => {
       removeNewSignalListeners("SIGINT", beforeSigint);
       removeNewSignalListeners("SIGUSR1", beforeSigusr1);
     }
+  });
+});
+
+describe("gateway discover routing helpers", () => {
+  it("prefers resolved service host over TXT hints", () => {
+    const beacon: GatewayBonjourBeacon = {
+      instanceName: "Test",
+      host: "10.0.0.2",
+      lanHost: "evil.example.com",
+      tailnetDns: "evil.example.com",
+    };
+    expect(pickBeaconHost(beacon)).toBe("10.0.0.2");
+  });
+
+  it("prefers resolved service port over TXT gatewayPort", () => {
+    const beacon: GatewayBonjourBeacon = {
+      instanceName: "Test",
+      host: "10.0.0.2",
+      port: 18789,
+      gatewayPort: 12345,
+    };
+    expect(pickGatewayPort(beacon)).toBe(18789);
+  });
+
+  it("falls back to TXT host/port when resolve data is missing", () => {
+    const beacon: GatewayBonjourBeacon = {
+      instanceName: "Test",
+      lanHost: "test-host.local",
+      gatewayPort: 18789,
+    };
+    expect(pickBeaconHost(beacon)).toBe("test-host.local");
+    expect(pickGatewayPort(beacon)).toBe(18789);
   });
 });

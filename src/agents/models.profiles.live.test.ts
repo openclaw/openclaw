@@ -21,7 +21,7 @@ const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_
 
 const describeLive = LIVE ? describe : describe.skip;
 
-function parseProviderFilter(raw?: string): Set<string> | null {
+function parseCsvFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "all") {
     return null;
@@ -33,16 +33,12 @@ function parseProviderFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
+function parseProviderFilter(raw?: string): Set<string> | null {
+  return parseCsvFilter(raw);
+}
+
 function parseModelFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return ids.length ? new Set(ids) : null;
+  return parseCsvFilter(raw);
 }
 
 function logProgress(message: string): void {

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawTools } from "./openclaw-tools.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
+  getSessionsSpawnTool,
   resetSessionsSpawnConfigOverride,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
@@ -11,6 +11,70 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 const callGatewayMock = getCallGatewayMock();
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
+  function setAllowAgents(allowAgents: string[]) {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents,
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  function mockAcceptedSpawn(acceptedAt: number) {
+    let childSessionKey: string | undefined;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        childSessionKey = params?.sessionKey;
+        return { runId: "run-1", status: "accepted", acceptedAt };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    return () => childSessionKey;
+  }
+
+  async function executeSpawn(callId: string, agentId: string) {
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+    return tool.execute(callId, { task: "do thing", agentId });
+  }
+
+  async function expectAllowedSpawn(params: {
+    allowAgents: string[];
+    agentId: string;
+    callId: string;
+    acceptedAt: number;
+  }) {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    setAllowAgents(params.allowAgents);
+    const getChildSessionKey = mockAcceptedSpawn(params.acceptedAt);
+
+    const result = await executeSpawn(params.callId, params.agentId);
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith(`agent:${params.agentId}:subagent:`)).toBe(true);
+  }
+
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
   });
@@ -19,13 +83,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
 
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
     const result = await tool.execute("call6", {
       task: "do thing",
@@ -57,13 +118,10 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       },
     });
 
-    const tool = createOpenClawTools({
+    const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
+    });
 
     const result = await tool.execute("call9", {
       task: "do thing",
@@ -76,164 +134,29 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("sessions_spawn allows cross-agent spawning when configured", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    setConfigOverride({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["beta"],
-            },
-          },
-        ],
-      },
-    });
-
-    let childSessionKey: string | undefined;
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      if (request.method === "agent") {
-        const params = request.params as { sessionKey?: string } | undefined;
-        childSessionKey = params?.sessionKey;
-        return { runId: "run-1", status: "accepted", acceptedAt: 5000 };
-      }
-      if (request.method === "agent.wait") {
-        return { status: "timeout" };
-      }
-      return {};
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
-
-    const result = await tool.execute("call7", {
-      task: "do thing",
+    await expectAllowedSpawn({
+      allowAgents: ["beta"],
       agentId: "beta",
+      callId: "call7",
+      acceptedAt: 5000,
     });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
-    });
-    expect(childSessionKey?.startsWith("agent:beta:subagent:")).toBe(true);
   });
 
   it("sessions_spawn allows any agent when allowlist is *", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    setConfigOverride({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["*"],
-            },
-          },
-        ],
-      },
-    });
-
-    let childSessionKey: string | undefined;
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      if (request.method === "agent") {
-        const params = request.params as { sessionKey?: string } | undefined;
-        childSessionKey = params?.sessionKey;
-        return { runId: "run-1", status: "accepted", acceptedAt: 5100 };
-      }
-      if (request.method === "agent.wait") {
-        return { status: "timeout" };
-      }
-      return {};
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
-
-    const result = await tool.execute("call8", {
-      task: "do thing",
+    await expectAllowedSpawn({
+      allowAgents: ["*"],
       agentId: "beta",
+      callId: "call8",
+      acceptedAt: 5100,
     });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
-    });
-    expect(childSessionKey?.startsWith("agent:beta:subagent:")).toBe(true);
   });
 
   it("sessions_spawn normalizes allowlisted agent ids", async () => {
-    resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
-    setConfigOverride({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["Research"],
-            },
-          },
-        ],
-      },
-    });
-
-    let childSessionKey: string | undefined;
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      if (request.method === "agent") {
-        const params = request.params as { sessionKey?: string } | undefined;
-        childSessionKey = params?.sessionKey;
-        return { runId: "run-1", status: "accepted", acceptedAt: 5200 };
-      }
-      if (request.method === "agent.wait") {
-        return { status: "timeout" };
-      }
-      return {};
-    });
-
-    const tool = createOpenClawTools({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) {
-      throw new Error("missing sessions_spawn tool");
-    }
-
-    const result = await tool.execute("call10", {
-      task: "do thing",
+    await expectAllowedSpawn({
+      allowAgents: ["Research"],
       agentId: "research",
+      callId: "call10",
+      acceptedAt: 5200,
     });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
-    });
-    expect(childSessionKey?.startsWith("agent:research:subagent:")).toBe(true);
   });
 });

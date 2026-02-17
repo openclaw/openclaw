@@ -1,4 +1,3 @@
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   ErrorCodes,
@@ -8,6 +7,7 @@ import {
   validateWebLoginWaitParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
