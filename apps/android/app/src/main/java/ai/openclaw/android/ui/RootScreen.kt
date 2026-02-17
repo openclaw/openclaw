@@ -346,9 +346,13 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
               request: WebResourceRequest,
               error: WebResourceError,
             ) {
-              if (!isDebuggable) return
               if (!request.isForMainFrame) return
-              Log.e("OpenClawWebView", "onReceivedError: ${error.errorCode} ${error.description} ${request.url}")
+              if (isDebuggable) {
+                Log.e("OpenClawWebView", "onReceivedError: ${error.errorCode} ${error.description} ${request.url}")
+              }
+              // Fall back to the local scaffold on network errors (gateway offline,
+              // timeout, etc.) instead of showing Chrome's net::ERR page.
+              view.loadUrl("file:///android_asset/CanvasScaffold/scaffold.html")
             }
 
             override fun onReceivedHttpError(
@@ -356,12 +360,19 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
               request: WebResourceRequest,
               errorResponse: WebResourceResponse,
             ) {
-              if (!isDebuggable) return
               if (!request.isForMainFrame) return
-              Log.e(
-                "OpenClawWebView",
-                "onReceivedHttpError: ${errorResponse.statusCode} ${errorResponse.reasonPhrase} ${request.url}",
-              )
+              if (isDebuggable) {
+                Log.e(
+                  "OpenClawWebView",
+                  "onReceivedHttpError: ${errorResponse.statusCode} ${errorResponse.reasonPhrase} ${request.url}",
+                )
+              }
+              // On auth errors (401/403), fall back to the local scaffold instead of
+              // displaying raw JSON error text.  The canvas will be re-navigated
+              // automatically once the gateway session is established.
+              if (errorResponse.statusCode == 401 || errorResponse.statusCode == 403) {
+                view.loadUrl("file:///android_asset/CanvasScaffold/scaffold.html")
+              }
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
