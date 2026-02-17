@@ -118,6 +118,26 @@ memorySearch: {
 }
 ```
 
+**Required Environment Variables:**
+
+- `GOOGLE_CLOUD_PROJECT`: Your GCP project ID.
+- `GOOGLE_APPLICATION_CREDENTIALS`: Path to your Service Account JSON key file.
+- `GOOGLE_CLOUD_LOCATION` (optional): Defaults to `us-central1`.
+
+You can set these in your `openclaw.json` under `agents.defaults.env`:
+
+```json5
+agents: {
+  defaults: {
+    env: {
+      GOOGLE_CLOUD_PROJECT: "your-project-id",
+      GOOGLE_APPLICATION_CREDENTIALS: "/path/to/key.json",
+      GOOGLE_CLOUD_LOCATION: "us-central1"
+    }
+  }
+}
+```
+
 When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
