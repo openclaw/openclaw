@@ -1,19 +1,19 @@
 import { describe, expect, it, test, vi } from "vitest";
+import type { RequestFrame } from "./protocol/index.js";
+import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { GatewayClient } from "./client.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
-import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
-import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const wsMockState = vi.hoisted(() => ({
   last: null as { url: unknown; opts: unknown } | null,

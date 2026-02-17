@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CronJob, CronJobState } from "./types.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
-import type { CronJob, CronJobState } from "./types.js";
 
 const noopLogger = {
   info: vi.fn(),

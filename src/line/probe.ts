@@ -1,6 +1,6 @@
 import { messagingApi } from "@line/bot-sdk";
-import { withTimeout } from "../utils/with-timeout.js";
 import type { LineProbeResult } from "./types.js";
+import { withTimeout } from "../utils/with-timeout.js";
 
 export async function probeLineBot(
   channelAccessToken: string,
