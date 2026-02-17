@@ -115,13 +115,15 @@ export async function runAgentTurnWithFallback(params: {
           return { skip: true };
         }
         let text = payload.text;
-        if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+        if (text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
           });
           if (stripped.didStrip && !didLogHeartbeatStrip) {
             didLogHeartbeatStrip = true;
-            logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+            if (!params.isHeartbeat) {
+              logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+            }
           }
           if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
             return { skip: true };
