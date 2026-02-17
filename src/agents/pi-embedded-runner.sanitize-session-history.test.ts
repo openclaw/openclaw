@@ -225,7 +225,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual([]);
   });
 
-  it("downgrades openai reasoning only when the model changes", async () => {
+  it("downgrades orphaned openai reasoning when the model changes too", async () => {
     const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
 
     const result = await sanitizeWithOpenAIResponses({
