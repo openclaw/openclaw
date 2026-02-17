@@ -1,0 +1,93 @@
+{
+  "version": "1",
+  "riskTierRules": {
+    "high": [
+      "src/agents/**",
+      "src/acp/**",
+      "src/gateway/**",
+      "src/providers/**",
+      "src/config/**",
+      "src/plugins/types.ts",
+      "src/plugin-sdk/**",
+      "extensions/*/index.ts",
+      "*.config.ts",
+      "*.config.js",
+      "package.json",
+      "pnpm-lock.yaml"
+    ],
+    "medium": [
+      "src/commands/**",
+      "src/channels/**",
+      "src/routing/**",
+      "src/hooks/**",
+      "extensions/*/src/**",
+      "skills/*/SKILL.md",
+      "ui/**"
+    ],
+    "low": [
+      "docs/**",
+      "test/**",
+      "scripts/**",
+      "**/*.test.ts",
+      "**/*.md",
+      "**"
+    ]
+  },
+  "mergePolicy": {
+    "high": {
+      "requiredChecks": [
+        "risk-policy-gate",
+        "typecheck",
+        "lint",
+        "unit-tests",
+        "code-review-agent",
+        "ci-pipeline"
+      ],
+      "requireBrowserEvidence": false,
+      "minTestCoverage": 70,
+      "requireHumanApproval": true
+    },
+    "medium": {
+      "requiredChecks": [
+        "risk-policy-gate",
+        "typecheck",
+        "lint",
+        "unit-tests",
+        "ci-pipeline"
+      ],
+      "requireBrowserEvidence": false,
+      "minTestCoverage": 50,
+      "requireHumanApproval": false
+    },
+    "low": {
+      "requiredChecks": [
+        "risk-policy-gate",
+        "lint",
+        "ci-pipeline"
+      ],
+      "requireBrowserEvidence": false,
+      "minTestCoverage": 0,
+      "requireHumanApproval": false
+    }
+  },
+  "docsDriftRules": {
+    "trackedPaths": [
+      ".harness/**",
+      ".github/workflows/**",
+      "skills/code-factory/**"
+    ],
+    "requireChangelogEntry": true
+  },
+  "remediationAgent": {
+    "enabled": true,
+    "model": "claude-opus-4-6",
+    "maxFixAttempts": 3,
+    "skipStaleComments": true,
+    "pinModelForReproducibility": true
+  },
+  "autoResolve": {
+    "enabled": true,
+    "onlyBotThreads": true,
+    "requireCleanRerun": true
+  }
+}

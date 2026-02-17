@@ -1,0 +1,45 @@
+name: Risk Policy Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+
+jobs:
+  risk-policy-gate:
+    name: Risk Policy Gate
+    runs-on: ubuntu-latest
+    outputs:
+      risk_tier: ${{ steps.gate.outputs.risk_tier }}
+      required_checks: ${{ steps.gate.outputs.required_checks }}
+      require_browser_evidence: ${{ steps.gate.outputs.require_browser_evidence }}
+      min_test_coverage: ${{ steps.gate.outputs.min_test_coverage }}
+      require_human_approval: ${{ steps.gate.outputs.require_human_approval }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run Risk Policy Gate
+        id: gate
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          GITHUB_OUTPUT: ${{ github.output }}
+        run: |
+          npx tsx .harness/scripts/risk-policy-gate.ts
+
+      - name: Summary
+        run: |
+          echo "## Risk Policy Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Risk Tier**: ${{ steps.gate.outputs.risk_tier }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Required Checks**: ${{ steps.gate.outputs.required_checks }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Browser Evidence**: ${{ steps.gate.outputs.require_browser_evidence }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Min Coverage**: ${{ steps.gate.outputs.min_test_coverage }}%" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,60 @@
+name: Code Review Rerun
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: read
+
+env:
+  REVIEW_AGENT_USERNAME: "greptile[bot]"
+
+jobs:
+  request-rerun:
+    name: Request Code Review Rerun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Request Re-Review
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_AGENT_USERNAME: ${{ env.REVIEW_AGENT_USERNAME }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx tsx .harness/scripts/rerun-writer.ts
+
+      - name: Wait for Review Completion
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_CHECK_NAME: "code-review-agent"
+          REVIEW_TIMEOUT_MINUTES: "20"
+        run: |
+          npx tsx .harness/scripts/sha-discipline.ts
+
+  auto-resolve:
+    name: Auto-Resolve Bot Threads
+    runs-on: ubuntu-latest
+    needs: request-rerun
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Auto-Resolve Bot-Only Threads
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_BOT_USERNAME: "greptile"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx tsx .harness/scripts/auto-resolve-threads.ts

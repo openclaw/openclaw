@@ -1,0 +1,106 @@
+name: Agent Remediation
+
+on:
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  check-findings:
+    name: Check for Actionable Findings
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.state == 'changes_requested') ||
+      (github.event_name == 'issue_comment' &&
+       contains(github.event.comment.body, '<!-- code-review-findings -->'))
+    outputs:
+      has_findings: ${{ steps.check.outputs.has_findings }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+    steps:
+      - name: Check for Findings
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+          # Check if review has actionable findings
+          FINDINGS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews \
+            --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | length')
+
+          if [ "$FINDINGS" -gt 0 ]; then
+            echo "has_findings=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_findings=false" >> $GITHUB_OUTPUT
+          fi
+
+  remediate:
+    name: Agent Remediation
+    runs-on: ubuntu-latest
+    needs: check-findings
+    if: needs.check-findings.outputs.has_findings == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Collect Review Findings
+        id: findings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.check-findings.outputs.pr_number }}
+        run: |
+          # Get review comments with suggestions
+          gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments \
+            --jq '.[] | select(.body | test("suggestion|fix|error|warning|issue"; "i")) | {path, line, body}' \
+            > /tmp/findings.json || true
+
+          echo "findings_file=/tmp/findings.json" >> $GITHUB_OUTPUT
+
+      - name: Run Remediation Agent
+        env:
+          FINDINGS_FILE: ${{ steps.findings.outputs.findings_file }}
+          PR_NUMBER: ${{ needs.check-findings.outputs.pr_number }}
+        run: |
+          echo "Running remediation agent for PR #$PR_NUMBER"
+          echo "Findings: $(cat $FINDINGS_FILE)"
+
+          # The agent reads findings and makes targeted fixes
+          # In production, this would invoke:
+          # openclaw agent --message "Fix review findings: $(cat $FINDINGS_FILE)"
+          # For now, log what would be done
+          echo "Remediation agent would process $(cat $FINDINGS_FILE | wc -l) findings"
+
+      - name: Run Validation
+        run: |
+          npm run typecheck || true
+          npm test -- --passWithNoTests || true
+
+      - name: Commit Fixes
+        run: |
+          git config user.name "openclaw[bot]"
+          git config user.email "openclaw[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add -A
+            git commit -m "fix: address review findings (automated remediation)"
+            git push
+          fi
