@@ -155,7 +155,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       }
 
       const userDataDir = resolved.userDataDir ?? resolveOpenClawUserDataDir(name);
-      const profileDir = path.dirname(userDataDir);
+      const profileDir = resolved.userDataDir ? userDataDir : path.dirname(userDataDir);
       if (fs.existsSync(profileDir)) {
         await movePathToTrash(profileDir);
         deleted = true;
