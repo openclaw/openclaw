@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { runCronDirectCommand } from "./direct-command.js";
 
+function parseSummary(summary: string | undefined) {
+  expect(summary).toBeTruthy();
+  return JSON.parse(summary ?? "{}") as {
+    status: "ok" | "error" | "skipped";
+    summary: string;
+    captured: { stdout: string; stderr: string };
+  };
+}
+
 describe("runCronDirectCommand", () => {
   it("executes argv commands without shell interpolation", async () => {
     const result = await runCronDirectCommand({
@@ -13,7 +22,15 @@ describe("runCronDirectCommand", () => {
     });
 
     expect(result.status).toBe("ok");
-    expect(result.summary).toBe("hello world");
+    const parsed = parseSummary(result.summary);
+    expect(parsed).toEqual({
+      status: "ok",
+      summary: "hello world",
+      captured: {
+        stdout: "hello world",
+        stderr: "",
+      },
+    });
   });
 
   it("returns an error for non-zero exits", async () => {
@@ -28,7 +45,10 @@ describe("runCronDirectCommand", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toContain("code 4");
-    expect(result.summary).toContain("boom");
+    const parsed = parseSummary(result.summary);
+    expect(parsed.status).toBe("error");
+    expect(parsed.summary).toContain("boom");
+    expect(parsed.captured.stderr).toContain("boom");
   });
 
   it("times out long-running commands", async () => {
@@ -60,8 +80,8 @@ describe("runCronDirectCommand", () => {
     });
 
     expect(result.status).toBe("ok");
-    expect(result.summary).toBeDefined();
-    expect(result.summary!.length).toBeLessThanOrEqual(50);
-    expect(result.summary).toMatch(/^a+$/);
+    const parsed = parseSummary(result.summary);
+    expect(parsed.summary.length).toBeLessThanOrEqual(50);
+    expect(parsed.captured.stdout).toMatch(/^a+$/);
   });
 });

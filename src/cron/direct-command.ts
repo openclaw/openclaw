@@ -7,6 +7,16 @@ export type DirectCommandRunResult = {
   status: "ok" | "error" | "skipped";
   summary?: string;
   error?: string;
+  result?: DirectCommandResultObject;
+};
+
+export type DirectCommandResultObject = {
+  status: "ok" | "error" | "skipped";
+  summary: string;
+  captured: {
+    stdout: string;
+    stderr: string;
+  };
 };
 
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024;
@@ -31,6 +41,27 @@ function summarizeOutput(stdout: Buffer, stderr: Buffer): string {
   return stdoutText || stderrText;
 }
 
+function createResultObject(params: {
+  status: "ok" | "error" | "skipped";
+  stdout: Buffer;
+  stderr: Buffer;
+}): DirectCommandResultObject {
+  const stdoutText = toUtf8(params.stdout);
+  const stderrText = toUtf8(params.stderr);
+  return {
+    status: params.status,
+    summary: summarizeOutput(params.stdout, params.stderr),
+    captured: {
+      stdout: stdoutText,
+      stderr: stderrText,
+    },
+  };
+}
+
+export function formatDirectCommandResult(result: DirectCommandResultObject): string {
+  return JSON.stringify(result);
+}
+
 export async function runCronDirectCommand(params: {
   jobId: string;
   payload: DirectCommandPayload;
@@ -38,7 +69,17 @@ export async function runCronDirectCommand(params: {
   const { payload, jobId } = params;
   const command = payload.command?.trim();
   if (!command) {
-    return { status: "skipped", error: "directCommand requires a non-empty command" };
+    const result = {
+      status: "skipped",
+      summary: "directCommand requires a non-empty command",
+      captured: { stdout: "", stderr: "" },
+    } satisfies DirectCommandResultObject;
+    return {
+      status: "skipped",
+      error: "directCommand requires a non-empty command",
+      summary: formatDirectCommandResult(result),
+      result,
+    };
   }
 
   const args = Array.isArray(payload.args) ? payload.args.map(String) : [];
@@ -102,17 +143,24 @@ export async function runCronDirectCommand(params: {
 
     child.on("close", (code, signal) => {
       if (timedOut) {
+        const result = createResultObject({
+          status: "error",
+          stdout,
+          stderr,
+        });
         finish({
           status: "error",
           error: `directCommand timed out after ${timeoutMs}ms`,
-          summary: summarizeOutput(stdout, stderr),
+          summary: formatDirectCommandResult(result),
+          result,
         });
         return;
       }
 
-      const summary = summarizeOutput(stdout, stderr);
+      const status = code === 0 ? "ok" : "error";
+      const result = createResultObject({ status, stdout, stderr });
       if (code === 0) {
-        finish({ status: "ok", summary });
+        finish({ status: "ok", summary: formatDirectCommandResult(result), result });
         return;
       }
 
@@ -123,7 +171,8 @@ export async function runCronDirectCommand(params: {
       finish({
         status: "error",
         error: `${exitReason} (job: ${jobId})`,
-        summary,
+        summary: formatDirectCommandResult(result),
+        result,
       });
     });
   });
