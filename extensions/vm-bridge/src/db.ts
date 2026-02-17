@@ -207,6 +207,14 @@ export class Db {
     return res.rows;
   }
 
+  async contractExistsForMessage(messageId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      "SELECT 1 FROM cos_contracts WHERE message_id = $1 LIMIT 1",
+      [messageId],
+    );
+    return res.rows.length > 0;
+  }
+
   async findStuckContracts(): Promise<Contract[]> {
     const res = await this.pool.query<Contract>(
       "SELECT * FROM cos_contracts WHERE state = 'STUCK'",

@@ -32,14 +32,21 @@ export function createPollerService(
 ) {
   let intervalHandle: ReturnType<typeof setInterval> | null = null;
   let logger: Logger;
+  let tickRunning = false;
+  const draftFailures = new Map<number, number>(); // contract.id → consecutive failure count
+  const MAX_DRAFT_FAILURES = 3;
 
   async function tick() {
+    if (tickRunning) return; // Prevent overlapping ticks
+    tickRunning = true;
     try {
       await ingestAndClassify();
       await detectCompletions();
       await detectStuck();
     } catch (err) {
       logger.error(`[vm-bridge] Poller tick failed: ${err}`);
+    } finally {
+      tickRunning = false;
     }
   }
 
@@ -62,6 +69,10 @@ export function createPollerService(
             const enrichment = await bridge.enrichmentsGet("outlook", msgId);
             const enrichData = enrichment.result as Record<string, unknown> | undefined;
             if (enrichData?.ingestion) continue; // Already processed
+
+            // Contract-level dedup: skip if a contract already exists for this message
+            // (handles case where enrichment save failed but contract was created)
+            if (await db.contractExistsForMessage(msgId)) continue;
             skipped++;
 
             const classification = await classifyMessage(
@@ -159,6 +170,9 @@ export function createPollerService(
             const enrichData = enrichment.result as Record<string, unknown> | undefined;
             if (enrichData?.ingestion) continue; // Already processed
 
+            // Contract-level dedup
+            if (await db.contractExistsForMessage(msgId)) continue;
+
             const classification = await classifyMessage(
               {
                 body: (msg.content as string) ?? "",
@@ -250,9 +264,17 @@ export function createPollerService(
   async function detectCompletions() {
     const completed = await db.findCompletedContracts();
     for (const contract of completed) {
+      // Skip contracts that have exhausted draft creation attempts
+      const failures = draftFailures.get(contract.id) ?? 0;
+      if (failures >= MAX_DRAFT_FAILURES) {
+        logger.warn(`[vm-bridge] Skipping draft for contract #${contract.id} — max draft attempts (${MAX_DRAFT_FAILURES}) exhausted`);
+        continue;
+      }
+
       try {
         const draft = await draftReply(contract, db, bridge, logger);
         if (draft) {
+          draftFailures.delete(contract.id);
           await db.updateContract(contract.id, {
             reply_draft_id: draft.draftId,
             reply_content: draft.replyContent,
@@ -266,8 +288,11 @@ export function createPollerService(
             }
           }
           logger.info(`[vm-bridge] Draft reply created for contract #${contract.id}`);
+        } else {
+          draftFailures.set(contract.id, failures + 1);
         }
       } catch (err) {
+        draftFailures.set(contract.id, failures + 1);
         logger.error(`[vm-bridge] Failed to draft reply for #${contract.id}: ${err}`);
       }
     }
