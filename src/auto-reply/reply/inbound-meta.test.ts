@@ -47,6 +47,36 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["sender_id"]).toBe("289522496");
   });
 
+  it("trims sender_id before storing", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSid: "457",
+      SenderId: "  289522496  ",
+      OriginatingTo: "telegram:-1001249586642",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["sender_id"]).toBe("289522496");
+  });
+
+  it("omits sender_id when blank", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSid: "458",
+      SenderId: "   ",
+      OriginatingTo: "telegram:-1001249586642",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["sender_id"]).toBeUndefined();
+  });
+
   it("omits sender_id when not provided", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "789",
