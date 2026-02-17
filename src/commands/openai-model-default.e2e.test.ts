@@ -118,7 +118,7 @@ describe("applyGoogleGeminiModelDefault", () => {
 
   it("overrides existing model", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);
     expectPrimaryModelChanged(applied, GOOGLE_GEMINI_DEFAULT_MODEL);
@@ -126,7 +126,7 @@ describe("applyGoogleGeminiModelDefault", () => {
 
   it("no-ops when already gemini default", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { model: GOOGLE_GEMINI_DEFAULT_MODEL } },
+      agents: { defaults: { model: { primary: GOOGLE_GEMINI_DEFAULT_MODEL } } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);
     expectConfigUnchanged(applied, cfg);
@@ -176,7 +176,7 @@ describe("applyOpenAICodexModelDefault", () => {
 
   it("sets openai-codex default when model is openai/*", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { model: OPENAI_DEFAULT_MODEL } },
+      agents: { defaults: { model: { primary: OPENAI_DEFAULT_MODEL } } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
     expectPrimaryModelChanged(applied, OPENAI_CODEX_DEFAULT_MODEL);
@@ -184,7 +184,7 @@ describe("applyOpenAICodexModelDefault", () => {
 
   it("does not override openai-codex/*", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { model: OPENAI_CODEX_DEFAULT_MODEL } },
+      agents: { defaults: { model: { primary: OPENAI_CODEX_DEFAULT_MODEL } } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
     expectConfigUnchanged(applied, cfg);
@@ -192,7 +192,7 @@ describe("applyOpenAICodexModelDefault", () => {
 
   it("does not override non-openai models", () => {
     const cfg: OpenClawConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
     };
     const applied = applyOpenAICodexModelDefault(cfg);
     expectConfigUnchanged(applied, cfg);
