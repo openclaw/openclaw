@@ -18,7 +18,7 @@ import {
 } from "./embeddings.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+import { isMemoryPath, normalizeExtraMemoryPaths, readPartialText } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
@@ -556,6 +556,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (statResult.missing) {
       return { text: "", path: relPath };
     }
+
+    if (params.from !== undefined || params.lines !== undefined) {
+      const text = await readPartialText(absPath, params.from, params.lines);
+      return { text, path: relPath };
+    }
+
     let content: string;
     try {
       content = await fs.readFile(absPath, "utf-8");
@@ -565,14 +571,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       throw err;
     }
-    if (!params.from && !params.lines) {
-      return { text: content, path: relPath };
-    }
-    const lines = content.split("\n");
-    const start = Math.max(1, params.from ?? 1);
-    const count = Math.max(1, params.lines ?? lines.length);
-    const slice = lines.slice(start - 1, start - 1 + count);
-    return { text: slice.join("\n"), path: relPath };
+    return { text: content, path: relPath };
   }
 
   status(): MemoryProviderStatus {
