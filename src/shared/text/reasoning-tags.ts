@@ -47,6 +47,22 @@ function applyTrim(value: string, mode: ReasoningTagTrim): string {
   return value.trim();
 }
 
+/**
+ * Strip DeepSeek-style DSML function-call markup (`<｜DSML｜…>`) from text.
+ * DSML blocks always trail user-visible content, so we remove from the first
+ * occurrence to end-of-string.
+ */
+export function stripDsmlMarkup(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const idx = text.indexOf("<\uFF5CDSML\uFF5C");
+  if (idx === -1) {
+    return text;
+  }
+  return text.slice(0, idx).trimEnd();
+}
+
 export function stripReasoningTagsFromText(
   text: string,
   options?: {

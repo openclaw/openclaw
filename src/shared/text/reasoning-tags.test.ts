@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { stripDsmlMarkup, stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 describe("stripReasoningTagsFromText", () => {
   describe("basic functionality", () => {
@@ -214,5 +214,57 @@ describe("stripReasoningTagsFromText", () => {
       const input = "  <think>x</think>  result  ";
       expect(stripReasoningTagsFromText(input, { trim: "start" })).toBe("result  ");
     });
+  });
+});
+
+describe("stripDsmlMarkup", () => {
+  it("returns text unchanged when no DSML tags present", () => {
+    expect(stripDsmlMarkup("Hello world")).toBe("Hello world");
+  });
+
+  it("returns empty/falsy input unchanged", () => {
+    expect(stripDsmlMarkup("")).toBe("");
+  });
+
+  it("strips DSML function_calls block from end of text", () => {
+    const input =
+      "Perfect! I'll post the tweet now. <\uFF5CDSML\uFF5Cfunction_calls> <\uFF5CDSML\uFF5Cinvoke name=\"exec\"> some args";
+    expect(stripDsmlMarkup(input)).toBe("Perfect! I'll post the tweet now.");
+  });
+
+  it("strips DSML block even when preceded by whitespace", () => {
+    const input = "Hello  <\uFF5CDSML\uFF5Cfunction_calls>";
+    expect(stripDsmlMarkup(input)).toBe("Hello");
+  });
+
+  it("preserves text that contains regular angle brackets", () => {
+    const input = "Use <div> tags for layout";
+    expect(stripDsmlMarkup(input)).toBe("Use <div> tags for layout");
+  });
+});
+
+describe("stripDsmlMarkup", () => {
+  it("returns text unchanged when no DSML tags present", () => {
+    expect(stripDsmlMarkup("Hello world")).toBe("Hello world");
+  });
+
+  it("returns empty/falsy input unchanged", () => {
+    expect(stripDsmlMarkup("")).toBe("");
+  });
+
+  it("strips DSML function_calls block from end of text", () => {
+    const input =
+      "Perfect! I'll post the tweet now. <｜DSML｜function_calls> <｜DSML｜invoke name=\"exec\"> some args";
+    expect(stripDsmlMarkup(input)).toBe("Perfect! I'll post the tweet now.");
+  });
+
+  it("strips DSML block even when preceded by whitespace", () => {
+    const input = "Hello  <｜DSML｜function_calls>";
+    expect(stripDsmlMarkup(input)).toBe("Hello");
+  });
+
+  it("preserves text that contains regular angle brackets", () => {
+    const input = "Use <div> tags for layout";
+    expect(stripDsmlMarkup(input)).toBe("Use <div> tags for layout");
   });
 });

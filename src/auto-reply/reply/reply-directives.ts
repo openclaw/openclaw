@@ -1,4 +1,5 @@
 import { splitMediaFromOutput } from "../../media/parse.js";
+import { stripDsmlMarkup } from "../../shared/text/reasoning-tags.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
@@ -18,7 +19,7 @@ export function parseReplyDirectives(
   options: { currentMessageId?: string; silentToken?: string } = {},
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw);
-  let text = split.text ?? "";
+  let text = stripDsmlMarkup(split.text ?? "");
 
   const replyParsed = parseInlineDirectives(text, {
     currentMessageId: options.currentMessageId,
