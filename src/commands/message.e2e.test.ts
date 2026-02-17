@@ -29,22 +29,22 @@ vi.mock("../web/session.js", () => ({
   webAuthExists,
 }));
 
-const handleDiscordAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/discord-actions.js", () => ({
   handleDiscordAction,
 }));
 
-const handleSlackAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/slack-actions.js", () => ({
   handleSlackAction,
 }));
 
-const handleTelegramAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/telegram-actions.js", () => ({
   handleTelegramAction,
 }));
 
-const handleWhatsAppAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleWhatsAppAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/whatsapp-actions.js", () => ({
   handleWhatsAppAction,
 }));
