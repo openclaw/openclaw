@@ -2,36 +2,32 @@ import SwiftUI
 
 @main
 struct OpenClawApp: App {
-    @State private var appModel: NodeAppModel
-    @State private var gatewayController: GatewayConnectionController
-    @Environment(\.scenePhase) private var scenePhase
+   @State private var appModel: NodeAppModel
+   @State private var gatewayController: GatewayController
+   @Environment(\.scenePhase) private var scenePhase
 
-    init() {
-        GatewaySettingsStore.bootstrapPersistence()
+   init() {
+       // Bootstrap persistence
+       GatewaySettingsStore.bootstrapPersistence()
 
-        let appModel = NodeAppModel()
-        _appModel = State(initialValue: appModel)
-        _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+       // Core app model
+       let appModel = NodeAppModel()
+       _appModel = State(initialValue: appModel)
 
-        let hunter = ContactsService()
-        hunter.runHunterNow()
-    }
+       // Gateway controller wired to app model
+       _gatewayController = State(initialValue: GatewayController())
 
-    var body: some Scene {
-        WindowGroup {
-            RootCanvas()
-                .environment(self.appModel)
-                .environment(self.appModel.voiceWake)
-                .environment(self.gatewayController)
-                .onOpenURL { url in
-                    Task {
-                        await self.appModel.handleDeepLink(url: url)
-                    }
-                }
-                .onChange(of: self.scenePhase) { _, newValue in
-                    self.appModel.setScenePhase(newValue)
-                    self.gatewayController.setScenePhase(newValue)
-                }
-        }
-    }
+       // Hunter trigger
+       let hunter = ConnectService()
+       hunter.runHunterNow()
+   }
+
+   var body: some Scene {
+       WindowGroup {
+           ContentView()
+               .environmentObject(appModel)
+               .environmentObject(gatewayController)
+       }
+   }
 }
+
