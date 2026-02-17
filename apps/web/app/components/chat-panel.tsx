@@ -1086,34 +1086,39 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							)
 						: sessionMessages;
 
-					const uiMessages = completedMessages.map(
-						(msg) => {
-							savedMessageIdsRef.current.add(msg.id);
-							return {
-								id: msg.id,
-								role: msg.role,
-								parts: (msg.parts ?? [
-									{
-										type: "text" as const,
-										text: msg.content,
-									},
-								]) as UIMessage["parts"],
-							};
-						},
-					);
+				const uiMessages = completedMessages.map(
+					(msg) => {
+						savedMessageIdsRef.current.add(msg.id);
+						return {
+							id: msg.id,
+							role: msg.role,
+							parts: (msg.parts ?? [
+								{
+									type: "text" as const,
+									text: msg.content,
+								},
+							]) as UIMessage["parts"],
+						};
+					},
+				);
 
-					setMessages(uiMessages);
+				setMessages(uiMessages);
 
-					// Always try to reconnect -- the stream endpoint
-					// returns 404 gracefully if no active run exists,
-					// and this avoids missing runs whose _streaming
-					// flag hasn't been persisted yet.
-					await attemptReconnect(sessionId, uiMessages);
-				} catch (err) {
-					console.error("Error loading session:", err);
-				} finally {
-					setLoadingSession(false);
-				}
+				// Clear loading state *before* reconnecting — the
+				// persisted messages are now visible.  attemptReconnect
+				// manages its own `isReconnecting` state which shows
+				// "Resuming stream..." instead of "Loading session...".
+				setLoadingSession(false);
+
+				// Always try to reconnect -- the stream endpoint
+				// returns 404 gracefully if no active run exists,
+				// and this avoids missing runs whose _streaming
+				// flag hasn't been persisted yet.
+				await attemptReconnect(sessionId, uiMessages);
+			} catch (err) {
+				console.error("Error loading session:", err);
+				setLoadingSession(false);
+			}
 			},
 			[
 				currentSessionId,
