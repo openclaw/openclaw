@@ -27,6 +27,7 @@ export {
   modelsImageFallbacksListCommand,
   modelsImageFallbacksRemoveCommand,
 } from "./models/image-fallbacks.js";
+export { modelsConfigureVllmCommand } from "./models/configure-vllm.js";
 export { modelsListCommand, modelsStatusCommand } from "./models/list.js";
 export { modelsScanCommand } from "./models/scan.js";
 export { modelsSetCommand } from "./models/set.js";

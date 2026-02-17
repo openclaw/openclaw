@@ -22,6 +22,7 @@ openclaw models status
 openclaw models list
 openclaw models set <model-or-alias>
 openclaw models scan
+openclaw models configure vllm
 ```
 
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview.
@@ -38,6 +39,18 @@ Notes:
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+
+### `models configure vllm`
+
+Configure a vLLM provider + model, storing the API key in auth profiles and setting the default model.
+Prompts for missing values when run in a TTY.
+
+```bash
+openclaw models configure vllm \
+  --base-url http://127.0.0.1:8000/v1 \
+  --api-key "$VLLM_API_KEY" \
+  --model-id meta-llama/Meta-Llama-3-8B-Instruct
+```
 
 ### `models status`
 

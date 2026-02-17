@@ -38,6 +38,17 @@ export VLLM_API_KEY="vllm-local"
 }
 ```
 
+## CLI configure
+
+Use the CLI to configure vLLM and set the default model:
+
+```bash
+openclaw models configure vllm \
+  --base-url http://127.0.0.1:8000/v1 \
+  --api-key "$VLLM_API_KEY" \
+  --model-id meta-llama/Meta-Llama-3-8B-Instruct
+```
+
 ## Model discovery (implicit provider)
 
 When `VLLM_API_KEY` is set (or an auth profile exists) and you **do not** define `models.providers.vllm`, OpenClaw will query:
