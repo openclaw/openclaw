@@ -368,20 +368,39 @@ export function createSlackMonitorContext(params: {
     if (!body || typeof body !== "object") {
       return false;
     }
-    const raw = body as { api_app_id?: unknown; team_id?: unknown };
+    const raw = body as { api_app_id?: unknown; team_id?: unknown; event?: unknown };
     const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
     const incomingTeamId = typeof raw.team_id === "string" ? raw.team_id : "";
 
-    if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
+    // Primary filter: api_app_id (most reliable for multi-account setups)
+    if (params.apiAppId) {
+      if (!incomingApiAppId) {
+        // If we have an expected api_app_id but event doesn't include it, drop for safety
+        logVerbose(
+          `slack[${params.accountId}]: drop event with missing api_app_id (expected ${params.apiAppId})`,
+        );
+        return true;
+      }
+      if (incomingApiAppId !== params.apiAppId) {
+        logVerbose(
+          `slack[${params.accountId}]: drop event with api_app_id=${incomingApiAppId} (expected ${params.apiAppId})`,
+        );
+        return true;
+      }
+      // api_app_id matches, accept the event
+      return false;
+    }
+
+    // Fallback: team_id filter (less reliable, but better than nothing)
+    if (params.teamId && incomingTeamId && incomingTeamId !== params.teamId) {
       logVerbose(
-        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${params.apiAppId})`,
+        `slack[${params.accountId}]: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`,
       );
       return true;
     }
-    if (params.teamId && incomingTeamId && incomingTeamId !== params.teamId) {
-      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`);
-      return true;
-    }
+
+    // If we reach here, we couldn't verify the event is for us, but we'll allow it
+    // This maintains backward compatibility with setups where auth.test doesn't return api_app_id
     return false;
   };
 

@@ -160,13 +160,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     botUserId = auth.user_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-  } catch {
+  } catch (err) {
     // auth test failing is non-fatal; message handler falls back to regex mentions.
+    runtime.error?.(
+      `slack[${account.accountId}]: auth.test failed: ${String(err)}. Multi-account routing may not work correctly.`,
+    );
+  }
+
+  if (!apiAppId) {
+    runtime.log?.(
+      `slack[${account.accountId}]: warning: api_app_id not available from auth.test. Multi-account setups may experience routing issues.`,
+    );
   }
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
     runtime.error?.(
-      `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
+      `slack[${account.accountId}]: token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
     );
   }
 
