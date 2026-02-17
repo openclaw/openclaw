@@ -593,7 +593,12 @@ export async function runCronIsolatedAgentTurn(params: {
   const isAutoDeliver = params.job.payload.kind === "agentTurn" && params.job.payload.deliver === "auto";
   const skipAutoDeliverAck = isAutoDeliver && (() => {
     if (payloads.length === 0) return true;
-    const lastText = (payloads[payloads.length - 1]?.text ?? "").trim().toLowerCase().replace(/[^a-z0-9_\s]/g, "");
+    const lastPayload = payloads[payloads.length - 1];
+    // Don't skip if there's media or structured content
+    const hasMedia = Boolean(lastPayload?.mediaUrl) || (lastPayload?.mediaUrls?.length ?? 0) > 0;
+    const hasChannelData = Object.keys(lastPayload?.channelData ?? {}).length > 0;
+    if (hasMedia || hasChannelData) return false;
+    const lastText = (lastPayload?.text ?? "").trim().toLowerCase().replace(/[^a-z0-9_\s]/g, "");
     const ackPatterns = ["ok", "no_reply", "noreply", "no reply", "heartbeat_ok", "acknowledged", "ack", "noted", "done", "ignored"];
     return ackPatterns.includes(lastText) || lastText.length <= 3;
   })();
