@@ -44,9 +44,10 @@ function buildMultipartBody(
   const boundary = `----SonioxBoundary${Date.now()}${Math.random().toString(36).slice(2)}`;
   const encoder = new TextEncoder();
 
+  const safeFileName = fileName.replace(/["\\]/g, "\\$&").replace(/\r\n|\r|\n/g, "_");
   const header = encoder.encode(
     `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${safeFileName}"\r\n` +
       `Content-Type: ${mime}\r\n` +
       `\r\n`,
   );
@@ -263,6 +264,10 @@ export async function transcribeSonioxAudio(
   const model = resolveModel(params.model);
   const mime = params.mime ?? "application/octet-stream";
 
+  // Use a single deadline so total wall-clock time is bounded by timeoutMs
+  const deadline = Date.now() + params.timeoutMs;
+  const remaining = () => Math.max(1_000, deadline - Date.now());
+
   // Step 1: Upload file
   const fileId = await uploadFile({
     buffer: params.buffer,
@@ -270,7 +275,7 @@ export async function transcribeSonioxAudio(
     mime,
     apiKey: params.apiKey,
     baseUrl,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: remaining(),
     fetchFn,
   });
 
@@ -281,7 +286,7 @@ export async function transcribeSonioxAudio(
     language: params.language,
     apiKey: params.apiKey,
     baseUrl,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: remaining(),
     fetchFn,
   });
 
@@ -290,7 +295,7 @@ export async function transcribeSonioxAudio(
     transcriptionId,
     apiKey: params.apiKey,
     baseUrl,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: remaining(),
     fetchFn,
   });
 
@@ -299,7 +304,7 @@ export async function transcribeSonioxAudio(
     transcriptionId,
     apiKey: params.apiKey,
     baseUrl,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: remaining(),
     fetchFn,
   });
 
