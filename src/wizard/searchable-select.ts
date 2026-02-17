@@ -1,9 +1,9 @@
-import chalk from "chalk";
 /**
  * Standalone FZF-like searchable select for CLI prompts.
  * Reuses fuzzy filtering logic but handles terminal I/O directly.
  */
 import { stdin, stdout } from "node:process";
+import chalk from "chalk";
 import { stripAnsi } from "../terminal/ansi.js";
 import { findWordBoundaryIndex, fuzzyFilterLower } from "../tui/components/fuzzy-filter.js";
 
