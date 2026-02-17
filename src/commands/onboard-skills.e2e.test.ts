@@ -105,6 +105,7 @@ function createPrompter(params: {
       notes.push({ title, message });
     }),
     select: vi.fn(async () => "npm") as unknown as WizardPrompter["select"],
+    searchableSelect: vi.fn(async () => "npm") as unknown as WizardPrompter["searchableSelect"],
     multiselect: vi.fn(
       async () => params.multiselect ?? ["__skip__"],
     ) as unknown as WizardPrompter["multiselect"],

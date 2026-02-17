@@ -33,6 +33,7 @@ describe("configureGatewayForOnboarding", () => {
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
       select,
+      searchableSelect: select,
       multiselect: vi.fn(async () => []),
       text: vi.fn(async () => textQueue.shift() as string),
       confirm: vi.fn(async () => false),

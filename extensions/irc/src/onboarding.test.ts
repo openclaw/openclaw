@@ -18,6 +18,7 @@ describe("irc onboarding", () => {
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
       select: selectFirstOption as WizardPrompter["select"],
+      searchableSelect: selectFirstOption as WizardPrompter["searchableSelect"],
       multiselect: vi.fn(async () => []),
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {
@@ -89,6 +90,7 @@ describe("irc onboarding", () => {
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
       select: selectFirstOption as WizardPrompter["select"],
+      searchableSelect: selectFirstOption as WizardPrompter["searchableSelect"],
       multiselect: vi.fn(async () => []),
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC allowFrom (nick or nick!user@host)") {

@@ -26,6 +26,7 @@ function makePrompter(): WizardPrompter {
     outro: async () => {},
     note: async () => {},
     select: (async <T>() => "" as T) as WizardPrompter["select"],
+    searchableSelect: (async <T>() => "" as T) as WizardPrompter["searchableSelect"],
     multiselect: (async <T>() => [] as T[]) as WizardPrompter["multiselect"],
     text: async () => "",
     confirm: async () => false,

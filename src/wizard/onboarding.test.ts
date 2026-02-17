@@ -203,6 +203,7 @@ function createWizardPrompter(overrides?: Partial<WizardPrompter>): WizardPrompt
     outro: vi.fn(async () => {}),
     note: vi.fn(async () => {}),
     select,
+    searchableSelect: select,
     multiselect: vi.fn(async () => []),
     text: vi.fn(async () => ""),
     confirm: vi.fn(async () => false),

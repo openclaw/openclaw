@@ -28,6 +28,7 @@ export function createWizardPrompter(
     outro: vi.fn(noopAsync),
     note: vi.fn(noopAsync),
     select: vi.fn(async () => (options?.defaultSelect ?? "") as never),
+    searchableSelect: vi.fn(async () => (options?.defaultSelect ?? "") as never),
     multiselect: vi.fn(async () => []),
     text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
     confirm: vi.fn(async () => false),

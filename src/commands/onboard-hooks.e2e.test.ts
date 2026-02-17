@@ -27,6 +27,7 @@ describe("onboard-hooks", () => {
     outro: vi.fn().mockResolvedValue(undefined),
     text: vi.fn().mockResolvedValue(""),
     select: vi.fn().mockResolvedValue(""),
+    searchableSelect: vi.fn().mockResolvedValue(""),
     multiselect: vi.fn().mockResolvedValue(multiselectValue),
     progress: vi.fn().mockReturnValue({
       stop: vi.fn(),
