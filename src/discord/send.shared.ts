@@ -386,10 +386,44 @@ async function sendDiscordText(
         "Discord message payload is empty: must include at least one of content, embeds, files, sticker_ids, or components",
       );
     }
-    const body = stripUndefinedFields({
-      ...serializePayload(payload),
-      ...(isFirst && messageReference ? { message_reference: messageReference } : {}),
-    });
+    let body: Record<string, unknown>;
+    try {
+      body = stripUndefinedFields({
+        ...serializePayload(payload),
+        ...(isFirst && messageReference ? { message_reference: messageReference } : {}),
+      });
+    } catch (serializeErr) {
+      // Carbon's serializePayload may throw if components are invalid.
+      // Re-throw with a clearer error message.
+      throw new Error(
+        `Discord payload serialization failed: ${String(serializeErr)}. Payload validation should have caught empty/invalid payloads.`,
+        { cause: serializeErr },
+      );
+    }
+    // Validate again after serialization in case serializePayload removed fields
+    const hasContentAfter = Boolean(body.content);
+    const hasEmbedsAfter = Boolean(
+      body.embeds && Array.isArray(body.embeds) && body.embeds.length > 0,
+    );
+    const hasFilesAfter = Boolean(body.files && Array.isArray(body.files) && body.files.length > 0);
+    const hasStickersAfter = Boolean(
+      body.sticker_ids && Array.isArray(body.sticker_ids) && body.sticker_ids.length > 0,
+    );
+    const hasComponentsAfter = Boolean(
+      body.components && Array.isArray(body.components) && body.components.length > 0,
+    );
+    // message_reference doesn't count as a valid field for Discord's requirements
+    if (
+      !hasContentAfter &&
+      !hasEmbedsAfter &&
+      !hasFilesAfter &&
+      !hasStickersAfter &&
+      !hasComponentsAfter
+    ) {
+      throw new Error(
+        "Discord message payload is empty after serialization: must include at least one of content, embeds, files, sticker_ids, or components",
+      );
+    }
     return (await request(
       () =>
         rest.post(Routes.channelMessages(channelId), {
