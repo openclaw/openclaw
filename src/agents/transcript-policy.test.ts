@@ -39,4 +39,32 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
   });
+
+  it("enables normalizeAntigravityThinkingBlocks for Antigravity Claude models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google-antigravity",
+      modelId: "anthropic/claude-opus-4-6",
+      modelApi: "google-antigravity",
+    });
+    expect(policy.normalizeAntigravityThinkingBlocks).toBe(true);
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("does not enable normalizeAntigravityThinkingBlocks for Gemini via Antigravity", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google-antigravity",
+      modelId: "google/gemini-2.0-flash",
+      modelApi: "google-antigravity",
+    });
+    expect(policy.normalizeAntigravityThinkingBlocks).toBe(false);
+  });
+
+  it("does not enable normalizeAntigravityThinkingBlocks for direct Anthropic API", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.normalizeAntigravityThinkingBlocks).toBe(false);
+  });
 });

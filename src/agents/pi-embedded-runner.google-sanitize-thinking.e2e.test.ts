@@ -1,7 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
+import {
+  sanitizeAntigravityThinkingBlocks,
+  sanitizeSessionHistory,
+} from "./pi-embedded-runner/google.js";
 
 type AssistantThinking = { type?: string; thinking?: string; thinkingSignature?: string };
 
@@ -333,5 +336,101 @@ describe("sanitizeSessionHistory (google thinking)", () => {
       (msg) => (msg as { role?: unknown }).role === "toolResult",
     ) as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.toolCallId).toBe(toolCall.id);
+  });
+});
+
+describe("sanitizeAntigravityThinkingBlocks (transformContext path)", () => {
+  it("strips unsigned thinking blocks from accumulated tool-call context", () => {
+    // Simulates the context that accumulates during an agent loop:
+    // user turn → assistant with unsigned thinking + tool call → tool result → assistant again
+    const messages: AgentMessage[] = [
+      { role: "user", content: "read /tmp/file and summarize" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I should read the file first" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/file" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+      },
+    ];
+
+    const out = sanitizeAntigravityThinkingBlocks(messages);
+
+    // Unsigned thinking block should be stripped; toolCall preserved.
+    const assistant = out.find((m) => m.role === "assistant") as {
+      content?: Array<{ type?: string }>;
+    };
+    expect(assistant.content?.map((b) => b.type)).toEqual(["toolCall"]);
+    // Non-assistant messages unchanged.
+    expect(out.filter((m) => m.role !== "assistant")).toHaveLength(2);
+  });
+
+  it("preserves signed thinking blocks in accumulated context", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning", thinkingSignature: "c2lnbmF0dXJl" },
+          { type: "text", text: "response" },
+        ],
+      },
+    ];
+
+    const out = sanitizeAntigravityThinkingBlocks(messages);
+
+    // Should be unchanged (same reference).
+    expect(out).toBe(messages);
+  });
+
+  it("normalizes signature field variants to thinkingSignature", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "thought", signature: "c2ln" }],
+      },
+    ];
+
+    const out = sanitizeAntigravityThinkingBlocks(messages);
+
+    const assistant = out.find((m) => m.role === "assistant") as {
+      content?: Array<{ type?: string; thinkingSignature?: string; signature?: string }>;
+    };
+    expect(assistant.content?.[0]?.thinkingSignature).toBe("c2ln");
+  });
+
+  it("drops assistant messages entirely when only content is unsigned thinking", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hi" },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "internal only" }],
+      },
+      { role: "user", content: "hello again" },
+    ];
+
+    const out = sanitizeAntigravityThinkingBlocks(messages);
+
+    // The all-unsigned assistant message should be dropped entirely.
+    expect(out.filter((m) => m.role === "assistant")).toHaveLength(0);
+    expect(out).toHaveLength(2);
+  });
+
+  it("returns same array reference when no changes needed", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "text", text: "hello" }] },
+    ];
+
+    const out = sanitizeAntigravityThinkingBlocks(messages);
+
+    expect(out).toBe(messages);
   });
 });
