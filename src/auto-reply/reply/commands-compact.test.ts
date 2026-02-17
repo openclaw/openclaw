@@ -8,7 +8,12 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: vi.fn(async () => ({
     ok: true,
     compacted: true,
-    result: { summary: "Compacted", firstKeptEntryId: "entry-1", tokensBefore: 20, tokensAfter: 10 },
+    result: {
+      summary: "Compacted",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 20,
+      tokensAfter: 10,
+    },
   })),
   isEmbeddedPiRunActive: vi.fn(() => false),
   waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
@@ -155,7 +160,12 @@ describe("handleCompactCommand", () => {
       .mockResolvedValueOnce({
         ok: true,
         compacted: true,
-        result: { summary: "Compacted", firstKeptEntryId: "entry-1", tokensBefore: 20, tokensAfter: 10 },
+        result: {
+          summary: "Compacted",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 20,
+          tokensAfter: 10,
+        },
       });
 
     await handleCompactCommand(makeParams(), true);
@@ -179,7 +189,12 @@ describe("handleCompactCommand", () => {
         result: {
           ok: true,
           compacted: true,
-          result: { summary: "Compacted", firstKeptEntryId: "entry-1", tokensBefore: 20, tokensAfter: 10 },
+          result: {
+            summary: "Compacted",
+            firstKeptEntryId: "entry-1",
+            tokensBefore: 20,
+            tokensAfter: 10,
+          },
         },
         provider: "fallback-provider",
         model: "fallback-model",
