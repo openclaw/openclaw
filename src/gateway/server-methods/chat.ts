@@ -269,7 +269,6 @@ function appendUserTranscriptMessage(params: {
   }
 
   const now = Date.now();
-  const messageId = randomUUID().slice(0, 8);
   const content: Array<Record<string, unknown>> = [];
   if (params.message.trim()) {
     content.push({ type: "text", text: params.message });
@@ -289,20 +288,15 @@ function appendUserTranscriptMessage(params: {
     content: content.length > 0 ? content : [],
     timestamp: now,
   };
-  const transcriptEntry = {
-    type: "message",
-    id: messageId,
-    timestamp: new Date(now).toISOString(),
-    message: messageBody,
-  };
-
   try {
-    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+    // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
+    // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
+    const sessionManager = SessionManager.open(transcriptPath);
+    const messageId = sessionManager.appendMessage(messageBody);
+    return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-
-  return { ok: true, messageId, message: transcriptEntry.message };
 }
 
 function collectSessionAbortPartials(params: {
