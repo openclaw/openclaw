@@ -63,6 +63,10 @@ describe("monitorSlackProvider tool results", () => {
     };
   }
 
+  function firstReplyCtx(): { WasMentioned?: boolean } {
+    return (replyMock.mock.calls[0]?.[0] ?? {}) as { WasMentioned?: boolean };
+  }
+
   async function runDirectMessageEvent(ts: string, extraEvent: Record<string, unknown> = {}) {
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent({ ts, ...extraEvent }),
@@ -168,7 +172,7 @@ describe("monitorSlackProvider tool results", () => {
     };
 
     let capturedCtx: { Body?: string; RawBody?: string; CommandBody?: string } = {};
-    replyMock.mockImplementation(async (ctx) => {
+    replyMock.mockImplementation(async (ctx: unknown) => {
       capturedCtx = ctx ?? {};
       return undefined;
     });
@@ -221,7 +225,7 @@ describe("monitorSlackProvider tool results", () => {
     };
 
     const capturedCtx: Array<{ Body?: string }> = [];
-    replyMock.mockImplementation(async (ctx) => {
+    replyMock.mockImplementation(async (ctx: unknown) => {
       capturedCtx.push(ctx ?? {});
       return undefined;
     });
@@ -274,7 +278,8 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   it("updates assistant thread status when replies start", async () => {
-    replyMock.mockImplementation(async (_ctx, opts) => {
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as { onReplyStart?: () => Promise<void> | void };
       await opts?.onReplyStart?.();
       return { text: "final reply" };
     });
@@ -325,7 +330,7 @@ describe("monitorSlackProvider tool results", () => {
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
+    expect(firstReplyCtx().WasMentioned).toBe(true);
   }
 
   it("accepts channel messages when mentionPatterns match", async () => {
@@ -358,7 +363,7 @@ describe("monitorSlackProvider tool results", () => {
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
+    expect(firstReplyCtx().WasMentioned).toBe(true);
   });
 
   it("accepts channel messages without mention when channels.slack.requireMention is false", async () => {
@@ -380,7 +385,7 @@ describe("monitorSlackProvider tool results", () => {
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(false);
+    expect(firstReplyCtx().WasMentioned).toBe(false);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
@@ -395,7 +400,7 @@ describe("monitorSlackProvider tool results", () => {
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
+    expect(firstReplyCtx().WasMentioned).toBe(true);
   });
 
   it("threads replies when incoming message is in a thread", async () => {
@@ -478,12 +483,15 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
+    const currentConfig = slackTestState.config as {
+      channels?: { slack?: Record<string, unknown> };
+    };
     slackTestState.config = {
-      ...slackTestState.config,
+      ...currentConfig,
       channels: {
-        ...slackTestState.config.channels,
+        ...currentConfig.channels,
         slack: {
-          ...slackTestState.config.channels?.slack,
+          ...currentConfig.channels?.slack,
           dm: { enabled: true, policy: "pairing", allowFrom: [] },
         },
       },
@@ -496,17 +504,20 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Slack user id: U1");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expect(sendMock.mock.calls[0]?.[1]).toContain("Your Slack user id: U1");
+    expect(sendMock.mock.calls[0]?.[1]).toContain("Pairing code: PAIRCODE");
   });
 
   it("does not resend pairing code when a request is already pending", async () => {
+    const currentConfig = slackTestState.config as {
+      channels?: { slack?: Record<string, unknown> };
+    };
     slackTestState.config = {
-      ...slackTestState.config,
+      ...currentConfig,
       channels: {
-        ...slackTestState.config.channels,
+        ...currentConfig.channels,
         slack: {
-          ...slackTestState.config.channels?.slack,
+          ...currentConfig.channels?.slack,
           dm: { enabled: true, policy: "pairing", allowFrom: [] },
         },
       },
