@@ -1,6 +1,7 @@
-// @ts-nocheck
-// oxlint-disable eslint/no-unused-vars, typescript/no-explicit-any
 import fs from "node:fs/promises";
+import type { DatabaseSync } from "node:sqlite";
+import { type FSWatcher } from "chokidar";
+import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
@@ -11,6 +12,12 @@ import {
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
+import {
+  type EmbeddingProvider,
+  type GeminiEmbeddingClient,
+  type OpenAiEmbeddingClient,
+  type VoyageEmbeddingClient,
+} from "./embeddings.js";
 import {
   chunkMarkdown,
   hashText,
@@ -41,8 +48,62 @@ const vectorToBlob = (embedding: number[]): Buffer =>
 
 const log = createSubsystemLogger("memory");
 
-class MemoryManagerEmbeddingOps {
-  [key: string]: any;
+abstract class MemoryManagerEmbeddingOps {
+  protected abstract readonly agentId: string;
+  protected abstract readonly workspaceDir: string;
+  protected abstract readonly settings: ResolvedMemorySearchConfig;
+  protected provider: EmbeddingProvider | null = null;
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  protected openAi?: OpenAiEmbeddingClient;
+  protected gemini?: GeminiEmbeddingClient;
+  protected voyage?: VoyageEmbeddingClient;
+  protected abstract batch: {
+    enabled: boolean;
+    wait: boolean;
+    concurrency: number;
+    pollIntervalMs: number;
+    timeoutMs: number;
+  };
+  protected readonly sources: Set<MemorySource> = new Set();
+  protected providerKey: string | null = null;
+  protected abstract readonly vector: {
+    enabled: boolean;
+    available: boolean | null;
+    extensionPath?: string;
+    loadError?: string;
+    dims?: number;
+  };
+  protected readonly fts: {
+    enabled: boolean;
+    available: boolean;
+    loadError?: string;
+  } = { enabled: false, available: false };
+  protected vectorReady: Promise<boolean> | null = null;
+  protected watcher: FSWatcher | null = null;
+  protected watchTimer: NodeJS.Timeout | null = null;
+  protected sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected sessionUnsubscribe: (() => void) | null = null;
+  protected fallbackReason?: string;
+  protected intervalTimer: NodeJS.Timeout | null = null;
+  protected closed = false;
+  protected dirty = false;
+  protected sessionsDirty = false;
+  protected sessionsDirtyFiles = new Set<string>();
+  protected sessionPendingFiles = new Set<string>();
+  protected sessionDeltas = new Map<
+    string,
+    { lastSize: number; pendingBytes: number; pendingMessages: number }
+  >();
+
+  protected batchFailureCount = 0;
+  protected batchFailureLastError?: string;
+  protected batchFailureLastProvider?: string;
+  protected batchFailureLock: Promise<void> = Promise.resolve();
+
+  protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
+  protected abstract db: DatabaseSync;
+  protected abstract ensureVectorReady(dimensions?: number): Promise<boolean>;
+
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
@@ -201,7 +262,7 @@ class MemoryManagerEmbeddingOps {
     return embeddings;
   }
 
-  private computeProviderKey(): string {
+  protected computeProviderKey(): string {
     // FTS-only mode: no provider, use a constant key
     if (!this.provider) {
       return hashText(JSON.stringify({ provider: "none", model: "fts-only" }));
@@ -339,13 +400,13 @@ class MemoryManagerEmbeddingOps {
     chunks: MemoryChunk[];
     source: MemorySource;
   }): {
-    agentId: string | undefined;
+    agentId: string;
     requests: TRequest[];
     wait: boolean;
     concurrency: number;
     pollIntervalMs: number;
     timeoutMs: number;
-    debug: (message: string, data: Record<string, unknown>) => void;
+    debug: (message: string, data?: Record<string, unknown>) => void;
   } {
     const { requests, chunks, source } = params;
     return {
