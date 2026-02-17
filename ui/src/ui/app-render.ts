@@ -1,7 +1,12 @@
 import { html, nothing } from "lit";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import { t } from "../i18n/index.ts";
-import { refreshChatAvatar } from "./app-chat.ts";
+import {
+  buildAgenticEngineeringWorkflowPrompt,
+  buildSubagentSpawnPrompt,
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  refreshChatAvatar,
+  resolveAgenticWorkflowDefinition,
+} from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -44,7 +49,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import { deleteSession, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -92,7 +97,7 @@ export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
-  const chatDisabledReason = state.connected ? null : t("chat.disconnected");
+  const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -100,7 +105,7 @@ export function renderApp(state: AppViewState) {
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
-  const basePath = normalizeBasePath(state.basePath ?? "");
+  const normalizedBasePath = normalizeBasePath(state.basePath ?? "");
   const resolvedAgentId =
     state.agentsSelectedId ??
     state.agentsList?.defaultId ??
@@ -118,14 +123,17 @@ export function renderApp(state: AppViewState) {
                 ...state.settings,
                 navCollapsed: !state.settings.navCollapsed,
               })}
-            title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-            aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+            title="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
+            aria-label="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
           >
             <span class="nav-collapse-toggle__icon">${icons.menu}</span>
           </button>
           <div class="brand">
             <div class="brand-logo">
-              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
+              <img
+                src=${normalizedBasePath ? `${normalizedBasePath}/favicon.svg` : "/favicon.svg"}
+                alt="OpenClaw"
+              />
             </div>
             <div class="brand-text">
               <div class="brand-title">OPENCLAW</div>
@@ -136,8 +144,8 @@ export function renderApp(state: AppViewState) {
         <div class="topbar-status">
           <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>${t("common.health")}</span>
-            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
+            <span>Health</span>
+            <span class="mono">${state.connected ? "OK" : "Offline"}</span>
           </div>
           ${renderThemeToggle(state)}
         </div>
@@ -160,7 +168,7 @@ export function renderApp(state: AppViewState) {
                 }}
                 aria-expanded=${!isGroupCollapsed}
               >
-                <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
+                <span class="nav-label__text">${group.label}</span>
                 <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
               </button>
               <div class="nav-group__items">
@@ -171,7 +179,7 @@ export function renderApp(state: AppViewState) {
         })}
         <div class="nav-group nav-group--links">
           <div class="nav-label nav-label--static">
-            <span class="nav-label__text">${t("common.resources")}</span>
+            <span class="nav-label__text">Resources</span>
           </div>
           <div class="nav-group__items">
             <a
@@ -179,10 +187,10 @@ export function renderApp(state: AppViewState) {
               href="https://docs.openclaw.ai"
               target="_blank"
               rel="noreferrer"
-              title="${t("common.docs")} (opens in new tab)"
+              title="Docs (opens in new tab)"
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              <span class="nav-item__text">${t("common.docs")}</span>
+              <span class="nav-item__text">Docs</span>
             </a>
           </div>
         </div>
@@ -301,7 +309,7 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
-                onDelete: (key) => deleteSessionAndRefresh(state, key),
+                onDelete: (key) => deleteSession(state, key),
               })
             : nothing
         }
@@ -372,6 +380,14 @@ export function renderApp(state: AppViewState) {
                 agentSkillsError: state.agentSkillsError,
                 agentSkillsAgentId: state.agentSkillsAgentId,
                 skillsFilter: state.skillsFilter,
+                agenticGoal: state.agenticGoal,
+                agenticTemplate: state.agenticTemplate,
+                agenticWorkflow: state.agenticWorkflow,
+                agenticLabel: state.agenticLabel,
+                agenticRunTimeoutSeconds: state.agenticRunTimeoutSeconds,
+                agenticCleanup: state.agenticCleanup,
+                agenticRunning: state.agenticRunning,
+                agenticStatusMessage: state.agenticStatusMessage,
                 onRefresh: async () => {
                   await loadAgents(state);
                   const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
@@ -593,6 +609,84 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
+                },
+                onAgenticGoalChange: (next) => (state.agenticGoal = next),
+                onAgenticTemplateChange: (next) => (state.agenticTemplate = next),
+                onAgenticWorkflowChange: (next) => (state.agenticWorkflow = next),
+                onAgenticLabelChange: (next) => (state.agenticLabel = next),
+                onAgenticRunTimeoutSecondsChange: (next) => (state.agenticRunTimeoutSeconds = next),
+                onAgenticCleanupChange: (next) => (state.agenticCleanup = next),
+                onRunAgenticWorker: (agentId) => {
+                  if (state.agenticRunning || !state.connected) {
+                    state.agenticStatusMessage = state.connected
+                      ? "A run is already in progress."
+                      : "Gateway is disconnected. Reconnect before running.";
+                    return;
+                  }
+                  const prompt = buildSubagentSpawnPrompt({
+                    task: state.agenticGoal,
+                    templateId: state.agenticTemplate,
+                    label: state.agenticLabel,
+                    agentId,
+                    runTimeoutSeconds: state.agenticRunTimeoutSeconds,
+                    cleanup: state.agenticCleanup,
+                  });
+                  if (!prompt) {
+                    state.agenticStatusMessage = "Add a goal before running.";
+                    return;
+                  }
+                  void (async () => {
+                    state.agenticRunning = true;
+                    state.agenticStatusMessage = "Dispatching worker run…";
+                    try {
+                      await state.handleSendChat(prompt, { restoreDraft: true });
+                      state.tab = "chat";
+                      state.agenticStatusMessage = "Worker run dispatched. Switched to Chat.";
+                      await loadSessions(state, { activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES });
+                    } catch (error) {
+                      const msg = error instanceof Error ? error.message : String(error);
+                      state.agenticStatusMessage = `Failed to dispatch worker: ${msg}`;
+                    } finally {
+                      state.agenticRunning = false;
+                    }
+                  })();
+                },
+                onRunAgenticWorkflow: (agentId) => {
+                  if (state.agenticRunning || !state.connected) {
+                    state.agenticStatusMessage = state.connected
+                      ? "A run is already in progress."
+                      : "Gateway is disconnected. Reconnect before running.";
+                    return;
+                  }
+                  const prompt = buildAgenticEngineeringWorkflowPrompt({
+                    goal: state.agenticGoal,
+                    workflowId: state.agenticWorkflow,
+                    label: state.agenticLabel,
+                    agentId,
+                    runTimeoutSeconds: state.agenticRunTimeoutSeconds,
+                    cleanup: state.agenticCleanup,
+                  });
+                  if (!prompt) {
+                    state.agenticStatusMessage = "Add a goal before running.";
+                    return;
+                  }
+                  void (async () => {
+                    const workflow = resolveAgenticWorkflowDefinition(state.agenticWorkflow);
+                    state.agenticRunning = true;
+                    state.agenticStatusMessage = `Dispatching ${workflow.label} workflow…`;
+                    try {
+                      await state.handleSendChat(prompt, { restoreDraft: true });
+                      state.tab = "chat";
+                      state.agenticStatusMessage =
+                        "Workflow dispatched. Switched to Chat for live progress.";
+                      await loadSessions(state, { activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES });
+                    } catch (error) {
+                      const msg = error instanceof Error ? error.message : String(error);
+                      state.agenticStatusMessage = `Failed to dispatch workflow: ${msg}`;
+                    } finally {
+                      state.agenticRunning = false;
+                    }
+                  })();
                 },
                 onModelChange: (agentId, modelId) => {
                   if (!configValue) {

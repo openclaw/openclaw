@@ -1,3 +1,4 @@
+import type { AgenticTemplateId, AgenticWorkflowId } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus } from "./app-tool-stream.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -127,7 +128,7 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
-  agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+  agentsPanel: "overview" | "agentic" | "files" | "tools" | "skills" | "channels" | "cron";
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFilesList: AgentsFilesListResult | null;
@@ -142,6 +143,14 @@ export type AppViewState = {
   agentSkillsError: string | null;
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsAgentId: string | null;
+  agenticGoal: string;
+  agenticTemplate: AgenticTemplateId;
+  agenticWorkflow: AgenticWorkflowId;
+  agenticLabel: string;
+  agenticRunTimeoutSeconds: string;
+  agenticCleanup: "keep" | "delete";
+  agenticRunning: boolean;
+  agenticStatusMessage: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

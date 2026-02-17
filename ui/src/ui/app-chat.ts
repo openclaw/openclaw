@@ -26,6 +26,333 @@ export type ChatHost = {
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
 
+export type SubagentCleanupMode = "keep" | "delete";
+export type AgenticTemplateId =
+  | "researcher"
+  | "coder"
+  | "reviewer"
+  | "bug-triager"
+  | "reproducer"
+  | "test-builder"
+  | "profiler"
+  | "security-researcher";
+
+export const AGENTIC_TEMPLATE_OPTIONS: Array<{ id: AgenticTemplateId; label: string }> = [
+  { id: "researcher", label: "Researcher" },
+  { id: "coder", label: "Coder" },
+  { id: "reviewer", label: "Reviewer" },
+  { id: "bug-triager", label: "Bug Triager" },
+  { id: "reproducer", label: "Reproducer" },
+  { id: "test-builder", label: "Test Builder" },
+  { id: "profiler", label: "Profiler" },
+  { id: "security-researcher", label: "Security Researcher" },
+];
+
+export type AgenticWorkflowId =
+  | "research-code-review"
+  | "bug-triage"
+  | "refactor-safety"
+  | "test-gap"
+  | "performance-optimization"
+  | "security-patch";
+
+type AgenticWorkflowStep = {
+  template: AgenticTemplateId;
+  labelSuffix: string;
+  task: (goal: string) => string;
+};
+
+type AgenticWorkflowDefinition = {
+  id: AgenticWorkflowId;
+  label: string;
+  steps: AgenticWorkflowStep[];
+};
+
+const AGENTIC_WORKFLOW_DEFINITIONS: AgenticWorkflowDefinition[] = [
+  {
+    id: "research-code-review",
+    label: "Research -> Code -> Review",
+    steps: [
+      {
+        template: "researcher",
+        labelSuffix: "research",
+        task: (goal) =>
+          `Investigate the goal, gather evidence, list risks/tradeoffs, and produce a concise implementation plan with citations. Goal: ${goal}`,
+      },
+      {
+        template: "coder",
+        labelSuffix: "code",
+        task: (goal) =>
+          `Using Step 1 findings, implement the best approach for the goal and run targeted validation. Goal: ${goal}`,
+      },
+      {
+        template: "reviewer",
+        labelSuffix: "review",
+        task: (goal) =>
+          `Review Step 2 result for bugs/regressions/test gaps and return prioritized findings with severity. Goal: ${goal}`,
+      },
+    ],
+  },
+  {
+    id: "bug-triage",
+    label: "Bug Triage Flow",
+    steps: [
+      {
+        template: "bug-triager",
+        labelSuffix: "triage",
+        task: (goal) =>
+          `Triage this bug report, define impact and likely root causes, and propose the fastest safe fix strategy. Goal: ${goal}`,
+      },
+      {
+        template: "reproducer",
+        labelSuffix: "repro",
+        task: (goal) =>
+          `Create deterministic reproduction steps and, if possible, a minimal failing test for the bug. Goal: ${goal}`,
+      },
+      {
+        template: "coder",
+        labelSuffix: "fix",
+        task: (goal) =>
+          `Implement the smallest correct fix using triage + repro evidence, then run focused validation. Goal: ${goal}`,
+      },
+      {
+        template: "reviewer",
+        labelSuffix: "verify",
+        task: (goal) =>
+          `Verify fix quality, regression risk, and test coverage; return prioritized findings. Goal: ${goal}`,
+      },
+    ],
+  },
+  {
+    id: "refactor-safety",
+    label: "Refactor Safety Flow",
+    steps: [
+      {
+        template: "researcher",
+        labelSuffix: "scope",
+        task: (goal) =>
+          `Map current behavior/contracts and identify refactor safety constraints and edge cases. Goal: ${goal}`,
+      },
+      {
+        template: "coder",
+        labelSuffix: "refactor",
+        task: (goal) =>
+          `Perform the refactor with minimal behavioral change and clear commit-ready diffs. Goal: ${goal}`,
+      },
+      {
+        template: "test-builder",
+        labelSuffix: "tests",
+        task: (goal) =>
+          `Add or improve regression tests that lock in pre-refactor behavior. Goal: ${goal}`,
+      },
+      {
+        template: "reviewer",
+        labelSuffix: "review",
+        task: (goal) =>
+          `Review refactor + tests for hidden regressions, missing coverage, and maintainability risks. Goal: ${goal}`,
+      },
+    ],
+  },
+  {
+    id: "test-gap",
+    label: "Test Gap Flow",
+    steps: [
+      {
+        template: "researcher",
+        labelSuffix: "analysis",
+        task: (goal) =>
+          `Analyze the target area and list the highest-risk behaviors not currently covered by tests. Goal: ${goal}`,
+      },
+      {
+        template: "test-builder",
+        labelSuffix: "tests",
+        task: (goal) =>
+          `Implement focused tests for the identified gaps and keep them deterministic. Goal: ${goal}`,
+      },
+      {
+        template: "reviewer",
+        labelSuffix: "verify",
+        task: (goal) =>
+          `Review new tests for relevance, flakiness risk, and missing edge cases. Goal: ${goal}`,
+      },
+    ],
+  },
+  {
+    id: "performance-optimization",
+    label: "Performance Optimization Flow",
+    steps: [
+      {
+        template: "profiler",
+        labelSuffix: "profile",
+        task: (goal) =>
+          `Profile the target path, identify bottlenecks, and provide baseline metrics. Goal: ${goal}`,
+      },
+      {
+        template: "coder",
+        labelSuffix: "optimize",
+        task: (goal) =>
+          `Implement the most impactful low-risk optimizations and run benchmark checks. Goal: ${goal}`,
+      },
+      {
+        template: "reviewer",
+        labelSuffix: "review",
+        task: (goal) =>
+          `Review optimization changes for correctness tradeoffs, regressions, and measurement quality. Goal: ${goal}`,
+      },
+    ],
+  },
+  {
+    id: "security-patch",
+    label: "Security Patch Flow",
+    steps: [
+      {
+        template: "security-researcher",
+        labelSuffix: "security",
+        task: (goal) =>
+          `Perform threat-focused analysis, identify exploitable paths, and prioritize remediation. Goal: ${goal}`,
+      },
+      {
+        template: "coder",
+        labelSuffix: "patch",
+        task: (goal) =>
+          `Implement the highest-priority security remediation with minimal blast radius and targeted validation. Goal: ${goal}`,
+      },
+      {
+        template: "reviewer",
+        labelSuffix: "review",
+        task: (goal) =>
+          `Review the patch for security completeness, regressions, and remaining residual risk. Goal: ${goal}`,
+      },
+    ],
+  },
+];
+
+export const AGENTIC_WORKFLOW_OPTIONS: Array<{ id: AgenticWorkflowId; label: string }> =
+  AGENTIC_WORKFLOW_DEFINITIONS.map((flow) => ({ id: flow.id, label: flow.label }));
+
+export type SubagentSpawnDraft = {
+  task: string;
+  templateId?: AgenticTemplateId;
+  label?: string;
+  agentId?: string;
+  runTimeoutSeconds?: string | number;
+  cleanup?: SubagentCleanupMode;
+};
+
+function normalizeRunTimeoutSeconds(raw: string | number | undefined): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(0, Math.floor(raw));
+  }
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
+export function buildSubagentSpawnPrompt(draft: SubagentSpawnDraft): string {
+  const task = draft.task.trim();
+  if (!task) {
+    return "";
+  }
+
+  const args: Record<string, unknown> = { task };
+  const templateId = draft.templateId?.trim();
+  if (templateId) {
+    args.template = templateId;
+  }
+  const label = draft.label?.trim();
+  if (label) {
+    args.label = label;
+  }
+  const agentId = draft.agentId?.trim();
+  if (agentId) {
+    args.agentId = agentId;
+  }
+  const runTimeoutSeconds = normalizeRunTimeoutSeconds(draft.runTimeoutSeconds);
+  if (runTimeoutSeconds !== null) {
+    args.runTimeoutSeconds = runTimeoutSeconds;
+  }
+  if (draft.cleanup === "delete") {
+    args.cleanup = "delete";
+  }
+
+  return [
+    "Run the `sessions_spawn` tool now with exactly these arguments:",
+    "```json",
+    JSON.stringify(args, null, 2),
+    "```",
+    "Then reply with one short confirmation that includes `runId` and `childSessionKey`.",
+  ].join("\n");
+}
+
+export type AgenticWorkflowDraft = {
+  goal: string;
+  workflowId?: AgenticWorkflowId;
+  label?: string;
+  agentId?: string;
+  runTimeoutSeconds?: string | number;
+  cleanup?: SubagentCleanupMode;
+};
+
+export function resolveAgenticWorkflowDefinition(raw: unknown): AgenticWorkflowDefinition {
+  const normalized = typeof raw === "string" ? raw.trim() : "";
+  return (
+    AGENTIC_WORKFLOW_DEFINITIONS.find((entry) => entry.id === normalized) ??
+    AGENTIC_WORKFLOW_DEFINITIONS[0]
+  );
+}
+
+export function buildAgenticEngineeringWorkflowPrompt(draft: AgenticWorkflowDraft): string {
+  const goal = draft.goal.trim();
+  if (!goal) {
+    return "";
+  }
+  const suffixParts: string[] = [];
+  const runTimeoutSeconds = normalizeRunTimeoutSeconds(draft.runTimeoutSeconds);
+  if (runTimeoutSeconds !== null) {
+    suffixParts.push(`runTimeoutSeconds: ${runTimeoutSeconds}`);
+  }
+  if (draft.cleanup === "delete") {
+    suffixParts.push(`cleanup: "delete"`);
+  }
+  const agentId = draft.agentId?.trim();
+  if (agentId) {
+    suffixParts.push(`agentId: "${agentId}"`);
+  }
+  const label = draft.label?.trim();
+  const suffix = suffixParts.length > 0 ? ` plus ${suffixParts.join(", ")}` : "";
+  const workflow = resolveAgenticWorkflowDefinition(draft.workflowId);
+  const baseLabel = label ? `${label}-` : `${workflow.id}-`;
+  const lines = [
+    `Run the "${workflow.label}" Agentic Engineering workflow by calling \`sessions_spawn\` exactly ${workflow.steps.length} times in order.`,
+    "Wait for each run to complete before starting the next one, and carry outputs forward.",
+    "",
+    `Goal: ${goal}`,
+    "",
+  ];
+
+  workflow.steps.forEach((step, index) => {
+    const stepNumber = index + 1;
+    lines.push(`Step ${stepNumber} template: ${step.template}`);
+    lines.push(`Step ${stepNumber} task: ${step.task(goal)}`);
+    lines.push(`Step ${stepNumber} args extras: label: "${baseLabel}${step.labelSuffix}"${suffix}`);
+    lines.push("");
+  });
+
+  lines.push("After all steps complete, reply with:");
+  lines.push("1) runId + childSessionKey for each step");
+  lines.push("2) final recommendation in 3-6 bullets");
+  return lines.join("\n");
+}
+
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
 }

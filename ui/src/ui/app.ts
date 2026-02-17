@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -15,6 +14,8 @@ import {
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels.ts";
 import {
+  type AgenticTemplateId,
+  type AgenticWorkflowId,
   handleAbortChat as handleAbortChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
@@ -105,14 +106,7 @@ function resolveOnboardingMode(): boolean {
 
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
-  private i18nController = new I18nController(this);
   @state() settings: UiSettings = loadSettings();
-  constructor() {
-    super();
-    if (isSupportedLocale(this.settings.locale)) {
-      void i18n.setLocale(this.settings.locale);
-    }
-  }
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
@@ -211,8 +205,14 @@ export class OpenClawApp extends LitElement {
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
   @state() agentsSelectedId: string | null = null;
-  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
-    "overview";
+  @state() agentsPanel:
+    | "overview"
+    | "agentic"
+    | "files"
+    | "tools"
+    | "skills"
+    | "channels"
+    | "cron" = "overview";
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -227,6 +227,14 @@ export class OpenClawApp extends LitElement {
   @state() agentSkillsError: string | null = null;
   @state() agentSkillsReport: SkillStatusReport | null = null;
   @state() agentSkillsAgentId: string | null = null;
+  @state() agenticGoal = "";
+  @state() agenticTemplate: AgenticTemplateId = "researcher";
+  @state() agenticWorkflow: AgenticWorkflowId = "research-code-review";
+  @state() agenticLabel = "";
+  @state() agenticRunTimeoutSeconds = "";
+  @state() agenticCleanup: "keep" | "delete" = "keep";
+  @state() agenticRunning = false;
+  @state() agenticStatusMessage: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
