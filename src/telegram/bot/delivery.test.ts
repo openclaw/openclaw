@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime.js";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
@@ -10,7 +11,12 @@ const baseDeliveryParams = {
   textLimit: 4000,
 } as const;
 type DeliverRepliesParams = Parameters<typeof deliverReplies>[0];
-type RuntimeStub = { error: ReturnType<typeof vi.fn>; log?: ReturnType<typeof vi.fn> };
+type DeliverWithParams = Omit<
+  DeliverRepliesParams,
+  "chatId" | "token" | "replyToMode" | "textLimit"
+> &
+  Partial<Pick<DeliverRepliesParams, "replyToMode" | "textLimit">>;
+type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
@@ -29,14 +35,18 @@ vi.mock("grammy", () => ({
 }));
 
 function createRuntime(withLog = true): RuntimeStub {
-  return withLog ? { error: vi.fn(), log: vi.fn() } : { error: vi.fn() };
+  return {
+    error: vi.fn(),
+    log: withLog ? vi.fn() : vi.fn(),
+    exit: vi.fn(),
+  };
 }
 
 function createBot(api: Record<string, unknown> = {}): Bot {
   return { api } as unknown as Bot;
 }
 
-async function deliverWith(params: Omit<DeliverRepliesParams, "chatId" | "token">) {
+async function deliverWith(params: DeliverWithParams) {
   await deliverReplies({
     ...baseDeliveryParams,
     ...params,
@@ -167,7 +177,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("does not include message_thread_id for DMs (threads don't exist in private chats)", async () => {
+  it("includes message_thread_id for DM topics", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 4,
@@ -179,14 +189,14 @@ describe("deliverReplies", () => {
       replies: [{ text: "Hello" }],
       runtime,
       bot,
-      thread: { id: 1, scope: "dm" },
+      thread: { id: 42, scope: "dm" },
     });
 
     expect(sendMessage).toHaveBeenCalledWith(
       "123",
       expect.any(String),
-      expect.not.objectContaining({
-        message_thread_id: 1,
+      expect.objectContaining({
+        message_thread_id: 42,
       }),
     );
   });

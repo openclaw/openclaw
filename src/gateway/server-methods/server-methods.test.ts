@@ -240,10 +240,12 @@ describe("gateway chat transcript writes (guardrail)", () => {
 });
 
 describe("exec approval handlers", () => {
-  const execApprovalNoop = () => {};
+  const execApprovalNoop = () => false;
   type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
   type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
   type ExecApprovalResolveArgs = Parameters<ExecApprovalHandlers["exec.approval.resolve"]>[0];
+  type ExecApprovalRequestRespond = ExecApprovalRequestArgs["respond"];
+  type ExecApprovalResolveRespond = ExecApprovalResolveArgs["respond"];
 
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
@@ -266,7 +268,7 @@ describe("exec approval handlers", () => {
 
   async function requestExecApproval(params: {
     handlers: ExecApprovalHandlers;
-    respond: ReturnType<typeof vi.fn>;
+    respond: ExecApprovalRequestRespond;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
   }) {
@@ -287,14 +289,24 @@ describe("exec approval handlers", () => {
   async function resolveExecApproval(params: {
     handlers: ExecApprovalHandlers;
     id: string;
-    respond: ReturnType<typeof vi.fn>;
+    respond: ExecApprovalResolveRespond;
     context: { broadcast: (event: string, payload: unknown) => void };
   }) {
     return params.handlers["exec.approval.resolve"]({
       params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
       respond: params.respond,
       context: toExecApprovalResolveContext(params.context),
-      client: { connect: { client: { id: "cli", displayName: "CLI" } } },
+      client: {
+        connect: {
+          client: {
+            id: "cli",
+            displayName: "CLI",
+            version: "1.0.0",
+            platform: "test",
+            mode: "cli",
+          },
+        },
+      } as unknown as ExecApprovalResolveArgs["client"],
       req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -304,7 +316,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
-    const respond = vi.fn();
+    const respond = vi.fn() as unknown as ExecApprovalRequestRespond;
     const context = {
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
@@ -375,7 +387,7 @@ describe("exec approval handlers", () => {
       undefined,
     );
 
-    const resolveRespond = vi.fn();
+    const resolveRespond = vi.fn() as unknown as ExecApprovalResolveRespond;
     await resolveExecApproval({
       handlers,
       id,
@@ -398,7 +410,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
-    const resolveRespond = vi.fn();
+    const resolveRespond = vi.fn() as unknown as ExecApprovalResolveRespond;
 
     const resolveContext = {
       broadcast: () => {},
@@ -479,7 +491,7 @@ describe("gateway healthHandlers.status scope handling", () => {
     await healthHandlers.status({
       respond,
       client: { connect: { role: "operator", scopes: ["operator.read"] } },
-    } as HealthStatusHandlerParams);
+    } as unknown as HealthStatusHandlerParams);
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: false });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -493,10 +505,59 @@ describe("gateway healthHandlers.status scope handling", () => {
     await healthHandlers.status({
       respond,
       client: { connect: { role: "operator", scopes: ["operator.admin"] } },
-    } as HealthStatusHandlerParams);
+    } as unknown as HealthStatusHandlerParams);
 
     expect(vi.mocked(status.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive: true });
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+});
+
+describe("gateway mesh.plan.auto scope handling", () => {
+  it("rejects operator.read clients for mesh.plan.auto", async () => {
+    const { handleGatewayRequest } = await import("../server-methods.js");
+    const respond = vi.fn();
+    const handler = vi.fn();
+
+    await handleGatewayRequest({
+      req: { id: "req-mesh-read", type: "req", method: "mesh.plan.auto", params: {} },
+      respond,
+      context: {} as Parameters<typeof handleGatewayRequest>[0]["context"],
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as unknown as Parameters<
+        typeof handleGatewayRequest
+      >[0]["client"],
+      isWebchatConnect: () => false,
+      extraHandlers: { "mesh.plan.auto": handler },
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "missing scope: operator.write" }),
+    );
+  });
+
+  it("allows operator.write clients for mesh.plan.auto", async () => {
+    const { handleGatewayRequest } = await import("../server-methods.js");
+    const respond = vi.fn();
+    const handler = vi.fn(
+      ({ respond: send }: { respond: (ok: boolean, payload?: unknown) => void }) =>
+        send(true, { ok: true }),
+    );
+
+    await handleGatewayRequest({
+      req: { id: "req-mesh-write", type: "req", method: "mesh.plan.auto", params: {} },
+      respond,
+      context: {} as Parameters<typeof handleGatewayRequest>[0]["context"],
+      client: {
+        connect: { role: "operator", scopes: ["operator.write"] },
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["client"],
+      isWebchatConnect: () => false,
+      extraHandlers: { "mesh.plan.auto": handler },
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
 });
 

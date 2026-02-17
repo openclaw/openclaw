@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { MsgContext } from "./templating.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
@@ -8,6 +7,7 @@ import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.j
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
+import type { MsgContext } from "./templating.js";
 
 const createRegistry = () =>
   createTestRegistry([
@@ -210,6 +210,28 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.senderIsOwner).toBe(true);
     expect(auth.ownerList).toEqual(["123"]);
+  });
+
+  it("does not infer a provider from channel allowlists for webchat command contexts", () => {
+    const cfg = {
+      channels: { whatsapp: { allowFrom: ["+15551234567"] } },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      SenderId: "openclaw-control-ui",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
   describe("commands.allowFrom", () => {

@@ -2,13 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
 function installMockFetch(payload: unknown) {
-  const mockFetch = vi.fn(() =>
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
     Promise.resolve({
       ok: true,
       json: () => Promise.resolve(payload),
     } as Response),
   );
-  // @ts-expect-error mock fetch
   global.fetch = mockFetch;
   return mockFetch;
 }
@@ -27,6 +26,38 @@ function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string; baseUr
     },
     sandboxed: true,
   });
+}
+
+function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
+  const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+  const requestBody = request?.body;
+  return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
+    string,
+    unknown
+  >;
+}
+
+function installPerplexitySuccessFetch() {
+  return installMockFetch({
+    choices: [{ message: { content: "ok" } }],
+    citations: [],
+  });
+}
+
+async function executePerplexitySearch(
+  query: string,
+  options?: {
+    perplexityConfig?: { apiKey?: string; baseUrl?: string };
+    freshness?: string;
+  },
+) {
+  const mockFetch = installPerplexitySuccessFetch();
+  const tool = createPerplexitySearchTool(options?.perplexityConfig);
+  await tool?.execute?.(
+    "call-1",
+    options?.freshness ? { query, freshness: options.freshness } : { query },
+  );
+  return mockFetch;
 }
 
 describe("web tools defaults", () => {
@@ -58,53 +89,39 @@ describe("web_search country and language parameters", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
-  it("should pass country parameter to Brave API", async () => {
+  async function runBraveSearchAndGetUrl(
+    params: Partial<{
+      country: string;
+      search_lang: string;
+      ui_lang: string;
+      freshness: string;
+    }>,
+  ) {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
     expect(tool).not.toBeNull();
-
-    await tool?.execute?.(1, { query: "test", country: "DE" });
-
+    await tool?.execute?.("call-1", { query: "test", ...params });
     expect(mockFetch).toHaveBeenCalled();
-    const url = new URL(mockFetch.mock.calls[0][0] as string);
-    expect(url.searchParams.get("country")).toBe("DE");
-  });
+    return new URL(mockFetch.mock.calls[0][0] as string);
+  }
 
-  it("should pass search_lang parameter to Brave API", async () => {
-    const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    await tool?.execute?.(1, { query: "test", search_lang: "de" });
-
-    const url = new URL(mockFetch.mock.calls[0][0] as string);
-    expect(url.searchParams.get("search_lang")).toBe("de");
-  });
-
-  it("should pass ui_lang parameter to Brave API", async () => {
-    const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    await tool?.execute?.(1, { query: "test", ui_lang: "de" });
-
-    const url = new URL(mockFetch.mock.calls[0][0] as string);
-    expect(url.searchParams.get("ui_lang")).toBe("de");
-  });
-
-  it("should pass freshness parameter to Brave API", async () => {
-    const mockFetch = installMockFetch({ web: { results: [] } });
-    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    await tool?.execute?.(1, { query: "test", freshness: "pw" });
-
-    const url = new URL(mockFetch.mock.calls[0][0] as string);
-    expect(url.searchParams.get("freshness")).toBe("pw");
+  it.each([
+    { key: "country", value: "DE" },
+    { key: "search_lang", value: "de" },
+    { key: "ui_lang", value: "de" },
+    { key: "freshness", value: "pw" },
+  ])("passes $key parameter to Brave API", async ({ key, value }) => {
+    const url = await runBraveSearchAndGetUrl({ [key]: value });
+    expect(url.searchParams.get(key)).toBe(value);
   });
 
   it("rejects invalid freshness values", async () => {
     const mockFetch = installMockFetch({ web: { results: [] } });
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "test", freshness: "yesterday" });
+    const result = await tool?.execute?.("call-1", { query: "test", freshness: "yesterday" });
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ error: "invalid_freshness" });
@@ -116,112 +133,75 @@ describe("web_search perplexity baseUrl defaults", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
-  });
-
-  it("defaults to Perplexity direct when PERPLEXITY_API_KEY is set", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
-    const mockFetch = installMockFetch({
-      choices: [{ message: { content: "ok" } }],
-      citations: [],
-    });
-    const tool = createPerplexitySearchTool();
-    await tool?.execute?.(1, { query: "test-openrouter" });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    const requestBody = request?.body;
-    const body = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as {
-      model?: string;
-    };
-    expect(body.model).toBe("sonar-pro");
   });
 
   it("passes freshness to Perplexity provider as search_recency_filter", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
-    const mockFetch = installMockFetch({
-      choices: [{ message: { content: "ok" } }],
-      citations: [],
+    const mockFetch = await executePerplexitySearch("perplexity-freshness-test", {
+      freshness: "pw",
     });
-    const tool = createPerplexitySearchTool();
-    await tool?.execute?.(1, { query: "perplexity-freshness-test", freshness: "pw" });
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    const body = parseFirstRequestBody(mockFetch);
     expect(body.search_recency_filter).toBe("week");
   });
 
-  it("defaults to OpenRouter when OPENROUTER_API_KEY is set", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "");
-    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
-    const mockFetch = installMockFetch({
-      choices: [{ message: { content: "ok" } }],
-      citations: [],
-    });
-    const tool = createPerplexitySearchTool();
-    await tool?.execute?.(1, { query: "test-openrouter-env" });
+  it.each([
+    {
+      name: "defaults to Perplexity direct when PERPLEXITY_API_KEY is set",
+      env: { perplexity: "pplx-test" },
+      query: "test-openrouter",
+      expectedUrl: "https://api.perplexity.ai/chat/completions",
+      expectedModel: "sonar-pro",
+    },
+    {
+      name: "defaults to OpenRouter when OPENROUTER_API_KEY is set",
+      env: { perplexity: "", openrouter: "sk-or-test" },
+      query: "test-openrouter-env",
+      expectedUrl: "https://openrouter.ai/api/v1/chat/completions",
+      expectedModel: "perplexity/sonar-pro",
+    },
+    {
+      name: "prefers PERPLEXITY_API_KEY when both env keys are set",
+      env: { perplexity: "pplx-test", openrouter: "sk-or-test" },
+      query: "test-both-env",
+      expectedUrl: "https://api.perplexity.ai/chat/completions",
+    },
+    {
+      name: "uses configured baseUrl even when PERPLEXITY_API_KEY is set",
+      env: { perplexity: "pplx-test" },
+      query: "test-config-baseurl",
+      perplexityConfig: { baseUrl: "https://example.com/pplx" },
+      expectedUrl: "https://example.com/pplx/chat/completions",
+    },
+    {
+      name: "defaults to Perplexity direct when apiKey looks like Perplexity",
+      query: "test-config-apikey",
+      perplexityConfig: { apiKey: "pplx-config" },
+      expectedUrl: "https://api.perplexity.ai/chat/completions",
+    },
+    {
+      name: "defaults to OpenRouter when apiKey looks like OpenRouter",
+      query: "test-openrouter-config",
+      perplexityConfig: { apiKey: "sk-or-v1-test" },
+      expectedUrl: "https://openrouter.ai/api/v1/chat/completions",
+    },
+  ])("$name", async ({ env, query, perplexityConfig, expectedUrl, expectedModel }) => {
+    if (env?.perplexity !== undefined) {
+      vi.stubEnv("PERPLEXITY_API_KEY", env.perplexity);
+    }
+    if (env?.openrouter !== undefined) {
+      vi.stubEnv("OPENROUTER_API_KEY", env.openrouter);
+    }
 
+    const mockFetch = await executePerplexitySearch(query, { perplexityConfig });
     expect(mockFetch).toHaveBeenCalled();
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    const requestBody = request?.body;
-    const body = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as {
-      model?: string;
-    };
-    expect(body.model).toBe("perplexity/sonar-pro");
-  });
-
-  it("prefers PERPLEXITY_API_KEY when both env keys are set", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
-    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
-    const mockFetch = installMockFetch({
-      choices: [{ message: { content: "ok" } }],
-      citations: [],
-    });
-    const tool = createPerplexitySearchTool();
-    await tool?.execute?.(1, { query: "test-both-env" });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
-  });
-
-  it("uses configured baseUrl even when PERPLEXITY_API_KEY is set", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
-    const mockFetch = installMockFetch({
-      choices: [{ message: { content: "ok" } }],
-      citations: [],
-    });
-    const tool = createPerplexitySearchTool({ baseUrl: "https://example.com/pplx" });
-    await tool?.execute?.(1, { query: "test-config-baseurl" });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/pplx/chat/completions");
-  });
-
-  it("defaults to Perplexity direct when apiKey looks like Perplexity", async () => {
-    const mockFetch = installMockFetch({
-      choices: [{ message: { content: "ok" } }],
-      citations: [],
-    });
-    const tool = createPerplexitySearchTool({ apiKey: "pplx-config" });
-    await tool?.execute?.(1, { query: "test-config-apikey" });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
-  });
-
-  it("defaults to OpenRouter when apiKey looks like OpenRouter", async () => {
-    const mockFetch = installMockFetch({
-      choices: [{ message: { content: "ok" } }],
-      citations: [],
-    });
-    const tool = createPerplexitySearchTool({ apiKey: "sk-or-v1-test" });
-    await tool?.execute?.(1, { query: "test-openrouter-config" });
-
-    expect(mockFetch).toHaveBeenCalled();
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(mockFetch.mock.calls[0]?.[0]).toBe(expectedUrl);
+    if (expectedModel) {
+      const body = parseFirstRequestBody(mockFetch);
+      expect(body.model).toBe(expectedModel);
+    }
   });
 });
 
@@ -230,7 +210,6 @@ describe("web_search external content wrapping", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    // @ts-expect-error global fetch cleanup
     global.fetch = priorFetch;
   });
 
@@ -253,11 +232,10 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "test" });
+    const result = await tool?.execute?.("call-1", { query: "test" });
     const details = result?.details as {
       externalContent?: { untrusted?: boolean; source?: string; wrapped?: boolean };
       results?: Array<{ description?: string }>;
@@ -292,11 +270,10 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "unique-test-url-not-wrapped" });
+    const result = await tool?.execute?.("call-1", { query: "unique-test-url-not-wrapped" });
     const details = result?.details as { results?: Array<{ url?: string }> };
 
     // URL should NOT be wrapped - kept raw for tool chaining (e.g., web_fetch)
@@ -323,11 +300,10 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "unique-test-site-name-wrapping" });
+    const result = await tool?.execute?.("call-1", { query: "unique-test-site-name-wrapping" });
     const details = result?.details as { results?: Array<{ siteName?: string }> };
 
     expect(details.results?.[0]?.siteName).toBe("example.com");
@@ -354,11 +330,12 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({ config: undefined, sandboxed: true });
-    const result = await tool?.execute?.(1, { query: "unique-test-brave-published-wrapping" });
+    const result = await tool?.execute?.("call-1", {
+      query: "unique-test-brave-published-wrapping",
+    });
     const details = result?.details as { results?: Array<{ published?: string }> };
 
     expect(details.results?.[0]?.published).toBe("2 days ago");
@@ -377,14 +354,13 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "perplexity" } } } },
       sandboxed: true,
     });
-    const result = await tool?.execute?.(1, { query: "test" });
+    const result = await tool?.execute?.("call-1", { query: "test" });
     const details = result?.details as { content?: string };
 
     expect(details.content).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
@@ -394,7 +370,7 @@ describe("web_search external content wrapping", () => {
   it("does not wrap Perplexity citations (raw for tool chaining)", async () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const citation = "https://example.com/some-article";
-    const mockFetch = vi.fn(() =>
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve({
         ok: true,
         json: () =>
@@ -404,14 +380,15 @@ describe("web_search external content wrapping", () => {
           }),
       } as Response),
     );
-    // @ts-expect-error mock fetch
     global.fetch = mockFetch;
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "perplexity" } } } },
       sandboxed: true,
     });
-    const result = await tool?.execute?.(1, { query: "unique-test-perplexity-citations-raw" });
+    const result = await tool?.execute?.("call-1", {
+      query: "unique-test-perplexity-citations-raw",
+    });
     const details = result?.details as { citations?: string[] };
 
     // Citations are URLs - should NOT be wrapped for tool chaining

@@ -1,5 +1,5 @@
-import type { IncomingMessage } from "node:http";
 import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
@@ -9,19 +9,21 @@ import {
   readRequestBodyWithLimit,
 } from "./http-body.js";
 
+type MockIncomingMessage = IncomingMessage & {
+  destroyed?: boolean;
+  destroy: (error?: Error) => MockIncomingMessage;
+  __unhandledDestroyError?: unknown;
+};
+
 function createMockRequest(params: {
   chunks?: string[];
   headers?: Record<string, string>;
   emitEnd?: boolean;
-}): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed?: boolean;
-    destroy: (error?: Error) => void;
-    __unhandledDestroyError?: unknown;
-  };
+}): MockIncomingMessage {
+  const req = new EventEmitter() as MockIncomingMessage;
   req.destroyed = false;
   req.headers = params.headers ?? {};
-  req.destroy = (error?: Error) => {
+  req.destroy = ((error?: Error) => {
     req.destroyed = true;
     if (error) {
       // Simulate Node's async 'error' emission on destroy(err). If no listener is
@@ -34,7 +36,8 @@ function createMockRequest(params: {
         }
       });
     }
-  };
+    return req;
+  }) as MockIncomingMessage["destroy"];
 
   if (params.chunks) {
     void Promise.resolve().then(() => {

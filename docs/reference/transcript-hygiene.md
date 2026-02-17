@@ -109,8 +109,7 @@ external end-user instructions.
 **OpenAI / OpenAI Codex**
 
 - Image sanitization only.
-- Malformed tool-call/tool-result entries are still pruned (no id rewriting).
-- On model switch into OpenAI Responses/Codex, drop orphaned reasoning signatures (standalone reasoning items without a following content block).
+- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
 - No tool call id sanitization.
 - No tool result pairing repair.
 - No turn validation or reordering.

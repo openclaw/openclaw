@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { jsonResult } from "../../agents/tools/common.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
@@ -558,6 +558,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
     });
   });
@@ -575,6 +578,9 @@ describe("runMessageAction sandboxed media validation", () => {
       });
 
       expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
       expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "note.ogg"));
     });
   });
@@ -740,6 +746,77 @@ describe("runMessageAction card-only send behavior", () => {
   });
 });
 
+describe("runMessageAction components parsing", () => {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({
+      ok: true,
+      components: params.components ?? null,
+    }),
+  );
+
+  const componentsPlugin: ChannelPlugin = {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord components send test plugin.",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+      isConfigured: () => true,
+    },
+    actions: {
+      listActions: () => ["send"],
+      supportsAction: ({ action }) => action === "send",
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: componentsPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("parses components JSON strings before plugin dispatch", async () => {
+    const components = {
+      text: "hello",
+      buttons: [{ label: "A", customId: "a" }],
+    };
+    const result = await runMessageAction({
+      cfg: {} as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "discord",
+        target: "channel:123",
+        message: "hi",
+        components: JSON.stringify(components),
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(handleAction).toHaveBeenCalled();
+    expect(result.payload).toMatchObject({ ok: true, components });
+  });
+});
+
 describe("runMessageAction accountId defaults", () => {
   const handleAction = vi.fn(async () => jsonResult({ ok: true }));
   const accountPlugin: ChannelPlugin = {
@@ -793,10 +870,15 @@ describe("runMessageAction accountId defaults", () => {
     });
 
     expect(handleAction).toHaveBeenCalled();
-    const ctx = handleAction.mock.calls[0]?.[0] as {
-      accountId?: string | null;
-      params: Record<string, unknown>;
-    };
+    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | {
+          accountId?: string | null;
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (!ctx) {
+      throw new Error("expected action context");
+    }
     expect(ctx.accountId).toBe("ops");
     expect(ctx.params.accountId).toBe("ops");
   });

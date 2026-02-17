@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { parseAbsoluteTimeMs } from "../parse.js";
+import { computeNextRunAtMs } from "../schedule.js";
 import type {
   CronDelivery,
   CronDeliveryPatch,
@@ -8,16 +10,15 @@ import type {
   CronPayload,
   CronPayloadPatch,
 } from "../types.js";
-import type { CronServiceState } from "./state.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
-import { computeNextRunAtMs } from "../schedule.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
+  normalizeOptionalSessionKey,
   normalizeOptionalText,
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
+import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
@@ -96,7 +97,18 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
             : null;
     return atMs !== null ? atMs : undefined;
   }
-  return computeNextRunAtMs(job.schedule, nowMs);
+  const next = computeNextRunAtMs(job.schedule, nowMs);
+  // Guard against the scheduler returning a time within the same second as
+  // nowMs.  When a cron job completes within the same wall-clock second it
+  // was scheduled for, some croner versions/timezone combinations may return
+  // the current second (or computeNextRunAtMs may return undefined, which
+  // triggers recomputation).  Advancing to the next second and retrying
+  // ensures we always land on the *next* occurrence.  (See #17821)
+  if (next === undefined && job.schedule.kind === "cron") {
+    const nextSecondMs = (Math.floor(nowMs / 1000) + 1) * 1000;
+    return computeNextRunAtMs(job.schedule, nextSecondMs);
+  }
+  return next;
 }
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
@@ -287,6 +299,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
+    sessionKey: normalizeOptionalSessionKey((input as { sessionKey?: unknown }).sessionKey),
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled,
@@ -355,6 +368,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
+  }
+  if ("sessionKey" in patch) {
+    job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
   assertDeliverySupport(job);

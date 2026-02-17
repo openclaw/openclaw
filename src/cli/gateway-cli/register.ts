@@ -1,10 +1,9 @@
 import type { Command } from "commander";
-import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
-import type { GatewayDiscoverOpts } from "./discover.js";
 import { gatewayStatusCommand } from "../../commands/gateway-status.js";
 import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
 import { loadConfig } from "../../config/config.js";
 import { discoverGatewayBeacons } from "../../infra/bonjour-discovery.js";
+import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import { resolveWideAreaDiscoveryDomain } from "../../infra/widearea-dns.js";
 import { defaultRuntime } from "../../runtime.js";
 import { styleHealthChannelLine } from "../../terminal/health-style.js";
@@ -13,8 +12,10 @@ import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { addGatewayServiceCommands } from "../daemon-cli.js";
+import { formatHelpExamples } from "../help-format.js";
 import { withProgress } from "../progress.js";
 import { callGatewayCli, gatewayCallOpts } from "./call.js";
+import type { GatewayDiscoverOpts } from "./discover.js";
 import {
   dedupeBeacons,
   parseDiscoverTimeoutMs,
@@ -75,11 +76,16 @@ export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
       .command("gateway")
-      .description("Run the WebSocket Gateway")
+      .description("Run, inspect, and query the WebSocket Gateway")
       .addHelpText(
         "after",
         () =>
-          `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
+          `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+            ["openclaw gateway run", "Run the gateway in the foreground."],
+            ["openclaw gateway status", "Show service status and probe reachability."],
+            ["openclaw gateway discover", "Find local and wide-area gateway beacons."],
+            ["openclaw gateway call health", "Call a gateway RPC method directly."],
+          ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
       ),
   );
 

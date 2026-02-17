@@ -16,7 +16,7 @@ function redirectResponse(location: string): Response {
     status: 302,
     headers: makeHeaders({ location }),
     body: { cancel: vi.fn() },
-  } as Response;
+  } as unknown as Response;
 }
 
 function textResponse(body: string): Response {
@@ -25,7 +25,7 @@ function textResponse(body: string): Response {
     status: 200,
     headers: makeHeaders({ "content-type": "text/plain" }),
     text: async () => body,
-  } as Response;
+  } as unknown as Response;
 }
 
 function setMockFetch(impl?: (...args: unknown[]) => unknown) {
@@ -62,7 +62,6 @@ describe("web_fetch SSRF protection", () => {
   });
 
   afterEach(() => {
-    // @ts-expect-error restore
     global.fetch = priorFetch;
     lookupMock.mockReset();
     vi.restoreAllMocks();

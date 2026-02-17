@@ -1,8 +1,8 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, afterEach } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -34,12 +34,13 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
 }
 
 function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>) {
-  sm.appendMessage({
+  const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+  appendMessage({
     role: "assistant",
     content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
   } as AgentMessage);
 
-  sm.appendMessage({
+  appendMessage({
     role: "toolResult",
     toolCallId: "call_1",
     isError: false,

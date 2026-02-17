@@ -42,7 +42,9 @@ function createForwarder(params: {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
   const forwarder = createExecApprovalForwarder({
     getConfig: () => params.cfg,
-    deliver,
+    deliver: deliver as unknown as NonNullable<
+      NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["deliver"]
+    >,
     nowMs: () => 1000,
     resolveSessionTarget: params.resolveSessionTarget ?? (() => null),
   });
@@ -111,19 +113,10 @@ describe("exec approval forwarder", () => {
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
   });
 
-  it("skips discord forwarding when discord exec approvals target channel", async () => {
+  it("skips discord forwarding targets", async () => {
     vi.useFakeTimers();
     const cfg = {
       approvals: { exec: { enabled: true, mode: "session" } },
-      channels: {
-        discord: {
-          execApprovals: {
-            enabled: true,
-            target: "channel",
-            approvers: ["123"],
-          },
-        },
-      },
     } as OpenClawConfig;
 
     const { deliver, forwarder } = createForwarder({

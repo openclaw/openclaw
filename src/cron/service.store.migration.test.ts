@@ -30,7 +30,7 @@ async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 
   await cron.start();
@@ -58,6 +58,7 @@ describe("cron store migration", () => {
     const legacyJob = {
       id: "job-1",
       agentId: undefined,
+      sessionKey: "  agent:main:discord:channel:ops  ",
       name: "Legacy job",
       description: null,
       enabled: true,
@@ -82,6 +83,7 @@ describe("cron store migration", () => {
     await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2));
 
     const migrated = await migrateAndLoadFirstJob(store.storePath);
+    expect(migrated.sessionKey).toBe("agent:main:discord:channel:ops");
     expect(migrated.delivery).toEqual({
       mode: "announce",
       channel: "telegram",
