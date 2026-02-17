@@ -102,9 +102,7 @@ export async function getStatusSummary(
   const configModel = resolved.model ?? DEFAULT_MODEL;
   const explicitContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =
-    explicitContextTokens ??
-    lookupContextTokens(configModel) ??
-    DEFAULT_CONTEXT_TOKENS;
+    explicitContextTokens ?? lookupContextTokens(configModel) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
