@@ -8,6 +8,7 @@ const {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   normalizeFreshness,
+  normalizeBraveUiLang,
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
   resolveGrokModel,
@@ -103,6 +104,40 @@ describe("web_search freshness normalization", () => {
     expect(normalizeFreshness("2024-13-01to2024-01-31")).toBeUndefined();
     expect(normalizeFreshness("2024-02-30to2024-03-01")).toBeUndefined();
     expect(normalizeFreshness("2024-03-10to2024-03-01")).toBeUndefined();
+  });
+});
+
+describe("normalizeBraveUiLang", () => {
+  it("passes through valid locale codes unchanged", () => {
+    expect(normalizeBraveUiLang("en-US")).toBe("en-US");
+    expect(normalizeBraveUiLang("de-DE")).toBe("de-DE");
+    expect(normalizeBraveUiLang("ja-JP")).toBe("ja-JP");
+    expect(normalizeBraveUiLang("zh-CN")).toBe("zh-CN");
+  });
+
+  it("maps bare language codes to default locales", () => {
+    expect(normalizeBraveUiLang("en")).toBe("en-US");
+    expect(normalizeBraveUiLang("de")).toBe("de-DE");
+    expect(normalizeBraveUiLang("fr")).toBe("fr-FR");
+    expect(normalizeBraveUiLang("ja")).toBe("ja-JP");
+    expect(normalizeBraveUiLang("zh")).toBe("zh-CN");
+  });
+
+  it("returns undefined for unrecognized values", () => {
+    expect(normalizeBraveUiLang("xx")).toBeUndefined();
+    expect(normalizeBraveUiLang("en-XX")).toBeUndefined();
+    expect(normalizeBraveUiLang("not-a-lang")).toBeUndefined();
+  });
+
+  it("returns undefined for empty/undefined input", () => {
+    expect(normalizeBraveUiLang(undefined)).toBeUndefined();
+    expect(normalizeBraveUiLang("")).toBeUndefined();
+    expect(normalizeBraveUiLang("  ")).toBeUndefined();
+  });
+
+  it("trims whitespace before matching", () => {
+    expect(normalizeBraveUiLang(" en-US ")).toBe("en-US");
+    expect(normalizeBraveUiLang(" en ")).toBe("en-US");
   });
 });
 
