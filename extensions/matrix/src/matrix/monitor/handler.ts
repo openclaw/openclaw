@@ -1,11 +1,15 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   createReplyPrefixOptions,
   createTypingCallbacks,
   formatAllowlistMatchMeta,
   logInboundDrop,
   logTypingFailure,
+  recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
+  type HistoryEntry,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
@@ -54,6 +58,8 @@ export type MatrixMonitorHandlerParams = {
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   textLimit: number;
+  historyLimit: number;
+  roomHistories: Map<string, HistoryEntry[]>;
   mediaMaxBytes: number;
   startupMs: number;
   startupGraceMs: number;
@@ -88,6 +94,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     dmEnabled,
     dmPolicy,
     textLimit,
+    historyLimit,
+    roomHistories,
     mediaMaxBytes,
     startupMs,
     startupGraceMs,
@@ -421,6 +429,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info("skipping room message", { roomId, reason: "no-mention" });
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: roomHistories,
+          historyKey: roomId,
+          limit: historyLimit,
+          entry: {
+            sender: senderName,
+            body: bodyText,
+            timestamp: eventTs ?? undefined,
+            messageId: event.event_id ?? undefined,
+          },
+        });
         return;
       }
 
@@ -502,7 +521,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         storePath,
         sessionKey: route.sessionKey,
       });
-      const body = core.channel.reply.formatAgentEnvelope({
+
+      let body = core.channel.reply.formatAgentEnvelope({
         channel: "Matrix",
         from: envelopeFrom,
         timestamp: eventTs ?? undefined,
@@ -511,10 +531,38 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         body: textWithId,
       });
 
+      // Prepend pending history context for room messages
+      if (isRoom) {
+        body = buildPendingHistoryContextFromMap({
+          historyMap: roomHistories,
+          historyKey: roomId,
+          limit: historyLimit,
+          currentMessage: body,
+          formatEntry: (entry) =>
+            core.channel.reply.formatAgentEnvelope({
+              channel: "Matrix",
+              from: envelopeFrom,
+              timestamp: entry.timestamp,
+              body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+              envelope: envelopeOptions,
+            }),
+        });
+      }
+
+      const inboundHistory =
+        isRoom && historyLimit > 0
+          ? (roomHistories.get(roomId) ?? []).map((entry) => ({
+              sender: entry.sender,
+              body: entry.body,
+              timestamp: entry.timestamp,
+            }))
+          : undefined;
+
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
         BodyForAgent: bodyText,
+        InboundHistory: inboundHistory,
         RawBody: bodyText,
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
@@ -680,6 +728,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       markDispatchIdle();
       if (!queuedFinal) {
+        if (isRoom) {
+          clearHistoryEntriesIfEnabled({
+            historyMap: roomHistories,
+            historyKey: roomId,
+            limit: historyLimit,
+          });
+        }
         return;
       }
       didSendReply = true;
@@ -687,6 +742,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
+      if (isRoom) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: roomHistories,
+          historyKey: roomId,
+          limit: historyLimit,
+        });
+      }
       if (didSendReply) {
         const previewText = bodyText.replace(/\s+/g, " ").slice(0, 160);
         core.system.enqueueSystemEvent(`Matrix message from ${senderName}: ${previewText}`, {

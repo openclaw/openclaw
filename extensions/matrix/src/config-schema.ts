@@ -49,6 +49,7 @@ export const MatrixConfigSchema = z.object({
   groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+  historyLimit: z.number().int().min(0).optional(),
   textChunkLimit: z.number().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
   responsePrefix: z.string().optional(),

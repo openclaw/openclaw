@@ -1,5 +1,11 @@
 import { format } from "node:util";
-import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
+import {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  mergeAllowlist,
+  summarizeMapping,
+  type HistoryEntry,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -252,6 +258,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix");
+  const historyLimit = Math.max(
+    0,
+    accountConfig.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+  );
+  const roomHistories = new Map<string, HistoryEntry[]>();
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
@@ -278,6 +289,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     dmEnabled,
     dmPolicy,
     textLimit,
+    historyLimit,
+    roomHistories,
     mediaMaxBytes,
     startupMs,
     startupGraceMs,

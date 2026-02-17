@@ -222,6 +222,12 @@ Notes:
 - To allow **no rooms**, set `channels.matrix.groupPolicy: "disabled"` (or keep an empty allowlist).
 - Legacy key: `channels.matrix.rooms` (same shape as `groups`).
 
+## History context
+
+- `channels.matrix.historyLimit` controls how many recent room messages are wrapped into the prompt when the bot is mentioned.
+- Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+- When mention gating is active, skipped messages are buffered and injected as context on the next triggering message.
+
 ## Threads
 
 - Reply threading is supported.
@@ -294,6 +300,7 @@ Provider options:
 - `channels.matrix.allowlistOnly`: force allowlist rules for DMs + rooms.
 - `channels.matrix.groups`: group allowlist + per-room settings map.
 - `channels.matrix.rooms`: legacy group allowlist/config.
+- `channels.matrix.historyLimit`: max room messages to include as context (0 disables, default 50).
 - `channels.matrix.replyToMode`: reply-to mode for threads/tags.
 - `channels.matrix.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.matrix.autoJoin`: invite handling (`always | allowlist | off`, default: always).

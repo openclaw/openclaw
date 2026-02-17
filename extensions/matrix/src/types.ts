@@ -73,6 +73,8 @@ export type MatrixConfig = {
   replyToMode?: ReplyToMode;
   /** How to handle thread replies (off|inbound|always). */
   threadReplies?: "off" | "inbound" | "always";
+  /** Max group/room messages to keep as pending history context (0 disables). */
+  historyLimit?: number;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
@@ -111,6 +113,9 @@ export type CoreConfig = {
   messages?: {
     ackReaction?: string;
     ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+    groupChat?: {
+      historyLimit?: number;
+    };
   };
   [key: string]: unknown;
 };
