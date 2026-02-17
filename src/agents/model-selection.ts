@@ -19,8 +19,10 @@ export type ModelAliasIndex = {
 const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "opus-4.6": "claude-opus-4-6",
   "opus-4.5": "claude-opus-4-5",
+  "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4.5": "claude-sonnet-4-5",
 };
+const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -45,6 +47,33 @@ export function normalizeProviderId(provider: string): string {
     return "kimi-coding";
   }
   return normalized;
+}
+
+export function findNormalizedProviderValue<T>(
+  entries: Record<string, T> | undefined,
+  provider: string,
+): T | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const providerKey = normalizeProviderId(provider);
+  for (const [key, value] of Object.entries(entries)) {
+    if (normalizeProviderId(key) === providerKey) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function findNormalizedProviderKey(
+  entries: Record<string, unknown> | undefined,
+  provider: string,
+): string | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const providerKey = normalizeProviderId(provider);
+  return Object.keys(entries).find((key) => normalizeProviderId(key) === providerKey);
 }
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
@@ -78,6 +107,28 @@ function normalizeProviderModelId(provider: string, model: string): string {
   return model;
 }
 
+function shouldUseOpenAICodexProvider(provider: string, model: string): boolean {
+  if (provider !== "openai") {
+    return false;
+  }
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return OPENAI_CODEX_OAUTH_MODEL_PREFIXES.some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
+  );
+}
+
+export function normalizeModelRef(provider: string, model: string): ModelRef {
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
+  if (shouldUseOpenAICodexProvider(normalizedProvider, normalizedModel)) {
+    return { provider: "openai-codex", model: normalizedModel };
+  }
+  return { provider: normalizedProvider, model: normalizedModel };
+}
+
 export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -85,18 +136,14 @@ export function parseModelRef(raw: string, defaultProvider: string): ModelRef | 
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    const provider = normalizeProviderId(defaultProvider);
-    const model = normalizeProviderModelId(provider, trimmed);
-    return { provider, model };
+    return normalizeModelRef(defaultProvider, trimmed);
   }
   const providerRaw = trimmed.slice(0, slash).trim();
-  const provider = normalizeProviderId(providerRaw);
   const model = trimmed.slice(slash + 1).trim();
-  if (!provider || !model) {
+  if (!providerRaw || !model) {
     return null;
   }
-  const normalizedModel = normalizeProviderModelId(provider, model);
-  return { provider, model: normalizedModel };
+  return normalizeModelRef(providerRaw, model);
 }
 
 export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {

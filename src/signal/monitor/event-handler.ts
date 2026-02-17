@@ -1,4 +1,3 @@
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -22,6 +21,7 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
+import { normalizeSignalMessagingTarget } from "../../channels/plugins/normalize/signal.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
@@ -47,6 +47,7 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -126,7 +127,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           }),
       });
     }
-    const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
+    const signalToRaw = entry.isGroup
+      ? `group:${entry.groupId}`
+      : `signal:${entry.senderRecipient}`;
+    const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
         ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({

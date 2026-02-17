@@ -1,5 +1,4 @@
 import { createRequire } from "node:module";
-import type { PluginRuntime } from "./types.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
@@ -128,7 +127,7 @@ import {
 } from "../../telegram/audit.js";
 import { monitorTelegramProvider } from "../../telegram/monitor.js";
 import { probeTelegram } from "../../telegram/probe.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
+import { sendMessageTelegram, sendPollTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { textToSpeechTelephony } from "../../tts/tts.js";
 import { getActiveWebListener } from "../../web/active-listener.js";
@@ -141,6 +140,7 @@ import {
 } from "../../web/auth-store.js";
 import { loadWebMedia } from "../../web/media.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
+import type { PluginRuntime } from "./types.js";
 
 let cachedVersion: string | null = null;
 
@@ -365,6 +365,7 @@ export function createPluginRuntime(): PluginRuntime {
         probeTelegram,
         resolveTelegramToken,
         sendMessageTelegram,
+        sendPollTelegram,
         monitorTelegramProvider,
         messageActions: telegramMessageActions,
       },

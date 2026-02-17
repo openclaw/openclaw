@@ -1,8 +1,7 @@
-import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
+import type { Command } from "commander";
 import type { GatewayAuthMode } from "../../config/config.js";
-import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import {
   CONFIG_PATH,
   loadConfig,
@@ -12,6 +11,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
+import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
@@ -247,7 +247,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  if (bind !== "loopback" && !hasSharedSecret) {
+  if (bind !== "loopback" && !hasSharedSecret && resolvedAuthMode !== "trusted-proxy") {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,

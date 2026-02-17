@@ -1,17 +1,21 @@
+import {
+  defaultTitle,
+  normalizeToolName,
+  normalizeVerb,
+  resolveActionSpec,
+  resolveDetailFromKeys,
+  resolveExecDetail,
+  resolveReadDetail,
+  resolveWebFetchDetail,
+  resolveWebSearchDetail,
+  resolveWriteDetail,
+  type ToolDisplaySpec as ToolDisplaySpecBase,
+} from "../../../src/agents/tool-display-common.js";
 import type { IconName } from "./icons.ts";
 import rawConfig from "./tool-display.json" with { type: "json" };
 
-type ToolDisplayActionSpec = {
-  label?: string;
-  detailKeys?: string[];
-};
-
-type ToolDisplaySpec = {
+type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;
-  title?: string;
-  label?: string;
-  detailKeys?: string[];
-  actions?: Record<string, ToolDisplayActionSpec>;
 };
 
 type ToolDisplayConfig = {
@@ -33,127 +37,25 @@ const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
 const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { icon: "puzzle" };
 const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
 
-function normalizeToolName(name?: string): string {
-  return (name ?? "tool").trim();
-}
+function shortenHomeInString(input: string): string {
+  if (!input) {
+    return input;
+  }
 
-function defaultTitle(name: string): string {
-  const cleaned = name.replace(/_/g, " ").trim();
-  if (!cleaned) {
-    return "Tool";
-  }
-  return cleaned
-    .split(/\s+/)
-    .map((part) =>
-      part.length <= 2 && part.toUpperCase() === part
-        ? part
-        : `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`,
-    )
-    .join(" ");
-}
+  // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
+  const patterns = [
+    { re: /^\/Users\/[^/]+(\/|$)/, replacement: "~$1" }, // macOS
+    { re: /^\/home\/[^/]+(\/|$)/, replacement: "~$1" }, // Linux
+    { re: /^C:\\Users\\[^\\]+(\\|$)/i, replacement: "~$1" }, // Windows
+  ] as const;
 
-function normalizeVerb(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.replace(/_/g, " ");
-}
-
-function coerceDisplayValue(value: unknown): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
-    if (!firstLine) {
-      return undefined;
-    }
-    return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    const values = value
-      .map((item) => coerceDisplayValue(item))
-      .filter((item): item is string => Boolean(item));
-    if (values.length === 0) {
-      return undefined;
-    }
-    const preview = values.slice(0, 3).join(", ");
-    return values.length > 3 ? `${preview}…` : preview;
-  }
-  return undefined;
-}
-
-function lookupValueByPath(args: unknown, path: string): unknown {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  let current: unknown = args;
-  for (const segment of path.split(".")) {
-    if (!segment) {
-      return undefined;
-    }
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    const record = current as Record<string, unknown>;
-    current = record[segment];
-  }
-  return current;
-}
-
-function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = lookupValueByPath(args, key);
-    const display = coerceDisplayValue(value);
-    if (display) {
-      return display;
+  for (const pattern of patterns) {
+    if (pattern.re.test(input)) {
+      return input.replace(pattern.re, pattern.replacement);
     }
   }
-  return undefined;
-}
 
-function resolveReadDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
-  if (!path) {
-    return undefined;
-  }
-  const offset = typeof record.offset === "number" ? record.offset : undefined;
-  const limit = typeof record.limit === "number" ? record.limit : undefined;
-  if (offset !== undefined && limit !== undefined) {
-    return `${path}:${offset}-${offset + limit}`;
-  }
-  return path;
-}
-
-function resolveWriteDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
-  return path;
-}
-
-function resolveActionSpec(
-  spec: ToolDisplaySpec | undefined,
-  action: string | undefined,
-): ToolDisplayActionSpec | undefined {
-  if (!spec || !action) {
-    return undefined;
-  }
-  return spec.actions?.[action] ?? undefined;
+  return input;
 }
 
 export function resolveToolDisplay(params: {
@@ -166,26 +68,46 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? name;
+  const label = spec?.label ?? title;
   const actionRaw =
     params.args && typeof params.args === "object"
       ? ((params.args as Record<string, unknown>).action as string | undefined)
       : undefined;
   const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
   const actionSpec = resolveActionSpec(spec, action);
-  const verb = normalizeVerb(actionSpec?.label ?? action);
+  const fallbackVerb =
+    key === "web_search"
+      ? "search"
+      : key === "web_fetch"
+        ? "fetch"
+        : key.replace(/_/g, " ").replace(/\./g, " ");
+  const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (key === "read") {
+  if (key === "exec") {
+    detail = resolveExecDetail(params.args);
+  }
+  if (!detail && key === "read") {
     detail = resolveReadDetail(params.args);
   }
   if (!detail && (key === "write" || key === "edit" || key === "attach")) {
-    detail = resolveWriteDetail(params.args);
+    detail = resolveWriteDetail(key, params.args);
+  }
+
+  if (!detail && key === "web_search") {
+    detail = resolveWebSearchDetail(params.args);
+  }
+
+  if (!detail && key === "web_fetch") {
+    detail = resolveWebFetchDetail(params.args);
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
   if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(params.args, detailKeys);
+    detail = resolveDetailFromKeys(params.args, detailKeys, {
+      mode: "first",
+      coerce: { includeFalse: true, includeZero: true },
+    });
   }
 
   if (!detail && params.meta) {
@@ -207,27 +129,21 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const parts: string[] = [];
-  if (display.verb) {
-    parts.push(display.verb);
-  }
-  if (display.detail) {
-    parts.push(display.detail);
-  }
-  if (parts.length === 0) {
+  if (!display.detail) {
     return undefined;
   }
-  return parts.join(" · ");
+  if (display.detail.includes(" · ")) {
+    const compact = display.detail
+      .split(" · ")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join(", ");
+    return compact ? `with ${compact}` : undefined;
+  }
+  return display.detail;
 }
 
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   return detail ? `${display.label}: ${detail}` : display.label;
-}
-
-function shortenHomeInString(input: string): string {
-  if (!input) {
-    return input;
-  }
-  return input.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
 }

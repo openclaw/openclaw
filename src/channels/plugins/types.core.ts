@@ -223,6 +223,16 @@ export type ChannelThreadingAdapter = {
     accountId?: string | null;
     chatType?: string | null;
   }) => "off" | "first" | "all";
+  /**
+   * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
+   *
+   * Default in shared reply flow: true for known providers; per-channel opt-out supported.
+   */
+  allowExplicitReplyTagsWhenOff?: boolean;
+  /**
+   * Deprecated alias for allowExplicitReplyTagsWhenOff.
+   * Kept for compatibility with older extensions/docks.
+   */
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {
     cfg: OpenClawConfig;
@@ -334,4 +344,18 @@ export type ChannelPollContext = {
   poll: PollInput;
   accountId?: string | null;
   threadId?: string | null;
+  silent?: boolean;
+  isAnonymous?: boolean;
+};
+
+/** Minimal base for all channel probe results. Channel-specific probes extend this. */
+export type BaseProbeResult<TError = string | null> = {
+  ok: boolean;
+  error?: TError;
+};
+
+/** Minimal base for token resolution results. */
+export type BaseTokenResolution = {
+  token: string;
+  source: string;
 };

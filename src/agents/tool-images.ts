@@ -2,6 +2,11 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
+import {
+  DEFAULT_IMAGE_MAX_BYTES,
+  DEFAULT_IMAGE_MAX_DIMENSION_PX,
+  type ImageSanitizationLimits,
+} from "./image-sanitization.js";
 
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
@@ -13,8 +18,8 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 //
 // To keep sessions resilient (and avoid "silent" WhatsApp non-replies), we auto-downscale
 // and recompress base64 image blocks when they exceed these limits.
-const MAX_IMAGE_DIMENSION_PX = 2000;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
+const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 const log = createSubsystemLogger("agents/tool-images");
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
@@ -100,7 +105,7 @@ async function resizeImageBase64IfNeeded(params: {
   const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;
   const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
   const sideGrid = [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
-    .map((v) => Math.min(params.maxDimensionPx, v))
+    .filter((v) => v > 0 && v <= params.maxDimensionPx)
     .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
     .toSorted((a, b) => b - a);
 
@@ -148,7 +153,7 @@ async function resizeImageBase64IfNeeded(params: {
 export async function sanitizeContentBlocksImages(
   blocks: ToolContentBlock[],
   label: string,
-  opts: { maxDimensionPx?: number; maxBytes?: number } = {},
+  opts: ImageSanitizationLimits = {},
 ): Promise<ToolContentBlock[]> {
   const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
   const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
@@ -198,7 +203,7 @@ export async function sanitizeContentBlocksImages(
 export async function sanitizeImageBlocks(
   images: ImageContent[],
   label: string,
-  opts: { maxDimensionPx?: number; maxBytes?: number } = {},
+  opts: ImageSanitizationLimits = {},
 ): Promise<{ images: ImageContent[]; dropped: number }> {
   if (images.length === 0) {
     return { images, dropped: 0 };
@@ -211,7 +216,7 @@ export async function sanitizeImageBlocks(
 export async function sanitizeToolResultImages(
   result: AgentToolResult<unknown>,
   label: string,
-  opts: { maxDimensionPx?: number; maxBytes?: number } = {},
+  opts: ImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
   if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) {

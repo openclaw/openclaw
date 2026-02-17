@@ -42,8 +42,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: `vitest.config.ts`
-- Files: `src/**/*.test.ts`
+- Config: `scripts/test-parallel.mjs` (runs `vitest.unit.config.ts`, `vitest.extensions.config.ts`, `vitest.gateway.config.ts`)
+- Files: `src/**/*.test.ts`, `extensions/**/*.test.ts`
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
@@ -200,7 +200,7 @@ OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-to
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
   - `OPENCLAW_LIVE_CLI_BACKEND=1`
 - Defaults:
-  - Model: `claude-cli/claude-sonnet-4-5`
+  - Model: `claude-cli/claude-sonnet-4-6`
   - Command: `claude`
   - Args: `["-p","--output-format","json","--dangerously-skip-permissions"]`
 - Overrides (optional):
@@ -219,7 +219,7 @@ Example:
 
 ```bash
 OPENCLAW_LIVE_CLI_BACKEND=1 \
-  OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-5" \
+  OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-6" \
   pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 ```
 
