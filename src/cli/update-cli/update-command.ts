@@ -458,11 +458,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
 
   const timeoutStr = typeof opts.timeout === "string" ? opts.timeout.trim() : "";
-  const timeoutSec = timeoutStr && /^\d+$/.test(timeoutStr) ? Number.parseInt(timeoutStr, 10) : NaN;
+  const isValidTimeoutFormat = timeoutStr === "" || /^\d+$/.test(timeoutStr);
+  const timeoutSec = isValidTimeoutFormat && timeoutStr ? Number.parseInt(timeoutStr, 10) : NaN;
   const timeoutMs = Number.isFinite(timeoutSec) ? timeoutSec * 1000 : undefined;
   const shouldRestart = opts.restart !== false;
 
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+  if (timeoutStr && !isValidTimeoutFormat) {
+    defaultRuntime.error("--timeout must be a positive integer (seconds)");
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  if (timeoutMs !== undefined && timeoutMs <= 0) {
     defaultRuntime.error("--timeout must be a positive integer (seconds)");
     defaultRuntime.exit(1);
     return;
