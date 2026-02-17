@@ -19,7 +19,11 @@ export function emitSessionTranscriptUpdate(sessionFile: string): void {
     return;
   }
   const update = { sessionFile: trimmed };
-  for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
-    listener(update);
-  }
+	for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
+		try {
+			listener(update);
+		} catch {
+			/* ignore */
+		}
+	}
 }
