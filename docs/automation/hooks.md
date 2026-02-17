@@ -239,12 +239,19 @@ Triggered when agent commands are issued:
 ### Agent Events
 
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
+- **`agent:thinking:start`**, **`agent:thinking:end`**: Model call start and end
+- **`agent:response:start`**, **`agent:response:end`**: Response generation start and end
+- **`agent:tool:start`**, **`agent:tool:end`**: Tool execution start and end
 
 ### Gateway Events
 
 Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
+
+### Plugin Hook Events
+
+- **`before_tool_call`**, **`after_tool_call`**: Tool lifecycle plugin hooks (receive `toolCallId` when available)
 
 ### Tool Result Hooks (Plugin API)
 

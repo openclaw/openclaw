@@ -49,5 +49,5 @@ export type EmbeddedRunAttemptResult = {
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
-  clientToolCall?: { name: string; params: Record<string, unknown> };
+  clientToolCall?: { name: string; params: Record<string, unknown>; toolCallId: string };
 };
