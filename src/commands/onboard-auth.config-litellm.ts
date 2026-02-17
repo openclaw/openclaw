@@ -45,14 +45,21 @@ export function applyLitellmProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 
   const defaultModel = buildLitellmModelDefinition();
 
-  const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
+  const existingProvider = cfg.models?.providers?.litellm as
+    | {
+        baseUrl?: unknown;
+        api?: unknown;
+      }
+    | undefined;
   const resolvedBaseUrl =
     typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  const resolvedApi =
+    typeof existingProvider?.api === "string" ? existingProvider.api : "openai-completions";
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "litellm",
-    api: "openai-completions",
+    api: resolvedApi,
     baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
     defaultModel,
     defaultModelId: LITELLM_DEFAULT_MODEL_ID,
