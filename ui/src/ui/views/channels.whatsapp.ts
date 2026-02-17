@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { WhatsAppStatus } from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
 
 export function renderWhatsAppCard(params: {
   props: ChannelsProps;

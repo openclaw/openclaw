@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyAgentTool } from "./tools/common.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -8,7 +9,6 @@ import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-sessio
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../plugins/hook-runner-global.js");
 

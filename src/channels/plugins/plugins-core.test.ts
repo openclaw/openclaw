@@ -7,11 +7,13 @@ import type { DiscordTokenResolution } from "../../discord/token.js";
 import type { IMessageProbe } from "../../imessage/probe.js";
 import type { LineProbeResult } from "../../line/types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SignalProbe } from "../../signal/probe.js";
 import type { SlackProbe } from "../../slack/probe.js";
 import type { TelegramProbe } from "../../telegram/probe.js";
 import type { TelegramTokenResolution } from "../../telegram/token.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
+import type { BaseProbeResult, BaseTokenResolution } from "./types.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "./catalog.js";
 import { resolveChannelConfigWrites } from "./config-writes.js";
@@ -28,8 +30,6 @@ import {
 import { listChannelPlugins } from "./index.js";
 import { loadChannelPlugin } from "./load.js";
 import { loadChannelOutboundAdapter } from "./outbound/load.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
-import type { BaseProbeResult, BaseTokenResolution } from "./types.js";
 
 describe("channel plugin registry", () => {
   const emptyRegistry = createTestRegistry([]);

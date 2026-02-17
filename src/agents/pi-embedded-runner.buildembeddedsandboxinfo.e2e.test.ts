@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
+import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
 
 function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
   const base = {

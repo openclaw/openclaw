@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -7,7 +8,6 @@ import {
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(() => clearInternalHooks());

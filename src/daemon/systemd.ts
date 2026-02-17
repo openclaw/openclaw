@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayServiceDescription,
@@ -9,7 +10,6 @@ import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,

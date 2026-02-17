@@ -104,8 +104,8 @@ vi.mock("openclaw/plugin-sdk", async () => {
   };
 });
 
-import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
+import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./service.js";
 
 describe("diagnostics-otel service", () => {

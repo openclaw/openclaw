@@ -1,3 +1,4 @@
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
@@ -5,7 +6,6 @@ import {
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 export function dedupeProfileIds(profileIds: string[]): string[] {
   return [...new Set(profileIds)];

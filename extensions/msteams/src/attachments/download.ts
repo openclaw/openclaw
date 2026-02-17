@@ -1,3 +1,8 @@
+import type {
+  MSTeamsAccessTokenProvider,
+  MSTeamsAttachmentLike,
+  MSTeamsInboundMedia,
+} from "./types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import {
   extractInlineImageCandidates,
@@ -9,11 +14,6 @@ import {
   resolveAuthAllowedHosts,
   resolveAllowedHosts,
 } from "./shared.js";
-import type {
-  MSTeamsAccessTokenProvider,
-  MSTeamsAttachmentLike,
-  MSTeamsInboundMedia,
-} from "./types.js";
 
 type DownloadCandidate = {
   url: string;

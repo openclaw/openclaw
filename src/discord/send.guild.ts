@@ -7,13 +7,13 @@ import type {
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
-import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordModerationTarget,
   DiscordReactOpts,
   DiscordRoleChange,
   DiscordTimeoutTarget,
 } from "./send.types.js";
+import { resolveDiscordRest } from "./send.shared.js";
 
 export async function fetchMemberInfoDiscord(
   guildId: string,

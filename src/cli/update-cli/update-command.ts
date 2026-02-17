@@ -1,5 +1,5 @@
-import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
+import path from "node:path";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
