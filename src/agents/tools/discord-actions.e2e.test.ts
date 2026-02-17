@@ -43,35 +43,35 @@ const kickMemberDiscord = vi.fn(async () => ({}));
 const banMemberDiscord = vi.fn(async () => ({}));
 
 vi.mock("../../discord/send.js", () => ({
-  banMemberDiscord: (...args: unknown[]) => banMemberDiscord(...args),
-  createChannelDiscord: (...args: unknown[]) => createChannelDiscord(...args),
-  createThreadDiscord: (...args: unknown[]) => createThreadDiscord(...args),
-  deleteChannelDiscord: (...args: unknown[]) => deleteChannelDiscord(...args),
-  deleteMessageDiscord: (...args: unknown[]) => deleteMessageDiscord(...args),
-  editChannelDiscord: (...args: unknown[]) => editChannelDiscord(...args),
-  editMessageDiscord: (...args: unknown[]) => editMessageDiscord(...args),
-  fetchMessageDiscord: (...args: unknown[]) => fetchMessageDiscord(...args),
-  fetchChannelPermissionsDiscord: (...args: unknown[]) => fetchChannelPermissionsDiscord(...args),
-  fetchReactionsDiscord: (...args: unknown[]) => fetchReactionsDiscord(...args),
-  kickMemberDiscord: (...args: unknown[]) => kickMemberDiscord(...args),
-  listGuildChannelsDiscord: (...args: unknown[]) => listGuildChannelsDiscord(...args),
-  listPinsDiscord: (...args: unknown[]) => listPinsDiscord(...args),
-  listThreadsDiscord: (...args: unknown[]) => listThreadsDiscord(...args),
-  moveChannelDiscord: (...args: unknown[]) => moveChannelDiscord(...args),
-  pinMessageDiscord: (...args: unknown[]) => pinMessageDiscord(...args),
-  reactMessageDiscord: (...args: unknown[]) => reactMessageDiscord(...args),
-  readMessagesDiscord: (...args: unknown[]) => readMessagesDiscord(...args),
-  removeChannelPermissionDiscord: (...args: unknown[]) => removeChannelPermissionDiscord(...args),
-  removeOwnReactionsDiscord: (...args: unknown[]) => removeOwnReactionsDiscord(...args),
-  removeReactionDiscord: (...args: unknown[]) => removeReactionDiscord(...args),
-  searchMessagesDiscord: (...args: unknown[]) => searchMessagesDiscord(...args),
-  sendMessageDiscord: (...args: unknown[]) => sendMessageDiscord(...args),
-  sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscord(...args),
-  sendPollDiscord: (...args: unknown[]) => sendPollDiscord(...args),
-  sendStickerDiscord: (...args: unknown[]) => sendStickerDiscord(...args),
-  setChannelPermissionDiscord: (...args: unknown[]) => setChannelPermissionDiscord(...args),
-  timeoutMemberDiscord: (...args: unknown[]) => timeoutMemberDiscord(...args),
-  unpinMessageDiscord: (...args: unknown[]) => unpinMessageDiscord(...args),
+  banMemberDiscord,
+  createChannelDiscord,
+  createThreadDiscord,
+  deleteChannelDiscord,
+  deleteMessageDiscord,
+  editChannelDiscord,
+  editMessageDiscord,
+  fetchMessageDiscord,
+  fetchChannelPermissionsDiscord,
+  fetchReactionsDiscord,
+  kickMemberDiscord,
+  listGuildChannelsDiscord,
+  listPinsDiscord,
+  listThreadsDiscord,
+  moveChannelDiscord,
+  pinMessageDiscord,
+  reactMessageDiscord,
+  readMessagesDiscord,
+  removeChannelPermissionDiscord,
+  removeOwnReactionsDiscord,
+  removeReactionDiscord,
+  searchMessagesDiscord,
+  sendMessageDiscord,
+  sendVoiceMessageDiscord,
+  sendPollDiscord,
+  sendStickerDiscord,
+  setChannelPermissionDiscord,
+  timeoutMemberDiscord,
+  unpinMessageDiscord,
 }));
 
 const enableAllActions = () => true;
@@ -165,7 +165,9 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {
-    readMessagesDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T10:00:00.000Z" }]);
+    readMessagesDiscord.mockResolvedValueOnce([
+      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
+    ] as never);
 
     const result = await handleDiscordMessagingAction(
       "readMessages",
