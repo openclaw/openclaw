@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
@@ -53,7 +54,16 @@ const MAX_ANNOUNCE_RETRY_COUNT = 3;
  * succeeded. Guards against stale registry entries surviving gateway restarts.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
-// (Backoff constant removed — max-retry + expiry guards are sufficient.)
+
+function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
+  const retryCount = entry.announceRetryCount ?? 0;
+  const endedAgoMs =
+    typeof entry.endedAt === "number" ? Math.max(0, Date.now() - entry.endedAt) : undefined;
+  const endedAgoLabel = endedAgoMs != null ? `${Math.round(endedAgoMs / 1000)}s` : "n/a";
+  defaultRuntime.log(
+    `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}`,
+  );
+}
 
 function persistSubagentRuns() {
   try {
@@ -107,11 +117,13 @@ function resumeSubagentRun(runId: string) {
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
   if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
+    logAnnounceGiveUp(entry, "retry-limit");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
     return;
   }
   if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS) {
+    logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
     return;
@@ -283,15 +295,17 @@ function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didA
     return;
   }
   if (!didAnnounce) {
+    const now = Date.now();
     const retryCount = (entry.announceRetryCount ?? 0) + 1;
     entry.announceRetryCount = retryCount;
-    entry.lastAnnounceRetryAt = Date.now();
+    entry.lastAnnounceRetryAt = now;
 
     // Check if the announce has exceeded retry limits or expired (#18264).
-    const endedAgo = typeof entry.endedAt === "number" ? Date.now() - entry.endedAt : 0;
+    const endedAgo = typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
     if (retryCount >= MAX_ANNOUNCE_RETRY_COUNT || endedAgo > ANNOUNCE_EXPIRY_MS) {
       // Give up: mark as completed to break the infinite retry loop.
-      entry.cleanupCompletedAt = Date.now();
+      logAnnounceGiveUp(entry, retryCount >= MAX_ANNOUNCE_RETRY_COUNT ? "retry-limit" : "expiry");
+      entry.cleanupCompletedAt = now;
       persistSubagentRuns();
       retryDeferredCompletedAnnounces(runId);
       return;
@@ -332,6 +346,7 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     // Force-expire announces that have been pending too long (#18264).
     const endedAgo = now - (entry.endedAt ?? now);
     if (endedAgo > ANNOUNCE_EXPIRY_MS) {
+      logAnnounceGiveUp(entry, "expiry");
       entry.cleanupCompletedAt = now;
       persistSubagentRuns();
       continue;
