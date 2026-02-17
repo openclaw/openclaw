@@ -146,8 +146,25 @@
       "label": "Call Log Store Path",
       "advanced": true
     },
+    "responseAgent": {
+      "label": "Response Agent",
+      "help": "Agent ID for voice responses (default: main). Use a different agent for custom personality/skills.",
+      "advanced": true
+    },
     "responseModel": {
       "label": "Response Model",
+      "advanced": true
+    },
+    "silenceFiller.enabled": {
+      "label": "Silence Filler",
+      "advanced": true
+    },
+    "silenceFiller.thresholdMs": {
+      "label": "Silence Filler Threshold (ms)",
+      "advanced": true
+    },
+    "silenceFiller.sfxSet": {
+      "label": "Silence Filler Sound Set",
       "advanced": true
     },
     "responseSystemPrompt": {
@@ -550,6 +567,9 @@
       "store": {
         "type": "string"
       },
+      "responseAgent": {
+        "type": "string"
+      },
       "responseModel": {
         "type": "string"
       },
@@ -559,6 +579,23 @@
       "responseTimeoutMs": {
         "type": "integer",
         "minimum": 1
+      },
+      "silenceFiller": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "thresholdMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sfxSet": {
+            "type": "string",
+            "enum": ["typing", "processing"]
+          }
+        }
       }
     }
   }
