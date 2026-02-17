@@ -45,6 +45,24 @@ function isOpenAiApi(modelApi?: string | null): boolean {
   return OPENAI_MODEL_APIS.has(modelApi);
 }
 
+/**
+ * Check if the API is OpenAI-compatible (uses OpenAI's tool call format).
+ * This includes:
+ * - Native OpenAI APIs (openai, openai-completions, openai-responses, openai-codex-responses)
+ * - OpenAI-compatible APIs accessed through other providers (e.g., NVIDIA NIM, OpenRouter)
+ */
+function isOpenAiCompatibleApi(modelApi?: string | null): boolean {
+  if (!modelApi) {
+    return false;
+  }
+  // Check if it's a known OpenAI API
+  if (OPENAI_MODEL_APIS.has(modelApi)) {
+    return true;
+  }
+  // Check if it's an OpenAI-compatible API (modelApi starts with "openai")
+  return modelApi.toLowerCase().startsWith("openai");
+}
+
 function isOpenAiProvider(provider?: string | null): boolean {
   if (!provider) {
     return false;
@@ -95,10 +113,15 @@ export function resolveTranscriptPolicy(params: {
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
+  // Sanitize tool call IDs for Google, Mistral, Anthropic, and OpenAI-compatible APIs.
+  // OpenAI-compatible APIs (e.g., NVIDIA NIM, OpenRouter) use OpenAI's tool calling format
+  // which can generate IDs with special characters (e.g., "functions.exec:0").
+  // Only native OpenAI providers don't need sanitization.
+  const sanitizeToolCallIds =
+    isGoogle || isMistral || isAnthropic || isOpenAiCompatibleApi(params.modelApi);
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
-    : sanitizeToolCallIds
+    : sanitizeToolCallIds && !isOpenAiProvider(provider)
       ? "strict"
       : undefined;
   const repairToolUseResultPairing = isGoogle || isAnthropic;
@@ -109,7 +132,8 @@ export function resolveTranscriptPolicy(params: {
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
-    sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
+    // Only disable tool call ID sanitization for native OpenAI providers, not for OpenAI-compatible APIs
+    sanitizeToolCallIds: !isOpenAiProvider(provider) && sanitizeToolCallIds,
     toolCallIdMode,
     repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
     preserveSignatures: isAntigravityClaudeModel,

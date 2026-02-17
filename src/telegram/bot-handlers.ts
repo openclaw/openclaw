@@ -1075,7 +1075,12 @@ export const registerTelegramHandlers = ({
         media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
       } catch (mediaErr) {
         const errMsg = String(mediaErr);
-        if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
+        // Handle file size limit errors - Telegram returns different error messages
+        // depending on file size: "exceeds MB limit" (older) or "file is too big" (newer)
+        const isSizeLimitError =
+          (errMsg.includes("exceeds") && errMsg.includes("MB limit")) ||
+          errMsg.includes("file is too big");
+        if (isSizeLimitError) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
