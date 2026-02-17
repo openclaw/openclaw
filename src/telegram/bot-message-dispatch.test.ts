@@ -661,6 +661,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("cleans up preview even when fallback delivery throws (double failure)", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      try {
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      } catch (err) {
+        dispatcherOptions.onError(err, { kind: "final" });
+      }
+      return { queuedFinal: false };
+    });
+    // No preview message id → deliver goes through deliverReplies directly
+    // Primary delivery fails
+    deliverReplies
+      .mockRejectedValueOnce(new Error("network down"))
+      // Fallback also fails
+      .mockRejectedValueOnce(new Error("still down"));
+
+    // Fallback throws, but cleanup still runs via try/finally.
+    await dispatchWithContext({ context: createContext() }).catch(() => {});
+
+    // Verify fallback was attempted and preview still cleaned up
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("supports concurrent dispatches with independent previews", async () => {
     const draftA = createDraftStream(11);
     const draftB = createDraftStream(22);

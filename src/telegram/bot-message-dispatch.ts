@@ -491,18 +491,20 @@ export const dispatchTelegramMessage = async ({
     await draftStream?.stop();
   }
   let sentFallback = false;
-  if (
-    !deliveryState.delivered &&
-    (deliveryState.skippedNonSilent > 0 || deliveryState.failedDeliveries > 0)
-  ) {
-    const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
-      ...deliveryBaseOptions,
-    });
-    sentFallback = result.delivered;
+  try {
+    if (
+      !deliveryState.delivered &&
+      (deliveryState.skippedNonSilent > 0 || deliveryState.failedDeliveries > 0)
+    ) {
+      const result = await deliverReplies({
+        replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+        ...deliveryBaseOptions,
+      });
+      sentFallback = result.delivered;
+    }
+  } finally {
+    await clearDraftPreviewIfNeeded();
   }
-
-  await clearDraftPreviewIfNeeded();
 
   const hasFinalResponse = queuedFinal || sentFallback;
   if (!hasFinalResponse) {
