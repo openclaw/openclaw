@@ -30,8 +30,8 @@ describe("runSilentMessageIngest", () => {
     });
 
     expect(runMessageIngest).toHaveBeenCalledTimes(1);
-    const firstCall = runMessageIngest.mock.calls[0];
-    const event = firstCall?.[0] as { from: string; content: string } | undefined;
+    const calls = runMessageIngest.mock.calls as unknown[][];
+    const event = calls[0]?.[0] as { from: string; content: string } | undefined;
     expect(event?.from).toBe("evilname");
     expect(event?.content).toBe("hello");
   });
