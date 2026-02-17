@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { nostrPlugin, resolveNostrTimestampMs } from "./channel.js";
 import {
   startNostrBus,
+  type NostrBusOptions,
   type NostrInboundMessage,
   type NostrOutboundMessageOptions,
 } from "./nostr-bus.js";
@@ -34,15 +35,15 @@ describe("nostrPlugin gateway.startAccount", () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const mockReplyDispatcher = vi.fn(async () => undefined);
 
-    let capturedOnMessage:
-      | ((
-          message: NostrInboundMessage,
-          reply: (text: string, options?: NostrOutboundMessageOptions) => Promise<void>,
-        ) => Promise<void>)
-      | null = null;
+    type OnMessage = (
+      payload: NostrInboundMessage,
+      reply: (text: string, options?: NostrOutboundMessageOptions) => Promise<void>,
+    ) => Promise<void>;
+    let capturedOnMessage: OnMessage | null = null;
 
-    vi.mocked(startNostrBus).mockImplementation(async ({ onMessage }) => {
-      capturedOnMessage = onMessage;
+    vi.mocked(startNostrBus).mockImplementation(async (options: NostrBusOptions) => {
+      const { onMessage } = options;
+      capturedOnMessage = onMessage as OnMessage | null;
       return {
         close: vi.fn(),
         publicKey: "bot-pubkey",
@@ -84,10 +85,11 @@ describe("nostrPlugin gateway.startAccount", () => {
 
     setNostrRuntime(runtime);
 
-    if (!nostrPlugin.gateway?.startAccount) {
+    const startAccount = nostrPlugin.gateway?.startAccount;
+    if (!startAccount) {
       throw new Error("nostr plugin startAccount is not defined");
     }
-    await nostrPlugin.gateway.startAccount({
+    await startAccount({
       account: {
         accountId: "default",
         configured: true,
@@ -119,7 +121,7 @@ describe("nostrPlugin gateway.startAccount", () => {
         eventId: "event-id",
         kind: 25802,
       },
-      async (_text, _options) => undefined,
+      async (_text: string, _options?: NostrOutboundMessageOptions) => undefined,
     );
 
     const expectedTimestampMs = resolveNostrTimestampMs(1_700_000_000);

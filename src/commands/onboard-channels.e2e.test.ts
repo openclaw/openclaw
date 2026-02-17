@@ -219,7 +219,7 @@ describe("setupChannels", () => {
         return "nostr";
       }
       throw new Error(`unexpected select prompt: ${message}`);
-    });
+    }) as unknown as WizardPrompter["select"];
     const multiselect = vi.fn(async () => {
       throw new Error("unexpected multiselect");
     });
@@ -231,7 +231,7 @@ describe("setupChannels", () => {
         return "wss://relay.damus.io, wss://relay.primal.net";
       }
       throw new Error(`unexpected text prompt: ${message}`);
-    });
+    }) as unknown as WizardPrompter["text"];
 
     const prompter = createPrompter({
       select,

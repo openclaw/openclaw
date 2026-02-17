@@ -22,7 +22,7 @@ describe("nostr onboarding", () => {
   });
 
   it("collects private key and relays and patches config", async () => {
-    const prompter: WizardPrompter = {
+    const prompter = {
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
@@ -39,7 +39,7 @@ describe("nostr onboarding", () => {
       }) as WizardPrompter["text"],
       confirm: vi.fn(async () => true),
       progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
+    } satisfies WizardPrompter;
 
     const result = await nostrOnboardingAdapter.configure({
       cfg: {} as OpenClawConfig,
