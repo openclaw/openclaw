@@ -1,19 +1,26 @@
-import type { TUI } from "@mariozechner/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import type { ChatLog } from "./components/chat-log.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
-type MockChatLog = Pick<
-  ChatLog,
-  | "startTool"
-  | "updateToolResult"
-  | "addSystem"
-  | "updateAssistant"
-  | "finalizeAssistant"
-  | "dropAssistant"
->;
-type MockTui = Pick<TUI, "requestRender">;
+type MockFn = ReturnType<typeof vi.fn>;
+type HandlerChatLog = {
+  startTool: (...args: unknown[]) => void;
+  updateToolResult: (...args: unknown[]) => void;
+  addSystem: (...args: unknown[]) => void;
+  updateAssistant: (...args: unknown[]) => void;
+  finalizeAssistant: (...args: unknown[]) => void;
+  dropAssistant: (...args: unknown[]) => void;
+};
+type HandlerTui = { requestRender: (...args: unknown[]) => void };
+type MockChatLog = {
+  startTool: MockFn;
+  updateToolResult: MockFn;
+  addSystem: MockFn;
+  updateAssistant: MockFn;
+  finalizeAssistant: MockFn;
+  dropAssistant: MockFn;
+};
+type MockTui = { requestRender: MockFn };
 
 describe("tui-event-handlers: handleAgentEvent", () => {
   const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess => ({
@@ -40,15 +47,15 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   const makeContext = (state: TuiStateAccess) => {
-    const chatLog: MockChatLog = {
+    const chatLog = {
       startTool: vi.fn(),
       updateToolResult: vi.fn(),
       addSystem: vi.fn(),
       updateAssistant: vi.fn(),
       finalizeAssistant: vi.fn(),
       dropAssistant: vi.fn(),
-    };
-    const tui: MockTui = { requestRender: vi.fn() };
+    } as unknown as MockChatLog & HandlerChatLog;
+    const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
     const loadHistory = vi.fn();
     const localRunIds = new Set<string>();
@@ -136,7 +143,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         addSystem: vi.fn(),
         updateAssistant: vi.fn(),
         finalizeAssistant: vi.fn(),
-      },
+        dropAssistant: vi.fn(),
+      } as unknown as HandlerChatLog,
       tui,
       state,
       setActivityStatus,

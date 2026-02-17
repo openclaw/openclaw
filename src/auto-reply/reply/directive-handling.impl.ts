@@ -1,23 +1,22 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
-import type { ReplyPayload } from "../types.js";
-import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
 import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
+import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   formatDirectiveAck,
@@ -26,6 +25,7 @@ import {
   enqueueModeSwitchEvents,
   withOptions,
 } from "./directive-handling.shared.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 
 function resolveExecDefaults(params: {
   cfg: OpenClawConfig;

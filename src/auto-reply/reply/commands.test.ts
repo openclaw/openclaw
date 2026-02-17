@@ -2,16 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildCommandsPaginationKeyboard } from "./commands-info.js";
@@ -102,6 +102,7 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
@@ -287,6 +288,154 @@ describe("/approve command", () => {
   });
 });
 
+describe("/mesh command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    callGatewayMock.mockReset();
+  });
+
+  it("shows usage for bare /mesh", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/mesh", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Mesh command");
+    expect(result.reply?.text).toContain("/mesh run <goal|mesh-plan-id>");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("runs auto plan + run for /mesh <goal>", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/mesh build a landing animation", cfg);
+
+    callGatewayMock
+      .mockResolvedValueOnce({
+        plan: {
+          planId: "mesh-plan-1",
+          goal: "build a landing animation",
+          createdAt: Date.now(),
+          steps: [
+            { id: "design", prompt: "Design animation" },
+            { id: "mobile-test", prompt: "Test mobile", dependsOn: ["design"] },
+          ],
+        },
+        order: ["design", "mobile-test"],
+        source: "llm",
+      })
+      .mockResolvedValueOnce({
+        runId: "mesh-run-1",
+        status: "completed",
+        stats: { total: 2, succeeded: 2, failed: 0, skipped: 0, running: 0, pending: 0 },
+      });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Mesh Plan");
+    expect(result.reply?.text).toContain("Mesh Run");
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "mesh.plan.auto",
+        params: expect.objectContaining({
+          goal: "build a landing animation",
+        }),
+      }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "mesh.run",
+      }),
+    );
+  });
+
+  it("returns status via /mesh status <runId>", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/mesh status mesh-run-77", cfg);
+
+    callGatewayMock.mockResolvedValueOnce({
+      runId: "mesh-run-77",
+      status: "failed",
+      stats: { total: 3, succeeded: 1, failed: 1, skipped: 1, running: 0, pending: 0 },
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Run: mesh-run-77");
+    expect(result.reply?.text).toContain("Status: failed");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "mesh.status",
+        params: { runId: "mesh-run-77" },
+      }),
+    );
+  });
+
+  it("runs a previously planned mesh plan id without re-planning", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const planParams = buildParams("/mesh plan Build Hero Animation", cfg);
+
+    callGatewayMock.mockResolvedValueOnce({
+      plan: {
+        planId: "mesh-plan-abc",
+        goal: "Build Hero Animation",
+        createdAt: Date.now(),
+        steps: [{ id: "design", prompt: "Design hero animation" }],
+      },
+      order: ["design"],
+      source: "llm",
+    });
+
+    const planResult = await handleCommands(planParams);
+    expect(planResult.shouldContinue).toBe(false);
+    expect(planResult.reply?.text).toContain("Run exact plan: /mesh run mesh-plan-abc");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "mesh.plan.auto",
+        params: expect.objectContaining({
+          goal: "Build Hero Animation",
+        }),
+      }),
+    );
+
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({
+      runId: "mesh-run-abc",
+      status: "completed",
+      stats: { total: 1, succeeded: 1, failed: 0, skipped: 0, running: 0, pending: 0 },
+    });
+
+    const runParams = buildParams("/mesh run mesh-plan-abc", cfg);
+    const runResult = await handleCommands(runParams);
+    expect(runResult.shouldContinue).toBe(false);
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "mesh.run",
+        params: expect.objectContaining({
+          plan: expect.objectContaining({
+            planId: "mesh-plan-abc",
+            goal: "Build Hero Animation",
+          }),
+        }),
+      }),
+    );
+  });
+});
+
 describe("/compact command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -356,6 +505,7 @@ describe("/compact command", () => {
         ...params,
         sessionEntry: {
           sessionId: "session-1",
+          updatedAt: Date.now(),
           groupId: "group-1",
           groupChannel: "#general",
           space: "workspace-1",
@@ -503,7 +653,7 @@ function buildPolicyParams(
   commandBody: string,
   cfg: OpenClawConfig,
   ctxOverrides?: Partial<MsgContext>,
-) {
+): HandleCommandsParams {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -522,7 +672,7 @@ function buildPolicyParams(
     commandAuthorized: true,
   });
 
-  return {
+  const params: HandleCommandsParams = {
     ctx,
     cfg,
     command,
@@ -531,14 +681,15 @@ function buildPolicyParams(
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
     defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off" as const,
-    resolvedReasoningLevel: "off" as const,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
     resolveDefaultThinkingLevel: async () => undefined,
     provider: "telegram",
     model: "test-model",
     contextTokens: 0,
     isGroup: false,
   };
+  return params;
 }
 
 describe("handleCommands /allowlist", () => {

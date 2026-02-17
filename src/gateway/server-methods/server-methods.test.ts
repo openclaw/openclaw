@@ -500,6 +500,51 @@ describe("gateway healthHandlers.status scope handling", () => {
   });
 });
 
+describe("gateway mesh.plan.auto scope handling", () => {
+  it("rejects operator.read clients for mesh.plan.auto", async () => {
+    const { handleGatewayRequest } = await import("../server-methods.js");
+    const respond = vi.fn();
+    const handler = vi.fn();
+
+    await handleGatewayRequest({
+      req: { id: "req-mesh-read", type: "req", method: "mesh.plan.auto", params: {} },
+      respond,
+      context: {} as Parameters<typeof handleGatewayRequest>[0]["context"],
+      client: { connect: { role: "operator", scopes: ["operator.read"] } },
+      isWebchatConnect: () => false,
+      extraHandlers: { "mesh.plan.auto": handler },
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "missing scope: operator.write" }),
+    );
+  });
+
+  it("allows operator.write clients for mesh.plan.auto", async () => {
+    const { handleGatewayRequest } = await import("../server-methods.js");
+    const respond = vi.fn();
+    const handler = vi.fn(
+      ({ respond: send }: { respond: (ok: boolean, payload?: unknown) => void }) =>
+        send(true, { ok: true }),
+    );
+
+    await handleGatewayRequest({
+      req: { id: "req-mesh-write", type: "req", method: "mesh.plan.auto", params: {} },
+      respond,
+      context: {} as Parameters<typeof handleGatewayRequest>[0]["context"],
+      client: { connect: { role: "operator", scopes: ["operator.write"] } },
+      isWebchatConnect: () => false,
+      extraHandlers: { "mesh.plan.auto": handler },
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+  });
+});
+
 describe("logs.tail", () => {
   const logsNoop = () => false;
 
