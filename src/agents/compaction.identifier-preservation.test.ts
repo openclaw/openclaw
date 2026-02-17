@@ -105,7 +105,9 @@ describe("compaction identifier-preservation instructions", () => {
     });
 
     const mergeCall = mockGenerateSummary.mock.calls.at(-1);
-    expect(mergeCall?.[5]).toContain("Merge these partial summaries into a single cohesive summary");
+    expect(mergeCall?.[5]).toContain(
+      "Merge these partial summaries into a single cohesive summary",
+    );
     expect(mergeCall?.[5]).toContain("Preserve all opaque identifiers exactly as written");
     expect(mergeCall?.[5]).toContain("Additional focus:\nFocus on unresolved blockers.");
     expect(mergeCall?.[5]).not.toContain("Additional focus:\nMerge these partial summaries");

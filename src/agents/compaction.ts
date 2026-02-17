@@ -180,7 +180,8 @@ async function summarizeChunks(params: {
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
   const effectiveInstructions =
-    params.resolvedInstructions ?? buildCompactionSummarizationInstructions(params.customInstructions);
+    params.resolvedInstructions ??
+    buildCompactionSummarizationInstructions(params.customInstructions);
 
   for (const chunk of chunks) {
     summary = await retryAsync(
