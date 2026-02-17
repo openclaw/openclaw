@@ -378,12 +378,16 @@ async function sendDiscordText(
       Array.isArray((payload as { sticker_ids?: unknown[] }).sticker_ids) &&
       (payload as { sticker_ids?: unknown[] }).sticker_ids!.length > 0,
     );
-    const hasComponents = Boolean(
-      payload.components && Array.isArray(payload.components) && payload.components.length > 0,
+    // Check components - must be non-empty array with valid entries
+    const componentsArray = payload.components;
+    const hasValidComponents = Boolean(
+      componentsArray &&
+      Array.isArray(componentsArray) &&
+      componentsArray.some((comp) => comp != null && typeof comp === "object"),
     );
-    if (!hasContent && !hasEmbeds && !hasFiles && !hasStickers && !hasComponents) {
+    if (!hasContent && !hasEmbeds && !hasFiles && !hasStickers && !hasValidComponents) {
       throw new Error(
-        "Discord message payload is empty: must include at least one of content, embeds, files, sticker_ids, or components",
+        "Discord message payload is empty: must include at least one of content, embeds, files, sticker_ids, or valid components",
       );
     }
     let body: Record<string, unknown>;
@@ -409,8 +413,12 @@ async function sendDiscordText(
     const hasStickersAfter = Boolean(
       body.sticker_ids && Array.isArray(body.sticker_ids) && body.sticker_ids.length > 0,
     );
+    // Check components after serialization - must be non-empty array with valid entries
+    const componentsAfter = body.components;
     const hasComponentsAfter = Boolean(
-      body.components && Array.isArray(body.components) && body.components.length > 0,
+      componentsAfter &&
+      Array.isArray(componentsAfter) &&
+      componentsAfter.some((comp) => comp != null && typeof comp === "object"),
     );
     // message_reference doesn't count as a valid field for Discord's requirements
     if (
@@ -424,13 +432,41 @@ async function sendDiscordText(
         "Discord message payload is empty after serialization: must include at least one of content, embeds, files, sticker_ids, or components",
       );
     }
-    return (await request(
-      () =>
-        rest.post(Routes.channelMessages(channelId), {
-          body,
-        }) as Promise<{ id: string; channel_id: string }>,
-      "text",
-    )) as { id: string; channel_id: string };
+    try {
+      return (await request(
+        () =>
+          rest.post(Routes.channelMessages(channelId), {
+            body,
+          }) as Promise<{ id: string; channel_id: string }>,
+        "text",
+      )) as { id: string; channel_id: string };
+    } catch (err) {
+      // If Discord returns 400, include payload details in error for debugging
+      const errorMessage = String(err);
+      if (errorMessage.includes("400") || errorMessage.includes("Bad Request")) {
+        const payloadSummary = {
+          hasContent: Boolean(body.content),
+          contentLength: typeof body.content === "string" ? body.content.length : 0,
+          hasEmbeds: Boolean(body.embeds && Array.isArray(body.embeds) && body.embeds.length > 0),
+          embedCount: Array.isArray(body.embeds) ? body.embeds.length : 0,
+          hasFiles: Boolean(body.files && Array.isArray(body.files) && body.files.length > 0),
+          fileCount: Array.isArray(body.files) ? body.files.length : 0,
+          hasComponents: Boolean(
+            body.components && Array.isArray(body.components) && body.components.length > 0,
+          ),
+          componentCount: Array.isArray(body.components) ? body.components.length : 0,
+          hasStickers: Boolean(
+            body.sticker_ids && Array.isArray(body.sticker_ids) && body.sticker_ids.length > 0,
+          ),
+          hasMessageReference: Boolean(body.message_reference),
+        };
+        throw new Error(
+          `Discord API returned 400 Bad Request. Payload summary: ${JSON.stringify(payloadSummary)}. Original error: ${errorMessage}`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
   };
   if (chunks.length === 1) {
     return await sendChunk(chunks[0], true);
