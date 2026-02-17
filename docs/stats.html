@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>OpenClaw Repository Stats</title>
+<style>
+body { font-family: Arial; padding: 40px; }
+h1 { margin-bottom: 10px; }
+#loading { font-size: 18px; }
+.stat { font-size: 20px; margin: 10px 0; }
+</style>
+</head>
+<body>
+
+<h1>OpenClaw Repository Stats</h1>
+<div id="loading">Loading live data…</div>
+
+<div class="stat">Total folders: <span id="folderCount">0</span></div>
+<div class="stat">Total files: <span id="fileCount">0</span></div>
+<div class="stat">Unique file types: <span id="typeCount">0</span></div>
+
+<script>
+async function fetchRepoTree() {
+    const url = "https://api.github.com/repos/ram133/openclaw/git/trees/main?recursive=1";
+    const res = await fetch(url);
+    return res.json();
+}
+
+fetchRepoTree().then(data => {
+    const tree = data.tree;
+
+    let folders = new Set();
+    let files = 0;
+    let types = new Set();
+
+    tree.forEach(item => {
+        if (item.type === "tree") {
+            folders.add(item.path);
+        } else if (item.type === "blob") {
+            files++;
+            const ext = item.path.includes('.') ? item.path.split('.').pop() : '';
+            types.add(ext);
+        }
+    });
+
+    document.getElementById("folderCount").textContent = folders.size;
+    document.getElementById("fileCount").textContent = files;
+    document.getElementById("typeCount").textContent = types.size;
+
+    document.getElementById("loading").style.display = "none";
+});
+</script>
+
+</body>
+</html>
