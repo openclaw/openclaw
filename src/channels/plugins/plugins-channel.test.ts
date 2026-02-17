@@ -51,6 +51,12 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("uuid:")).toBe(false);
     expect(looksLikeSignalTargetId("uuid:not-a-uuid")).toBe(false);
   });
+
+  it("accepts signal:-prefixed phone numbers for target detection", () => {
+    expect(looksLikeSignalTargetId("signal:+15551234567")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:15551234567")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:+4915551234567")).toBe(true);
+  });
 });
 
 describe("telegramOutbound.sendPayload", () => {

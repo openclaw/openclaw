@@ -57,5 +57,5 @@ export function looksLikeSignalTargetId(raw: string): boolean {
   if (UUID_PATTERN.test(trimmed) || UUID_COMPACT_PATTERN.test(trimmed)) {
     return true;
   }
-  return /^\+?\d{3,}$/.test(trimmed);
+  return /^(signal:)?\+?\d{3,}$/.test(trimmed);
 }
