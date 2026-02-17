@@ -32,6 +32,9 @@ persistent actor Factory {
   // IC requires ~1.1T for canister installation as of 2026
   let VAULT_CREATION_CYCLES : Nat = 1_200_000_000_000;
 
+  // Admin principal (deployer) -- set once via claimAdmin, then immutable.
+  var admin : ?Principal = null;
+
   // -- State (auto-persisted via EOP) --
 
   // Array of (owner principal, vault canister ID) pairs
@@ -120,6 +123,58 @@ persistent actor Factory {
       };
     };
   };
+
+  // -- Admin functions --
+
+  /// Claim admin role. Can only be called once (when admin is unset).
+  /// Call immediately after deployment to secure the Factory.
+  public shared ({ caller }) func claimAdmin() : async Result.Result<(), Types.FactoryError> {
+    if (Principal.isAnonymous(caller)) {
+      return #err(#creationFailed("Anonymous callers cannot claim admin"));
+    };
+    switch (admin) {
+      case (?_) { #err(#creationFailed("Admin already set")) };
+      case null {
+        admin := ?caller;
+        #ok(());
+      };
+    };
+  };
+
+  /// Re-register an existing vault mapping (admin-only recovery).
+  /// Use after a Factory upgrade that lost state.
+  public shared ({ caller }) func adminRegisterVault(
+    owner : Principal,
+    vaultId : Principal,
+  ) : async Result.Result<(), Types.FactoryError> {
+    switch (admin) {
+      case (?a) {
+        if (caller != a) {
+          return #err(#creationFailed("Only admin can register vaults"));
+        };
+      };
+      case null {
+        return #err(#creationFailed("Admin not set -- call claimAdmin first"));
+      };
+    };
+
+    // Don't allow duplicate registrations for the same owner
+    switch (findVault(owner)) {
+      case (?_) { return #err(#alreadyExists) };
+      case null {};
+    };
+
+    vaults := Array.append(vaults, [(owner, vaultId)]);
+    totalCreated += 1;
+    #ok(());
+  };
+
+  /// Get the current admin principal.
+  public query func getAdmin() : async ?Principal {
+    admin;
+  };
+
+  // -- Public queries --
 
   /// Get the vault canister ID for the caller.
   public query ({ caller }) func getVault() : async ?Principal {
