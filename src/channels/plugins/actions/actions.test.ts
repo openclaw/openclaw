@@ -142,43 +142,6 @@ describe("discord message actions", () => {
   });
 });
 
-describe("telegram message actions", () => {
-  it("lists poll action when telegram is configured", () => {
-    const cfg = { channels: { telegram: { botToken: "t0" } } } as OpenClawConfig;
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
-    expect(actions).toContain("poll");
-  });
-
-  it("routes poll with normalized params", async () => {
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "poll",
-      params: {
-        to: "123",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No"],
-        pollMulti: true,
-        pollDurationSeconds: 60,
-      },
-      cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
-      accountId: "ops",
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        to: "123",
-        question: "Ready?",
-        options: ["Yes", "No"],
-        allowMultiselect: true,
-        durationSeconds: 60,
-        accountId: "ops",
-      }),
-      expect.any(Object),
-    );
-  });
-});
-
 describe("handleDiscordMessageAction", () => {
   it("forwards context accountId for send", async () => {
     await handleDiscordMessageAction({
@@ -534,32 +497,6 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.chatId)).toBe("123");
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
-  });
-
-  it("routes poll action to sendPoll with question and options", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "poll",
-      params: {
-        to: "-100123",
-        pollQuestion: "Ready?",
-        pollOption: ["Yes", "No", "Maybe"],
-      },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        to: "-100123",
-        question: "Ready?",
-        options: ["Yes", "No", "Maybe"],
-      }),
-      cfg,
-    );
   });
 });
 

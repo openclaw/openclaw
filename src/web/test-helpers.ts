@@ -93,24 +93,35 @@ export function resetBaileysMocks() {
     recreated.lastSocket;
 
   const makeWASocket = vi.mocked(baileys.makeWASocket);
+  const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
+    (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
   makeWASocket.mockReset();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  makeWASocket.mockImplementation(recreated.mod.makeWASocket as any);
+  makeWASocket.mockImplementation(makeWASocketImpl);
 
   const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
+  const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
+    (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
+      ...args,
+    );
   useMultiFileAuthState.mockReset();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  useMultiFileAuthState.mockImplementation(recreated.mod.useMultiFileAuthState as any);
+  useMultiFileAuthState.mockImplementation(useMultiFileAuthStateImpl);
 
   const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
+  const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
+    (
+      recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
+    )(...args);
   fetchLatestBaileysVersion.mockReset();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  fetchLatestBaileysVersion.mockImplementation(recreated.mod.fetchLatestBaileysVersion as any);
+  fetchLatestBaileysVersion.mockImplementation(fetchLatestBaileysVersionImpl);
 
   const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
+  const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
+    (
+      recreated.mod
+        .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
+    )(...args);
   makeCacheableSignalKeyStore.mockReset();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  makeCacheableSignalKeyStore.mockImplementation(recreated.mod.makeCacheableSignalKeyStore as any);
+  makeCacheableSignalKeyStore.mockImplementation(makeCacheableSignalKeyStoreImpl);
 }
 
 export function getLastSocket(): MockBaileysSocket {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
 function installMockFetch(payload: unknown) {
@@ -8,7 +9,7 @@ function installMockFetch(payload: unknown) {
       json: () => Promise.resolve(payload),
     } as Response),
   );
-  global.fetch = mockFetch;
+  global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
 }
 
