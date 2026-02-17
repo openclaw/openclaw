@@ -56,6 +56,8 @@ describe("signal target normalization", () => {
     expect(looksLikeSignalTargetId("signal:+10123566789")).toBe(true);
     expect(looksLikeSignalTargetId("signal:+15551234567")).toBe(true);
     expect(looksLikeSignalTargetId("+15551234567")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:notanumber")).toBe(false);
+    expect(looksLikeSignalTargetId("signal:")).toBe(false);
   });
 });
 
