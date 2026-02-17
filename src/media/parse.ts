@@ -29,7 +29,13 @@ function isLikelyLocalPath(candidate: string): boolean {
     candidate.startsWith("~") ||
     WINDOWS_DRIVE_RE.test(candidate) ||
     candidate.startsWith("\\\\") ||
-    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+    (!SCHEME_RE.test(candidate) &&
+      (candidate.includes("/") || candidate.includes("\\")) &&
+      // Require a file extension for ambiguous relative paths to avoid matching
+      // prose text that happens to contain slashes (e.g. "MEDIA:-prefixed paths
+      // (lenient whitespace) when loading outbound media...").
+      // Explicit prefixes (/, ./, ../, ~, drive letters, UNC) are checked above.
+      HAS_FILE_EXT.test(candidate))
   );
 }
 
