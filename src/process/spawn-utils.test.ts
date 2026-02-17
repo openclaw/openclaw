@@ -10,8 +10,8 @@ function createStubChild() {
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
-  child.pid = 1234;
-  child.killed = false;
+  Object.defineProperty(child, "pid", { value: 1234, configurable: true });
+  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   child.kill = vi.fn(() => true) as ChildProcess["kill"];
   queueMicrotask(() => {
     child.emit("spawn");

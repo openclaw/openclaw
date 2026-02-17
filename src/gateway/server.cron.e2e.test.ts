@@ -561,7 +561,7 @@ describe("gateway server cron", () => {
       await yieldToEventLoop();
       expect(fetchMock).toHaveBeenCalledTimes(2);
 
-      cronIsolatedRun.mockResolvedValueOnce({ status: "ok" });
+      cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryRes = await rpcReq(ws, "cron.add", {
         name: "webhook no summary",
         enabled: true,
