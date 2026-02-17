@@ -274,6 +274,12 @@ function createMockRuntime(): PluginRuntime {
       imessage: {} as PluginRuntime["channel"]["imessage"],
       whatsapp: {} as PluginRuntime["channel"]["whatsapp"],
     },
+    events: {
+      onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],
+      onSessionTranscriptUpdate: vi.fn(
+        () => () => {},
+      ) as unknown as PluginRuntime["events"]["onSessionTranscriptUpdate"],
+    },
     logging: {
       shouldLogVerbose: vi.fn(
         () => false,
