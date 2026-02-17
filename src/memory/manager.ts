@@ -43,8 +43,8 @@ export class MemoryIndexManager implements MemorySearchManager {
   // oxlint-disable-next-line typescript/no-explicit-any
   [key: string]: any;
   private readonly cacheKey: string;
-  private readonly cfg: OpenClawConfig;
-  private readonly agentId: string;
+  protected readonly cfg: OpenClawConfig;
+  protected readonly agentId: string;
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
   private provider: EmbeddingProvider | null;
@@ -52,9 +52,9 @@ export class MemoryIndexManager implements MemorySearchManager {
   private fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
   private fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
-  private openAi?: OpenAiEmbeddingClient;
-  private gemini?: GeminiEmbeddingClient;
-  private voyage?: VoyageEmbeddingClient;
+  protected openAi?: OpenAiEmbeddingClient;
+  protected gemini?: GeminiEmbeddingClient;
+  protected voyage?: VoyageEmbeddingClient;
   private batch: {
     enabled: boolean;
     wait: boolean;
@@ -62,13 +62,12 @@ export class MemoryIndexManager implements MemorySearchManager {
     pollIntervalMs: number;
     timeoutMs: number;
   };
-  private batchFailureCount = 0;
-  private batchFailureLastError?: string;
-  private batchFailureLastProvider?: string;
-  private batchFailureLock: Promise<void> = Promise.resolve();
+  protected batchFailureCount = 0;
+  protected batchFailureLastError?: string;
+  protected batchFailureLastProvider?: string;
   private db: DatabaseSync;
   private readonly sources: Set<MemorySource>;
-  private providerKey: string;
+  protected providerKey: string;
   private readonly cache: { enabled: boolean; maxEntries?: number };
   private readonly vector: {
     enabled: boolean;
@@ -82,7 +81,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     available: boolean;
     loadError?: string;
   };
-  private vectorReady: Promise<boolean> | null = null;
+  protected vectorReady: Promise<boolean> | null = null;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private sessionWatchTimer: NodeJS.Timeout | null = null;
@@ -91,9 +90,9 @@ export class MemoryIndexManager implements MemorySearchManager {
   private closed = false;
   private dirty = false;
   private sessionsDirty = false;
-  private sessionsDirtyFiles = new Set<string>();
-  private sessionPendingFiles = new Set<string>();
-  private sessionDeltas = new Map<
+  protected sessionsDirtyFiles = new Set<string>();
+  protected sessionPendingFiles = new Set<string>();
+  protected sessionDeltas = new Map<
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
