@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { createHash } from "node:crypto";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -13,6 +14,31 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
+
+// Session transcripts should be resilient across providers. Some OpenAI-compatible APIs
+// generate tool call ids like `functions.exec:0` (or include whitespace), which can
+// break strict parsers / validators on reload. Normalize ids before persistence and
+// apply a stable mapping to corresponding toolResult messages.
+const PERSISTED_TOOL_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+function shortHash(text: string, length = 8): string {
+  return createHash("sha1").update(text).digest("hex").slice(0, length);
+}
+
+function normalizePersistedToolCallId(raw: string): string {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed) {
+    return "tool";
+  }
+  if (PERSISTED_TOOL_ID_RE.test(trimmed)) {
+    return trimmed;
+  }
+
+  // Keep only safe chars for on-disk transcripts.
+  const replaced = trimmed.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const collapsed = replaced.replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+  return collapsed || `tool_${shortHash(trimmed)}`;
+}
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -111,15 +137,133 @@ export function installSessionToolResultGuard(
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pending = new Map<string, string | undefined>();
+
+  const persistedIdMap = new Map<string, string>();
+  const usedPersistedIds = new Set<string>();
+
+  const resolvePersistedId = (id: string): string => {
+    const raw = typeof id === "string" ? id : "";
+    const canonical = raw.trim();
+    if (!canonical) {
+      return "tool";
+    }
+
+    const existing = persistedIdMap.get(canonical);
+    if (existing) {
+      return existing;
+    }
+
+    // Idempotence: if we've already emitted this id (e.g. a toolResult message
+    // has already been mapped once), don't remap it again.
+    if (PERSISTED_TOOL_ID_RE.test(canonical) && usedPersistedIds.has(canonical)) {
+      return canonical;
+    }
+
+    const base = normalizePersistedToolCallId(canonical);
+    if (!usedPersistedIds.has(base)) {
+      persistedIdMap.set(canonical, base);
+      usedPersistedIds.add(base);
+      return base;
+    }
+
+    const candidate = `${base}_${shortHash(canonical)}`;
+    if (!usedPersistedIds.has(candidate)) {
+      persistedIdMap.set(canonical, candidate);
+      usedPersistedIds.add(candidate);
+      return candidate;
+    }
+
+    for (let i = 2; i < 1000; i += 1) {
+      const next = `${base}_${i}`;
+      if (!usedPersistedIds.has(next)) {
+        persistedIdMap.set(canonical, next);
+        usedPersistedIds.add(next);
+        return next;
+      }
+    }
+
+    const fallback = `tool_${shortHash(`${canonical}:${Date.now()}`)}`;
+    persistedIdMap.set(canonical, fallback);
+    usedPersistedIds.add(fallback);
+    return fallback;
+  };
+
+  const applyPersistedIdMapping = (message: AgentMessage): AgentMessage => {
+    if (!message || typeof message !== "object") {
+      return message;
+    }
+
+    const role = (message as { role?: unknown }).role;
+
+    if (role === "assistant") {
+      const content = (message as { content?: unknown }).content;
+      if (!Array.isArray(content)) {
+        return message;
+      }
+      let changed = false;
+      const nextContent = content.map((block: unknown) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const rec = block as { type?: unknown; id?: unknown };
+        const type = rec.type;
+        const id = rec.id;
+        if (
+          (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
+          typeof id !== "string" ||
+          !id
+        ) {
+          return block;
+        }
+        const nextId = resolvePersistedId(id);
+        if (nextId === id) {
+          return block;
+        }
+        changed = true;
+        return { ...(block as unknown as Record<string, unknown>), id: nextId };
+      });
+      return changed
+        ? ({
+            ...(message as unknown as Record<string, unknown>),
+            content: nextContent,
+          } as AgentMessage)
+        : message;
+    }
+
+    if (role === "toolResult") {
+      const toolCallId = (message as { toolCallId?: unknown }).toolCallId;
+      const toolUseId = (message as { toolUseId?: unknown }).toolUseId;
+      const toolCallIdStr = typeof toolCallId === "string" && toolCallId ? toolCallId : undefined;
+      const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
+      const nextToolCallId = toolCallIdStr ? resolvePersistedId(toolCallIdStr) : undefined;
+      const nextToolUseId = toolUseIdStr ? resolvePersistedId(toolUseIdStr) : undefined;
+
+      if (nextToolCallId === toolCallIdStr && nextToolUseId === toolUseIdStr) {
+        return message;
+      }
+
+      return {
+        ...(message as unknown as Record<string, unknown>),
+        ...(nextToolCallId !== undefined ? { toolCallId: nextToolCallId } : null),
+        ...(nextToolUseId !== undefined ? { toolUseId: nextToolUseId } : null),
+      } as AgentMessage;
+    }
+
+    return message;
+  };
+
   const persistMessage = (message: AgentMessage) => {
+    const mapped = applyPersistedIdMapping(message);
     const transformer = opts?.transformMessageForPersistence;
-    return transformer ? transformer(message) : message;
+    return transformer ? transformer(mapped) : mapped;
   };
 
   const persistToolResult = (
     message: AgentMessage,
     meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
   ) => {
+    // `persistMessage` already applies the persisted tool id mapping; keep this focused
+    // on the optional tool-result persistence hook.
     const transformer = opts?.transformToolResultForPersistence;
     return transformer ? transformer(message, meta) : message;
   };
@@ -183,11 +327,15 @@ export function installSessionToolResultGuard(
     const nextRole = (nextMessage as { role?: unknown }).role;
 
     if (nextRole === "toolResult") {
-      const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
+      const idRaw = extractToolResultId(
+        nextMessage as Extract<AgentMessage, { role: "toolResult" }>,
+      );
+      const id = idRaw ? resolvePersistedId(idRaw) : null;
       const toolName = id ? pending.get(id) : undefined;
       if (id) {
         pending.delete(id);
       }
+
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const capped = capToolResultSize(persistMessage(nextMessage));
@@ -235,7 +383,7 @@ export function installSessionToolResultGuard(
 
     if (toolCalls.length > 0) {
       for (const call of toolCalls) {
-        pending.set(call.id, call.name);
+        pending.set(resolvePersistedId(call.id), call.name);
       }
     }
 
