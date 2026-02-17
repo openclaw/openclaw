@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import {
+  findListeningPid,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -251,9 +252,27 @@ function createProfileContext(
         return;
       }
       const profileState = getProfileState();
-      if (profileState.running?.pid === running.pid) {
-        setProfileRunning(null);
+      if (profileState.running?.pid !== running.pid) {
+        return;
       }
+
+      // On Windows, Chrome re-parents to child processes — the spawned parent
+      // exits but Chrome keeps running on the CDP port. Defer cleanup and check
+      // if CDP is still alive before clearing state.
+      if (process.platform === "win32") {
+        setTimeout(async () => {
+          if (!opts.getState()) return;
+          if (getProfileState().running?.pid !== running.pid) return;
+          if (await isHttpReachable(500)) {
+            // Chrome is still alive on the port — don't clear state.
+            return;
+          }
+          setProfileRunning(null);
+        }, 1500);
+        return;
+      }
+
+      setProfileRunning(null);
     });
   };
 
@@ -500,12 +519,24 @@ function createProfileContext(
 
     const httpReachable = await isHttpReachable(300);
     if (httpReachable && !profileState.running) {
-      // Port in use but not by us - kill it
+      // Port in use but not by us — possibly an orphaned Chrome from Windows
+      // re-parenting. Close Playwright connection then kill by port.
       try {
         const mod = await import("./pw-ai.js");
         await mod.closePlaywrightBrowserConnection();
       } catch {
         // ignore
+      }
+      if (profile.cdpIsLoopback && process.platform === "win32") {
+        const pid = await findListeningPid(profile.cdpPort);
+        if (pid) {
+          try {
+            const { execSync } = await import("node:child_process");
+            execSync(`taskkill /F /T /PID ${pid}`, { timeout: 5000 });
+          } catch {
+            // best effort
+          }
+        }
       }
     }
 

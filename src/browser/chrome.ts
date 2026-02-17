@@ -1,4 +1,4 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +65,24 @@ export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSE
 
 function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
+}
+
+/**
+ * On Windows, find the PID listening on a given port via netstat.
+ * Returns null on non-Windows platforms or if no listener is found.
+ */
+export async function findListeningPid(port: number): Promise<number | null> {
+  if (process.platform !== "win32") return null;
+  try {
+    const output = execSync(
+      `netstat -ano | findstr ":${port}" | findstr "LISTENING"`,
+      { encoding: "utf8", timeout: 3000 },
+    );
+    const match = output.match(/LISTENING\s+(\d+)/);
+    return match ? parseInt(match[1], 10) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function isChromeReachable(cdpUrl: string, timeoutMs = 500): Promise<boolean> {
@@ -322,13 +340,12 @@ export async function launchOpenClawChrome(
 
 export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
   const proc = running.proc;
-  if (proc.killed) {
-    return;
-  }
-  try {
-    proc.kill("SIGTERM");
-  } catch {
-    // ignore
+  if (!proc.killed) {
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // ignore — process may have already exited (Windows re-parenting)
+    }
   }
 
   const start = Date.now();
@@ -342,9 +359,24 @@ export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 250
     await new Promise((r) => setTimeout(r, 100));
   }
 
-  try {
-    proc.kill("SIGKILL");
-  } catch {
-    // ignore
+  // If Chrome is still reachable, the original proc.kill may have targeted a dead
+  // parent (Windows re-parenting). Fall back to killing by port ownership.
+  if (await isChromeReachable(cdpUrlForPort(running.cdpPort), 200)) {
+    const actualPid = await findListeningPid(running.cdpPort);
+    if (actualPid) {
+      log.info(`🦞 Chrome still alive after proc.kill — killing PID ${actualPid} by port (Windows re-parenting)`);
+      try {
+        execSync(`taskkill /F /T /PID ${actualPid}`, { timeout: 5000 });
+      } catch {
+        // best effort
+      }
+    } else {
+      // Last resort: SIGKILL on original proc
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }
   }
 }
