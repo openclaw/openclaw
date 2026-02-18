@@ -64,7 +64,7 @@ enum GatewayLaunchAgentManager {
         if enabled {
             self.logger.info("launchd enable requested via CLI port=\(port)")
             let loaded = await self.readDaemonLoaded() == true
-            let snapshot = loaded ? self.launchdConfigSnapshot() : nil
+            let snapshot = self.launchdConfigSnapshot()
             let plan = self.enableCommandPlan(
                 isAlreadyLoaded: loaded,
                 snapshot: snapshot,
@@ -89,6 +89,17 @@ enum GatewayLaunchAgentManager {
                     daemonResult: result.result)
                 {
                     return nil
+                }
+                if self.isNonTerminalSuccessfulStep(
+                    command: command,
+                    success: result.success,
+                    daemonResult: result.result)
+                {
+                    let step = command.joined(separator: " ")
+                    let daemonResult = result.result ?? "ok"
+                    self.logger.info(
+                        "launchd step completed but requires follow-up (\(step, privacy: .public); result=\(daemonResult, privacy: .public))")
+                    continue
                 }
                 let message = result.message ?? "unknown error"
                 if index == 0 {
@@ -150,6 +161,20 @@ enum GatewayLaunchAgentManager {
             ]
         }
 
+        // Service not loaded, but plist exists with stale args. Reinstall first so
+        // launchd starts with desired port/runtime instead of resurrecting old config.
+        if snapshot != nil,
+           !self.loadedServiceMatchesDesiredConfig(
+               snapshot: snapshot,
+               desiredPort: desiredPort,
+               desiredRuntime: desiredRuntime)
+        {
+            return [
+                ["install", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+                ["install", "--force", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
+            ]
+        }
+
         return [
             ["start"],
             ["install", "--port", "\(desiredPort)", "--runtime", desiredRuntime],
@@ -205,6 +230,17 @@ enum GatewayLaunchAgentManager {
         default:
             return success
         }
+    }
+
+    static func isNonTerminalSuccessfulStep(
+        command: [String],
+        success: Bool,
+        daemonResult: String?) -> Bool
+    {
+        success && !self.isTerminalEnableSuccess(
+            command: command,
+            success: success,
+            daemonResult: daemonResult)
     }
 }
 

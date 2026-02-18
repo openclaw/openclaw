@@ -77,6 +77,26 @@ import Testing
         #expect(plan[1] == ["install", "--force", "--port", "18789", "--runtime", "node"])
     }
 
+    @Test func enableCommandPlanRepairsUnloadedServiceWhenPlistIsStale() {
+        let snapshot = LaunchAgentPlistSnapshot(
+            programArguments: ["/usr/local/bin/node", "/path/to/dist/index.js", "gateway", "--port", "9999"],
+            environment: [:],
+            stdoutPath: nil,
+            stderrPath: nil,
+            port: 9999,
+            bind: nil,
+            token: nil,
+            password: nil)
+        let plan = GatewayLaunchAgentManager.enableCommandPlan(
+            isAlreadyLoaded: false,
+            snapshot: snapshot,
+            desiredPort: 18789,
+            desiredRuntime: "node")
+        #expect(plan.count == 2)
+        #expect(plan[0] == ["install", "--port", "18789", "--runtime", "node"])
+        #expect(plan[1] == ["install", "--force", "--port", "18789", "--runtime", "node"])
+    }
+
     @Test func enableCommandPlanPrefersStartThenInstallThenForceInstall() {
         let plan = GatewayLaunchAgentManager.enableCommandPlan(
             isAlreadyLoaded: false,
@@ -110,5 +130,19 @@ import Testing
             success: true,
             daemonResult: "already-installed")
         #expect(shouldStop == true)
+    }
+
+    @Test func nonTerminalSuccessRecognizesExpectedContinueSignals() {
+        let startNonTerminal = GatewayLaunchAgentManager.isNonTerminalSuccessfulStep(
+            command: ["start"],
+            success: true,
+            daemonResult: "not-loaded")
+        #expect(startNonTerminal == true)
+
+        let installNonTerminal = GatewayLaunchAgentManager.isNonTerminalSuccessfulStep(
+            command: ["install", "--port", "18789", "--runtime", "node"],
+            success: true,
+            daemonResult: "already-installed")
+        #expect(installNonTerminal == true)
     }
 }
