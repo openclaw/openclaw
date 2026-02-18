@@ -9,6 +9,8 @@ metadata:
 
 # Coding Agent (bash-first)
 
+> **Pro Tip**: For complex multi-step coding tasks, consider using the **planner** skill first to plan and coordinate the work, then use coding-agent for implementation.
+
 Use **bash** (with optional background mode) for all coding agent work. Simple and effective.
 
 ## ⚠️ PTY Mode Required!
