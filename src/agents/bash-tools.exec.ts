@@ -260,6 +260,11 @@ export function createExecTool(
         node?: string;
       };
 
+      // Normalize `cmd` → `command` for model compatibility (e.g. Llama 3.1).
+      if (!params.command && typeof (args as Record<string, unknown>)["cmd"] === "string") {
+        params.command = (args as Record<string, unknown>)["cmd"] as string;
+      }
+
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }
