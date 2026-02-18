@@ -259,10 +259,11 @@ export async function runPreparedReply(
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
+  const shouldInjectThreadContext = isNewSession || ctx.IsFirstThreadTurn;
   const threadContextNote =
-    isNewSession && threadHistoryBody
+    shouldInjectThreadContext && threadHistoryBody
       ? `[Thread history - for context]\n${threadHistoryBody}`
-      : isNewSession && threadStarterBody
+      : shouldInjectThreadContext && threadStarterBody
         ? `[Thread starter - for context]\n${threadStarterBody}`
         : undefined;
   const skillResult = await ensureSkillSnapshot({
