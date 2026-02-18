@@ -149,6 +149,18 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "voicewake.get",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "voicewake.set",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "models.list",
                     family: MethodFamily::Gateway,
                     requires_auth: true,
@@ -679,6 +691,7 @@ pub struct RpcDispatcher {
     system: SystemRegistry,
     talk: TalkRegistry,
     tts: TtsRegistry,
+    voicewake: VoiceWakeRegistry,
     models: ModelRegistry,
     agents: AgentRegistry,
     agent_runs: AgentRunRegistry,
@@ -749,6 +762,7 @@ const TTS_ELEVENLABS_MODELS: &[&str] = &[
     "eleven_turbo_v2_5",
     "eleven_monolingual_v1",
 ];
+const DEFAULT_VOICEWAKE_TRIGGERS: &[&str] = &["openclaw", "claude", "computer"];
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static WEB_LOGIN_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -782,6 +796,8 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "tts.convert",
     "tts.setProvider",
     "tts.providers",
+    "voicewake.get",
+    "voicewake.set",
     "models.list",
     "agents.list",
     "agents.create",
@@ -877,6 +893,7 @@ impl RpcDispatcher {
             system: SystemRegistry::new(),
             talk: TalkRegistry::new(),
             tts: TtsRegistry::new(),
+            voicewake: VoiceWakeRegistry::new(),
             models: ModelRegistry::new(),
             agents: AgentRegistry::new(),
             agent_runs: AgentRunRegistry::new(),
@@ -917,6 +934,8 @@ impl RpcDispatcher {
             "tts.convert" => self.handle_tts_convert(req).await,
             "tts.setprovider" => self.handle_tts_set_provider(req).await,
             "tts.providers" => self.handle_tts_providers(req).await,
+            "voicewake.get" => self.handle_voicewake_get(req).await,
+            "voicewake.set" => self.handle_voicewake_set(req).await,
             "models.list" => self.handle_models_list(req).await,
             "agents.list" => self.handle_agents_list(req).await,
             "agents.create" => self.handle_agents_create(req).await,
@@ -1389,6 +1408,47 @@ impl RpcDispatcher {
                 }
             ],
             "active": active
+        }))
+    }
+
+    async fn handle_voicewake_get(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<VoiceWakeGetParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid voicewake.get params: {err}"));
+        }
+        let state = self.voicewake.snapshot().await;
+        RpcDispatchOutcome::Handled(json!({
+            "triggers": state.triggers
+        }))
+    }
+
+    async fn handle_voicewake_set(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<VoiceWakeSetParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid voicewake.set params: {err}"
+                ));
+            }
+        };
+        let Some(triggers_raw) = params.triggers else {
+            return RpcDispatchOutcome::bad_request("voicewake.set requires triggers: string[]");
+        };
+        let Some(values) = triggers_raw.as_array() else {
+            return RpcDispatchOutcome::bad_request("voicewake.set requires triggers: string[]");
+        };
+        let normalized = normalize_voicewake_triggers(values);
+        let state = self.voicewake.set_triggers(normalized.clone()).await;
+        let payload_json = serde_json::to_string(&json!({ "triggers": normalized }))
+            .ok()
+            .filter(|value| !value.is_empty());
+        self.node_runtime
+            .record_event("voicewake.changed".to_owned(), payload_json)
+            .await;
+        self.system
+            .log_line(format!("voicewake.set triggers={}", state.triggers.len()))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "triggers": state.triggers
         }))
     }
 
@@ -4730,6 +4790,42 @@ impl TtsRegistry {
     }
 }
 
+struct VoiceWakeRegistry {
+    state: Mutex<VoiceWakeState>,
+}
+
+#[derive(Debug, Clone)]
+struct VoiceWakeState {
+    triggers: Vec<String>,
+    updated_at_ms: u64,
+}
+
+impl VoiceWakeRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(VoiceWakeState {
+                triggers: DEFAULT_VOICEWAKE_TRIGGERS
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect(),
+                updated_at_ms: 0,
+            }),
+        }
+    }
+
+    async fn snapshot(&self) -> VoiceWakeState {
+        let guard = self.state.lock().await;
+        guard.clone()
+    }
+
+    async fn set_triggers(&self, triggers: Vec<String>) -> VoiceWakeState {
+        let mut guard = self.state.lock().await;
+        guard.triggers = triggers;
+        guard.updated_at_ms = now_ms();
+        guard.clone()
+    }
+}
+
 struct ModelRegistry {
     models: Vec<ModelChoice>,
 }
@@ -7361,6 +7457,34 @@ fn tts_fallback_providers(primary: &str) -> Vec<String> {
         .skip(1)
         .map(str::to_owned)
         .collect()
+}
+
+fn normalize_voicewake_triggers(values: &[Value]) -> Vec<String> {
+    let mut cleaned = Vec::new();
+    for value in values {
+        let Some(trigger) = value.as_str() else {
+            continue;
+        };
+        let trimmed = trigger.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let normalized = trimmed.chars().take(64).collect::<String>();
+        if normalized.is_empty() {
+            continue;
+        }
+        cleaned.push(normalized);
+        if cleaned.len() >= 32 {
+            break;
+        }
+    }
+    if cleaned.is_empty() {
+        return DEFAULT_VOICEWAKE_TRIGGERS
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect();
+    }
+    cleaned
 }
 
 fn derive_outbound_session_key(channel: &str, to: &str) -> String {
@@ -10372,6 +10496,16 @@ struct TtsProvidersParams {}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+struct VoiceWakeGetParams {}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct VoiceWakeSetParams {
+    triggers: Option<Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct ModelsListParams {}
 
 #[derive(Debug, Default, Deserialize)]
@@ -12297,6 +12431,12 @@ mod tests {
         let connect_spec = connect.spec.expect("connect spec");
         assert_eq!(connect_spec.family, MethodFamily::Connect);
         assert!(connect_spec.requires_auth);
+
+        let voicewake = registry.resolve("voicewake.set");
+        assert!(voicewake.known);
+        let voicewake_spec = voicewake.spec.expect("voicewake spec");
+        assert_eq!(voicewake_spec.family, MethodFamily::Gateway);
+        assert!(voicewake_spec.requires_auth);
     }
 
     #[test]
@@ -14990,6 +15130,86 @@ mod tests {
                 );
             }
             _ => panic!("expected tts.disable handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_voicewake_methods_follow_parity_contract() {
+        let dispatcher = RpcDispatcher::new();
+
+        let get = RpcRequestFrame {
+            id: "req-voicewake-get-default".to_owned(),
+            method: "voicewake.get".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&get).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/triggers").cloned(),
+                    Some(serde_json::json!(["openclaw", "claude", "computer"]))
+                );
+            }
+            _ => panic!("expected voicewake.get handled"),
+        }
+
+        let set_missing = RpcRequestFrame {
+            id: "req-voicewake-set-missing".to_owned(),
+            method: "voicewake.set".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&set_missing).await {
+            RpcDispatchOutcome::Error { code, message, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(message, "voicewake.set requires triggers: string[]");
+            }
+            _ => panic!("expected missing triggers rejection"),
+        }
+
+        let set_non_array = RpcRequestFrame {
+            id: "req-voicewake-set-non-array".to_owned(),
+            method: "voicewake.set".to_owned(),
+            params: serde_json::json!({
+                "triggers": "openclaw"
+            }),
+        };
+        match dispatcher.handle_request(&set_non_array).await {
+            RpcDispatchOutcome::Error { code, message, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(message, "voicewake.set requires triggers: string[]");
+            }
+            _ => panic!("expected non-array triggers rejection"),
+        }
+
+        let set = RpcRequestFrame {
+            id: "req-voicewake-set".to_owned(),
+            method: "voicewake.set".to_owned(),
+            params: serde_json::json!({
+                "triggers": ["  hello  ", "", "world", 42]
+            }),
+        };
+        match dispatcher.handle_request(&set).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/triggers").cloned(),
+                    Some(serde_json::json!(["hello", "world"]))
+                );
+            }
+            _ => panic!("expected voicewake.set handled"),
+        }
+
+        let get_after = RpcRequestFrame {
+            id: "req-voicewake-get-after".to_owned(),
+            method: "voicewake.get".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&get_after).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/triggers").cloned(),
+                    Some(serde_json::json!(["hello", "world"]))
+                );
+            }
+            _ => panic!("expected voicewake.get after set"),
         }
     }
 
