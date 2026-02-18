@@ -113,9 +113,9 @@ describe("sanitizeSessionHistory", () => {
       mockMessages,
       "session:history",
       expect.objectContaining({
-        sanitizeMode: "images-only",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
+         sanitizeMode: "images-only",
+         sanitizeToolCallIds: false,
+         preserveSignatures: false,
       }),
     );
   });
