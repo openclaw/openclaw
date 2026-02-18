@@ -19,20 +19,11 @@ type DevicePairPluginConfig = {
 
 type SetupPayload = {
   url: string;
-  token?: string;
-  password?: string;
 };
 
 type ResolveUrlResult = {
   url?: string;
   source?: string;
-  error?: string;
-};
-
-type ResolveAuthResult = {
-  token?: string;
-  password?: string;
-  label?: string;
   error?: string;
 };
 
@@ -212,38 +203,6 @@ function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {
   }
 }
 
-function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
-  const mode = cfg.gateway?.auth?.mode;
-  const token =
-    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-    process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-    cfg.gateway?.auth?.token?.trim();
-  const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-    cfg.gateway?.auth?.password?.trim();
-
-  if (mode === "password") {
-    if (!password) {
-      return { error: "Gateway auth is set to password, but no password is configured." };
-    }
-    return { password, label: "password" };
-  }
-  if (mode === "token") {
-    if (!token) {
-      return { error: "Gateway auth is set to token, but no token is configured." };
-    }
-    return { token, label: "token" };
-  }
-  if (token) {
-    return { token, label: "token" };
-  }
-  if (password) {
-    return { password, label: "password" };
-  }
-  return { error: "Gateway auth is not configured (no token or password)." };
-}
-
 async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
   const cfg = api.config;
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
@@ -312,20 +271,21 @@ function encodeSetupCode(payload: SetupPayload): string {
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function formatSetupReply(payload: SetupPayload, authLabel: string): string {
+function formatSetupReply(payload: SetupPayload): string {
   const setupCode = encodeSetupCode(payload);
   return [
     "Pairing setup code generated.",
     "",
     "1) Open the iOS app → Settings → Gateway",
-    "2) Paste the setup code below and tap Connect",
-    "3) Back here, run /pair approve",
+    "2) Paste the setup code below",
+    "3) Enter your gateway token/password in the app",
+    "4) Tap Connect, then back here run /pair approve",
     "",
     "Setup code:",
     setupCode,
     "",
     `Gateway: ${payload.url}`,
-    `Auth: ${authLabel}`,
+    "Auth: enter manually in app (token/password)",
   ].join("\n");
 }
 
@@ -334,8 +294,9 @@ function formatSetupInstructions(): string {
     "Pairing setup code generated.",
     "",
     "1) Open the iOS app → Settings → Gateway",
-    "2) Paste the setup code from my next message and tap Connect",
-    "3) Back here, run /pair approve",
+    "2) Paste the setup code from my next message",
+    "3) Enter your gateway token/password in the app",
+    "4) Tap Connect, then back here run /pair approve",
   ].join("\n");
 }
 
@@ -427,11 +388,6 @@ export default function register(api: OpenClawPluginApi) {
         return { text: `✅ Paired ${label}${platformLabel}.` };
       }
 
-      const auth = resolveAuth(api.config);
-      if (auth.error) {
-        return { text: `Error: ${auth.error}` };
-      }
-
       const urlResult = await resolveGatewayUrl(api);
       if (!urlResult.url) {
         return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };
@@ -439,8 +395,6 @@ export default function register(api: OpenClawPluginApi) {
 
       const payload: SetupPayload = {
         url: urlResult.url,
-        token: auth.token,
-        password: auth.password,
       };
 
       if (action === "qr") {
@@ -508,7 +462,6 @@ export default function register(api: OpenClawPluginApi) {
 
       const channel = ctx.channel;
       const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
-      const authLabel = auth.label ?? "auth";
 
       if (channel === "telegram" && target) {
         try {
@@ -547,7 +500,7 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       return {
-        text: formatSetupReply(payload, authLabel),
+        text: formatSetupReply(payload),
       };
     },
   });
