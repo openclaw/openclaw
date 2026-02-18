@@ -526,6 +526,24 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "chat.history",
+                    family: MethodFamily::Message,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "chat.send",
+                    family: MethodFamily::Message,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "chat.abort",
+                    family: MethodFamily::Message,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "browser.request",
                     family: MethodFamily::Browser,
                     requires_auth: true,
@@ -618,6 +636,7 @@ pub struct RpcDispatcher {
     node_runtime: NodeRuntimeRegistry,
     exec_approvals: ExecApprovalsRegistry,
     exec_approval: ExecApprovalRegistry,
+    chat: ChatRegistry,
     skills: SkillsRegistry,
     cron: CronRegistry,
     config: ConfigRegistry,
@@ -663,6 +682,8 @@ const MAX_EXEC_APPROVALS_NODE_SNAPSHOTS: usize = 512;
 const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS: u64 = 120_000;
 const MAX_EXEC_APPROVAL_PENDING: usize = 4_096;
 const EXEC_APPROVAL_RESOLVED_GRACE_MS: u64 = 15_000;
+const MAX_CHAT_RUNS: usize = 4_096;
+const CHAT_RUN_COMPLETE_DELAY_MS: u64 = 25;
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static WEB_LOGIN_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -740,6 +761,9 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
+    "chat.history",
+    "chat.send",
+    "chat.abort",
     "config.get",
     "config.set",
     "config.patch",
@@ -779,6 +803,7 @@ impl RpcDispatcher {
             node_runtime: NodeRuntimeRegistry::new(),
             exec_approvals: ExecApprovalsRegistry::new(),
             exec_approval: ExecApprovalRegistry::new(),
+            chat: ChatRegistry::new(),
             skills: SkillsRegistry::new(),
             cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
@@ -858,6 +883,9 @@ impl RpcDispatcher {
             "exec.approval.request" => self.handle_exec_approval_request(req).await,
             "exec.approval.waitdecision" => self.handle_exec_approval_wait_decision(req).await,
             "exec.approval.resolve" => self.handle_exec_approval_resolve(req).await,
+            "chat.history" => self.handle_chat_history(req).await,
+            "chat.send" => self.handle_chat_send(req).await,
+            "chat.abort" => self.handle_chat_abort(req).await,
             "config.get" => self.handle_config_get(req).await,
             "config.set" => self.handle_config_set(req).await,
             "config.patch" => self.handle_config_patch(req).await,
@@ -2714,6 +2742,157 @@ impl RpcDispatcher {
         }
         RpcDispatchOutcome::Handled(json!({
             "ok": true
+        }))
+    }
+
+    async fn handle_chat_history(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ChatHistoryParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid chat.history params: {err}"
+                ));
+            }
+        };
+        let session_key = canonicalize_session_key(&params.session_key);
+        if session_key.is_empty() {
+            return RpcDispatchOutcome::bad_request("sessionKey is required");
+        }
+        let limit = params.limit.unwrap_or(200).clamp(1, 1_000);
+        let mut messages = self
+            .sessions
+            .history(Some(&session_key), Some(limit))
+            .await
+            .into_iter()
+            .filter_map(|record| match record.kind {
+                SessionHistoryKind::Send => {
+                    let text = normalize_optional_text(record.text.or(record.command), 12_000)?;
+                    Some(json!({
+                        "role": "user",
+                        "timestamp": record.at_ms,
+                        "content": text
+                    }))
+                }
+                SessionHistoryKind::Decision => None,
+            })
+            .collect::<Vec<_>>();
+        messages.reverse();
+        let meta = self.sessions.chat_meta(&session_key).await;
+        RpcDispatchOutcome::Handled(json!({
+            "sessionKey": session_key,
+            "sessionId": meta.as_ref().map(|value| value.session_id.clone()),
+            "messages": messages,
+            "thinkingLevel": meta.as_ref().and_then(|value| value.thinking_level.clone()),
+            "verboseLevel": meta.as_ref().and_then(|value| value.verbose_level.clone())
+        }))
+    }
+
+    async fn handle_chat_send(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ChatSendParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!("invalid chat.send params: {err}"));
+            }
+        };
+        let session_key = canonicalize_session_key(&params.session_key);
+        if session_key.is_empty() {
+            return RpcDispatchOutcome::bad_request("sessionKey is required");
+        }
+        let run_id = normalize_optional_text(Some(params.idempotency_key), 256);
+        let Some(run_id) = run_id else {
+            return RpcDispatchOutcome::bad_request("idempotencyKey is required");
+        };
+        let _thinking = normalize_optional_text(params.thinking, 128);
+        let _deliver = params.deliver.unwrap_or(false);
+        let message = normalize_optional_text(Some(params.message), 12_000);
+        let has_attachments = params
+            .attachments
+            .as_ref()
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        if message.is_none() && !has_attachments {
+            return RpcDispatchOutcome::bad_request("message or attachment required");
+        }
+        let timeout_ms = params.timeout_ms.unwrap_or(30_000);
+        match self.chat.start_run(&session_key, &run_id, timeout_ms).await {
+            ChatRunStartOutcome::InFlight => {
+                return RpcDispatchOutcome::Handled(json!({
+                    "runId": run_id,
+                    "status": "in_flight"
+                }));
+            }
+            ChatRunStartOutcome::Completed => {
+                return RpcDispatchOutcome::Handled(json!({
+                    "runId": run_id,
+                    "status": "completed"
+                }));
+            }
+            ChatRunStartOutcome::Aborted => {
+                return RpcDispatchOutcome::Handled(json!({
+                    "runId": run_id,
+                    "status": "aborted"
+                }));
+            }
+            ChatRunStartOutcome::Started => {}
+        }
+
+        let stored_message = message.or_else(|| has_attachments.then(|| "[attachment]".to_owned()));
+        let _ = self
+            .sessions
+            .record_send(SessionSend {
+                session_key,
+                request_id: Some(run_id.clone()),
+                message: stored_message,
+                command: None,
+                source: "chat".to_owned(),
+                channel: Some("webchat".to_owned()),
+                to: None,
+                account_id: None,
+            })
+            .await;
+
+        RpcDispatchOutcome::Handled(json!({
+            "runId": run_id,
+            "status": "started"
+        }))
+    }
+
+    async fn handle_chat_abort(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ChatAbortParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid chat.abort params: {err}"
+                ));
+            }
+        };
+        let session_key = canonicalize_session_key(&params.session_key);
+        if session_key.is_empty() {
+            return RpcDispatchOutcome::bad_request("sessionKey is required");
+        }
+        let run_id = normalize_optional_text(params.run_id, 256);
+        if let Some(run_id) = run_id {
+            return match self.chat.abort_run(&session_key, &run_id).await {
+                ChatAbortRunOutcome::SessionMismatch => {
+                    RpcDispatchOutcome::bad_request("runId does not match sessionKey")
+                }
+                ChatAbortRunOutcome::NotFound => RpcDispatchOutcome::Handled(json!({
+                    "ok": true,
+                    "aborted": false,
+                    "runIds": []
+                })),
+                ChatAbortRunOutcome::Aborted => RpcDispatchOutcome::Handled(json!({
+                    "ok": true,
+                    "aborted": true,
+                    "runIds": [run_id]
+                })),
+            };
+        }
+        let run_ids = self.chat.abort_session(&session_key).await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "aborted": !run_ids.is_empty(),
+            "runIds": run_ids
         }))
     }
 
@@ -6406,6 +6585,145 @@ fn next_exec_approval_id() -> String {
     format!("approval-{}-{sequence}", now_ms())
 }
 
+struct ChatRegistry {
+    state: Arc<Mutex<ChatState>>,
+}
+
+#[derive(Default)]
+struct ChatState {
+    runs_by_id: HashMap<String, ChatRunEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatRunStatus {
+    InFlight,
+    Completed,
+    Aborted,
+}
+
+#[derive(Debug, Clone)]
+struct ChatRunEntry {
+    session_key: String,
+    status: ChatRunStatus,
+    started_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatRunStartOutcome {
+    Started,
+    InFlight,
+    Completed,
+    Aborted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatAbortRunOutcome {
+    NotFound,
+    SessionMismatch,
+    Aborted,
+}
+
+impl ChatRegistry {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ChatState::default())),
+        }
+    }
+
+    async fn start_run(
+        &self,
+        session_key: &str,
+        run_id: &str,
+        timeout_ms: u64,
+    ) -> ChatRunStartOutcome {
+        let mut guard = self.state.lock().await;
+        if let Some(existing) = guard.runs_by_id.get(run_id) {
+            return match existing.status {
+                ChatRunStatus::InFlight => ChatRunStartOutcome::InFlight,
+                ChatRunStatus::Completed => ChatRunStartOutcome::Completed,
+                ChatRunStatus::Aborted => ChatRunStartOutcome::Aborted,
+            };
+        }
+        let now = now_ms();
+        guard.runs_by_id.insert(
+            run_id.to_owned(),
+            ChatRunEntry {
+                session_key: session_key.to_owned(),
+                status: ChatRunStatus::InFlight,
+                started_at_ms: now,
+                updated_at_ms: now,
+            },
+        );
+        prune_oldest_chat_runs(&mut guard.runs_by_id, MAX_CHAT_RUNS);
+        drop(guard);
+
+        let state = Arc::clone(&self.state);
+        let complete_run_id = run_id.to_owned();
+        let delay_ms = CHAT_RUN_COMPLETE_DELAY_MS.min(timeout_ms.max(1));
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            let mut guard = state.lock().await;
+            let Some(entry) = guard.runs_by_id.get_mut(&complete_run_id) else {
+                return;
+            };
+            if entry.status == ChatRunStatus::InFlight {
+                entry.status = ChatRunStatus::Completed;
+                entry.updated_at_ms = now_ms();
+            }
+        });
+
+        ChatRunStartOutcome::Started
+    }
+
+    async fn abort_run(&self, session_key: &str, run_id: &str) -> ChatAbortRunOutcome {
+        let mut guard = self.state.lock().await;
+        let Some(entry) = guard.runs_by_id.get_mut(run_id) else {
+            return ChatAbortRunOutcome::NotFound;
+        };
+        if !entry.session_key.eq_ignore_ascii_case(session_key) {
+            return ChatAbortRunOutcome::SessionMismatch;
+        }
+        if entry.status != ChatRunStatus::InFlight {
+            return ChatAbortRunOutcome::NotFound;
+        }
+        entry.status = ChatRunStatus::Aborted;
+        entry.updated_at_ms = now_ms();
+        ChatAbortRunOutcome::Aborted
+    }
+
+    async fn abort_session(&self, session_key: &str) -> Vec<String> {
+        let mut guard = self.state.lock().await;
+        let mut aborted = Vec::new();
+        for (run_id, entry) in &mut guard.runs_by_id {
+            if !entry.session_key.eq_ignore_ascii_case(session_key) {
+                continue;
+            }
+            if entry.status != ChatRunStatus::InFlight {
+                continue;
+            }
+            entry.status = ChatRunStatus::Aborted;
+            entry.updated_at_ms = now_ms();
+            aborted.push(run_id.clone());
+        }
+        aborted.sort();
+        aborted
+    }
+}
+
+fn prune_oldest_chat_runs(runs_by_id: &mut HashMap<String, ChatRunEntry>, max_runs: usize) {
+    while runs_by_id.len() > max_runs {
+        let Some(oldest_key) = runs_by_id
+            .iter()
+            .min_by_key(|(_, entry)| (entry.status == ChatRunStatus::InFlight, entry.started_at_ms))
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        let _ = runs_by_id.remove(&oldest_key);
+    }
+}
+
 struct DeviceRegistry {
     state: Mutex<DevicePairState>,
 }
@@ -7914,6 +8232,13 @@ struct SessionResolveQuery {
     include_unknown: bool,
 }
 
+#[derive(Debug, Clone)]
+struct ChatSessionMeta {
+    session_id: String,
+    thinking_level: Option<String>,
+    verbose_level: Option<String>,
+}
+
 impl SessionRegistry {
     fn new() -> Self {
         Self {
@@ -8107,6 +8432,16 @@ impl SessionRegistry {
             .values()
             .find(|entry| entry.session_id.eq_ignore_ascii_case(session_id))
             .map(|entry| entry.key.clone())
+    }
+
+    async fn chat_meta(&self, session_key: &str) -> Option<ChatSessionMeta> {
+        let guard = self.entries.lock().await;
+        let entry = guard.get(session_key)?;
+        Some(ChatSessionMeta {
+            session_id: entry.session_id.clone(),
+            thinking_level: entry.thinking_level.clone(),
+            verbose_level: entry.verbose_level.clone(),
+        })
     }
 
     async fn resolve_query(&self, query: SessionResolveQuery) -> Option<String> {
@@ -9421,6 +9756,38 @@ struct UpdateRunParams {
     restart_delay_ms: Option<u64>,
     #[serde(rename = "timeoutMs", alias = "timeout_ms")]
     timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatHistoryParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatSendParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: String,
+    message: String,
+    thinking: Option<String>,
+    deliver: Option<bool>,
+    attachments: Option<Vec<Value>>,
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    timeout_ms: Option<u64>,
+    #[serde(rename = "idempotencyKey", alias = "idempotency_key")]
+    idempotency_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatAbortParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: String,
+    #[serde(rename = "runId", alias = "run_id")]
+    run_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -15302,6 +15669,317 @@ mod tests {
                 );
             }
             _ => panic!("expected single-phase timeout response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_chat_methods_follow_parity_contract() {
+        let dispatcher = RpcDispatcher::new();
+        let expected_session_key = super::canonicalize_session_key("main");
+
+        let invalid_history = RpcRequestFrame {
+            id: "req-chat-history-invalid".to_owned(),
+            method: "chat.history".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "extra": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_history).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let missing_idempotency = RpcRequestFrame {
+            id: "req-chat-send-missing-idempotency".to_owned(),
+            method: "chat.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "message": "hello"
+            }),
+        };
+        let out = dispatcher.handle_request(&missing_idempotency).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let empty_message = RpcRequestFrame {
+            id: "req-chat-send-empty".to_owned(),
+            method: "chat.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "message": "   ",
+                "idempotencyKey": "chat-empty"
+            }),
+        };
+        let out = dispatcher.handle_request(&empty_message).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let send = RpcRequestFrame {
+            id: "req-chat-send".to_owned(),
+            method: "chat.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "message": "hello from chat",
+                "idempotencyKey": "chat-run-1"
+            }),
+        };
+        match dispatcher.handle_request(&send).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/runId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("chat-run-1")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("started")
+                );
+            }
+            _ => panic!("expected chat.send started response"),
+        }
+
+        match dispatcher.handle_request(&send).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("in_flight")
+                );
+            }
+            _ => panic!("expected chat.send in_flight response"),
+        }
+
+        let mut completed = false;
+        for _ in 0..10 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            match dispatcher.handle_request(&send).await {
+                RpcDispatchOutcome::Handled(payload) => {
+                    let status = payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    if status == "completed" {
+                        completed = true;
+                        break;
+                    }
+                    assert_eq!(status, "in_flight");
+                }
+                _ => panic!("expected chat.send replay response"),
+            }
+        }
+        assert!(completed, "expected completed chat.send replay status");
+
+        let patch = RpcRequestFrame {
+            id: "req-chat-session-patch".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": "main",
+                "thinkingLevel": "high",
+                "verboseLevel": "on"
+            }),
+        };
+        let out = dispatcher.handle_request(&patch).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let send_abortable = RpcRequestFrame {
+            id: "req-chat-send-abortable".to_owned(),
+            method: "chat.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "message": "abort this run",
+                "idempotencyKey": "chat-run-abort"
+            }),
+        };
+        let out = dispatcher.handle_request(&send_abortable).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let abort_mismatch = RpcRequestFrame {
+            id: "req-chat-abort-mismatch".to_owned(),
+            method: "chat.abort".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "other",
+                "runId": "chat-run-abort"
+            }),
+        };
+        let out = dispatcher.handle_request(&abort_mismatch).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let abort_not_found = RpcRequestFrame {
+            id: "req-chat-abort-not-found".to_owned(),
+            method: "chat.abort".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "runId": "chat-run-missing"
+            }),
+        };
+        match dispatcher.handle_request(&abort_not_found).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/aborted")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                let run_ids = payload
+                    .pointer("/runIds")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("run ids");
+                assert!(run_ids.is_empty());
+            }
+            _ => panic!("expected chat.abort not found response"),
+        }
+
+        let abort = RpcRequestFrame {
+            id: "req-chat-abort".to_owned(),
+            method: "chat.abort".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "runId": "chat-run-abort"
+            }),
+        };
+        match dispatcher.handle_request(&abort).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/aborted")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/runIds/0")
+                        .and_then(serde_json::Value::as_str),
+                    Some("chat-run-abort")
+                );
+            }
+            _ => panic!("expected chat.abort aborted response"),
+        }
+
+        match dispatcher.handle_request(&send_abortable).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("aborted")
+                );
+            }
+            _ => panic!("expected chat.send aborted replay response"),
+        }
+
+        let send_batch_a = RpcRequestFrame {
+            id: "req-chat-send-batch-a".to_owned(),
+            method: "chat.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "message": "batch-a",
+                "idempotencyKey": "chat-run-a"
+            }),
+        };
+        let send_batch_b = RpcRequestFrame {
+            id: "req-chat-send-batch-b".to_owned(),
+            method: "chat.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "message": "batch-b",
+                "idempotencyKey": "chat-run-b"
+            }),
+        };
+        let out = dispatcher.handle_request(&send_batch_a).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+        let out = dispatcher.handle_request(&send_batch_b).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let abort_session = RpcRequestFrame {
+            id: "req-chat-abort-session".to_owned(),
+            method: "chat.abort".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main"
+            }),
+        };
+        match dispatcher.handle_request(&abort_session).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/aborted")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                let run_ids = payload
+                    .pointer("/runIds")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("run ids");
+                let ids = run_ids
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>();
+                assert_eq!(ids, vec!["chat-run-a", "chat-run-b"]);
+            }
+            _ => panic!("expected chat.abort session response"),
+        }
+
+        let history = RpcRequestFrame {
+            id: "req-chat-history".to_owned(),
+            method: "chat.history".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "limit": 2
+            }),
+        };
+        match dispatcher.handle_request(&history).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/sessionKey")
+                        .and_then(serde_json::Value::as_str),
+                    Some(expected_session_key.as_str())
+                );
+                assert!(payload.pointer("/sessionId").is_some());
+                assert_eq!(
+                    payload
+                        .pointer("/thinkingLevel")
+                        .and_then(serde_json::Value::as_str),
+                    Some("high")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/verboseLevel")
+                        .and_then(serde_json::Value::as_str),
+                    Some("on")
+                );
+                let messages = payload
+                    .pointer("/messages")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("messages array");
+                assert_eq!(messages.len(), 2);
+                assert_eq!(
+                    messages
+                        .first()
+                        .and_then(|msg| msg.pointer("/role"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("user")
+                );
+                let texts = messages
+                    .iter()
+                    .filter_map(|msg| msg.pointer("/content"))
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>();
+                assert_eq!(texts, vec!["batch-a", "batch-b"]);
+            }
+            _ => panic!("expected chat.history handled response"),
         }
     }
 
