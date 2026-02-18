@@ -20,8 +20,10 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import { applyAuthProfileConfig } from "../onboard-auth.js";
+import { applyAuthProfileConfig, writeOAuthCredentials } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../openai-codex-model-default.js";
+import { loginOpenAICodexOAuth } from "../openai-codex-oauth.js";
 import {
   applyDefaultModel,
   mergeConfigPatch,
@@ -289,6 +291,40 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const agentDir = resolveAgentDir(config, defaultAgentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
+
+  // Handle openai-codex — built-in OAuth flow, not a plugin provider
+  if (normalizeProviderId(opts.provider ?? "") === "openai-codex") {
+    const prompter = createClackPrompter();
+    const creds = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: isRemoteEnvironment(),
+      openUrl: async (url) => {
+        await openUrl(url);
+      },
+    });
+    if (!creds) {
+      return;
+    }
+    await writeOAuthCredentials("openai-codex", creds, agentDir);
+    await updateConfig((cfg) => {
+      let next = applyAuthProfileConfig(cfg, {
+        profileId: "openai-codex:default",
+        provider: "openai-codex",
+        mode: "oauth",
+      });
+      if (opts.setDefault) {
+        next = applyDefaultModel(next, OPENAI_CODEX_DEFAULT_MODEL);
+      }
+      return next;
+    });
+    logConfigUpdated(runtime);
+    runtime.log("Auth profile: openai-codex:default (openai-codex/oauth)");
+    if (opts.setDefault) {
+      runtime.log(`Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`);
+    }
+    return;
+  }
 
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
