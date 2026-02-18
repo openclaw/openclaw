@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -61,6 +62,13 @@ function restoreGatewayToken(prevToken: string | undefined) {
   } else {
     process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
   }
+}
+
+async function withRuntimeVersionEnv<T>(
+  env: Record<string, string | undefined>,
+  run: () => Promise<T>,
+): Promise<T> {
+  return withEnvAsync(env, run);
 }
 
 const TEST_OPERATOR_CLIENT = {
@@ -233,6 +241,78 @@ describe("gateway server auth/connect", () => {
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);
 
       ws.close();
+    });
+
+    test("connect (req) handshake prefers service version fallback in hello-ok payload", async () => {
+      await withRuntimeVersionEnv(
+        {
+          OPENCLAW_VERSION: " ",
+          OPENCLAW_SERVICE_VERSION: "2.4.6-service",
+          npm_package_version: "1.0.0-package",
+        },
+        async () => {
+          const ws = await openWs(port);
+          const res = await connectReq(ws);
+          expect(res.ok).toBe(true);
+          const payload = res.payload as
+            | {
+                type?: unknown;
+                server?: { version?: string };
+              }
+            | undefined;
+          expect(payload?.type).toBe("hello-ok");
+          expect(payload?.server?.version).toBe("2.4.6-service");
+          ws.close();
+        },
+      );
+    });
+
+    test("connect (req) handshake prefers OPENCLAW_VERSION over service version", async () => {
+      await withRuntimeVersionEnv(
+        {
+          OPENCLAW_VERSION: "9.9.9-cli",
+          OPENCLAW_SERVICE_VERSION: "2.4.6-service",
+          npm_package_version: "1.0.0-package",
+        },
+        async () => {
+          const ws = await openWs(port);
+          const res = await connectReq(ws);
+          expect(res.ok).toBe(true);
+          const payload = res.payload as
+            | {
+                type?: unknown;
+                server?: { version?: string };
+              }
+            | undefined;
+          expect(payload?.type).toBe("hello-ok");
+          expect(payload?.server?.version).toBe("9.9.9-cli");
+          ws.close();
+        },
+      );
+    });
+
+    test("connect (req) handshake falls back to npm_package_version when higher-precedence env values are blank", async () => {
+      await withRuntimeVersionEnv(
+        {
+          OPENCLAW_VERSION: " ",
+          OPENCLAW_SERVICE_VERSION: "\t",
+          npm_package_version: "1.0.0-package",
+        },
+        async () => {
+          const ws = await openWs(port);
+          const res = await connectReq(ws);
+          expect(res.ok).toBe(true);
+          const payload = res.payload as
+            | {
+                type?: unknown;
+                server?: { version?: string };
+              }
+            | undefined;
+          expect(payload?.type).toBe("hello-ok");
+          expect(payload?.server?.version).toBe("1.0.0-package");
+          ws.close();
+        },
+      );
     });
 
     test("does not grant admin when scopes are empty", async () => {
