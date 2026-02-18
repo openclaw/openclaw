@@ -940,6 +940,8 @@ impl RpcDispatcher {
                 source: normalize_optional_text(params.source, 128)
                     .unwrap_or_else(|| "rpc".to_owned()),
                 channel: normalize_optional_text(params.channel, 128),
+                to: normalize_optional_text(params.to, 256),
+                account_id: normalize_optional_text(params.account_id, 128),
             })
             .await;
         RpcDispatchOutcome::Handled(json!({
@@ -1079,26 +1081,42 @@ impl SessionRegistry {
     }
 
     async fn record_send(&self, send: SessionSend) -> (SessionView, SessionHistoryRecord) {
+        let SessionSend {
+            session_key,
+            request_id,
+            message,
+            command,
+            source,
+            channel,
+            to,
+            account_id,
+        } = send;
         let now = now_ms();
         let mut guard = self.entries.lock().await;
         let entry = guard
-            .entry(send.session_key.clone())
-            .or_insert_with(|| SessionEntry::new(&send.session_key));
+            .entry(session_key.clone())
+            .or_insert_with(|| SessionEntry::new(&session_key));
         entry.updated_at_ms = now;
-        if entry.channel.is_none() {
-            entry.channel = send.channel.clone();
+        if channel.is_some() {
+            entry.channel = channel.clone();
+        }
+        if to.is_some() {
+            entry.last_to = to.clone();
+        }
+        if account_id.is_some() {
+            entry.last_account_id = account_id.clone();
         }
 
         let event = SessionHistoryEvent {
             at_ms: now,
             kind: SessionHistoryKind::Send,
-            request_id: send.request_id,
-            text: send.message,
-            command: send.command,
+            request_id,
+            text: message,
+            command,
             action: None,
             risk_score: None,
-            source: Some(send.source),
-            channel: send.channel.or_else(|| entry.channel.clone()),
+            source: Some(source),
+            channel: channel.or_else(|| entry.channel.clone()),
         };
         entry.push_history(event.clone());
 
@@ -1676,6 +1694,8 @@ struct SessionEntry {
     kind: SessionKind,
     agent_id: Option<String>,
     channel: Option<String>,
+    last_to: Option<String>,
+    last_account_id: Option<String>,
     label: Option<String>,
     spawned_by: Option<String>,
     spawn_depth: Option<u32>,
@@ -1712,6 +1732,8 @@ impl SessionEntry {
             kind: parsed.kind,
             agent_id: parsed.agent_id,
             channel: parsed.channel,
+            last_to: None,
+            last_account_id: None,
             label: None,
             spawned_by: None,
             spawn_depth: None,
@@ -1765,6 +1787,14 @@ impl SessionEntry {
             derived_title,
             last_message_preview,
             channel: self.channel.clone(),
+            last_account_id: self.last_account_id.clone(),
+            delivery_context: SessionDeliveryContext::from_parts(
+                self.channel.clone(),
+                self.last_to.clone(),
+                self.last_account_id.clone(),
+            ),
+            total_tokens: None,
+            total_tokens_fresh: false,
             label: self.label.clone(),
             spawned_by: self.spawned_by.clone(),
             spawn_depth: self.spawn_depth,
@@ -1859,6 +1889,8 @@ struct SessionSend {
     command: Option<String>,
     source: String,
     channel: Option<String>,
+    to: Option<String>,
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -2035,6 +2067,33 @@ struct ModelOverridePatch {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+struct SessionDeliveryContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<String>,
+    #[serde(rename = "accountId", skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
+}
+
+impl SessionDeliveryContext {
+    fn from_parts(
+        channel: Option<String>,
+        to: Option<String>,
+        account_id: Option<String>,
+    ) -> Option<Self> {
+        if channel.is_none() && to.is_none() && account_id.is_none() {
+            return None;
+        }
+        Some(Self {
+            channel,
+            to,
+            account_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 struct SessionView {
     key: String,
     #[serde(rename = "sessionId")]
@@ -2049,6 +2108,14 @@ struct SessionView {
     #[serde(rename = "lastMessagePreview", skip_serializing_if = "Option::is_none")]
     last_message_preview: Option<String>,
     channel: Option<String>,
+    #[serde(rename = "lastAccountId", skip_serializing_if = "Option::is_none")]
+    last_account_id: Option<String>,
+    #[serde(rename = "deliveryContext", skip_serializing_if = "Option::is_none")]
+    delivery_context: Option<SessionDeliveryContext>,
+    #[serde(rename = "totalTokens", skip_serializing_if = "Option::is_none")]
+    total_tokens: Option<u64>,
+    #[serde(rename = "totalTokensFresh")]
+    total_tokens_fresh: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     #[serde(rename = "spawnedBy", skip_serializing_if = "Option::is_none")]
@@ -2259,6 +2326,9 @@ struct SessionsSendParams {
     request_id: Option<String>,
     source: Option<String>,
     channel: Option<String>,
+    to: Option<String>,
+    #[serde(rename = "accountId", alias = "account_id")]
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -3196,6 +3266,76 @@ mod tests {
                 );
             }
             _ => panic!("expected handled history"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_list_includes_delivery_context_fields() {
+        let dispatcher = RpcDispatcher::new();
+        let send = RpcRequestFrame {
+            id: "req-send-delivery".to_owned(),
+            method: "sessions.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:whatsapp:dm:+15551234567",
+                "message": "hello delivery context",
+                "channel": "whatsapp",
+                "to": "+15551234567",
+                "accountId": "work"
+            }),
+        };
+        let _ = dispatcher.handle_request(&send).await;
+
+        let list = RpcRequestFrame {
+            id: "req-list-delivery".to_owned(),
+            method: "sessions.list".to_owned(),
+            params: serde_json::json!({
+                "limit": 10,
+                "includeGlobal": false,
+                "includeUnknown": true
+            }),
+        };
+        let out = dispatcher.handle_request(&list).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/key")
+                        .and_then(serde_json::Value::as_str),
+                    Some("agent:main:whatsapp:dm:+15551234567")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/lastAccountId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("work")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/deliveryContext/channel")
+                        .and_then(serde_json::Value::as_str),
+                    Some("whatsapp")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/deliveryContext/to")
+                        .and_then(serde_json::Value::as_str),
+                    Some("+15551234567")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/deliveryContext/accountId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("work")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sessions/0/totalTokensFresh")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                assert!(payload.pointer("/sessions/0/totalTokens").is_none());
+            }
+            _ => panic!("expected delivery context list handled"),
         }
     }
 
