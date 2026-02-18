@@ -46,7 +46,10 @@ export function stripEnvelope(text: string): string {
 
   // Then strip "Conversation info (untrusted metadata):" blocks (all occurrences)
   // Note: UNTRUSTED_METADATA_PATTERN has 'g' flag for global matching
+  // Reset lastIndex before replace to avoid the test()/replace() lastIndex issue
+  UNTRUSTED_METADATA_PATTERN.lastIndex = 0;
   if (UNTRUSTED_METADATA_PATTERN.test(stripped)) {
+    UNTRUSTED_METADATA_PATTERN.lastIndex = 0;
     return stripped.replace(UNTRUSTED_METADATA_PATTERN, "").trim();
   }
 
