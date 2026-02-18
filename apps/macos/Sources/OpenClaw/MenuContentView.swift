@@ -70,6 +70,9 @@ struct MenuContent: View {
                     self.statusLine(label: self.heartbeatStatus.label, color: self.heartbeatStatus.color)
                 }
             }
+            Toggle(isOn: self.replyNotificationsBinding) {
+                Label("Reply Notifications", systemImage: "bell.badge")
+            }
             Toggle(
                 isOn: Binding(
                     get: { self.browserControlEnabled },
@@ -422,6 +425,10 @@ struct MenuContent: View {
 
     private var heartbeatsBinding: Binding<Bool> {
         Binding(get: { self.state.heartbeatsEnabled }, set: { self.state.heartbeatsEnabled = $0 })
+    }
+
+    private var replyNotificationsBinding: Binding<Bool> {
+        Binding(get: { self.state.replyNotificationsEnabled }, set: { self.state.replyNotificationsEnabled = $0 })
     }
 
     private var voiceWakeBinding: Binding<Bool> {
