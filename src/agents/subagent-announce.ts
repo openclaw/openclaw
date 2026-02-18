@@ -29,25 +29,32 @@ import {
 } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { readLatestAssistantReply } from "./tools/agent-step.js";
-import { sanitizeTextContent } from "./tools/sessions-helpers.js";
+import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
 type ToolResultMessage = {
   role?: unknown;
   content?: unknown;
 };
 
-function isToolResultMessage(msg: unknown): boolean {
-  if (!msg || typeof msg !== "object") {
-    return false;
-  }
-  const role = (msg as { role?: unknown }).role;
-  return role === "toolResult" || role === "tool";
-}
-
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
     return sanitizeTextContent(content);
+  }
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const obj = content as {
+      text?: unknown;
+      output?: unknown;
+      content?: unknown;
+    };
+    if (typeof obj.text === "string") {
+      return sanitizeTextContent(obj.text);
+    }
+    if (typeof obj.output === "string") {
+      return sanitizeTextContent(obj.output);
+    }
+    if (typeof obj.content === "string") {
+      return sanitizeTextContent(obj.content);
+    }
   }
   if (!Array.isArray(content)) {
     return "";
@@ -60,7 +67,21 @@ function extractToolResultText(content: unknown): string {
   return joined?.trim() ?? "";
 }
 
-async function readLatestToolResult(sessionKey: string): Promise<string | undefined> {
+function extractSubagentOutputText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const role = (message as { role?: unknown }).role;
+  if (role === "assistant") {
+    return extractAssistantText(message) ?? "";
+  }
+  if (role === "toolResult" || role === "tool") {
+    return extractToolResultText((message as ToolResultMessage).content);
+  }
+  return "";
+}
+
+async function readLatestSubagentOutput(sessionKey: string): Promise<string | undefined> {
   const history = await callGateway<{ messages?: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey, limit: 50 },
@@ -68,11 +89,7 @@ async function readLatestToolResult(sessionKey: string): Promise<string | undefi
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
-    if (!isToolResultMessage(msg)) {
-      continue;
-    }
-    const candidate = msg as ToolResultMessage;
-    const text = extractToolResultText(candidate.content);
+    const text = extractSubagentOutputText(msg);
     if (text) {
       return text;
     }
@@ -80,7 +97,7 @@ async function readLatestToolResult(sessionKey: string): Promise<string | undefi
   return undefined;
 }
 
-async function readLatestToolResultWithRetry(params: {
+async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
 }): Promise<string | undefined> {
@@ -88,7 +105,7 @@ async function readLatestToolResultWithRetry(params: {
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
   let result: string | undefined;
   while (Date.now() < deadline) {
-    result = await readLatestToolResult(params.sessionKey);
+    result = await readLatestSubagentOutput(params.sessionKey);
     if (result?.trim()) {
       return result;
     }
@@ -305,28 +322,6 @@ function loadSessionEntryByKey(sessionKey: string) {
   return store[sessionKey];
 }
 
-async function readLatestAssistantReplyWithRetry(params: {
-  sessionKey: string;
-  initialReply?: string;
-  maxWaitMs: number;
-}): Promise<string | undefined> {
-  const RETRY_INTERVAL_MS = 100;
-  let reply = params.initialReply?.trim() ? params.initialReply : undefined;
-  if (reply) {
-    return reply;
-  }
-
-  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
-    const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey });
-    if (latest?.trim()) {
-      return latest;
-    }
-  }
-  return reply;
-}
-
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
   requesterOrigin?: DeliveryContext;
@@ -522,23 +517,15 @@ export async function runSubagentAnnounceFlow(params: {
           outcome = { status: "timeout" };
         }
       }
-      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
+      reply = await readLatestSubagentOutput(params.childSessionKey);
     }
 
     if (!reply) {
-      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
+      reply = await readLatestSubagentOutput(params.childSessionKey);
     }
 
     if (!reply?.trim()) {
-      reply = await readLatestAssistantReplyWithRetry({
-        sessionKey: params.childSessionKey,
-        initialReply: reply,
-        maxWaitMs: params.timeoutMs,
-      });
-    }
-
-    if (!reply?.trim()) {
-      reply = await readLatestToolResultWithRetry({
+      reply = await readLatestSubagentOutputWithRetry({
         sessionKey: params.childSessionKey,
         maxWaitMs: params.timeoutMs,
       });
