@@ -490,6 +490,10 @@ by Peter Steinberger and the community.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
 AI/vibe-coded PRs welcome! 🤖
 
+### Agent Templates
+
+- [awesome-openclaw-agents](https://github.com/mergisi/awesome-openclaw-agents) — Curated collection of copy-paste SOUL.md templates for productivity, marketing, business, and development agents. Deploy any template with [CrewClaw](https://crewclaw.com).
+
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
 [pi-mono](https://github.com/badlogic/pi-mono).
 Special thanks to Adam Doppelt for lobster.bot.
