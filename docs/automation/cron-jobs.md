@@ -192,6 +192,8 @@ Execution details:
 - Direct command jobs run through a dedicated spawn-based executor.
 - Commands are executed with `shell: false` (argv only), so shell interpolation is not used unless your command explicitly invokes a shell.
 - These jobs bypass heartbeat and LLM turn execution flows entirely.
+- By default, commands must satisfy exec allowlist checks before execution (`cron.directCommand.enforceAllowlist: true`).
+- You can opt out in trusted setups with `cron.directCommand.enforceAllowlist: false`.
 
 `directCommand` runs produce a deterministic result object with:
 

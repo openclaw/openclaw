@@ -2,6 +2,13 @@ export type CronConfig = {
   enabled?: boolean;
   store?: string;
   maxConcurrentRuns?: number;
+  directCommand?: {
+    /**
+     * When true (default), isolated directCommand jobs must satisfy exec allowlist checks.
+     * Set to false only for trusted environments that intentionally allow unrestricted commands.
+     */
+    enforceAllowlist?: boolean;
+  };
   /**
    * Deprecated legacy fallback webhook URL used only for stored jobs with notify=true.
    * Prefer per-job delivery.mode="webhook" with delivery.to.

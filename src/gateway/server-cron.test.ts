@@ -12,6 +12,11 @@ const fetchWithSsrFGuardMock = vi.fn();
 const deliverOutboundPayloadsMock = vi.fn();
 const resolveDeliveryTargetMock = vi.fn();
 const cronLoggerWarnMock = vi.fn();
+const execApprovalsMocks = vi.hoisted(() => ({
+  resolveExecApprovals: vi.fn(),
+  evaluateShellAllowlist: vi.fn(),
+  resolveSafeBins: vi.fn(),
+}));
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -54,6 +59,13 @@ vi.mock("../logging.js", async () => {
   };
 });
 
+vi.mock("../infra/exec-approvals.js", () => ({
+  resolveExecApprovals: (...args: unknown[]) => execApprovalsMocks.resolveExecApprovals(...args),
+  evaluateShellAllowlist: (...args: unknown[]) =>
+    execApprovalsMocks.evaluateShellAllowlist(...args),
+  resolveSafeBins: (...args: unknown[]) => execApprovalsMocks.resolveSafeBins(...args),
+}));
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 describe("buildGatewayCronService", () => {
@@ -65,6 +77,9 @@ describe("buildGatewayCronService", () => {
     deliverOutboundPayloadsMock.mockReset();
     resolveDeliveryTargetMock.mockReset();
     cronLoggerWarnMock.mockReset();
+    execApprovalsMocks.resolveExecApprovals.mockReset();
+    execApprovalsMocks.evaluateShellAllowlist.mockReset();
+    execApprovalsMocks.resolveSafeBins.mockReset();
     resolveDeliveryTargetMock.mockResolvedValue({
       channel: "telegram",
       to: "123",
@@ -72,6 +87,15 @@ describe("buildGatewayCronService", () => {
       accountId: undefined,
       threadId: undefined,
     });
+    execApprovalsMocks.resolveExecApprovals.mockReturnValue({ allowlist: [] });
+    execApprovalsMocks.evaluateShellAllowlist.mockReturnValue({
+      analysisOk: true,
+      allowlistSatisfied: true,
+      allowlistMatches: [],
+      segments: [],
+      segmentSatisfiedBy: [],
+    });
+    execApprovalsMocks.resolveSafeBins.mockReturnValue(new Set());
   });
 
   it("canonicalizes non-agent sessionKey to agent store key for enqueue + wake", async () => {
@@ -309,6 +333,102 @@ describe("buildGatewayCronService", () => {
         }),
         "cron: direct command delivery failed (best-effort)",
       );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("denies direct-command jobs on allowlist miss by default", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-${Date.now()}`);
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: { store: path.join(tmpDir, "cron.json") },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+    execApprovalsMocks.evaluateShellAllowlist.mockReturnValue({
+      analysisOk: true,
+      allowlistSatisfied: false,
+      allowlistMatches: [],
+      segments: [],
+      segmentSatisfiedBy: [],
+    });
+
+    const broadcastMock = vi.fn();
+    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: broadcastMock });
+    try {
+      const job = await state.cron.add({
+        name: "direct-allowlist-denied",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "directCommand",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('hi')"],
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(execApprovalsMocks.evaluateShellAllowlist).toHaveBeenCalledTimes(1);
+      const finishedEvent = broadcastMock.mock.calls
+        .map(
+          (call) =>
+            call[1] as { action?: string; status?: string; error?: string; summary?: string },
+        )
+        .find((evt) => evt?.action === "finished");
+      expect(finishedEvent?.status).toBe("error");
+      expect(finishedEvent?.error).toContain("allowlist miss");
+
+      const parsed = JSON.parse(finishedEvent?.summary ?? "{}") as { status?: string };
+      expect(parsed.status).toBe("error");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("allows opting out of direct-command allowlist enforcement", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-${Date.now()}`);
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+        directCommand: { enforceAllowlist: false },
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+    execApprovalsMocks.evaluateShellAllowlist.mockReturnValue({
+      analysisOk: true,
+      allowlistSatisfied: false,
+      allowlistMatches: [],
+      segments: [],
+      segmentSatisfiedBy: [],
+    });
+
+    const broadcastMock = vi.fn();
+    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: broadcastMock });
+    try {
+      const job = await state.cron.add({
+        name: "direct-allowlist-opt-out",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "directCommand",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('hi')"],
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(execApprovalsMocks.evaluateShellAllowlist).not.toHaveBeenCalled();
+      const finishedEvent = broadcastMock.mock.calls
+        .map((call) => call[1] as { action?: string; status?: string })
+        .find((evt) => evt?.action === "finished");
+      expect(finishedEvent?.status).toBe("ok");
     } finally {
       state.cron.stop();
     }

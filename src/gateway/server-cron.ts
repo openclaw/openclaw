@@ -1,4 +1,4 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
@@ -21,6 +21,11 @@ import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  evaluateShellAllowlist,
+  resolveExecApprovals,
+  resolveSafeBins,
+} from "../infra/exec-approvals.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -39,6 +44,10 @@ export type GatewayCronState = {
 };
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
+
+function shouldEnforceDirectCommandAllowlist(cfg: ReturnType<typeof loadConfig>): boolean {
+  return cfg.cron?.directCommand?.enforceAllowlist !== false;
+}
 
 function withDirectCommandDeliveryError(
   result: Awaited<ReturnType<typeof runCronDirectCommand>>,
@@ -232,6 +241,40 @@ export function buildGatewayCronService(params: {
       timeoutSeconds,
       maxOutputBytes,
     }) => {
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      if (shouldEnforceDirectCommandAllowlist(runtimeConfig)) {
+        const resolvedAgentConfig = resolveAgentConfig(runtimeConfig, agentId);
+        const safeBins = resolveSafeBins(
+          resolvedAgentConfig?.tools?.exec?.safeBins ?? runtimeConfig.tools?.exec?.safeBins,
+        );
+        const approvals = resolveExecApprovals(agentId, { security: "allowlist" });
+        const allowlistEval = evaluateShellAllowlist({
+          command,
+          allowlist: approvals.allowlist,
+          safeBins,
+          platform: process.platform,
+        });
+        if (!allowlistEval.analysisOk || !allowlistEval.allowlistSatisfied) {
+          const reason = !allowlistEval.analysisOk
+            ? "directCommand denied: allowlist analysis failed"
+            : "directCommand denied: allowlist miss";
+          const result = {
+            status: "error" as const,
+            summary: reason,
+            captured: {
+              stdout: "",
+              stderr: reason,
+            },
+          };
+          return {
+            status: "error" as const,
+            error: reason,
+            summary: formatDirectCommandResult(result),
+            result,
+          };
+        }
+      }
+
       const directCommandResult = await runCronDirectCommand({
         jobId: job.id,
         payload: {
@@ -254,7 +297,6 @@ export function buildGatewayCronService(params: {
         return directCommandResult;
       }
 
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const resolvedDelivery = await resolveDeliveryTarget(runtimeConfig, agentId, {
         channel: deliveryPlan.channel ?? "last",
         to: deliveryPlan.to,
