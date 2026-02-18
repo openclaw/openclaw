@@ -71,6 +71,8 @@ describe("restart-helper", () => {
       const content = await fs.readFile(scriptPath!, "utf-8");
       expect(content).toContain("#!/bin/sh");
       expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
+      expect(content).toContain("launchctl bootstrap 'gui/501'");
+      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain('rm -f "$0"');
 
       if (scriptPath) {
@@ -90,6 +92,7 @@ describe("restart-helper", () => {
       expect(scriptPath).toBeTruthy();
       const content = await fs.readFile(scriptPath!, "utf-8");
       expect(content).toContain("launchctl kickstart -k 'gui/501/com.custom.openclaw'");
+      expect(content).toContain("com.custom.openclaw.plist");
 
       if (scriptPath) {
         await fs.unlink(scriptPath);

@@ -78,15 +78,26 @@ rm -f "$0"
 `;
     } else if (platform === "darwin") {
       const label = resolveLaunchdLabel(env);
-      const escaped = shellEscape(label);
+      const escapedLabel = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
+      const homeDir = env.HOME || os.homedir();
+      const plistPath = path.join(homeDir, "Library", "LaunchAgents", `${label}.plist`);
+      const escapedPlistPath = shellEscape(plistPath);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-launchctl kickstart -k 'gui/${uid}/${escaped}'
+if ! launchctl kickstart -k 'gui/${uid}/${escapedLabel}' >/dev/null 2>&1; then
+  if [ -f '${escapedPlistPath}' ]; then
+    launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' >/dev/null 2>&1 || true
+    launchctl enable 'gui/${uid}/${escapedLabel}' >/dev/null 2>&1 || true
+    launchctl kickstart -k 'gui/${uid}/${escapedLabel}'
+  else
+    exit 1
+  fi
+fi
 # Self-cleanup
 rm -f "$0"
 `;

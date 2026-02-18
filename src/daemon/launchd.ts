@@ -213,6 +213,8 @@ export async function repairLaunchAgentBootstrap(args: {
   if (boot.code !== 0) {
     return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
   }
+  // Keep parity with restart helper fallback: clear persisted disabled state before kickstart.
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {
     return { ok: false, detail: (kick.stderr || kick.stdout).trim() || undefined };
@@ -424,6 +426,23 @@ export async function restartLaunchAgent({
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (res.code !== 0) {
+    if (isLaunchctlNotLoaded(res)) {
+      const repair = await repairLaunchAgentBootstrap({ env });
+      if (repair.ok) {
+        try {
+          stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+          stdout.write(`${formatLine("Repair", "bootstrap fallback applied")}\n`);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+            throw err;
+          }
+        }
+        return;
+      }
+      throw new Error(
+        `launchctl kickstart failed: ${res.stderr || res.stdout}; bootstrap fallback failed: ${repair.detail ?? "unknown error"}`.trim(),
+      );
+    }
     throw new Error(`launchctl kickstart failed: ${res.stderr || res.stdout}`.trim());
   }
   try {
