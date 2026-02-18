@@ -18,6 +18,7 @@ fi
 
 # Security: avoid option-injection from malicious file names (e.g. "--all", "--force").
 # Robustness: NUL-delimited file list handles spaces/newlines safely.
+# Compatibility: use read loops instead of `mapfile` so this runs on macOS Bash 3.x.
 files=()
 while IFS= read -r -d '' file; do
   files+=("$file")

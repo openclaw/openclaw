@@ -207,12 +207,13 @@ Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway',
-  action: string,              // e.g., 'new', 'reset', 'stop'
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
+  action: string,              // e.g., 'new', 'reset', 'stop', 'received', 'sent'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
   messages: string[],          // Push messages here to send to user
   context: {
+    // Command events:
     sessionEntry?: SessionEntry,
     sessionId?: string,
     sessionFile?: string,
@@ -220,7 +221,13 @@ Each event includes:
     senderId?: string,
     workspaceDir?: string,
     bootstrapFiles?: WorkspaceBootstrapFile[],
-    cfg?: OpenClawConfig
+    cfg?: OpenClawConfig,
+    // Message events (see Message Events section for full details):
+    from?: string,             // message:received
+    to?: string,               // message:sent
+    content?: string,
+    channelId?: string,
+    success?: boolean,         // message:sent
   }
 }
 ```
@@ -245,6 +252,70 @@ Triggered when agent commands are issued:
 Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
+
+### Message Events
+
+Triggered when messages are received or sent:
+
+- **`message`**: All message events (general listener)
+- **`message:received`**: When an inbound message is received from any channel
+- **`message:sent`**: When an outbound message is successfully sent
+
+#### Message Event Context
+
+Message events include rich context about the message:
+
+```typescript
+// message:received context
+{
+  from: string,           // Sender identifier (phone number, user ID, etc.)
+  content: string,        // Message content
+  timestamp?: number,     // Unix timestamp when received
+  channelId: string,      // Channel (e.g., "whatsapp", "telegram", "discord")
+  accountId?: string,     // Provider account ID for multi-account setups
+  conversationId?: string, // Chat/conversation ID
+  messageId?: string,     // Message ID from the provider
+  metadata?: {            // Additional provider-specific data
+    to?: string,
+    provider?: string,
+    surface?: string,
+    threadId?: string,
+    senderId?: string,
+    senderName?: string,
+    senderUsername?: string,
+    senderE164?: string,
+  }
+}
+
+// message:sent context
+{
+  to: string,             // Recipient identifier
+  content: string,        // Message content that was sent
+  success: boolean,       // Whether the send succeeded
+  error?: string,         // Error message if sending failed
+  channelId: string,      // Channel (e.g., "whatsapp", "telegram", "discord")
+  accountId?: string,     // Provider account ID
+  conversationId?: string, // Chat/conversation ID
+  messageId?: string,     // Message ID returned by the provider
+}
+```
+
+#### Example: Message Logger Hook
+
+```typescript
+import type { HookHandler } from "../../src/hooks/hooks.js";
+import { isMessageReceivedEvent, isMessageSentEvent } from "../../src/hooks/internal-hooks.js";
+
+const handler: HookHandler = async (event) => {
+  if (isMessageReceivedEvent(event)) {
+    console.log(`[message-logger] Received from ${event.context.from}: ${event.context.content}`);
+  } else if (isMessageSentEvent(event)) {
+    console.log(`[message-logger] Sent to ${event.context.to}: ${event.context.content}`);
+  }
+};
+
+export default handler;
+```
 
 ### Tool Result Hooks (Plugin API)
 

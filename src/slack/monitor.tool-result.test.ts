@@ -58,6 +58,8 @@ describe("monitorSlackProvider tool results", () => {
         slack: {
           dm: { enabled: true, policy: "open", allowFrom: ["*"] },
           replyToMode,
+          // Disable native streaming for replyToMode tests (client mock lacks chatStream).
+          streaming: false,
         },
       },
     };

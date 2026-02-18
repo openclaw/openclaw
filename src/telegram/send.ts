@@ -5,8 +5,6 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
-import type { RetryConfig } from "../infra/retry.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -14,6 +12,7 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
+import type { RetryConfig } from "../infra/retry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -23,6 +22,7 @@ import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
@@ -1076,4 +1076,105 @@ export async function sendPollTelegram(
   });
 
   return { messageId, chatId: resolvedChatId, pollId };
+}
+
+// ---------------------------------------------------------------------------
+// Forum topic creation
+// ---------------------------------------------------------------------------
+
+type TelegramCreateForumTopicOpts = {
+  token?: string;
+  accountId?: string;
+  api?: Bot["api"];
+  verbose?: boolean;
+  retry?: RetryConfig;
+  /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
+  iconColor?: number;
+  /** Custom emoji ID for the topic icon. */
+  iconCustomEmojiId?: string;
+};
+
+export type TelegramCreateForumTopicResult = {
+  topicId: number;
+  name: string;
+  chatId: string;
+};
+
+/**
+ * Create a forum topic in a Telegram supergroup.
+ * Requires the bot to have `can_manage_topics` permission.
+ *
+ * @param chatId - Supergroup chat ID
+ * @param name - Topic name (1-128 characters)
+ * @param opts - Optional configuration
+ */
+export async function createForumTopicTelegram(
+  chatId: string,
+  name: string,
+  opts: TelegramCreateForumTopicOpts = {},
+): Promise<TelegramCreateForumTopicResult> {
+  if (!name?.trim()) {
+    throw new Error("Forum topic name is required");
+  }
+  const trimmedName = name.trim();
+  if (trimmedName.length > 128) {
+    throw new Error("Forum topic name must be 128 characters or fewer");
+  }
+
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
+  // but createForumTopic must always target the base supergroup chat id.
+  const target = parseTelegramTarget(chatId);
+  const normalizedChatId = normalizeChatId(target.chatId);
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const extra: Record<string, unknown> = {};
+  if (opts.iconColor != null) {
+    extra.icon_color = opts.iconColor;
+  }
+  if (opts.iconCustomEmojiId?.trim()) {
+    extra.icon_custom_emoji_id = opts.iconCustomEmojiId.trim();
+  }
+
+  const hasExtra = Object.keys(extra).length > 0;
+  const result = await requestWithDiag(
+    () => api.createForumTopic(normalizedChatId, trimmedName, hasExtra ? extra : undefined),
+    "createForumTopic",
+  );
+
+  const topicId = result.message_thread_id;
+
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  return {
+    topicId,
+    name: result.name ?? trimmedName,
+    chatId: normalizedChatId,
+  };
 }

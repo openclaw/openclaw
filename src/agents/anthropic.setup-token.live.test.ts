@@ -1,8 +1,8 @@
-import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_SETUP_TOKEN_PREFIX,
@@ -142,6 +142,7 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
 
   const preferred = [
     "claude-opus-4-5",
+    "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-sonnet-4-0",
     "claude-haiku-3-5",
