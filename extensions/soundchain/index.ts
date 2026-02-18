@@ -6,6 +6,13 @@ import type {
 } from "../../src/plugins/types.js";
 import { createSoundChainApi, type SoundChainApi, type SoundChainConfig } from "./src/api.js";
 import {
+  runPipeline,
+  quickDiagnose,
+  deepDiagnose,
+  PIPELINE_STAGES,
+  classifyError,
+} from "./src/phil-jackson.js";
+import {
   createWarRoomClient,
   type WarRoomClient,
   type WarRoomConfig,
@@ -142,7 +149,7 @@ function createLeaderboardTool(api: SoundChainApi): AnyAgentTool {
 }
 
 // ---------------------------------------------------------------------------
-// War Room Tools (SCid Worker + Ollama + Fleet)
+// War Room — Infrastructure Tools
 // ---------------------------------------------------------------------------
 
 function createWarRoomHealthTool(wr: WarRoomClient): AnyAgentTool {
@@ -158,67 +165,15 @@ function createWarRoomHealthTool(wr: WarRoomClient): AnyAgentTool {
   } as AnyAgentTool;
 }
 
-function createOllamaThinkTool(wr: WarRoomClient): AnyAgentTool {
-  return {
-    name: "warroom_think",
-    label: "War Room Think",
-    description:
-      "Quick reasoning via the War Room's Mistral model (First Responder). Fast queries, scan logs, instant patches. Routes through the SCid Worker task router on localhost:8787.",
-    parameters: Type.Object({
-      prompt: Type.String({ description: "The prompt to reason about." }),
-    }),
-    async execute(_id: string, params: Record<string, unknown>) {
-      const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
-      if (!prompt) return json({ error: "prompt is required." });
-      return json(await wr.think(prompt));
-    },
-  } as AnyAgentTool;
-}
-
-function createOllamaCodeTool(wr: WarRoomClient): AnyAgentTool {
-  return {
-    name: "warroom_code",
-    label: "War Room Code",
-    description:
-      "Code analysis via the War Room's Qwen model (Code Specialist). Understands syntax, patterns, and code structure. Routes through the SCid Worker task router.",
-    parameters: Type.Object({
-      prompt: Type.String({ description: "Code question or snippet to analyze." }),
-    }),
-    async execute(_id: string, params: Record<string, unknown>) {
-      const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
-      if (!prompt) return json({ error: "prompt is required." });
-      return json(await wr.code(prompt));
-    },
-  } as AnyAgentTool;
-}
-
-function createOllamaReasonTool(wr: WarRoomClient): AnyAgentTool {
-  return {
-    name: "warroom_reason",
-    label: "War Room Reason",
-    description:
-      "Complex reasoning via the War Room's Llama 3.1 model (Team Captain). Deep analysis, multi-step logic, review consistency. Routes through the SCid Worker task router.",
-    parameters: Type.Object({
-      prompt: Type.String({ description: "Complex question requiring deep reasoning." }),
-    }),
-    async execute(_id: string, params: Record<string, unknown>) {
-      const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
-      if (!prompt) return json({ error: "prompt is required." });
-      return json(await wr.reason(prompt));
-    },
-  } as AnyAgentTool;
-}
-
 function createOllamaDirectTool(wr: WarRoomClient): AnyAgentTool {
   return {
     name: "warroom_ollama",
     label: "War Room Ollama",
     description:
-      "Send a prompt directly to any Ollama model in the War Room. Available models: mistral (fast), qwen:7b (code), llama3.1 (reason), falcon:7b (syntax), gemma:7b (deps), mixtral:8x22b (architect, 79GB), jmorgan/grok (deep analysis, 116GB). Zero token cost — all local.",
+      "Send a prompt directly to any Ollama model. Available: mistral (fast), qwen:7b (code), llama3.1 (reason), falcon:7b (syntax), gemma:7b (deps), mixtral:8x22b (architect, 79GB), jmorgan/grok (deep, 116GB). Zero token cost — all local.",
     parameters: Type.Object({
       model: Type.String({
-        description:
-          "Model name (e.g. 'mistral:latest', 'llama3.1:latest', 'mixtral:8x22b', 'jmorgan/grok:latest'). Use warroom_health to see available models.",
+        description: "Model name (e.g. 'mistral:latest', 'mixtral:8x22b', 'jmorgan/grok:latest').",
       }),
       prompt: Type.String({ description: "The prompt to send to the model." }),
     }),
@@ -237,17 +192,153 @@ function createWarRoomTaskTool(wr: WarRoomClient): AnyAgentTool {
     name: "warroom_task",
     label: "War Room Task",
     description:
-      "Send a raw task to the SCid Worker (localhost:8787). The worker routes to the right Ollama model based on task prefix: 'think:', 'code:', 'reason:', 'bash:', 'read:', 'grep:', 'glob:', 'git:status', 'build', 'ping'. Returns the task result.",
+      "Send a raw task to the SCid Worker (localhost:8787). Task prefixes: 'think:', 'code:', 'reason:', 'bash:', 'read:', 'grep:', 'glob:', 'git:status', 'build', 'ping'.",
     parameters: Type.Object({
       task: Type.String({
         description:
-          "Task string. Examples: 'think:why is this failing?', 'bash:ls -la', 'read:src/index.ts', 'grep:TODO:src/', 'build', 'git:status', 'ping'.",
+          "Task string. Examples: 'bash:ls -la', 'read:src/index.ts', 'grep:TODO:src/', 'build', 'git:status'.",
       }),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const task = typeof params.task === "string" ? params.task.trim() : "";
       if (!task) return json({ error: "task is required." });
       return json(await wr.scidTask(task));
+    },
+  } as AnyAgentTool;
+}
+
+// ---------------------------------------------------------------------------
+// Phil Jackson Triangle — Diagnostic Pipeline Tools
+// ---------------------------------------------------------------------------
+
+function createDiagnoseTool(wr: WarRoomClient): AnyAgentTool {
+  return {
+    name: "warroom_diagnose",
+    label: "Phil Jackson Diagnose",
+    description:
+      "Run the Phil Jackson Triangle Pipeline on a problem. Routes through up to 7 Ollama models in sequence — each with a specific role (syntax, deep analysis, fast fix, deps, architect, captain, backup). Auto-classifies the error type and starts with the most relevant model. Use depth='quick' for 1 model, 'standard' for 3, 'deep' for all 7.",
+    parameters: Type.Object({
+      problem: Type.String({
+        description:
+          "The error message, build failure, bug description, or code problem to diagnose.",
+      }),
+      depth: Type.Optional(
+        Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")], {
+          description:
+            "Pipeline depth: 'quick' = 1 model (fast break), 'standard' = 3 models (half-court), 'deep' = all 7 (full triangle rotation). Default: 'standard'.",
+        }),
+      ),
+    }),
+    async execute(_id: string, params: Record<string, unknown>) {
+      const problem = typeof params.problem === "string" ? params.problem.trim() : "";
+      if (!problem) return json({ error: "problem is required." });
+
+      const depth = typeof params.depth === "string" ? params.depth : "standard";
+      let result;
+      switch (depth) {
+        case "quick":
+          result = await quickDiagnose(wr, problem);
+          break;
+        case "deep":
+          result = await deepDiagnose(wr, problem);
+          break;
+        default:
+          result = await runPipeline(wr, problem, 3);
+          break;
+      }
+      return json(result);
+    },
+  } as AnyAgentTool;
+}
+
+function createSpecialistTool(wr: WarRoomClient): AnyAgentTool {
+  return {
+    name: "warroom_specialist",
+    label: "War Room Specialist",
+    description: `Route a problem to a SoundChain specialist domain. Available specialists:
+- code-simplifier: Cleanup, refactoring, duplicate consolidation
+- dex-inspector: DEX swap flow, marketplace tx, OGUN swap, auction, staking
+- helix-validator: MongoDB <-> Blockchain sync, ownership mismatch, balance desync, SCid
+- ipfs-auditor: IPFS/Pinata streaming, CID missing, gateway timeout, artwork
+- mobile-detective: iOS/Android bugs, Safari, wallet deep links, in-app browser
+- verify-app: E2E testing, pre-merge checks, regression tests
+- wallet-debugger: Wallet connection, balance shows 0, session lost, chain switch`,
+    parameters: Type.Object({
+      specialist: Type.String({
+        description:
+          "Specialist domain: 'code-simplifier', 'dex-inspector', 'helix-validator', 'ipfs-auditor', 'mobile-detective', 'verify-app', or 'wallet-debugger'.",
+      }),
+      problem: Type.String({
+        description: "Describe the issue for the specialist to investigate.",
+      }),
+    }),
+    async execute(_id: string, params: Record<string, unknown>) {
+      const specialist = typeof params.specialist === "string" ? params.specialist.trim() : "";
+      const problem = typeof params.problem === "string" ? params.problem.trim() : "";
+      if (!specialist) return json({ error: "specialist is required." });
+      if (!problem) return json({ error: "problem is required." });
+
+      const spec = SPECIALISTS[specialist as keyof typeof SPECIALISTS];
+      if (!spec) {
+        return json({
+          error: `Unknown specialist '${specialist}'. Available: ${Object.keys(SPECIALISTS).join(", ")}`,
+        });
+      }
+
+      // Route to the best model for this specialist's domain
+      const modelMap: Record<string, string> = {
+        "code-simplifier": "qwen:7b",
+        "dex-inspector": "llama3.1:latest",
+        "helix-validator": "jmorgan/grok:latest",
+        "ipfs-auditor": "mistral:latest",
+        "mobile-detective": "gemma:7b",
+        "verify-app": "mistral:latest",
+        "wallet-debugger": "llama3.1:latest",
+      };
+
+      const model = modelMap[specialist] ?? "mistral:latest";
+
+      const prompt = `You are the ${specialist} specialist for SoundChain.
+Your focus: ${spec.focus}
+Known triggers: ${spec.triggers.join(", ")}
+
+PROBLEM:
+${problem}
+
+Analyze this issue within your domain. Be specific: file paths, line numbers, code fixes, commands to run. No fluff.`;
+
+      const response = await wr.ollamaGenerate(model, prompt);
+      return json({
+        specialist,
+        focus: spec.focus,
+        model,
+        response,
+      });
+    },
+  } as AnyAgentTool;
+}
+
+function createPipelineInfoTool(): AnyAgentTool {
+  return {
+    name: "warroom_roster",
+    label: "War Room Roster",
+    description:
+      "View the Phil Jackson Triangle Pipeline roster — all 7 models, their roles, triggers, tasks, and NBA chemistry analogies. Also shows fleet nodes and specialist domains.",
+    parameters: Type.Object({}),
+    async execute() {
+      return json({
+        pipeline: PIPELINE_STAGES.map((s) => ({
+          stage: s.name,
+          model: s.model,
+          role: s.role,
+          trigger: s.trigger,
+          tasks: s.tasks,
+          chemistry: s.chemistry,
+        })),
+        models: OLLAMA_MODELS,
+        fleet: FLEET_NODES,
+        specialists: SPECIALISTS,
+      });
     },
   } as AnyAgentTool;
 }
@@ -260,7 +351,7 @@ const plugin = {
   id: "soundchain",
   name: "SoundChain",
   description:
-    "Search music, play tracks, earn OGUN streaming rewards, and command the War Room — 7 Ollama models + fleet nodes + SCid Worker — all from any OpenClaw channel.",
+    "SoundChain War Room — Phil Jackson Triangle diagnostic pipeline (7 Ollama models), specialist agents, fleet nodes, music API + OGUN streaming rewards. Build. Diagnose. Ship.",
 
   register(api: OpenClawPluginApi) {
     const cfg = (api.pluginConfig ?? {}) as Record<string, unknown>;
@@ -289,7 +380,7 @@ const plugin = {
     const scApi = createSoundChainApi(scConfig);
     const wrClient = createWarRoomClient(wrConfig);
 
-    // Music tools (SoundChain Agent REST API)
+    // --- Music tools (SoundChain Agent REST API) ---
     const musicTools = [
       createSearchTool,
       createRadioTool,
@@ -310,17 +401,14 @@ const plugin = {
       );
     }
 
-    // War Room tools (SCid Worker + Ollama + Fleet)
-    const warRoomTools = [
+    // --- War Room infrastructure tools ---
+    const infrastructureTools = [
       createWarRoomHealthTool,
-      createOllamaThinkTool,
-      createOllamaCodeTool,
-      createOllamaReasonTool,
       createOllamaDirectTool,
       createWarRoomTaskTool,
     ];
 
-    for (const createTool of warRoomTools) {
+    for (const createTool of infrastructureTools) {
       api.registerTool(
         ((ctx) => {
           if (ctx.sandboxed) return null;
@@ -329,6 +417,28 @@ const plugin = {
         { optional: true },
       );
     }
+
+    // --- Phil Jackson Triangle diagnostic tools ---
+    const diagnosticTools = [createDiagnoseTool, createSpecialistTool];
+
+    for (const createTool of diagnosticTools) {
+      api.registerTool(
+        ((ctx) => {
+          if (ctx.sandboxed) return null;
+          return createTool(wrClient);
+        }) as OpenClawPluginToolFactory,
+        { optional: true },
+      );
+    }
+
+    // --- Roster (no client needed) ---
+    api.registerTool(
+      ((ctx) => {
+        if (ctx.sandboxed) return null;
+        return createPipelineInfoTool();
+      }) as OpenClawPluginToolFactory,
+      { optional: true },
+    );
   },
 };
 
