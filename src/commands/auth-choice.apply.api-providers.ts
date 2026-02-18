@@ -564,7 +564,7 @@ export async function applyAuthChoiceApiProviders(
         initialValue: true,
       });
       if (useExisting) {
-        apiKey = envKey.apiKey;
+        apiKey = envKey.apiKey ?? "";
         await setZaiApiKey(apiKey, params.agentDir);
         hasCredential = true;
       }
