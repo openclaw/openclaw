@@ -3,6 +3,7 @@ OPENCLAW_IOS_DEFAULT_TEAM = Y5PE65HELJ
 OPENCLAW_IOS_SELECTED_TEAM = $(OPENCLAW_IOS_DEFAULT_TEAM)
 
 // Local contributors can override this by running scripts/ios-configure-signing.sh.
+// Keep include after defaults: xcconfig is evaluated top-to-bottom.
 #include? "../.local-signing.xcconfig"
 
 CODE_SIGN_STYLE = Automatic

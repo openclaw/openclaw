@@ -11,6 +11,24 @@ import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
 const HOME = path.join(os.tmpdir(), "openclaw-home-redirect");
 const mockRequest = vi.fn();
 
+function createMockHttpExchange() {
+  const res = Object.assign(new PassThrough(), {
+    statusCode: 0,
+    headers: {} as Record<string, string>,
+  });
+  const req = {
+    on: (event: string, handler: (...args: unknown[]) => void) => {
+      if (event === "error") {
+        res.on("error", handler);
+      }
+      return req;
+    },
+    end: () => undefined,
+    destroy: () => res.destroy(),
+  } as const;
+  return { req, res };
+}
+
 describe("media store redirects", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -44,20 +62,7 @@ describe("media store redirects", () => {
     let call = 0;
     mockRequest.mockImplementation((_url, _opts, cb) => {
       call += 1;
-      const res = Object.assign(new PassThrough(), {
-        statusCode: 0,
-        headers: {} as Record<string, string>,
-      });
-      const req = {
-        on: (event: string, handler: (...args: unknown[]) => void) => {
-          if (event === "error") {
-            res.on("error", handler);
-          }
-          return req;
-        },
-        end: () => undefined,
-        destroy: () => res.destroy(),
-      } as const;
+      const { req, res } = createMockHttpExchange();
 
       if (call === 1) {
         res.statusCode = 302;
@@ -89,20 +94,7 @@ describe("media store redirects", () => {
 
   it("sniffs xlsx from zip content when headers and url extension are missing", async () => {
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const res = Object.assign(new PassThrough(), {
-        statusCode: 0,
-        headers: {} as Record<string, string>,
-      });
-      const req = {
-        on: (event: string, handler: (...args: unknown[]) => void) => {
-          if (event === "error") {
-            res.on("error", handler);
-          }
-          return req;
-        },
-        end: () => undefined,
-        destroy: () => res.destroy(),
-      } as const;
+      const { req, res } = createMockHttpExchange();
 
       res.statusCode = 200;
       res.headers = {};
@@ -133,5 +125,23 @@ describe("media store redirects", () => {
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     expect(path.extname(saved.path)).toBe(".xlsx");
+  });
+
+  it("fails when redirect response omits location header", async () => {
+    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
+      const { req, res } = createMockHttpExchange();
+      res.statusCode = 302;
+      res.headers = {};
+      setImmediate(() => {
+        cb(res as unknown);
+        res.end();
+      });
+      return req;
+    });
+
+    await expect(saveMediaSource("https://example.com/start")).rejects.toThrow(
+      "Redirect loop or missing Location header",
+    );
+    expect(mockRequest).toHaveBeenCalledTimes(1);
   });
 });
