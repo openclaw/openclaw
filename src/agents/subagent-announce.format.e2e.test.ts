@@ -24,7 +24,9 @@ const subagentRegistryMock = {
   countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
   resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
-const chatHistoryMock = vi.fn(async (_sessionKey: string) => ({ messages: [] as Array<unknown> }));
+const chatHistoryMock = vi.fn(async (_sessionKey?: string) => ({
+  messages: [] as Array<unknown>,
+}));
 let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
