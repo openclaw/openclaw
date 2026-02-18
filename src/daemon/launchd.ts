@@ -424,6 +424,23 @@ export async function restartLaunchAgent({
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (res.code !== 0) {
+    if (isLaunchctlNotLoaded(res)) {
+      const repair = await repairLaunchAgentBootstrap({ env });
+      if (repair.ok) {
+        try {
+          stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+          stdout.write(`${formatLine("Repair", "bootstrap fallback applied")}\n`);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+            throw err;
+          }
+        }
+        return;
+      }
+      throw new Error(
+        `launchctl kickstart failed: ${res.stderr || res.stdout}; bootstrap fallback failed: ${repair.detail ?? "unknown error"}`.trim(),
+      );
+    }
     throw new Error(`launchctl kickstart failed: ${res.stderr || res.stdout}`.trim());
   }
   try {
