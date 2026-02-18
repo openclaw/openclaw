@@ -1,6 +1,11 @@
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import {
+  extractRecoverySuggestion,
+  formatRecoverySuggestion,
+  shouldDisplayRecoverySuggestion,
+} from "./recovery-handler.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -197,6 +202,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       noteFinalizedRun(evt.runId);
       clearActiveRunIfMatch(evt.runId);
       if (wasActiveRun) {
+        // Check for recovery suggestion on error stopReason
+        if (stopReason === "error") {
+          const recoverySuggestion = extractRecoverySuggestion(evt.message);
+          if (recoverySuggestion && shouldDisplayRecoverySuggestion(recoverySuggestion)) {
+            const recoveryMessage = formatRecoverySuggestion(recoverySuggestion);
+            chatLog.addSystem(recoveryMessage);
+          }
+        }
         setActivityStatus(stopReason === "error" ? "error" : "idle");
       }
       // Refresh session info to update token counts in footer
@@ -216,7 +229,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "error") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+      
+      // Check for recovery suggestion
+      const recoverySuggestion = extractRecoverySuggestion(evt.message);
+      
+      if (recoverySuggestion && shouldDisplayRecoverySuggestion(recoverySuggestion)) {
+        // Display recovery options
+        const recoveryMessage = formatRecoverySuggestion(recoverySuggestion);
+        chatLog.addSystem(recoveryMessage);
+      } else {
+        // Standard error message
+        chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+      }
+      
       streamAssembler.drop(evt.runId);
       sessionRuns.delete(evt.runId);
       clearActiveRunIfMatch(evt.runId);
