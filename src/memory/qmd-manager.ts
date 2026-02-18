@@ -105,6 +105,45 @@ export class QmdMemoryManager implements MemorySearchManager {
   private lastEmbedAt: number | null = null;
   private attemptedNullByteCollectionRepair = false;
 
+  private getWeightForPath(relPath: string): number {
+    const weights = this.qmd.weights;
+    if (!weights || Object.keys(weights).length === 0) {
+      return 1;
+    }
+    const normalizedPath = relPath.replace(/\\/g, "/");
+    let bestWeight: number | undefined;
+    for (const [rawPattern, weight] of Object.entries(weights)) {
+      if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0) {
+        continue;
+      }
+      const pattern = rawPattern.replace(/\\/g, "/").trim();
+      if (!pattern) {
+        continue;
+      }
+      if (!this.matchesWeightPattern(normalizedPath, pattern)) {
+        continue;
+      }
+      if (bestWeight === undefined || weight > bestWeight) {
+        bestWeight = weight;
+      }
+    }
+    return bestWeight ?? 1;
+  }
+
+  private matchesWeightPattern(pathRel: string, pattern: string): boolean {
+    if (pattern.endsWith("/**")) {
+      const base = pattern.slice(0, -3).replace(/\/+$/, "");
+      if (!base) {
+        return true;
+      }
+      if (pathRel === base) {
+        return true;
+      }
+      return pathRel.startsWith(`${base}/`);
+    }
+    return pathRel === pattern;
+  }
+
   private constructor(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -449,7 +488,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
       const lines = this.extractSnippetLines(snippet);
-      const score = typeof entry.score === "number" ? entry.score : 0;
+      const baseScore = typeof entry.score === "number" ? entry.score : 0;
+      const weight = this.getWeightForPath(doc.rel);
+      const score = baseScore * weight;
       const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
         continue;

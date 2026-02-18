@@ -58,6 +58,7 @@ export type ResolvedQmdConfig = {
   update: ResolvedQmdUpdateConfig;
   limits: ResolvedQmdLimitsConfig;
   includeDefaultMemory: boolean;
+  weights?: Record<string, number>;
   scope?: SessionSendPolicyConfig;
 };
 
@@ -161,6 +162,26 @@ function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
     return Math.floor(raw);
   }
   return fallback;
+}
+
+function resolveWeights(raw?: Record<string, number>): Record<string, number> | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const entries: Array<[string, number]> = [];
+  for (const [pattern, weight] of Object.entries(raw)) {
+    if (!pattern.trim()) {
+      continue;
+    }
+    if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0) {
+      continue;
+    }
+    entries.push([pattern.trim(), weight]);
+  }
+  if (!entries.length) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
 }
 
 function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
@@ -307,6 +328,7 @@ export function resolveMemoryBackendConfig(params: {
       ),
     },
     limits: resolveLimits(qmdCfg?.limits),
+    weights: resolveWeights(qmdCfg?.weights),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,
   };
 
