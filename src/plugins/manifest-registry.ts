@@ -229,12 +229,18 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // Different plugins with same ID: only warn on same-precedence conflicts.
+      // Workspace/global extensions intentionally override bundled plugins
+      // (precedence: config > workspace > global > bundled).
+      const samePrecedence = PLUGIN_ORIGIN_RANK[candidate.origin] === PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (samePrecedence) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
