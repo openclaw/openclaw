@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { parseSessionMeta, resolveSessionKey } from "./session-mapper.js";
+import { createInMemorySessionStore } from "./session.js";
 
 function createGateway(resolveLabelKey = "agent:main:label"): {
   gateway: GatewayClient;
@@ -52,5 +53,28 @@ describe("acp session mapper", () => {
 
     expect(key).toBe("agent:main:override");
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("acp session manager", () => {
+  const store = createInMemorySessionStore();
+
+  afterEach(() => {
+    store.clearAllSessionsForTest();
+  });
+
+  it("tracks active runs and clears on cancel", () => {
+    const session = store.createSession({
+      sessionKey: "acp:test",
+      cwd: "/tmp",
+    });
+    const controller = new AbortController();
+    store.setActiveRun(session.sessionId, "run-1", controller);
+
+    expect(store.getSessionByRunId("run-1")?.sessionId).toBe(session.sessionId);
+
+    const cancelled = store.cancelActiveRun(session.sessionId);
+    expect(cancelled).toBe(true);
+    expect(store.getSessionByRunId("run-1")).toBeUndefined();
   });
 });

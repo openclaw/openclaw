@@ -1,12 +1,12 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { throwIfAborted } from "./abort.js";
 import { sendMessage, sendPoll } from "./message.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -23,6 +23,8 @@ export type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
+  /** Active agent id for per-agent outbound media root scoping. */
+  agentId?: string;
   accountId?: string | null;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
@@ -93,6 +95,7 @@ export async function executeSendAction(params: {
     cfg: params.ctx.cfg,
     to: params.to,
     content: params.message,
+    agentId: params.ctx.agentId,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
     channel: params.ctx.channel || undefined,

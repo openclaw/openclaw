@@ -1,5 +1,3 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
@@ -11,6 +9,8 @@ import {
   normalizeProviderId,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
@@ -55,6 +55,25 @@ function hasAuthForProvider(
     return true;
   }
   return false;
+}
+
+function createProviderAuthChecker(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): (provider: string) => boolean {
+  const authStore = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const authCache = new Map<string, boolean>();
+  return (provider: string) => {
+    const cached = authCache.get(provider);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const value = hasAuthForProvider(provider, params.cfg, authStore);
+    authCache.set(provider, value);
+    return value;
+  };
 }
 
 function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
@@ -130,6 +149,14 @@ function addModelSelectOption(params: {
     hint: hints.length > 0 ? hints.join(" · ") : undefined,
   });
   params.seen.add(key);
+}
+
+function isAnthropicLegacyModel(entry: { provider: string; id: string }): boolean {
+  return (
+    entry.provider === "anthropic" &&
+    typeof entry.id === "string" &&
+    entry.id.toLowerCase().startsWith("claude-3")
+  );
 }
 
 async function promptManualModel(params: {
@@ -232,22 +259,13 @@ export async function promptDefaultModel(
 
   if (hasPreferredProvider && preferredProvider) {
     models = models.filter((entry) => entry.provider === preferredProvider);
+    if (preferredProvider === "anthropic") {
+      models = models.filter((entry) => !isAnthropicLegacyModel(entry));
+    }
   }
 
   const agentDir = params.agentDir;
-  const authStore = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const authCache = new Map<string, boolean>();
-  const hasAuth = (provider: string) => {
-    const cached = authCache.get(provider);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const value = hasAuthForProvider(provider, cfg, authStore);
-    authCache.set(provider, value);
-    return value;
-  };
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir });
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
@@ -383,19 +401,7 @@ export async function promptModelAllowlist(params: {
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const authCache = new Map<string, boolean>();
-  const hasAuth = (provider: string) => {
-    const cached = authCache.get(provider);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const value = hasAuthForProvider(provider, cfg, authStore);
-    authCache.set(provider, value);
-    return value;
-  };
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
@@ -429,6 +435,7 @@ export async function promptModelAllowlist(params: {
     message: params.message ?? "Models in /model picker (multi-select)",
     options,
     initialValues: initialKeys.length > 0 ? initialKeys : undefined,
+    searchable: true,
   });
   const selected = normalizeModelKeys(selection.map((value) => String(value)));
   if (selected.length > 0) {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
 vi.mock("../../../commands/message.js", () => ({
-  messageCommand: (...args: unknown[]) => messageCommandMock(...args),
+  messageCommand: messageCommandMock,
 }));
 
 vi.mock("../../../globals.js", () => ({
@@ -14,8 +14,10 @@ vi.mock("../../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: vi.fn(),
 }));
 
-const hasHooksMock = vi.fn(() => false);
-const runGatewayStopMock = vi.fn(async () => {});
+const hasHooksMock = vi.fn((_hookName: string) => false);
+const runGatewayStopMock = vi.fn(
+  async (_event: { reason?: string }, _ctx: Record<string, unknown>) => {},
+);
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
     event: { reason?: string };
@@ -33,7 +35,7 @@ const runGlobalGatewayStopSafelyMock = vi.fn(
   },
 );
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
-  runGlobalGatewayStopSafely: (...args: unknown[]) => runGlobalGatewayStopSafelyMock(...args),
+  runGlobalGatewayStopSafely: runGlobalGatewayStopSafelyMock,
 }));
 
 const exitMock = vi.fn((): never => {
@@ -201,7 +203,13 @@ describe("runMessageAction", () => {
       expect.anything(),
     );
     // account key should be stripped in favor of accountId
-    const passedOpts = messageCommandMock.mock.calls[0][0] as Record<string, unknown>;
+    const passedOpts = (
+      messageCommandMock.mock.calls as unknown as Array<[Record<string, unknown>]>
+    )?.[0]?.[0];
+    expect(passedOpts).toBeTruthy();
+    if (!passedOpts) {
+      throw new Error("expected message command call");
+    }
     expect(passedOpts).not.toHaveProperty("account");
   });
 });

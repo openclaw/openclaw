@@ -1,10 +1,11 @@
-import type { ChannelOutboundAdapter } from "../types.js";
+import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../../telegram/outbound-params.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
+import type { ChannelOutboundAdapter } from "../types.js";
 
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -24,7 +25,16 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "telegram", ...result };
   },
-  sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId }) => {
+  sendMedia: async ({
+    to,
+    text,
+    mediaUrl,
+    mediaLocalRoots,
+    accountId,
+    deps,
+    replyToId,
+    threadId,
+  }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
     const messageThreadId = parseTelegramThreadId(threadId);
@@ -35,15 +45,16 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       messageThreadId,
       replyToMessageId,
       accountId: accountId ?? undefined,
+      mediaLocalRoots,
     });
     return { channel: "telegram", ...result };
   },
-  sendPayload: async ({ to, payload, accountId, deps, replyToId, threadId }) => {
+  sendPayload: async ({ to, payload, mediaLocalRoots, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
     const messageThreadId = parseTelegramThreadId(threadId);
     const telegramData = payload.channelData?.telegram as
-      | { buttons?: Array<Array<{ text: string; callback_data: string }>>; quoteText?: string }
+      | { buttons?: TelegramInlineButtons; quoteText?: string }
       | undefined;
     const quoteText =
       typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
@@ -60,6 +71,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       replyToMessageId,
       quoteText,
       accountId: accountId ?? undefined,
+      mediaLocalRoots,
     };
 
     if (mediaUrls.length === 0) {
