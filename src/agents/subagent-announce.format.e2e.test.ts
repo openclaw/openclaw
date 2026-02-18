@@ -232,6 +232,36 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tool output line 1");
   });
 
+  it("uses latest assistant text when it appears after a tool output", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "tool",
+          content: [{ type: "text", text: "tool output line" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "assistant final line" }],
+        },
+      ],
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-latest-assistant",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      waitForCompletion: false,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("assistant final line");
+  });
+
   it("falls back to latest tool output when assistant reply is empty", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     chatHistoryMock.mockResolvedValueOnce({
