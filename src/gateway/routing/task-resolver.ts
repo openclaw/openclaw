@@ -55,9 +55,11 @@ const rules: Array<[RegExp, TaskType]> = [
   [new RegExp(`${W}(计划|plan|设计|design|architecture|架构)${W_}`, "i"), TaskType.PLANNING],
   [new RegExp(`${W}(heartbeat|心跳)${W_}`, "i"), TaskType.HEARTBEAT_CHECK],
   [
-    // 修改|改代码 etc. — bare 改 removed (too broad: "改天"、"改变主意" false-positives)
+    // 修改|改 etc. — bare 改 included; higher-priority rules (DOC_WRITE, GIT_OPS, etc.)
+    // fire first for "改文档", "提交这次修改" etc., so CODE_EDIT only captures
+    // genuine edit requests like "帮我改这个函数的逻辑".
     new RegExp(
-      `${W}(implement|实现|写代码|write code|新增功能|feature|编码|修改|改代码|改函数|改逻辑|添加|加个|增加|改一下|改下)${W_}`,
+      `${W}(implement|实现|写代码|write code|新增功能|feature|编码|修改|改|改代码|改函数|改逻辑|添加|加个|增加|改一下|改下)${W_}`,
       "i",
     ),
     TaskType.CODE_EDIT,
