@@ -4,11 +4,18 @@ import {
   type TemporalDecayConfig,
   DEFAULT_TEMPORAL_DECAY_CONFIG,
 } from "./temporal-decay.js";
+import {
+  clusterByEmbeddings,
+  selectClusterRepresentatives,
+  type ClusterConfig,
+  DEFAULT_CLUSTER_CONFIG,
+} from "./semantic-clustering.js";
 
 export type HybridSource = string;
 
 export { type MMRConfig, DEFAULT_MMR_CONFIG };
 export { type TemporalDecayConfig, DEFAULT_TEMPORAL_DECAY_CONFIG };
+export { type ClusterConfig, DEFAULT_CLUSTER_CONFIG };
 
 export type HybridVectorResult = {
   id: string;
@@ -18,6 +25,7 @@ export type HybridVectorResult = {
   source: HybridSource;
   snippet: string;
   vectorScore: number;
+  embedding?: number[];
 };
 
 export type HybridKeywordResult = {
@@ -58,6 +66,8 @@ export async function mergeHybridResults(params: {
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
+  /** Clustering configuration for semantic grouping before MMR */
+  clustering?: Partial<ClusterConfig>;
   /** Test seam for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<
@@ -68,6 +78,7 @@ export async function mergeHybridResults(params: {
     score: number;
     snippet: string;
     source: HybridSource;
+    embedding?: number[];
   }>
 > {
   const byId = new Map<
@@ -120,6 +131,8 @@ export async function mergeHybridResults(params: {
 
   const merged = Array.from(byId.values()).map((entry) => {
     const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+    // Extract embedding from vector results if available
+    const vectorResult = params.vector.find((v) => v.id === entry.id);
     return {
       path: entry.path,
       startLine: entry.startLine,
@@ -127,6 +140,7 @@ export async function mergeHybridResults(params: {
       score,
       snippet: entry.snippet,
       source: entry.source,
+      embedding: vectorResult?.embedding,
     };
   });
 
@@ -137,7 +151,27 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const sorted = decayed.toSorted((a, b) => b.score - a.score);
+  let sorted = decayed.toSorted((a, b) => b.score - a.score);
+
+  // Apply semantic clustering if enabled
+  const clusteringConfig = { ...DEFAULT_CLUSTER_CONFIG, ...params.clustering };
+  if (clusteringConfig.enabled) {
+    // Cluster results by semantic similarity
+    const clusters = clusterByEmbeddings(
+      sorted.map((r, idx) => ({ ...r, id: `${r.path}:${r.startLine}:${idx}` })),
+      clusteringConfig,
+    );
+    
+    // Select diverse representatives from each cluster
+    // This ensures we don't have too many similar results before MMR
+    const representatives = selectClusterRepresentatives(
+      clusters.flatMap((c) => c.items),
+      1, // Take top 1 from each cluster
+    );
+    
+    // Re-sort representatives by score
+    sorted = representatives.toSorted((a, b) => b.score - a.score);
+  }
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };

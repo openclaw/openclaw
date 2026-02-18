@@ -4,13 +4,20 @@
  * MMR balances relevance with diversity by iteratively selecting results
  * that maximize: λ * relevance - (1-λ) * max_similarity_to_selected
  *
+ * Supports two similarity modes:
+ * - Text mode: Uses Jaccard similarity on tokenized text (default, backward compatible)
+ * - Embedding mode: Uses cosine similarity on embedding vectors (better semantic diversity)
+ *
  * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
  */
+
+import { cosineSimilarity } from "./internal.js";
 
 export type MMRItem = {
   id: string;
   score: number;
   content: string;
+  embedding?: number[];
 };
 
 export type MMRConfig = {
@@ -18,11 +25,14 @@ export type MMRConfig = {
   enabled: boolean;
   /** Lambda parameter: 0 = max diversity, 1 = max relevance. Default: 0.7 */
   lambda: number;
+  /** Use embedding cosine similarity if available (better semantic diversity). Default: true */
+  useEmbeddingSimilarity: boolean;
 };
 
 export const DEFAULT_MMR_CONFIG: MMRConfig = {
   enabled: false,
   lambda: 0.7,
+  useEmbeddingSimilarity: true,
 };
 
 /**
@@ -68,7 +78,7 @@ export function textSimilarity(contentA: string, contentB: string): number {
 }
 
 /**
- * Compute the maximum similarity between an item and all selected items.
+ * Compute the maximum similarity between an item and all selected items using text tokens.
  */
 function maxSimilarityToSelected(
   item: MMRItem,
@@ -85,6 +95,33 @@ function maxSimilarityToSelected(
   for (const selected of selectedItems) {
     const selectedTokens = tokenCache.get(selected.id) ?? tokenize(selected.content);
     const sim = jaccardSimilarity(itemTokens, selectedTokens);
+    if (sim > maxSim) {
+      maxSim = sim;
+    }
+  }
+
+  return maxSim;
+}
+
+/**
+ * Compute the maximum similarity between an item and all selected items using embeddings.
+ * Uses cosine similarity which captures semantic meaning better than token overlap.
+ */
+function maxSimilarityToSelectedWithEmbeddings(
+  item: MMRItem,
+  selectedItems: MMRItem[],
+): number {
+  if (selectedItems.length === 0 || !item.embedding || item.embedding.length === 0) {
+    return 0;
+  }
+
+  let maxSim = 0;
+
+  for (const selected of selectedItems) {
+    if (!selected.embedding || selected.embedding.length === 0) {
+      continue;
+    }
+    const sim = cosineSimilarity(item.embedding, selected.embedding);
     if (sim > maxSim) {
       maxSim = sim;
     }
@@ -114,7 +151,11 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
  * @returns Re-ranked items in MMR order
  */
 export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
-  const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
+  const { 
+    enabled = DEFAULT_MMR_CONFIG.enabled, 
+    lambda = DEFAULT_MMR_CONFIG.lambda,
+    useEmbeddingSimilarity = DEFAULT_MMR_CONFIG.useEmbeddingSimilarity
+  } = config;
 
   // Early exits
   if (!enabled || items.length <= 1) {
@@ -129,10 +170,16 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     return [...items].toSorted((a, b) => b.score - a.score);
   }
 
-  // Pre-tokenize all items for efficiency
+  // Determine if we can use embedding similarity
+  const hasEmbeddings = items.some((item) => item.embedding && item.embedding.length > 0);
+  const useEmbeddings = useEmbeddingSimilarity && hasEmbeddings;
+
+  // Pre-tokenize all items for text similarity (if not using embeddings)
   const tokenCache = new Map<string, Set<string>>();
-  for (const item of items) {
-    tokenCache.set(item.id, tokenize(item.content));
+  if (!useEmbeddings) {
+    for (const item of items) {
+      tokenCache.set(item.id, tokenize(item.content));
+    }
   }
 
   // Normalize scores to [0, 1] for fair comparison with similarity
@@ -157,7 +204,12 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 
     for (const candidate of remaining) {
       const normalizedRelevance = normalizeScore(candidate.score);
-      const maxSim = maxSimilarityToSelected(candidate, selected, tokenCache);
+      
+      // Choose similarity computation method based on config and data availability
+      const maxSim = useEmbeddings
+        ? maxSimilarityToSelectedWithEmbeddings(candidate, selected)
+        : maxSimilarityToSelected(candidate, selected, tokenCache);
+      
       const mmrScore = computeMMRScore(normalizedRelevance, maxSim, clampedLambda);
 
       // Use original score as tiebreaker (higher is better)
@@ -185,9 +237,10 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 /**
  * Apply MMR re-ranking to hybrid search results.
  * Adapts the generic MMR function to work with the hybrid search result format.
+ * If results have embeddings, they will be used for semantic similarity comparison.
  */
 export function applyMMRToHybridResults<
-  T extends { score: number; snippet: string; path: string; startLine: number },
+  T extends { score: number; snippet: string; path: string; startLine: number; embedding?: number[] },
 >(results: T[], config: Partial<MMRConfig> = {}): T[] {
   if (results.length === 0) {
     return results;
@@ -196,7 +249,7 @@ export function applyMMRToHybridResults<
   // Create a map from ID to original item for type-safe retrieval
   const itemById = new Map<string, T>();
 
-  // Create MMR items with unique IDs
+  // Create MMR items with unique IDs, preserving embeddings if available
   const mmrItems: MMRItem[] = results.map((r, index) => {
     const id = `${r.path}:${r.startLine}:${index}`;
     itemById.set(id, r);
@@ -204,6 +257,7 @@ export function applyMMRToHybridResults<
       id,
       score: r.score,
       content: r.snippet,
+      embedding: r.embedding,
     };
   });
 
