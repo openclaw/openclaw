@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { DiscordActionConfig } from "../../config/config.js";
+import type { DiscordActionConfig, OpenClawConfig } from "../../config/config.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { readDiscordComponentSpec } from "../../discord/components.js";
 import {
   createThreadDiscord,
@@ -52,10 +53,24 @@ function parseDiscordMessageLink(link: string) {
   };
 }
 
+/** Resolve the webhook identity for an agent if it has one configured. */
+function resolveWebhookIdentity(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): { name: string; emoji?: string; avatar?: string } | undefined {
+  if (!cfg || !agentId) return undefined;
+  const normalized = normalizeAgentId(agentId);
+  const agent = cfg.agents?.list?.find((a) => normalizeAgentId(a.id) === normalized);
+  const identity = agent?.identity;
+  if (!identity?.name) return undefined;
+  return { name: identity.name, emoji: identity.emoji, avatar: identity.avatar };
+}
+
 export async function handleDiscordMessagingAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
+  cfg?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const resolveChannelId = () =>
     resolveDiscordChannelId(
@@ -305,6 +320,7 @@ export async function handleDiscordMessagingAction(
         return jsonResult({ ok: true, result, voiceMessage: true });
       }
 
+      const webhookIdentity = resolveWebhookIdentity(cfg, agentId ?? undefined);
       const result = await sendMessageDiscord(to, content ?? "", {
         ...(accountId ? { accountId } : {}),
         mediaUrl,
@@ -312,6 +328,7 @@ export async function handleDiscordMessagingAction(
         components,
         embeds,
         silent,
+        webhookIdentity,
       });
       return jsonResult({ ok: true, result });
     }
