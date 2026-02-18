@@ -1,6 +1,6 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
 import katex from "katex";
+import { marked } from "marked";
 import { truncateText } from "./format.ts";
 
 marked.setOptions({
@@ -147,91 +147,21 @@ function installHooks() {
  * Process LaTeX math expressions in markdown.
  * Supports both display math ($$...$$) and inline math ($...$).
  */
-function processLatex(text: string): string {
-  // Track positions to avoid processing LaTeX inside code blocks
-  const codeBlockPattern = /```[\s\S]*?```|`[^`]+`/g;
-  const codeBlocks: Array<{ start: number; end: number }> = [];
-  let match;
-  
-  while ((match = codeBlockPattern.exec(text)) !== null) {
-    codeBlocks.push({ start: match.index, end: match.index + match[0].length });
-  }
 
-  function isInCodeBlock(index: number): boolean {
-    return codeBlocks.some(block => index >= block.start && index < block.end);
-  }
-
-  // Process display math ($$...$$) first
-  let result = text;
-  const displayMathPattern = /\$\$([^\$]+)\$\$/g;
-  const displayMatches: Array<{ match: string; latex: string; index: number }> = [];
-  
-  while ((match = displayMathPattern.exec(text)) !== null) {
-    if (!isInCodeBlock(match.index)) {
-      displayMatches.push({
-        match: match[0],
-        latex: match[1].trim(),
-        index: match.index,
-      });
-    }
-  }
-
-  // Replace display math from end to start to preserve indices
-  for (let i = displayMatches.length - 1; i >= 0; i--) {
-    const { match, latex, index } = displayMatches[i];
-    try {
-      const rendered = katex.renderToString(latex, {
-        displayMode: true,
-        throwOnError: false,
-        trust: false,
-      });
-      result = result.substring(0, index) + rendered + result.substring(index + match.length);
-    } catch (error) {
-      console.warn("KaTeX display math rendering error:", error);
-    }
-  }
-
-  // Process inline math ($...$)
-  // Use a more careful pattern to avoid matching $$ from display math
-  const inlineMathPattern = /(?<!\$)\$(?!\$)([^\$\n]+)\$(?!\$)/g;
-  const inlineMatches: Array<{ match: string; latex: string; index: number }> = [];
-  
-  while ((match = inlineMathPattern.exec(result)) !== null) {
-    if (!isInCodeBlock(match.index)) {
-      inlineMatches.push({
-        match: match[0],
-        latex: match[1].trim(),
-        index: match.index,
-      });
-    }
-  }
-
-  // Replace inline math from end to start to preserve indices
-  for (let i = inlineMatches.length - 1; i >= 0; i--) {
-    const { match, latex, index } = inlineMatches[i];
-    try {
-      const rendered = katex.renderToString(latex, {
-        displayMode: false,
-        throwOnError: false,
-        trust: false,
-      });
-      result = result.substring(0, index) + rendered + result.substring(index + match.length);
-    } catch (error) {
-      console.warn("KaTeX inline math rendering error:", error);
-    }
-  }
-
-  return result;
-}
-
-export function toSanitizedMarkdownHtml(markdown: string): string {
+export function toSanitizedMarkdownHtml(
+  markdown: string,
+  options?: { skipLatex?: boolean },
+): string {
+  const skipLatex = options?.skipLatex ?? false;
   const input = markdown.trim();
   if (!input) {
     return "";
   }
   installHooks();
-  if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    const cached = getCachedMarkdown(input);
+  // Cache key includes skipLatex flag so tool output and regular output cache separately
+  const cacheKey = skipLatex ? `\x00nolx\x00${input}` : input;
+  if (cacheKey.length <= MARKDOWN_CACHE_MAX_CHARS) {
+    const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
       return cached;
     }
@@ -244,21 +174,67 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     const html = `<pre class="code-block">${escaped}</pre>`;
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
-    if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-      setCachedMarkdown(input, sanitized);
+    if (cacheKey.length <= MARKDOWN_CACHE_MAX_CHARS) {
+      setCachedMarkdown(cacheKey, sanitized);
     }
     return sanitized;
   }
-  // Process LaTeX before markdown rendering
-  const withLatex = processLatex(`${truncated.text}${suffix}`);
-  const rendered = marked.parse(withLatex, {
+
+  const rawText = `${truncated.text}${suffix}`;
+  let withPlaceholders: string;
+  const latexMap = new Map<string, string>();
+
+  if (skipLatex) {
+    // Tool output: skip LaTeX processing so $ signs are left as-is
+    withPlaceholders = rawText;
+  } else {
+    // LaTeX pipeline: extract $..$ and $$..$$, replace with placeholders,
+    // run markdown, then restore rendered KaTeX HTML after sanitization.
+    let placeholderIdx = 0;
+    withPlaceholders = rawText
+      // Display math first ($$...$$)
+      .replace(/\$\$([^$]+)\$\$/g, (_match, latex) => {
+        const key = `%%KATEX_D${placeholderIdx++}%%`;
+        try {
+          latexMap.set(
+            key,
+            katex.renderToString(latex.trim(), { displayMode: true, throwOnError: false }),
+          );
+        } catch {
+          latexMap.set(key, `<code>${escapeHtml(latex)}</code>`);
+        }
+        return key;
+      })
+      // Inline math ($...$)
+      .replace(/(?<!\$)\$(?!\$)([^$\n]+)\$(?!\$)/g, (_match, latex) => {
+        const key = `%%KATEX_I${placeholderIdx++}%%`;
+        try {
+          latexMap.set(
+            key,
+            katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false }),
+          );
+        } catch {
+          latexMap.set(key, `<code>${escapeHtml(latex)}</code>`);
+        }
+        return key;
+      });
+  }
+
+  const rendered = marked.parse(withPlaceholders, {
     renderer: htmlEscapeRenderer,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
-  if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    setCachedMarkdown(input, sanitized);
+
+  // Restore KaTeX HTML (these are safe - we generated them ourselves)
+  let final = sanitized;
+  for (const [key, html] of latexMap) {
+    final = final.replaceAll(key, html);
   }
-  return sanitized;
+
+  if (cacheKey.length <= MARKDOWN_CACHE_MAX_CHARS) {
+    setCachedMarkdown(cacheKey, final);
+  }
+  return final;
 }
 
 // Prevent raw HTML in chat messages from being rendered as formatted HTML.
@@ -266,7 +242,13 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
 // Security is handled by DOMPurify, but rendering pasted HTML (e.g. error
 // pages) as formatted output is confusing UX (#13937).
 const htmlEscapeRenderer = new marked.Renderer();
-htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
+htmlEscapeRenderer.html = ({ text }: { text: string }) => {
+  // Preserve KaTeX-rendered HTML (spans with class="katex")
+  if (text.includes('class="katex"') || text.includes('class="katex-display"')) {
+    return text;
+  }
+  return escapeHtml(text);
+};
 
 function escapeHtml(value: string): string {
   return value

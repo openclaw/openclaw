@@ -7,112 +7,300 @@
 /** Map of LaTeX commands to Unicode replacements */
 const LATEX_TO_UNICODE: Record<string, string> = {
   // Operators
-  "\\sum": "∑", "\\prod": "∏", "\\int": "∫", "\\oint": "∮",
-  "\\infty": "∞", "\\pm": "±", "\\mp": "∓", "\\times": "×", "\\div": "÷",
-  "\\cdot": "·", "\\star": "⋆", "\\circ": "∘", "\\bullet": "∙",
-  "\\oplus": "⊕", "\\otimes": "⊗", "\\odot": "⊙",
+  "\\sum": "∑",
+  "\\prod": "∏",
+  "\\int": "∫",
+  "\\oint": "∮",
+  "\\infty": "∞",
+  "\\pm": "±",
+  "\\mp": "∓",
+  "\\times": "×",
+  "\\div": "÷",
+  "\\cdot": "·",
+  "\\star": "⋆",
+  "\\circ": "∘",
+  "\\bullet": "∙",
+  "\\oplus": "⊕",
+  "\\otimes": "⊗",
+  "\\odot": "⊙",
 
   // Relations
-  "\\leq": "≤", "\\geq": "≥", "\\neq": "≠", "\\approx": "≈",
-  "\\equiv": "≡", "\\sim": "∼", "\\simeq": "≃", "\\cong": "≅",
-  "\\propto": "∝", "\\ll": "≪", "\\gg": "≫", "\\prec": "≺", "\\succ": "≻",
+  "\\leq": "≤",
+  "\\geq": "≥",
+  "\\neq": "≠",
+  "\\approx": "≈",
+  "\\equiv": "≡",
+  "\\sim": "∼",
+  "\\simeq": "≃",
+  "\\cong": "≅",
+  "\\propto": "∝",
+  "\\ll": "≪",
+  "\\gg": "≫",
+  "\\prec": "≺",
+  "\\succ": "≻",
 
   // Greek lowercase
-  "\\alpha": "α", "\\beta": "β", "\\gamma": "γ", "\\delta": "δ",
-  "\\epsilon": "ε", "\\varepsilon": "ε", "\\zeta": "ζ", "\\eta": "η",
-  "\\theta": "θ", "\\vartheta": "ϑ", "\\iota": "ι", "\\kappa": "κ",
-  "\\lambda": "λ", "\\mu": "μ", "\\nu": "ν", "\\xi": "ξ",
-  "\\pi": "π", "\\varpi": "ϖ", "\\rho": "ρ", "\\varrho": "ϱ",
-  "\\sigma": "σ", "\\varsigma": "ς", "\\tau": "τ", "\\upsilon": "υ",
-  "\\phi": "φ", "\\varphi": "ϕ", "\\chi": "χ", "\\psi": "ψ", "\\omega": "ω",
+  "\\alpha": "α",
+  "\\beta": "β",
+  "\\gamma": "γ",
+  "\\delta": "δ",
+  "\\epsilon": "ε",
+  "\\varepsilon": "ε",
+  "\\zeta": "ζ",
+  "\\eta": "η",
+  "\\theta": "θ",
+  "\\vartheta": "ϑ",
+  "\\iota": "ι",
+  "\\kappa": "κ",
+  "\\lambda": "λ",
+  "\\mu": "μ",
+  "\\nu": "ν",
+  "\\xi": "ξ",
+  "\\pi": "π",
+  "\\varpi": "ϖ",
+  "\\rho": "ρ",
+  "\\varrho": "ϱ",
+  "\\sigma": "σ",
+  "\\varsigma": "ς",
+  "\\tau": "τ",
+  "\\upsilon": "υ",
+  "\\phi": "φ",
+  "\\varphi": "ϕ",
+  "\\chi": "χ",
+  "\\psi": "ψ",
+  "\\omega": "ω",
 
   // Greek uppercase
-  "\\Gamma": "Γ", "\\Delta": "Δ", "\\Theta": "Θ", "\\Lambda": "Λ",
-  "\\Xi": "Ξ", "\\Pi": "Π", "\\Sigma": "Σ", "\\Upsilon": "Υ",
-  "\\Phi": "Φ", "\\Psi": "Ψ", "\\Omega": "Ω",
+  "\\Gamma": "Γ",
+  "\\Delta": "Δ",
+  "\\Theta": "Θ",
+  "\\Lambda": "Λ",
+  "\\Xi": "Ξ",
+  "\\Pi": "Π",
+  "\\Sigma": "Σ",
+  "\\Upsilon": "Υ",
+  "\\Phi": "Φ",
+  "\\Psi": "Ψ",
+  "\\Omega": "Ω",
 
   // Set theory
-  "\\in": "∈", "\\notin": "∉", "\\ni": "∋",
-  "\\subset": "⊂", "\\supset": "⊃", "\\subseteq": "⊆", "\\supseteq": "⊇",
-  "\\cup": "∪", "\\cap": "∩", "\\emptyset": "∅", "\\varnothing": "∅",
+  "\\in": "∈",
+  "\\notin": "∉",
+  "\\ni": "∋",
+  "\\subset": "⊂",
+  "\\supset": "⊃",
+  "\\subseteq": "⊆",
+  "\\supseteq": "⊇",
+  "\\cup": "∪",
+  "\\cap": "∩",
+  "\\emptyset": "∅",
+  "\\varnothing": "∅",
   "\\setminus": "∖",
 
   // Logic
-  "\\forall": "∀", "\\exists": "∃", "\\nexists": "∄",
-  "\\neg": "¬", "\\lnot": "¬", "\\land": "∧", "\\lor": "∨",
-  "\\vdash": "⊢", "\\models": "⊨", "\\top": "⊤", "\\bot": "⊥",
+  "\\forall": "∀",
+  "\\exists": "∃",
+  "\\nexists": "∄",
+  "\\neg": "¬",
+  "\\lnot": "¬",
+  "\\land": "∧",
+  "\\lor": "∨",
+  "\\vdash": "⊢",
+  "\\models": "⊨",
+  "\\top": "⊤",
+  "\\bot": "⊥",
 
   // Calculus
-  "\\nabla": "∇", "\\partial": "∂",
+  "\\nabla": "∇",
+  "\\partial": "∂",
 
   // Arrows
-  "\\to": "→", "\\rightarrow": "→", "\\leftarrow": "←",
-  "\\Rightarrow": "⇒", "\\Leftarrow": "⇐",
-  "\\leftrightarrow": "↔", "\\Leftrightarrow": "⇔",
-  "\\mapsto": "↦", "\\uparrow": "↑", "\\downarrow": "↓",
-  "\\nearrow": "↗", "\\searrow": "↘", "\\nwarrow": "↖", "\\swarrow": "↙",
+  "\\to": "→",
+  "\\rightarrow": "→",
+  "\\leftarrow": "←",
+  "\\Rightarrow": "⇒",
+  "\\Leftarrow": "⇐",
+  "\\leftrightarrow": "↔",
+  "\\Leftrightarrow": "⇔",
+  "\\mapsto": "↦",
+  "\\uparrow": "↑",
+  "\\downarrow": "↓",
+  "\\nearrow": "↗",
+  "\\searrow": "↘",
+  "\\nwarrow": "↖",
+  "\\swarrow": "↙",
 
   // Dots
-  "\\ldots": "…", "\\cdots": "⋯", "\\vdots": "⋮", "\\ddots": "⋱",
+  "\\ldots": "…",
+  "\\cdots": "⋯",
+  "\\vdots": "⋮",
+  "\\ddots": "⋱",
 
   // Geometry & misc
-  "\\perp": "⊥", "\\angle": "∠", "\\triangle": "△", "\\square": "□",
-  "\\langle": "⟨", "\\rangle": "⟩", "\\lceil": "⌈", "\\rceil": "⌉",
-  "\\lfloor": "⌊", "\\rfloor": "⌋",
-  "\\ell": "ℓ", "\\hbar": "ℏ", "\\imath": "ı", "\\jmath": "ȷ",
-  "\\Re": "ℜ", "\\Im": "ℑ", "\\wp": "℘", "\\aleph": "ℵ",
+  "\\perp": "⊥",
+  "\\angle": "∠",
+  "\\triangle": "△",
+  "\\square": "□",
+  "\\langle": "⟨",
+  "\\rangle": "⟩",
+  "\\lceil": "⌈",
+  "\\rceil": "⌉",
+  "\\lfloor": "⌊",
+  "\\rfloor": "⌋",
+  "\\ell": "ℓ",
+  "\\hbar": "ℏ",
+  "\\imath": "ı",
+  "\\jmath": "ȷ",
+  "\\Re": "ℜ",
+  "\\Im": "ℑ",
+  "\\wp": "℘",
+  "\\aleph": "ℵ",
 
   // Spacing & formatting (strip these)
-  "\\quad": " ", "\\qquad": "  ", "\\,": " ", "\\;": " ", "\\:": " ",
-  "\\!": "", "\\left": "", "\\right": "", "\\big": "", "\\Big": "",
-  "\\bigg": "", "\\Bigg": "", "\\displaystyle": "", "\\textstyle": "",
+  "\\quad": " ",
+  "\\qquad": "  ",
+  "\\,": " ",
+  "\\;": " ",
+  "\\:": " ",
+  "\\!": "",
+  "\\left": "",
+  "\\right": "",
+  "\\big": "",
+  "\\Big": "",
+  "\\bigg": "",
+  "\\Bigg": "",
+  "\\displaystyle": "",
+  "\\textstyle": "",
   "\\text": "",
 };
 
 /** Superscript digit map */
 const SUPERSCRIPTS: Record<string, string> = {
-  "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
-  "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-  "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
-  "n": "ⁿ", "i": "ⁱ", "a": "ᵃ", "b": "ᵇ", "c": "ᶜ",
-  "d": "ᵈ", "e": "ᵉ", "f": "ᶠ", "g": "ᵍ", "h": "ʰ",
-  "k": "ᵏ", "l": "ˡ", "m": "ᵐ", "o": "ᵒ", "p": "ᵖ",
-  "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ", "v": "ᵛ",
-  "w": "ʷ", "x": "ˣ", "y": "ʸ", "z": "ᶻ",
+  "0": "⁰",
+  "1": "¹",
+  "2": "²",
+  "3": "³",
+  "4": "⁴",
+  "5": "⁵",
+  "6": "⁶",
+  "7": "⁷",
+  "8": "⁸",
+  "9": "⁹",
+  "+": "⁺",
+  "-": "⁻",
+  "=": "⁼",
+  "(": "⁽",
+  ")": "⁾",
+  n: "ⁿ",
+  i: "ⁱ",
+  a: "ᵃ",
+  b: "ᵇ",
+  c: "ᶜ",
+  d: "ᵈ",
+  e: "ᵉ",
+  f: "ᶠ",
+  g: "ᵍ",
+  h: "ʰ",
+  k: "ᵏ",
+  l: "ˡ",
+  m: "ᵐ",
+  o: "ᵒ",
+  p: "ᵖ",
+  r: "ʳ",
+  s: "ˢ",
+  t: "ᵗ",
+  u: "ᵘ",
+  v: "ᵛ",
+  w: "ʷ",
+  x: "ˣ",
+  y: "ʸ",
+  z: "ᶻ",
 };
 
 /** Subscript digit map */
 const SUBSCRIPTS: Record<string, string> = {
-  "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
-  "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
-  "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
-  "a": "ₐ", "e": "ₑ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ",
-  "k": "ₖ", "l": "ₗ", "m": "ₘ", "n": "ₙ", "o": "ₒ",
-  "p": "ₚ", "r": "ᵣ", "s": "ₛ", "t": "ₜ", "u": "ᵤ",
-  "v": "ᵥ", "x": "ₓ",
+  "0": "₀",
+  "1": "₁",
+  "2": "₂",
+  "3": "₃",
+  "4": "₄",
+  "5": "₅",
+  "6": "₆",
+  "7": "₇",
+  "8": "₈",
+  "9": "₉",
+  "+": "₊",
+  "-": "₋",
+  "=": "₌",
+  "(": "₍",
+  ")": "₎",
+  a: "ₐ",
+  e: "ₑ",
+  h: "ₕ",
+  i: "ᵢ",
+  j: "ⱼ",
+  k: "ₖ",
+  l: "ₗ",
+  m: "ₘ",
+  n: "ₙ",
+  o: "ₒ",
+  p: "ₚ",
+  r: "ᵣ",
+  s: "ₛ",
+  t: "ₜ",
+  u: "ᵤ",
+  v: "ᵥ",
+  x: "ₓ",
 };
 
 /** Blackboard bold map */
 const BLACKBOARD: Record<string, string> = {
-  "A": "𝔸", "B": "𝔹", "C": "ℂ", "D": "𝔻", "E": "𝔼",
-  "F": "𝔽", "G": "𝔾", "H": "ℍ", "I": "𝕀", "J": "𝕁",
-  "K": "𝕂", "L": "𝕃", "M": "𝕄", "N": "ℕ", "O": "𝕆",
-  "P": "ℙ", "Q": "ℚ", "R": "ℝ", "S": "𝕊", "T": "𝕋",
-  "U": "𝕌", "V": "𝕍", "W": "𝕎", "X": "𝕏", "Y": "𝕐", "Z": "ℤ",
+  A: "𝔸",
+  B: "𝔹",
+  C: "ℂ",
+  D: "𝔻",
+  E: "𝔼",
+  F: "𝔽",
+  G: "𝔾",
+  H: "ℍ",
+  I: "𝕀",
+  J: "𝕁",
+  K: "𝕂",
+  L: "𝕃",
+  M: "𝕄",
+  N: "ℕ",
+  O: "𝕆",
+  P: "ℙ",
+  Q: "ℚ",
+  R: "ℝ",
+  S: "𝕊",
+  T: "𝕋",
+  U: "𝕌",
+  V: "𝕍",
+  W: "𝕎",
+  X: "𝕏",
+  Y: "𝕐",
+  Z: "ℤ",
 };
 
 /**
  * Convert a string of characters to superscript Unicode.
  */
 function toSuperscript(s: string): string {
-  return s.split("").map(c => SUPERSCRIPTS[c] ?? c).join("");
+  return s
+    .split("")
+    .map((c) => SUPERSCRIPTS[c] ?? c)
+    .join("");
 }
 
 /**
  * Convert a string of characters to subscript Unicode.
  */
 function toSubscript(s: string): string {
-  return s.split("").map(c => SUBSCRIPTS[c] ?? c).join("");
+  return s
+    .split("")
+    .map((c) => SUBSCRIPTS[c] ?? c)
+    .join("");
 }
 
 /**
@@ -160,7 +348,7 @@ function latexToUnicode(latex: string): string {
   result = result.replace(/\\mathbf\{([^}]*)\}/g, "$1");
 
   // Replace all known LaTeX commands (sort by length desc to match longest first)
-  const sortedCommands = Object.keys(LATEX_TO_UNICODE).sort((a, b) => b.length - a.length);
+  const sortedCommands = Object.keys(LATEX_TO_UNICODE).toSorted((a, b) => b.length - a.length);
   for (const cmd of sortedCommands) {
     // Escape backslashes for regex, use word boundary after command
     const escaped = cmd.replace(/\\/g, "\\\\");
@@ -197,7 +385,7 @@ function getCodeBlockRanges(text: string): Array<{ start: number; end: number }>
  * Check if a position falls inside a code block.
  */
 function isInCodeBlock(index: number, ranges: Array<{ start: number; end: number }>): boolean {
-  return ranges.some(r => index >= r.start && index < r.end);
+  return ranges.some((r) => index >= r.start && index < r.end);
 }
 
 /**

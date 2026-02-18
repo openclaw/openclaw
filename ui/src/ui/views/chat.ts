@@ -59,6 +59,7 @@ export type ChatProps = {
   sidebarOpen?: boolean;
   sidebarContent?: string | null;
   sidebarError?: string | null;
+  sidebarSkipLatex?: boolean;
   splitRatio?: number;
   assistantName: string;
   assistantAvatar: string | null;
@@ -76,7 +77,7 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
-  onOpenSidebar?: (content: string) => void;
+  onOpenSidebar?: (content: string, skipLatex?: boolean) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
@@ -237,6 +238,30 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
+function handleImagePick(e: Event, props: ChatProps) {
+  const input = e.target as HTMLInputElement;
+  const files = input.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+  const current = [...(props.attachments ?? [])];
+  for (const file of Array.from(files)) {
+    if (!file.type.startsWith("image/")) {
+      continue;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      const id = "img-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+      const att = { id, dataUrl, mimeType: file.type, name: file.name };
+      current.push(att);
+      props.onAttachmentsChange!([...current]);
+    };
+    reader.readAsDataURL(file);
+  }
+  input.value = "";
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -357,6 +382,7 @@ export function renderChat(props: ChatProps) {
                 ${renderMarkdownSidebar({
                   content: props.sidebarContent ?? null,
                   error: props.sidebarError ?? null,
+                  skipLatex: props.sidebarSkipLatex,
                   onClose: props.onCloseSidebar!,
                   onViewRawText: () => {
                     if (!props.sidebarContent || !props.onOpenSidebar) {
@@ -423,6 +449,25 @@ export function renderChat(props: ChatProps) {
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            style="display:none"
+            id="chat-image-picker"
+            @change=${(e: Event) => handleImagePick(e, props)}
+          />
+          <button
+            class="btn chat-compose__attach-btn"
+            title="Attach images"
+            ?disabled=${!props.connected}
+            @click=${() => {
+              const el = document.getElementById("chat-image-picker");
+              if (el) {
+                (el as HTMLInputElement).click();
+              }
+            }}
+          >+</button>
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
