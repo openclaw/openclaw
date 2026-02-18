@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { BudgetTracker } from "../budget-tracker.js";
 import { HealthTracker } from "../health-tracker.js";
 import { ModelSelector } from "../model-selector.js";
-import { ModelTier, TaskType, type RoutingConfig } from "../types.js";
+import { ModelTier, TaskType, type BudgetConfig, type RoutingConfig } from "../types.js";
 
 function makeConfig(
   overrides: Partial<RoutingConfig> = {},
@@ -278,5 +279,163 @@ describe("ModelSelector — 24 TaskType routing", () => {
       const models = selector.resolveModels(t, config);
       expect(models).toEqual([`${t}-model`]);
     }
+  });
+});
+
+// ── Budget-aware routing tests (cases 16–22) ─────────────────────────────────
+
+function makeBudgetConfig(overrides: Partial<BudgetConfig> = {}): BudgetConfig {
+  return {
+    enabled: true,
+    daily_budget_usd: 10,
+    daily_token_limit: 500_000,
+    warning_threshold: 0.8,
+    critical_action: "degrade",
+    ...overrides,
+  };
+}
+
+describe("ModelSelector — budget-aware routing", () => {
+  // Standard 3-tier matrix for budget tests
+  const threeConfig = makeConfig();
+
+  // 16. No budgetTracker → original behaviour unchanged
+  it("16. no budgetTracker → behaves as before (all tiers returned)", () => {
+    const selector = new ModelSelector();
+    const models = selector.resolveModels(TaskType.CODE_EDIT, threeConfig);
+    expect(models).toEqual(["model-a", "model-b", "model-c"]);
+  });
+
+  // 17. budget normal → starts at tier1
+  it("17. budget normal → starts at TIER1, all tiers returned", () => {
+    const tracker = new BudgetTracker(makeBudgetConfig());
+    // no usage → normal
+    const selector = new ModelSelector(undefined, tracker);
+    const config = makeConfig({ budget: makeBudgetConfig() });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config);
+    expect(models).toEqual(["model-a", "model-b", "model-c"]);
+  });
+
+  // 18. budget warning → skip tier1
+  it("18. budget warning → skips TIER1, returns TIER2 + TIER3", () => {
+    const budgetCfg = makeBudgetConfig({ daily_budget_usd: 10 });
+    const tracker = new BudgetTracker(budgetCfg);
+    // 85% → warning
+    tracker.recordUsage({
+      model: "x",
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 8.5,
+      timestamp: Date.now(),
+    });
+
+    const selector = new ModelSelector(undefined, tracker);
+    const config = makeConfig({ budget: budgetCfg });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config);
+    expect(models).not.toContain("model-a");
+    expect(models).toContain("model-b");
+    expect(models).toContain("model-c");
+  });
+
+  // 19. budget critical + degrade → only tier3
+  it("19. budget critical + degrade → only TIER3 returned", () => {
+    const budgetCfg = makeBudgetConfig({ daily_budget_usd: 10, critical_action: "degrade" });
+    const tracker = new BudgetTracker(budgetCfg);
+    tracker.recordUsage({
+      model: "x",
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 11.0,
+      timestamp: Date.now(),
+    });
+
+    const selector = new ModelSelector(undefined, tracker);
+    const config = makeConfig({ budget: budgetCfg });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config);
+    expect(models).toEqual(["model-c"]);
+  });
+
+  // 20. budget critical + degrade + fallback_model → returns fallback
+  it("20. budget critical + degrade + fallback_model → returns fallback when tier3 absent", () => {
+    const budgetCfg = makeBudgetConfig({
+      daily_budget_usd: 10,
+      critical_action: "degrade",
+      fallback_model: "free-model",
+    });
+    const tracker = new BudgetTracker(budgetCfg);
+    tracker.recordUsage({
+      model: "x",
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 11.0,
+      timestamp: Date.now(),
+    });
+
+    const selector = new ModelSelector(undefined, tracker);
+    // Config with no TIER3 entry so the tier3 slot is empty → falls to fallback
+    const config = makeConfig(
+      { budget: budgetCfg },
+      {
+        [TaskType.CODE_EDIT]: {
+          [ModelTier.TIER1]: "model-a",
+          [ModelTier.TIER2]: "model-b",
+          // no TIER3
+        },
+      },
+    );
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config);
+    expect(models).toEqual(["free-model"]);
+  });
+
+  // 21. budget critical + block → returns []
+  it("21. budget critical + block → returns empty array", () => {
+    const budgetCfg = makeBudgetConfig({ daily_budget_usd: 10, critical_action: "block" });
+    const tracker = new BudgetTracker(budgetCfg);
+    tracker.recordUsage({
+      model: "x",
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 11.0,
+      timestamp: Date.now(),
+    });
+
+    const selector = new ModelSelector(undefined, tracker);
+    const config = makeConfig({ budget: budgetCfg });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config);
+    expect(models).toEqual([]);
+  });
+
+  // 22. budget warning + tier2 unhealthy → falls through to tier3
+  it("22. budget warning + tier2 unhealthy → skips to TIER3", () => {
+    const budgetCfg = makeBudgetConfig({ daily_budget_usd: 10 });
+    const budgetTracker = new BudgetTracker(budgetCfg);
+    budgetTracker.recordUsage({
+      model: "x",
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: 8.5,
+      timestamp: Date.now(),
+    }); // warning
+
+    const healthTracker = new HealthTracker(10);
+    // make model-b (tier2) unhealthy
+    for (let i = 0; i < 7; i++) {
+      healthTracker.recordResult("model-b", {
+        timestamp: Date.now(),
+        success: false,
+        latencyMs: 100,
+        error: "error",
+      });
+    }
+
+    const selector = new ModelSelector(healthTracker, budgetTracker);
+    const config = makeConfig({
+      budget: budgetCfg,
+      health: { enabled: true, window_size: 10, threshold: 0.8, cooldown_ms: 60_000 },
+    });
+    const models = selector.resolveModels(TaskType.CODE_EDIT, config);
+    expect(models).not.toContain("model-a"); // skipped by budget
+    expect(models).not.toContain("model-b"); // skipped by health
+    expect(models).toContain("model-c");
   });
 });
