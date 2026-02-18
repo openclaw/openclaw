@@ -284,7 +284,7 @@ async function handleDiscordCommandArgInteraction(
       components: [],
     }),
   );
-  if (!updated) {
+  if (updated === null) {
     return;
   }
   const commandArgs = createCommandArgsWithValue({
