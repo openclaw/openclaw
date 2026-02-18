@@ -80,6 +80,12 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  // Re-attach the scroll observer when switching back to the chat tab,
+  // since Lit re-creates the .chat-thread DOM and the old sentinel is detached.
+  if (changed.has("tab") && host.tab === "chat") {
+    initChatScrollObserver(host as unknown as Parameters<typeof initChatScrollObserver>[0]);
+  }
+
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
