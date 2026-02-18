@@ -1,6 +1,6 @@
 import type { BrowserRouteContext } from "../server-context.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
-import type { BrowserRouteRegistrar } from "./types.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 type StorageKind = "local" | "session";
@@ -18,6 +18,44 @@ function parseStorageKind(raw: string): StorageKind | null {
     return raw;
   }
   return null;
+}
+
+function parseStorageMutationRequest(
+  kindParam: unknown,
+  body: unknown,
+): { kind: StorageKind | null; targetId: string | undefined } {
+  return {
+    kind: parseStorageKind(toStringOrEmpty(kindParam)),
+    targetId: resolveBodyTargetId(body),
+  };
+}
+
+function resolveStorageMutationContext(params: {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+}): {
+  profileCtx: NonNullable<ReturnType<typeof resolveProfileContext>>;
+  body: Record<string, unknown>;
+  kind: StorageKind;
+  targetId: string | undefined;
+} | null {
+  const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
+  if (!profileCtx) {
+    return null;
+  }
+  const body = readBody(params.req);
+  const parsed = parseStorageMutationRequest(params.req.params.kind, body);
+  if (!parsed.kind) {
+    jsonError(params.res, 400, "kind must be local|session");
+    return null;
+  }
+  return {
+    profileCtx,
+    body,
+    kind: parsed.kind,
+    targetId: parsed.targetId,
+  };
 }
 
 export function registerBrowserAgentStorageRoutes(
@@ -143,16 +181,11 @@ export function registerBrowserAgentStorageRoutes(
   });
 
   app.post("/storage/:kind/set", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
+    const mutation = resolveStorageMutationContext({ req, res, ctx });
+    if (!mutation) {
       return;
     }
-    const kind = parseStorageKind(toStringOrEmpty(req.params.kind));
-    if (!kind) {
-      return jsonError(res, 400, "kind must be local|session");
-    }
-    const body = readBody(req);
-    const targetId = resolveBodyTargetId(body);
+    const { profileCtx, body, kind, targetId } = mutation;
     const key = toStringOrEmpty(body.key);
     if (!key) {
       return jsonError(res, 400, "key is required");
@@ -178,16 +211,11 @@ export function registerBrowserAgentStorageRoutes(
   });
 
   app.post("/storage/:kind/clear", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
+    const mutation = resolveStorageMutationContext({ req, res, ctx });
+    if (!mutation) {
       return;
     }
-    const kind = parseStorageKind(toStringOrEmpty(req.params.kind));
-    if (!kind) {
-      return jsonError(res, 400, "kind must be local|session");
-    }
-    const body = readBody(req);
-    const targetId = resolveBodyTargetId(body);
+    const { profileCtx, kind, targetId } = mutation;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "storage clear");
