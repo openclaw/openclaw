@@ -18,6 +18,13 @@ import {
 } from "./google-gemini-model-default.js";
 import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
+  applyBedrockDefaultModel,
+  applyBedrockProviderConfig,
+  BEDROCK_DEFAULT_MODEL_REF,
+  listBedrockModels,
+  setBedrockApiKey,
+} from "./onboard-auth.config-bedrock.js";
+import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
@@ -101,6 +108,8 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   opencode: "opencode-zen",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  "amazon-bedrock": "bedrock-api-key",
+  bedrock: "bedrock-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -669,6 +678,114 @@ export async function applyAuthChoiceApiProviders(
       noteDefault: defaultModel,
     });
 
+    return { config: nextConfig, agentModelOverride };
+  }
+
+
+  if (authChoice === "bedrock-api-key") {
+    let hasCredential = false;
+
+    // Non-interactive: accept token from CLI flags.
+    if (
+      !hasCredential &&
+      params.opts?.token &&
+      (params.opts?.tokenProvider === "bedrock" || params.opts?.tokenProvider === "amazon-bedrock")
+    ) {
+      setBedrockApiKey(normalizeApiKeyInput(params.opts.token));
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const existingKey = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
+      if (existingKey) {
+        const keepExisting = await params.prompter.confirm({
+          message: `A Bedrock API key is already configured (${formatApiKeyPreview(existingKey)}). Keep it?`,
+          initialValue: true,
+        });
+        if (keepExisting) {
+          setBedrockApiKey(existingKey);
+          hasCredential = true;
+        }
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Bedrock API key",
+        validate: validateApiKeyInput,
+      });
+      setBedrockApiKey(normalizeApiKeyInput(String(key ?? "")));
+      hasCredential = true;
+    }
+
+    // Offer to change the default model.
+    let selectedModelRef = BEDROCK_DEFAULT_MODEL_REF;
+    const changeModel = await params.prompter.confirm({
+      message: `Default model: Claude Opus 4.6 (${BEDROCK_DEFAULT_MODEL_REF}). Change it?`,
+      initialValue: false,
+    });
+
+    if (changeModel) {
+      try {
+        const region =
+          process.env.AWS_REGION?.trim() || process.env.AWS_DEFAULT_REGION?.trim() || "us-east-1";
+        const discovered = await listBedrockModels(region);
+        if (discovered.length > 0) {
+          const options = discovered.map((m) => ({
+            value: `amazon-bedrock/${m.id}`,
+            label: m.id,
+          }));
+          options.sort((a, b) => {
+            if (a.value === BEDROCK_DEFAULT_MODEL_REF) {
+              return -1;
+            }
+            if (b.value === BEDROCK_DEFAULT_MODEL_REF) {
+              return 1;
+            }
+            return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+          });
+          selectedModelRef = await params.prompter.select({
+            message: "Select Bedrock model",
+            options,
+            initialValue: options.some((o) => o.value === BEDROCK_DEFAULT_MODEL_REF)
+              ? BEDROCK_DEFAULT_MODEL_REF
+              : options[0].value,
+          });
+        } else {
+          await params.prompter.note("No models discovered. Using default.", "Amazon Bedrock");
+        }
+      } catch {
+        await params.prompter.note(
+          `Could not discover models. Using default: ${BEDROCK_DEFAULT_MODEL_REF}`,
+          "Amazon Bedrock",
+        );
+      }
+    }
+
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId: "amazon-bedrock:default",
+        provider: "amazon-bedrock",
+        mode: "api_key",
+      });
+    }
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: selectedModelRef,
+        applyDefaultConfig: (config) => {
+          const withProvider = applyBedrockProviderConfig(config);
+          return applyBedrockDefaultModel(withProvider, selectedModelRef);
+        },
+        applyProviderConfig: applyBedrockProviderConfig,
+        noteDefault: selectedModelRef,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
     return { config: nextConfig, agentModelOverride };
   }
 

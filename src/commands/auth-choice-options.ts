@@ -156,6 +156,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "bedrock",
+    label: "Amazon Bedrock",
+    hint: "API key",
+    choices: ["bedrock-api-key"],
+  },
+  {
     value: "huggingface",
     label: "Hugging Face",
     hint: "Inference API (HF token)",
@@ -232,6 +238,31 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "moonshot-api-key-cn",
     label: "Kimi API key (.cn)",
+  },
+  {
+    value: "kimi-code-api-key",
+    label: "Kimi Code API key (subscription)",
+  },
+  { value: "synthetic-api-key", label: "Synthetic API key" },
+  {
+    value: "venice-api-key",
+    label: "Venice AI API key",
+    hint: "Privacy-focused inference (uncensored models)",
+  },
+  {
+    value: "together-api-key",
+    label: "Together AI API key",
+    hint: "Access to Llama, DeepSeek, Qwen, and more open models",
+  },
+  {
+    value: "bedrock-api-key",
+    label: "Amazon Bedrock API key",
+    hint: "API key (bearer token)",
+  },
+  {
+    value: "huggingface-api-key",
+    label: "Hugging Face API key (HF token)",
+    hint: "Inference Providers — OpenAI-compatible chat",
   },
   {
     value: "github-copilot",
