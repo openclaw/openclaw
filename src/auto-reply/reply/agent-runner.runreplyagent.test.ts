@@ -7,8 +7,8 @@ import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
 import * as memoryFlush from "./memory-flush.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const DEFAULT_PROMPT = memoryFlush.DEFAULT_MEMORY_FLUSH_PROMPT;
