@@ -36,14 +36,14 @@ Follow the official CLI get-started steps. Don't guess install commands.
 1. Check OS + shell.
 2. Verify CLI present: `op --version`.
 3. Confirm desktop app integration is enabled (per get-started) and the app is unlocked.
-4. REQUIRED: create a fresh tmux session for all `op` commands (no direct `op` calls outside tmux).
-5. Sign in / authorize inside tmux: `op signin` (expect app prompt).
-6. Verify access inside tmux: `op whoami` (must succeed before any secret read).
-7. If multiple accounts: use `--account` or `OP_ACCOUNT`.
+4. REQUIRED: create one fresh tmux session and keep it alive for the entire `op` workflow (no direct `op` calls outside tmux).
+5. Sign in inside that same tmux session with shell eval: `eval $(op signin --account my.1password.com)` (expect app prompt).
+6. Verify access in the same tmux session: `op whoami` (must succeed before any secret read).
+7. If multiple accounts: use `--account` or `OP_ACCOUNT` consistently in that same session.
 
 ## REQUIRED tmux session (T-Max)
 
-The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session with a fresh socket/session name.
+The shell tool uses a fresh TTY per command. To avoid re-prompts and "account is not signed in" failures, always run `op` inside a dedicated tmux session with a fresh socket/session name, then keep using that same session for sign-in + secret reads.
 
 Example (see `tmux` skill for socket conventions, do not reuse old session names):
 
@@ -54,7 +54,7 @@ SOCKET="$SOCKET_DIR/openclaw-op.sock"
 SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
 
 tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op signin --account my.1password.com" Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "eval $(op signin --account my.1password.com)" Enter
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op whoami" Enter
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op vault list" Enter
 tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
@@ -66,5 +66,6 @@ tmux -S "$SOCKET" kill-session -t "$SESSION"
 - Never paste secrets into logs, chat, or code.
 - Prefer `op run` / `op inject` over writing secrets to disk.
 - If sign-in without app integration is needed, use `op account add`.
-- If a command returns "account is not signed in", re-run `op signin` inside tmux and authorize in the app.
+- Approving the desktop app prompt alone is not enough; `op whoami` must succeed in the same tmux session before secret reads.
+- If a command returns "account is not signed in", re-run `eval $(op signin --account ...)` inside the same tmux session and re-check with `op whoami`.
 - Do not run `op` outside tmux; stop and ask if tmux is unavailable.
