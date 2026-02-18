@@ -1,9 +1,11 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { AgentCommandOpts } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -16,9 +18,8 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
@@ -157,7 +158,20 @@ export async function deliverAgentCommandResult(params: {
     return { payloads: [], meta: result.meta };
   }
 
-  const deliveryPayloads = normalizeOutboundPayloads(payloads);
+  // The agentCommand delivery path (cron announce, sessions-send, etc.) bypasses
+  // dispatchReplyFromConfig, so [[tts:...]] tags are never processed.  Apply TTS
+  // here to strip directive markup and optionally synthesise audio before outbound
+  // delivery.
+  const shouldApplyTts = deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel);
+  const ttsProcessedPayloads = shouldApplyTts
+    ? await Promise.all(
+        payloads.map((payload) =>
+          maybeApplyTtsToPayload({ payload, cfg, channel: deliveryChannel, kind: "final" }),
+        ),
+      )
+    : payloads;
+
+  const deliveryPayloads = normalizeOutboundPayloads(ttsProcessedPayloads);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
