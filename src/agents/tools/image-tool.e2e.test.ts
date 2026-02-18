@@ -591,6 +591,46 @@ describe("image tool MiniMax VLM routing", () => {
 });
 
 describe("image tool response validation", () => {
+  function zeroUsage() {
+    return {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    };
+  }
+
+  function createAssistantMessage(
+    overrides: Partial<{
+      api: string;
+      provider: string;
+      model: string;
+      stopReason: string;
+      errorMessage: string;
+      content: unknown[];
+    }>,
+  ) {
+    return {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5-mini",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      usage: zeroUsage(),
+      content: [] as unknown[],
+      ...overrides,
+    };
+  }
+
   it("caps image-tool max tokens by model capability", () => {
     expect(__testing.resolveImageToolMaxTokens(4000)).toBe(4000);
   });
@@ -608,29 +648,9 @@ describe("image tool response validation", () => {
       __testing.coerceImageAssistantText({
         provider: "openai",
         model: "gpt-5-mini",
-        message: {
-          role: "assistant",
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5-mini",
-          stopReason: "stop",
-          timestamp: Date.now(),
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
+        message: createAssistantMessage({
           content: [{ type: "thinking", thinking: "hmm" }],
-        },
+        }) as never,
       }),
     ).toThrow(/returned no text/i);
   });
@@ -640,30 +660,10 @@ describe("image tool response validation", () => {
       __testing.coerceImageAssistantText({
         provider: "openai",
         model: "gpt-5-mini",
-        message: {
-          role: "assistant",
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5-mini",
+        message: createAssistantMessage({
           stopReason: "error",
           errorMessage: "boom",
-          timestamp: Date.now(),
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
-          content: [],
-        },
+        }) as never,
       }),
     ).toThrow(/boom/i);
   });
@@ -673,28 +673,13 @@ describe("image tool response validation", () => {
       provider: "anthropic",
       model: "claude-opus-4-5",
       message: {
-        role: "assistant",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-opus-4-5",
-        stopReason: "stop",
-        timestamp: Date.now(),
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
+        ...createAssistantMessage({
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+        }),
         content: [{ type: "text", text: "  hello  " }],
-      },
+      } as never,
     });
     expect(text).toBe("hello");
   });
