@@ -26,6 +26,13 @@ describe("session path safety", () => {
     expect(() => validateSessionId("/abs")).toThrow(/Invalid session ID/);
   });
 
+  it("accepts negative Telegram group IDs with topic separators", () => {
+    // Telegram supergroup/channel IDs are negative (e.g., -1003110470591)
+    expect(validateSessionId("-1003110470591")).toBe("-1003110470591");
+    // Forum topic session keys use colon as separator (e.g., -1003110470591:91088)
+    expect(validateSessionId("-1003110470591:91088")).toBe("-1003110470591:91088");
+  });
+
   it("resolves transcript path inside an explicit sessions dir", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
     const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");
