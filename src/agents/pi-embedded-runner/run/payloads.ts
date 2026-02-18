@@ -53,13 +53,13 @@ function shouldShowToolErrorWarning(params: {
   if (params.suppressToolErrorWarnings) {
     return false;
   }
+  if (params.suppressToolErrors) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return true;
-  }
-  if (params.suppressToolErrors) {
-    return false;
   }
   return !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error);
 }
