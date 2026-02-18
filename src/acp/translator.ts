@@ -264,13 +264,15 @@ export class AcpGatewayAgent implements Agent {
     this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
 
     const meta = parseSessionMeta(params._meta);
-    const userText = extractTextFromPrompt(params.prompt);
+    // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
+    // block-by-block, before the full string is ever assembled in memory (CWE-400)
+    const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
     const attachments = extractAttachmentsFromPrompt(params.prompt);
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
     const displayCwd = shortenHomePath(session.cwd);
     const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
 
-    // Guard against oversized prompts that could cause memory exhaustion (DoS)
+    // Defense-in-depth: also check the final assembled message (includes cwd prefix)
     if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
       throw new Error(
         `Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`,
