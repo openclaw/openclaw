@@ -40,6 +40,29 @@ function createMockSessionContent(
     .join("\n");
 }
 
+async function runNewWithPreviousSessionEntry(params: {
+  tempDir: string;
+  previousSessionEntry: { sessionId: string; sessionFile?: string };
+  cfg?: OpenClawConfig;
+}): Promise<{ files: string[]; memoryContent: string }> {
+  const event = createHookEvent("command", "new", "agent:main:main", {
+    cfg:
+      params.cfg ??
+      ({
+        agents: { defaults: { workspace: params.tempDir } },
+      } satisfies OpenClawConfig),
+    previousSessionEntry: params.previousSessionEntry,
+  });
+
+  await handler(event);
+
+  const memoryDir = path.join(params.tempDir, "memory");
+  const files = await fs.readdir(memoryDir);
+  const memoryContent =
+    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
+  return { files, memoryContent };
+}
+
 async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
@@ -60,22 +83,32 @@ async function runNewWithPreviousSession(params: {
       agents: { defaults: { workspace: tempDir } },
     } satisfies OpenClawConfig);
 
-  const event = createHookEvent("command", "new", "agent:main:main", {
+  const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+    tempDir,
     cfg,
     previousSessionEntry: {
       sessionId: "test-123",
       sessionFile,
     },
   });
-
-  await handler(event);
-
-  const memoryDir = path.join(tempDir, "memory");
-  const files = await fs.readdir(memoryDir);
-  const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
-
   return { tempDir, files, memoryContent };
+}
+
+function makeSessionMemoryConfig(tempDir: string, messages?: number): OpenClawConfig {
+  return {
+    agents: { defaults: { workspace: tempDir } },
+    ...(typeof messages === "number"
+      ? {
+          hooks: {
+            internal: {
+              entries: {
+                "session-memory": { enabled: true, messages },
+              },
+            },
+          },
+        }
+      : {}),
+  } satisfies OpenClawConfig;
 }
 
 describe("session-memory hook", () => {
@@ -198,16 +231,7 @@ describe("session-memory hook", () => {
     const sessionContent = createMockSessionContent(entries);
     const { memoryContent } = await runNewWithPreviousSession({
       sessionContent,
-      cfg: (tempDir) => ({
-        agents: { defaults: { workspace: tempDir } },
-        hooks: {
-          internal: {
-            entries: {
-              "session-memory": { enabled: true, messages: 3 },
-            },
-          },
-        },
-      }),
+      cfg: (tempDir) => makeSessionMemoryConfig(tempDir, 3),
     });
 
     // Only last 3 messages should be present
@@ -236,16 +260,7 @@ describe("session-memory hook", () => {
     const sessionContent = createMockSessionContent(entries);
     const { memoryContent } = await runNewWithPreviousSession({
       sessionContent,
-      cfg: (tempDir) => ({
-        agents: { defaults: { workspace: tempDir } },
-        hooks: {
-          internal: {
-            entries: {
-              "session-memory": { enabled: true, messages: 3 },
-            },
-          },
-        },
-      }),
+      cfg: (tempDir) => makeSessionMemoryConfig(tempDir, 3),
     });
 
     // Should have exactly 3 user/assistant messages (the last 3)
@@ -277,24 +292,13 @@ describe("session-memory hook", () => {
       content: resetContent,
     });
 
-    const cfg = {
-      agents: { defaults: { workspace: tempDir } },
-    } satisfies OpenClawConfig;
-
-    const event = createHookEvent("command", "new", "agent:main:main", {
-      cfg,
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
       previousSessionEntry: {
         sessionId: "test-123",
         sessionFile: activeSessionFile,
       },
     });
-
-    await handler(event);
-
-    const memoryDir = path.join(tempDir, "memory");
-    const files = await fs.readdir(memoryDir);
-    expect(files.length).toBe(1);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     expect(memoryContent).toContain("user: Message from rotated transcript");
     expect(memoryContent).toContain("assistant: Recovered from reset fallback");
@@ -315,24 +319,15 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const cfg = {
-      agents: { defaults: { workspace: tempDir } },
-    } satisfies OpenClawConfig;
-
-    const event = createHookEvent("command", "new", "agent:main:main", {
-      cfg,
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: makeSessionMemoryConfig(tempDir),
       previousSessionEntry: {
         sessionId,
         sessionFile: resetSessionFile,
       },
     });
-
-    await handler(event);
-
-    const memoryDir = path.join(tempDir, "memory");
-    const files = await fs.readdir(memoryDir);
     expect(files.length).toBe(1);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     expect(memoryContent).toContain("user: Message from reset pointer");
     expect(memoryContent).toContain("assistant: Recovered directly from reset file");
@@ -358,23 +353,14 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const cfg = {
-      agents: { defaults: { workspace: tempDir } },
-    } satisfies OpenClawConfig;
-
-    const event = createHookEvent("command", "new", "agent:main:main", {
-      cfg,
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: makeSessionMemoryConfig(tempDir),
       previousSessionEntry: {
         sessionId,
       },
     });
-
-    await handler(event);
-
-    const memoryDir = path.join(tempDir, "memory");
-    const files = await fs.readdir(memoryDir);
     expect(files.length).toBe(1);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
@@ -408,24 +394,13 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const cfg = {
-      agents: { defaults: { workspace: tempDir } },
-    } satisfies OpenClawConfig;
-
-    const event = createHookEvent("command", "new", "agent:main:main", {
-      cfg,
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
       previousSessionEntry: {
         sessionId: "test-123",
         sessionFile: activeSessionFile,
       },
     });
-
-    await handler(event);
-
-    const memoryDir = path.join(tempDir, "memory");
-    const files = await fs.readdir(memoryDir);
-    expect(files.length).toBe(1);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     expect(memoryContent).toContain("user: Newest rotated transcript");
     expect(memoryContent).toContain("assistant: Newest summary");
