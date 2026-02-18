@@ -1,6 +1,31 @@
 ---
 name: github
 description: "Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced queries."
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🐙",
+        "requires": { "bins": ["gh"] },
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "gh",
+              "bins": ["gh"],
+              "label": "Install GitHub CLI (brew)",
+            },
+            {
+              "id": "apt",
+              "kind": "apt",
+              "package": "gh",
+              "bins": ["gh"],
+              "label": "Install GitHub CLI (apt)",
+            },
+          ],
+      },
+  }
 ---
 
 # GitHub Skill
@@ -10,6 +35,7 @@ Use the `gh` CLI to interact with GitHub repositories, issues, PRs, and CI.
 ## When to Use
 
 ✅ **USE this skill when:**
+
 - Checking PR status, reviews, or merge readiness
 - Viewing CI/workflow run status and logs
 - Creating, closing, or commenting on issues
@@ -20,6 +46,7 @@ Use the `gh` CLI to interact with GitHub repositories, issues, PRs, and CI.
 ## When NOT to Use
 
 ❌ **DON'T use this skill when:**
+
 - Local git operations (commit, push, pull, branch) → use `git` directly
 - Non-GitHub repos (GitLab, Bitbucket, self-hosted) → different CLIs
 - Cloning repositories → use `git clone`
@@ -111,6 +138,7 @@ gh pr list --json number,title,state,mergeable --jq '.[] | select(.mergeable == 
 ## Templates
 
 ### PR Review Summary
+
 ```bash
 # Get PR overview for review
 PR=55 REPO=owner/repo
@@ -121,6 +149,7 @@ gh pr checks $PR --repo $REPO
 ```
 
 ### Issue Triage
+
 ```bash
 # Quick issue triage view
 gh issue list --repo owner/repo --state open --json number,title,labels,createdAt \

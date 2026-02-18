@@ -2,7 +2,25 @@
 name: imsg
 description: iMessage/SMS CLI for listing chats, history, and sending messages via Messages.app.
 homepage: https://imsg.to
-metadata: {"clawdbot":{"emoji":"📨","os":["darwin"],"requires":{"bins":["imsg"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/imsg","bins":["imsg"],"label":"Install imsg (brew)"}]}}
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "📨",
+        "os": ["darwin"],
+        "requires": { "bins": ["imsg"] },
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "steipete/tap/imsg",
+              "bins": ["imsg"],
+              "label": "Install imsg (brew)",
+            },
+          ],
+      },
+  }
 ---
 
 # imsg
@@ -12,7 +30,8 @@ Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 ## When to Use
 
 ✅ **USE this skill when:**
-- Blake explicitly asks to send iMessage or SMS
+
+- User explicitly asks to send iMessage or SMS
 - Reading iMessage conversation history
 - Checking recent Messages.app chats
 - Sending to phone numbers or Apple IDs
@@ -20,6 +39,7 @@ Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 ## When NOT to Use
 
 ❌ **DON'T use this skill when:**
+
 - Telegram messages → use `message` tool with `channel:telegram`
 - Signal messages → use Signal channel if configured
 - WhatsApp messages → use WhatsApp channel if configured
@@ -38,11 +58,13 @@ Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 ## Common Commands
 
 ### List Chats
+
 ```bash
 imsg chats --limit 10 --json
 ```
 
 ### View History
+
 ```bash
 # By chat ID
 imsg history --chat-id 1 --limit 20 --json
@@ -52,11 +74,13 @@ imsg history --chat-id 1 --limit 20 --attachments --json
 ```
 
 ### Watch for New Messages
+
 ```bash
 imsg watch --chat-id 1 --attachments
 ```
 
 ### Send Messages
+
 ```bash
 # Text only
 imsg send --to "+14155551212" --text "Hello!"

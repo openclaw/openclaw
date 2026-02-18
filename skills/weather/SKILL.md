@@ -1,6 +1,8 @@
 ---
 name: weather
 description: Get current weather and forecasts (no API key required).
+homepage: https://wttr.in/:help
+metadata: { "openclaw": { "emoji": "🌤️", "requires": { "bins": ["curl"] } } }
 ---
 
 # Weather Skill
@@ -10,6 +12,7 @@ Get current weather conditions and forecasts.
 ## When to Use
 
 ✅ **USE this skill when:**
+
 - "What's the weather?"
 - "Will it rain today/tomorrow?"
 - "Temperature in [city]"
@@ -19,57 +22,60 @@ Get current weather conditions and forecasts.
 ## When NOT to Use
 
 ❌ **DON'T use this skill when:**
+
 - Historical weather data → use weather archives/APIs
 - Climate analysis or trends → use specialized data sources
 - Hyper-local microclimate data → use local sensors
 - Severe weather alerts → check official NWS sources
 - Aviation/marine weather → use specialized services (METAR, etc.)
 
-## Blake's Default Location
+## Location
 
-- **City:** Chicago, IL
-- **Timezone:** America/Chicago (CST)
-- Update if Blake mentions traveling
+Always include a city, region, or airport code in weather queries.
 
 ## Commands
 
 ### Current Weather
+
 ```bash
-# Default location (Chicago)
-curl "wttr.in/Chicago?format=3"
+# One-line summary
+curl "wttr.in/London?format=3"
 
 # Detailed current conditions
-curl "wttr.in/Chicago?0"
+curl "wttr.in/London?0"
 
 # Specific city
 curl "wttr.in/New+York?format=3"
 ```
 
 ### Forecasts
+
 ```bash
 # 3-day forecast
-curl "wttr.in/Chicago"
+curl "wttr.in/London"
 
 # Week forecast
-curl "wttr.in/Chicago?format=v2"
+curl "wttr.in/London?format=v2"
 
 # Specific day (0=today, 1=tomorrow, 2=day after)
-curl "wttr.in/Chicago?1"
+curl "wttr.in/London?1"
 ```
 
 ### Format Options
+
 ```bash
 # One-liner
-curl "wttr.in/Chicago?format=%l:+%c+%t+%w"
+curl "wttr.in/London?format=%l:+%c+%t+%w"
 
 # JSON output
-curl "wttr.in/Chicago?format=j1"
+curl "wttr.in/London?format=j1"
 
 # PNG image
-curl "wttr.in/Chicago.png"
+curl "wttr.in/London.png"
 ```
 
 ### Format Codes
+
 - `%c` — Weather condition emoji
 - `%t` — Temperature
 - `%f` — "Feels like"
@@ -81,18 +87,21 @@ curl "wttr.in/Chicago.png"
 ## Quick Responses
 
 **"What's the weather?"**
+
 ```bash
-curl -s "wttr.in/Chicago?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
+curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
 ```
 
 **"Will it rain?"**
+
 ```bash
-curl -s "wttr.in/Chicago?format=j1" | jq '.weather[0].hourly[].chanceofrain'
+curl -s "wttr.in/London?format=%l:+%c+%p"
 ```
 
 **"Weekend forecast"**
+
 ```bash
-curl "wttr.in/Chicago?format=v2"
+curl "wttr.in/London?format=v2"
 ```
 
 ## Notes
