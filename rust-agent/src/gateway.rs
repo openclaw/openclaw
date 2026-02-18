@@ -389,11 +389,11 @@ impl RpcDispatcher {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|v| {
-                let normalized = canonicalize_session_key(&v);
-                if normalized.is_empty() {
+                let requested = v.trim().to_owned();
+                if requested.is_empty() {
                     None
                 } else {
-                    Some(normalized)
+                    Some(requested)
                 }
             })
             .take(64)
@@ -406,7 +406,14 @@ impl RpcDispatcher {
                 "previews": []
             }));
         }
-        let previews = self.sessions.preview(&keys, limit, max_chars).await;
+        let lookup_keys = keys
+            .iter()
+            .map(|key| canonicalize_session_key(key))
+            .collect::<Vec<_>>();
+        let mut previews = self.sessions.preview(&lookup_keys, limit, max_chars).await;
+        for (preview, requested) in previews.iter_mut().zip(keys.iter()) {
+            preview.key = requested.clone();
+        }
         RpcDispatchOutcome::Handled(json!({
             "ts": now_ms(),
             "previews": previews
@@ -4011,6 +4018,48 @@ mod tests {
                 );
             }
             _ => panic!("expected preview handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_preview_preserves_requested_alias_key() {
+        let dispatcher = RpcDispatcher::new();
+        let send = RpcRequestFrame {
+            id: "req-send-preview-alias".to_owned(),
+            method: "sessions.send".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-preview-alias",
+                "message": "preview alias payload",
+            }),
+        };
+        let _ = dispatcher.handle_request(&send).await;
+
+        let preview = RpcRequestFrame {
+            id: "req-preview-alias".to_owned(),
+            method: "sessions.preview".to_owned(),
+            params: serde_json::json!({
+                "keys": ["discord:group:g-preview-alias"],
+                "limit": 10,
+                "maxChars": 32
+            }),
+        };
+        let out = dispatcher.handle_request(&preview).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/previews/0/key")
+                        .and_then(serde_json::Value::as_str),
+                    Some("discord:group:g-preview-alias")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/previews/0/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("ok")
+                );
+            }
+            _ => panic!("expected preview alias handled"),
         }
     }
 

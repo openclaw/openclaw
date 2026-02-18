@@ -51,6 +51,7 @@
 - Added `sessions.list` delivery-context parity hints (`lastAccountId`, `deliveryContext`) and `totalTokensFresh` compatibility fields.
 - Added `sessions.history` parity lookups for both `key` aliases and `sessionId`.
 - Aligned patch-clear parity for `reasoningLevel`/`responseUsage` so explicit `"off"` clears persisted overrides.
+- Aligned preview response parity to preserve requested keys in `sessions.preview` output.
 - Rust defender policy engine with bounded worker concurrency.
 - Prompt injection scoring + command risk scoring.
 - Host integrity baseline checks.
