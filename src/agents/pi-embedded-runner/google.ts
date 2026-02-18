@@ -240,6 +240,24 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
   return violations;
 }
 
+function stripUnsupportedSchemaKeywords(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map((item) => stripUnsupportedSchemaKeywords(item));
+  }
+  const record = { ...(schema as Record<string, unknown>) };
+  for (const key of Object.keys(record)) {
+    if (GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS.has(key)) {
+      delete record[key];
+      continue;
+    }
+    record[key] = stripUnsupportedSchemaKeywords(record[key]);
+  }
+  return record;
+}
+
 export function sanitizeToolsForGoogle<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
@@ -258,11 +276,11 @@ export function sanitizeToolsForGoogle<
     if (!tool.parameters || typeof tool.parameters !== "object") {
       return tool;
     }
+    const cleaned = cleanToolSchemaForGemini(tool.parameters as Record<string, unknown>);
+    const stripped = stripUnsupportedSchemaKeywords(cleaned);
     return {
       ...tool,
-      parameters: cleanToolSchemaForGemini(
-        tool.parameters as Record<string, unknown>,
-      ) as TSchemaType,
+      parameters: stripped as TSchemaType,
     };
   });
 }
