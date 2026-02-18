@@ -33,7 +33,9 @@ import { getTelegramRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("telegram");
 
-function safeParseTelegramReplyToMessageId(replyToId: string | undefined): number | undefined {
+function safeParseTelegramReplyToMessageId(
+  replyToId: string | null | undefined,
+): number | undefined {
   if (typeof parseTelegramReplyToMessageId === "function") {
     return parseTelegramReplyToMessageId(replyToId);
   }
