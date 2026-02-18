@@ -1,3 +1,4 @@
+import type { GatewayBindMode } from "../../../config/types.gateway.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
@@ -9,7 +10,7 @@ export function logNonInteractiveOnboardingJson(params: {
   authChoice?: string;
   gateway?: {
     port: number;
-    bind: string;
+    bind: GatewayBindMode;
     authMode: string;
     tailscaleMode: string;
   };
