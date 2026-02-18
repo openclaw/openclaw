@@ -1,3 +1,4 @@
+import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
 import { parseConfigValue } from "./config-value.js";
 
 export type SetUnsetParseResult =
@@ -59,4 +60,42 @@ export function parseSetUnsetCommandAction<T>(params: {
   return parsed.kind === "set"
     ? params.onSet(parsed.path, parsed.value)
     : params.onUnset(parsed.path);
+}
+
+export function parseSlashCommandWithSetUnset<T>(params: {
+  raw: string;
+  slash: string;
+  invalidMessage: string;
+  usageMessage: string;
+  onKnownAction: (action: string, args: string) => T | undefined;
+  onSet: (path: string, value: unknown) => T;
+  onUnset: (path: string) => T;
+  onError: (message: string) => T;
+}): T | null {
+  const parsed = parseSlashCommandOrNull(params.raw, params.slash, {
+    invalidMessage: params.invalidMessage,
+  });
+  if (!parsed) {
+    return null;
+  }
+  if (!parsed.ok) {
+    return params.onError(parsed.message);
+  }
+  const { action, args } = parsed;
+  const setUnset = parseSetUnsetCommandAction<T>({
+    slash: params.slash,
+    action,
+    args,
+    onSet: params.onSet,
+    onUnset: params.onUnset,
+    onError: params.onError,
+  });
+  if (setUnset) {
+    return setUnset;
+  }
+  const knownAction = params.onKnownAction(action, args);
+  if (knownAction) {
+    return knownAction;
+  }
+  return params.onError(params.usageMessage);
 }
