@@ -84,7 +84,8 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
-  const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+  const TRANSIENT_HTTP_RETRY_BASE_DELAY_MS = 2_500;
+  const TRANSIENT_HTTP_MAX_RETRIES = 3;
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -103,7 +104,7 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let didResetAfterCompactionFailure = false;
-  let didRetryTransientHttpError = false;
+  let transientHttpRetryCount = 0;
 
   while (true) {
     try {
@@ -520,17 +521,18 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && !didRetryTransientHttpError) {
-        didRetryTransientHttpError = true;
+      if (isTransientHttp && transientHttpRetryCount < TRANSIENT_HTTP_MAX_RETRIES) {
+        transientHttpRetryCount++;
         // Retry the full runWithModelFallback() cycle — transient errors
         // (502/521/etc.) typically affect the whole provider, so falling
         // back to an alternate model first would not help. Instead we wait
         // and retry the complete primary→fallback chain.
+        const delayMs = TRANSIENT_HTTP_RETRY_BASE_DELAY_MS * transientHttpRetryCount;
         defaultRuntime.error(
-          `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+          `Transient HTTP provider error before reply (${message}). Retry ${transientHttpRetryCount}/${TRANSIENT_HTTP_MAX_RETRIES} in ${delayMs}ms.`,
         );
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
+          setTimeout(resolve, delayMs);
         });
         continue;
       }
