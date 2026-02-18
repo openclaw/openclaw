@@ -1,14 +1,11 @@
+import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import type { ResolvedZaloAccount } from "./types.js";
 import { handleZaloWebhookRequest, registerZaloWebhookTarget } from "./monitor.js";
+import type { ResolvedZaloAccount } from "./types.js";
 
-async function withServer(
-  handler: Parameters<typeof createServer>[0],
-  fn: (baseUrl: string) => Promise<void>,
-) {
+async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
   const server = createServer(handler);
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve());

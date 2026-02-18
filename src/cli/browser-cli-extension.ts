@@ -1,7 +1,7 @@
-import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Command } from "commander";
 import { movePathToTrash } from "../browser/trash.js";
 import { resolveStateDir } from "../config/paths.js";
 import { danger, info } from "../globals.js";
@@ -84,6 +84,7 @@ export function registerBrowserExtensionCommands(
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
+        return;
       }
 
       if (parent?.json) {

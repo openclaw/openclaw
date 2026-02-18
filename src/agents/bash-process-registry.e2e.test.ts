@@ -10,34 +10,35 @@ import {
   markExited,
   resetProcessRegistryForTests,
 } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 
 describe("bash process registry", () => {
+  function createRegistrySession(params: {
+    id?: string;
+    maxOutputChars: number;
+    pendingMaxOutputChars: number;
+    backgrounded: boolean;
+  }): ProcessSession {
+    return createProcessSessionFixture({
+      id: params.id ?? "sess",
+      command: "echo test",
+      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
+      maxOutputChars: params.maxOutputChars,
+      pendingMaxOutputChars: params.pendingMaxOutputChars,
+      backgrounded: params.backgrounded,
+    });
+  }
+
   beforeEach(() => {
     resetProcessRegistryForTests();
   });
 
   it("captures output and truncates", () => {
-    const session: ProcessSession = {
-      id: "sess",
-      command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
-      startedAt: Date.now(),
-      cwd: "/tmp",
+    const session = createRegistrySession({
       maxOutputChars: 10,
       pendingMaxOutputChars: 30_000,
-      totalOutputChars: 0,
-      pendingStdout: [],
-      pendingStderr: [],
-      pendingStdoutChars: 0,
-      pendingStderrChars: 0,
-      aggregated: "",
-      tail: "",
-      exited: false,
-      exitCode: undefined,
-      exitSignal: undefined,
-      truncated: false,
       backgrounded: false,
-    };
+    });
 
     addSession(session);
     appendOutput(session, "stdout", "0123456789");
@@ -48,27 +49,11 @@ describe("bash process registry", () => {
   });
 
   it("caps pending output to avoid runaway polls", () => {
-    const session: ProcessSession = {
-      id: "sess",
-      command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
-      startedAt: Date.now(),
-      cwd: "/tmp",
+    const session = createRegistrySession({
       maxOutputChars: 100_000,
       pendingMaxOutputChars: 20_000,
-      totalOutputChars: 0,
-      pendingStdout: [],
-      pendingStderr: [],
-      pendingStdoutChars: 0,
-      pendingStderrChars: 0,
-      aggregated: "",
-      tail: "",
-      exited: false,
-      exitCode: undefined,
-      exitSignal: undefined,
-      truncated: false,
       backgrounded: true,
-    };
+    });
 
     addSession(session);
     const payload = `${"a".repeat(70_000)}${"b".repeat(20_000)}`;
@@ -82,27 +67,11 @@ describe("bash process registry", () => {
   });
 
   it("respects max output cap when pending cap is larger", () => {
-    const session: ProcessSession = {
-      id: "sess",
-      command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
-      startedAt: Date.now(),
-      cwd: "/tmp",
+    const session = createRegistrySession({
       maxOutputChars: 5_000,
       pendingMaxOutputChars: 30_000,
-      totalOutputChars: 0,
-      pendingStdout: [],
-      pendingStderr: [],
-      pendingStdoutChars: 0,
-      pendingStderrChars: 0,
-      aggregated: "",
-      tail: "",
-      exited: false,
-      exitCode: undefined,
-      exitSignal: undefined,
-      truncated: false,
       backgrounded: true,
-    };
+    });
 
     addSession(session);
     appendOutput(session, "stdout", "x".repeat(10_000));
@@ -113,27 +82,11 @@ describe("bash process registry", () => {
   });
 
   it("caps stdout and stderr independently", () => {
-    const session: ProcessSession = {
-      id: "sess",
-      command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
-      startedAt: Date.now(),
-      cwd: "/tmp",
+    const session = createRegistrySession({
       maxOutputChars: 100,
       pendingMaxOutputChars: 10,
-      totalOutputChars: 0,
-      pendingStdout: [],
-      pendingStderr: [],
-      pendingStdoutChars: 0,
-      pendingStderrChars: 0,
-      aggregated: "",
-      tail: "",
-      exited: false,
-      exitCode: undefined,
-      exitSignal: undefined,
-      truncated: false,
       backgrounded: true,
-    };
+    });
 
     addSession(session);
     appendOutput(session, "stdout", "a".repeat(6));
@@ -147,27 +100,11 @@ describe("bash process registry", () => {
   });
 
   it("only persists finished sessions when backgrounded", () => {
-    const session: ProcessSession = {
-      id: "sess",
-      command: "echo test",
-      child: { pid: 123, removeAllListeners: vi.fn() } as ChildProcessWithoutNullStreams,
-      startedAt: Date.now(),
-      cwd: "/tmp",
+    const session = createRegistrySession({
       maxOutputChars: 100,
       pendingMaxOutputChars: 30_000,
-      totalOutputChars: 0,
-      pendingStdout: [],
-      pendingStderr: [],
-      pendingStdoutChars: 0,
-      pendingStderrChars: 0,
-      aggregated: "",
-      tail: "",
-      exited: false,
-      exitCode: undefined,
-      exitSignal: undefined,
-      truncated: false,
       backgrounded: false,
-    };
+    });
 
     addSession(session);
     markExited(session, 0, null, "completed");

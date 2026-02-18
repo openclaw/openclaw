@@ -1,13 +1,13 @@
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
-import type { ChannelsProps } from "./channels.types.ts";
 import { formatRelativeTimestamp } from "../format.ts";
+import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
 } from "./channels.nostr-profile-form.ts";
+import type { ChannelsProps } from "./channels.types.ts";
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)

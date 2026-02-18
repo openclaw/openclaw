@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
 import type { SkillEntry } from "../agents/skills.js";
+import { captureEnv } from "../test-utils/env.js";
+import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 // Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
@@ -27,22 +29,7 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     disabled: false,
     blockedByAllowlist: false,
     eligible: true,
-    requirements: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    missing: {
-      bins: [],
-      anyBins: [],
-      env: [],
-      config: [],
-      os: [],
-    },
-    configChecks: [],
-    install: [],
+    ...createEmptyInstallChecks(),
     ...overrides,
   };
 }
@@ -218,15 +205,26 @@ describe("skills-cli", () => {
 
   describe("integration: loads real skills from bundled directory", () => {
     let tempWorkspaceDir = "";
+    let tempBundledDir = "";
+    let envSnapshot: ReturnType<typeof captureEnv>;
+    let buildWorkspaceSkillStatus: typeof import("../agents/skills-status.js").buildWorkspaceSkillStatus;
 
-    beforeAll(() => {
+    beforeAll(async () => {
+      envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
       tempWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skills-test-"));
+      tempBundledDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-skills-test-"));
+      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = tempBundledDir;
+      ({ buildWorkspaceSkillStatus } = await import("../agents/skills-status.js"));
     });
 
     afterAll(() => {
       if (tempWorkspaceDir) {
         fs.rmSync(tempWorkspaceDir, { recursive: true, force: true });
       }
+      if (tempBundledDir) {
+        fs.rmSync(tempBundledDir, { recursive: true, force: true });
+      }
+      envSnapshot.restore();
     });
 
     const createEntries = (): SkillEntry[] => {
@@ -247,7 +245,6 @@ describe("skills-cli", () => {
     };
 
     it("loads bundled skills and formats them", async () => {
-      const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
       const entries = createEntries();
       const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",
@@ -271,7 +268,6 @@ describe("skills-cli", () => {
     });
 
     it("formats info for a real bundled skill (peekaboo)", async () => {
-      const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
       const entries = createEntries();
       const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
         managedSkillsDir: "/nonexistent",

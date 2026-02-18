@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
@@ -62,39 +62,35 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
-type PromiseSettlement<T> =
-  | { status: "resolved"; value: T }
-  | { status: "rejected"; reason: unknown };
+function createLockPayload(params: { configPath: string; startTime: number; createdAt?: string }) {
+  return {
+    pid: process.pid,
+    createdAt: params.createdAt ?? new Date().toISOString(),
+    configPath: params.configPath,
+    startTime: params.startTime,
+  };
+}
 
-async function settleWithFakeTimers<T>(
-  promise: Promise<T>,
-  params: { stepMs: number; maxSteps: number },
-) {
-  const wrapped: Promise<PromiseSettlement<T>> = promise.then(
-    (value) => ({ status: "resolved", value }),
-    (reason) => ({ status: "rejected", reason }),
-  );
-
-  for (let step = 0; step < params.maxSteps; step += 1) {
-    const settled = await Promise.race([wrapped, Promise.resolve(null)]);
-    if (settled) {
-      return settled;
+function mockProcStatRead(params: { onProcRead: () => string }) {
+  const readFileSync = fsSync.readFileSync;
+  return vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
+    if (filePath === `/proc/${process.pid}/stat`) {
+      return params.onProcRead();
     }
-    await vi.advanceTimersByTimeAsync(params.stepMs);
-  }
-
-  const final = await Promise.race([wrapped, Promise.resolve(null)]);
-  if (final) {
-    return final;
-  }
-  throw new Error(
-    `promise did not settle after ${params.maxSteps} steps of ${params.stepMs}ms fake time`,
-  );
+    return readFileSync(filePath as never, encoding as never) as never;
+  });
 }
 
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
+  });
+
+  beforeEach(() => {
+    // Other suites occasionally leave global spies behind (Date.now, setTimeout, etc.).
+    // This test relies on fake timers advancing Date.now and setTimeout deterministically.
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   afterAll(async () => {
@@ -106,34 +102,32 @@ describe("gateway lock", () => {
   });
 
   it("blocks concurrent acquisition until release", async () => {
-    vi.useFakeTimers();
+    // Fake timers can hang on Windows CI when combined with fs open loops.
+    // Keep this test on real timers and use small timeouts.
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 50,
+      pollIntervalMs: 2,
     });
     expect(lock).not.toBeNull();
 
     const pending = acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 15,
+      pollIntervalMs: 2,
     });
-    const settlement = await settleWithFakeTimers(pending, { stepMs: 5, maxSteps: 40 });
-    expect(settlement.status).toBe("rejected");
-    expect((settlement as { status: "rejected"; reason: unknown }).reason).toBeInstanceOf(
-      GatewayLockError,
-    );
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     await lock?.release();
     const lock2 = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 30,
+      pollIntervalMs: 2,
     });
     await lock2?.release();
     await cleanup();
@@ -141,23 +135,15 @@ describe("gateway lock", () => {
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
-    const payload = {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      configPath,
-      startTime: 111,
-    };
+    const payload = createLockPayload({ configPath, startTime: 111 });
     await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
 
-    const readFileSync = fsSync.readFileSync;
     const statValue = makeProcStat(process.pid, 222);
-    const spy = vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${process.pid}/stat`) {
-        return statValue;
-      }
-      return readFileSync(filePath as never, encoding as never) as never;
+    const spy = mockProcStatRead({
+      onProcRead: () => statValue,
     });
 
     const lock = await acquireGatewayLock({
@@ -175,59 +161,48 @@ describe("gateway lock", () => {
   });
 
   it("keeps lock on linux when proc access fails unless stale", async () => {
-    vi.useFakeTimers();
+    vi.useRealTimers();
     const { env, cleanup } = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
-    const payload = {
-      pid: process.pid,
-      createdAt: new Date().toISOString(),
-      configPath,
-      startTime: 111,
-    };
+    const payload = createLockPayload({ configPath, startTime: 111 });
     await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
 
-    const readFileSync = fsSync.readFileSync;
-    const spy = vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${process.pid}/stat`) {
+    const spy = mockProcStatRead({
+      onProcRead: () => {
         throw new Error("EACCES");
-      }
-      return readFileSync(filePath as never, encoding as never) as never;
+      },
     });
 
     const pending = acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 50,
-      pollIntervalMs: 5,
+      timeoutMs: 15,
+      pollIntervalMs: 2,
       staleMs: 10_000,
       platform: "linux",
     });
-    const settlement = await settleWithFakeTimers(pending, { stepMs: 5, maxSteps: 30 });
-    expect(settlement.status).toBe("rejected");
-    expect((settlement as { status: "rejected"; reason: unknown }).reason).toBeInstanceOf(
-      GatewayLockError,
-    );
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     spy.mockRestore();
 
-    const stalePayload = {
-      ...payload,
+    const stalePayload = createLockPayload({
+      configPath,
+      startTime: 111,
       createdAt: new Date(0).toISOString(),
-    };
+    });
     await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
 
-    const staleSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-      if (filePath === `/proc/${process.pid}/stat`) {
+    const staleSpy = mockProcStatRead({
+      onProcRead: () => {
         throw new Error("EACCES");
-      }
-      return readFileSync(filePath as never, encoding as never) as never;
+      },
     });
 
     const lock = await acquireGatewayLock({
       env,
       allowInTests: true,
-      timeoutMs: 80,
-      pollIntervalMs: 5,
+      timeoutMs: 30,
+      pollIntervalMs: 2,
       staleMs: 1,
       platform: "linux",
     });

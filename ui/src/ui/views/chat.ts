@@ -1,9 +1,6 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -12,6 +9,9 @@ import {
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import type { SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
