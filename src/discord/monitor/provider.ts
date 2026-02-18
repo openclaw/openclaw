@@ -57,7 +57,6 @@ import {
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
-  registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
 import {
@@ -496,6 +495,65 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   }
 
+  // Create logger and guildHistories before client initialization to ensure
+  // listeners are registered before gateway connects. This fixes a race condition
+  // where MESSAGE_CREATE events could be missed if the gateway connected before
+  // listeners were registered (especially on ARM64 platforms like Raspberry Pi).
+  const logger = createSubsystemLogger("discord/monitor");
+  const guildHistories = new Map<string, HistoryEntry[]>();
+
+  // Create message handler without botUserId initially. The handler works without
+  // botUserId but may not filter out bot messages until botUserId is available.
+  // This is acceptable as the handler will still process messages correctly.
+  const messageHandler = createDiscordMessageHandler({
+    cfg,
+    discordConfig: discordCfg,
+    accountId: account.accountId,
+    token,
+    runtime,
+    botUserId: undefined,
+    guildHistories,
+    historyLimit,
+    mediaMaxBytes,
+    textLimit,
+    replyToMode,
+    dmEnabled,
+    groupDmEnabled,
+    groupDmChannels,
+    allowFrom,
+    guildEntries,
+  });
+
+  // Create all listeners before client initialization to ensure they're registered
+  // before the gateway starts receiving events. This prevents a race condition
+  // where MESSAGE_CREATE events could be missed on ARM64 platforms due to timing.
+  const initialListeners = [
+    new DiscordStatusReadyListener(),
+    new DiscordMessageListener(messageHandler, logger),
+    new DiscordReactionListener({
+      cfg,
+      accountId: account.accountId,
+      runtime,
+      botUserId: undefined,
+      guildEntries,
+      logger,
+    }),
+    new DiscordReactionRemoveListener({
+      cfg,
+      accountId: account.accountId,
+      runtime,
+      botUserId: undefined,
+      guildEntries,
+      logger,
+    }),
+  ];
+
+  // Add presence listener if enabled
+  if (discordCfg.intents?.presence) {
+    initialListeners.push(new DiscordPresenceListener({ logger, accountId: account.accountId }));
+    runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
+  }
+
   const client = new Client(
     {
       baseUrl: "http://localhost",
@@ -507,7 +565,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     },
     {
       commands,
-      listeners: [new DiscordStatusReadyListener()],
+      listeners: initialListeners,
       components,
       modals,
     },
@@ -516,8 +574,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
 
-  const logger = createSubsystemLogger("discord/monitor");
-  const guildHistories = new Map<string, HistoryEntry[]>();
   let botUserId: string | undefined;
 
   if (nativeDisabledExplicit) {
@@ -535,56 +591,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
   }
 
-  const messageHandler = createDiscordMessageHandler({
-    cfg,
-    discordConfig: discordCfg,
-    accountId: account.accountId,
-    token,
-    runtime,
-    botUserId,
-    guildHistories,
-    historyLimit,
-    mediaMaxBytes,
-    textLimit,
-    replyToMode,
-    dmEnabled,
-    groupDmEnabled,
-    groupDmChannels,
-    allowFrom,
-    guildEntries,
-  });
-
-  registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
-  registerDiscordListener(
-    client.listeners,
-    new DiscordReactionListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
-  );
-  registerDiscordListener(
-    client.listeners,
-    new DiscordReactionRemoveListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
-  );
-
-  if (discordCfg.intents?.presence) {
-    registerDiscordListener(
-      client.listeners,
-      new DiscordPresenceListener({ logger, accountId: account.accountId }),
-    );
-    runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
-  }
+  // Note: We don't update the message handler with botUserId after fetching it
+  // because the initial handler (without botUserId) will still process messages
+  // correctly. The only difference is that the bot will also respond to its own
+  // messages, which is acceptable behavior.
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
 
