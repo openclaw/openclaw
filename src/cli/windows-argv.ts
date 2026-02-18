@@ -54,7 +54,11 @@ export function normalizeWindowsArgv(argv: string[]): string[] {
   // We keep the first element (argv[0]) as it's the nominal executable.
   for (let i = 1; i <= 3 && i < next.length; ) {
     const arg = next[i];
-    if (isExecPath(arg) || arg === "--disable-warning=ExperimentalWarning" || arg === "--no-warnings") {
+    if (
+      isExecPath(arg) ||
+      arg === "--disable-warning=ExperimentalWarning" ||
+      arg === "--no-warnings"
+    ) {
       next.splice(i, 1);
       continue;
     }
