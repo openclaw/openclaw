@@ -381,6 +381,48 @@ async function runViaMacAppExecHost(params: {
   });
 }
 
+async function sendJsonPayloadResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  payload: unknown,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: true,
+    payloadJSON: JSON.stringify(payload),
+  });
+}
+
+async function sendRawPayloadResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  payloadJSON: string,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: true,
+    payloadJSON,
+  });
+}
+
+async function sendErrorResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  code: string,
+  message: string,
+) {
+  await sendInvokeResult(client, frame, {
+    ok: false,
+    error: { code, message },
+  });
+}
+
+async function sendInvalidRequestResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  err: unknown,
+) {
+  await sendErrorResult(client, frame, "INVALID_REQUEST", String(err));
+}
+
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: GatewayClient,
@@ -397,17 +439,11 @@ export async function handleInvoke(
         hash: snapshot.hash,
         file: redactExecApprovals(snapshot.file),
       };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
       const message = String(err);
       const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code, message },
-      });
+      await sendErrorResult(client, frame, code, message);
     }
     return;
   }
@@ -431,15 +467,9 @@ export async function handleInvoke(
         hash: nextSnapshot.hash,
         file: redactExecApprovals(nextSnapshot.file),
       };
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
@@ -452,15 +482,9 @@ export async function handleInvoke(
       }
       const env = sanitizeEnv(undefined);
       const payload = await handleSystemWhich(params, env);
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(payload),
-      });
+      await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
@@ -468,24 +492,15 @@ export async function handleInvoke(
   if (command === "browser.proxy") {
     try {
       const payload = await runBrowserProxyCommand(frame.paramsJSON);
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: payload,
-      });
+      await sendRawPayloadResult(client, frame, payload);
     } catch (err) {
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: String(err) },
-      });
+      await sendInvalidRequestResult(client, frame, err);
     }
     return;
   }
 
   if (command !== "system.run") {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "command not supported" },
-    });
+    await sendErrorResult(client, frame, "UNAVAILABLE", "command not supported");
     return;
   }
 
@@ -493,18 +508,12 @@ export async function handleInvoke(
   try {
     params = decodeParams<SystemRunParams>(frame.paramsJSON);
   } catch (err) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: String(err) },
-    });
+    await sendInvalidRequestResult(client, frame, err);
     return;
   }
 
   if (!Array.isArray(params.command) || params.command.length === 0) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "command required" },
-    });
+    await sendErrorResult(client, frame, "INVALID_REQUEST", "command required");
     return;
   }
 
@@ -515,10 +524,7 @@ export async function handleInvoke(
     rawCommand: rawCommand || null,
   });
   if (!consistency.ok) {
-    await sendInvokeResult(client, frame, {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: consistency.message },
-    });
+    await sendErrorResult(client, frame, "INVALID_REQUEST", consistency.message);
     return;
   }
 
