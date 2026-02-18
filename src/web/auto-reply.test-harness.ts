@@ -171,7 +171,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
   };
 }
 
-export function createMockWebListener() {
+export function createMockWebListener(): MockWebListener {
   return {
     close: vi.fn(async () => undefined),
     onClose: new Promise<WebListenerCloseReason>(() => {}),
