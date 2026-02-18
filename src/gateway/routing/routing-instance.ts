@@ -12,7 +12,7 @@
  * instance will be created.
  */
 
-import type { EmbeddingProvider } from "../memory/embeddings.js";
+import type { EmbeddingProvider } from "../../memory/embeddings.js";
 import { BudgetTracker } from "./budget-tracker.js";
 import { HealthTracker } from "./health-tracker.js";
 import { ModelSelector } from "./model-selector.js";

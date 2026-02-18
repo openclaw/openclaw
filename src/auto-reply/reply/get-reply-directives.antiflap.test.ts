@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { TaskType, type RoutingConfig } from "../../gateway/routing/types.js";
 import type { TemplateContext } from "../templating.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const taskResolverMock = vi.hoisted(() => ({
   resolveTaskType: vi.fn(async () => TaskType.CODE_EDIT),
@@ -152,7 +153,7 @@ function buildParams(params: {
     provider: "anthropic",
     model: "claude-opus-4-5",
     hasResolvedHeartbeatModelOverride: false,
-    typing: { cleanup: vi.fn() } as unknown as import("./typing.js").TypingController,
+    typing: createMockTypingController(),
     opts: undefined,
     skillFilter: undefined,
   };
@@ -285,7 +286,7 @@ describe("resolveReplyDirectives — recentContext 提取逻辑", () => {
       sessionStore,
       sessionKey,
       sessionScope: "per-sender" as const,
-      groupResolution: null,
+      groupResolution: undefined,
       isGroup: false,
       triggerBodyNormalized: "",
       commandAuthorized: true,
@@ -295,7 +296,7 @@ describe("resolveReplyDirectives — recentContext 提取逻辑", () => {
       provider: "anthropic",
       model: "claude-opus-4-5",
       hasResolvedHeartbeatModelOverride: false,
-      typing: { cleanup: vi.fn() },
+      typing: createMockTypingController(),
       opts: undefined,
       skillFilter: undefined,
     };
