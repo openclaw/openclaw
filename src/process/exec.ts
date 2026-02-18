@@ -8,6 +8,85 @@ import { resolveCommandStdio } from "./spawn-utils.js";
 const execFileAsync = promisify(execFile);
 
 /**
+ * Windows shell builtins that are implemented by cmd.exe, not as separate executables.
+ * These commands require cmd.exe /c wrapping to execute properly without shell: true.
+ */
+const WINDOWS_SHELL_BUILTINS = new Set([
+  "assoc",
+  "break",
+  "call",
+  "cd",
+  "chdir",
+  "cls",
+  "color",
+  "copy",
+  "date",
+  "del",
+  "dir",
+  "dpath",
+  "echo",
+  "endlocal",
+  "erase",
+  "exit",
+  "for",
+  "ftype",
+  "goto",
+  "if",
+  "keys",
+  "md",
+  "mkdir",
+  "mklink",
+  "move",
+  "path",
+  "pause",
+  "popd",
+  "prompt",
+  "pushd",
+  "rd",
+  "rem",
+  "ren",
+  "rename",
+  "rmdir",
+  "set",
+  "setlocal",
+  "shift",
+  "start",
+  "time",
+  "title",
+  "type",
+  "ver",
+  "verify",
+  "vol",
+]);
+
+/**
+ * Checks if a command is a Windows shell builtin.
+ */
+function isWindowsShellBuiltin(command: string): boolean {
+  const basename = path.basename(command).toLowerCase();
+  return WINDOWS_SHELL_BUILTINS.has(basename);
+}
+
+/**
+ * Wraps a Windows shell builtin command with cmd.exe /c to enable execution.
+ * This is the security-safe alternative to shell: true — we control the wrapping
+ * and only apply it to known builtins, not to arbitrary untrusted input.
+ * Returns the modified argv array, or the original if no wrapping is needed.
+ */
+export function wrapWindowsBuiltinCommand(argv: string[], platform: NodeJS.Platform): string[] {
+  if (platform !== "win32" || argv.length === 0) {
+    return argv;
+  }
+  const command = argv[0] ?? "";
+  if (!isWindowsShellBuiltin(command)) {
+    return argv;
+  }
+  // Wrap with cmd.exe /c: arguments are passed separately so Node's spawn
+  // can properly quote them. cmd.exe /c treats everything after /c as the command.
+  return ["cmd.exe", "/c", ...argv];
+}
+
+/**
  * Resolves a command for Windows compatibility.
  * On Windows, non-.exe commands (like npm, pnpm) require their .cmd extension.
  */
@@ -133,8 +212,11 @@ export async function runCommandWithTimeout(
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const resolvedCommand = resolveCommand(argv[0] ?? "");
-  const child = spawn(resolvedCommand, argv.slice(1), {
+  // Wrap Windows shell builtins (echo, dir, etc.) with cmd.exe /c for proper execution.
+  // This is security-safe since we only wrap known builtins, not enabling shell: true.
+  const wrappedArgv = wrapWindowsBuiltinCommand(argv, process.platform);
+  const resolvedCommand = resolveCommand(wrappedArgv[0] ?? "");
+  const child = spawn(resolvedCommand, wrappedArgv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,

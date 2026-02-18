@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
+import { runCommandWithTimeout, shouldSpawnWithShell, wrapWindowsBuiltinCommand } from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
@@ -81,5 +81,57 @@ describe("runCommandWithTimeout", () => {
     expect(result.termination).toBe("timeout");
     expect(result.noOutputTimedOut).toBe(false);
     expect(result.code).not.toBe(0);
+  });
+});
+
+describe("wrapWindowsBuiltinCommand", () => {
+  it("wraps echo on win32 with cmd.exe /c", () => {
+    const result = wrapWindowsBuiltinCommand(["echo", "hello"], "win32");
+    expect(result).toEqual(["cmd.exe", "/c", "echo", "hello"]);
+  });
+
+  it("wraps dir on win32 with cmd.exe /c", () => {
+    const result = wrapWindowsBuiltinCommand(["dir", "/b"], "win32");
+    expect(result).toEqual(["cmd.exe", "/c", "dir", "/b"]);
+  });
+
+  it("wraps type on win32 with cmd.exe /c", () => {
+    const result = wrapWindowsBuiltinCommand(["type", "file.txt"], "win32");
+    expect(result).toEqual(["cmd.exe", "/c", "type", "file.txt"]);
+  });
+
+  it("wraps cd on win32 with cmd.exe /c", () => {
+    const result = wrapWindowsBuiltinCommand(["cd"], "win32");
+    expect(result).toEqual(["cmd.exe", "/c", "cd"]);
+  });
+
+  it("does not wrap non-builtin commands on win32", () => {
+    const result = wrapWindowsBuiltinCommand(["node", "-e", "console.log(1)"], "win32");
+    expect(result).toEqual(["node", "-e", "console.log(1)"]);
+  });
+
+  it("does not wrap npm on win32 (handled by resolveCommand)", () => {
+    const result = wrapWindowsBuiltinCommand(["npm", "install"], "win32");
+    expect(result).toEqual(["npm", "install"]);
+  });
+
+  it("does not wrap commands on non-Windows platforms", () => {
+    const result = wrapWindowsBuiltinCommand(["echo", "hello"], "darwin");
+    expect(result).toEqual(["echo", "hello"]);
+  });
+
+  it("does not wrap commands on linux", () => {
+    const result = wrapWindowsBuiltinCommand(["echo", "hello"], "linux");
+    expect(result).toEqual(["echo", "hello"]);
+  });
+
+  it("returns empty array for empty input", () => {
+    const result = wrapWindowsBuiltinCommand([], "win32");
+    expect(result).toEqual([]);
+  });
+
+  it("handles case-insensitive builtin matching", () => {
+    const result = wrapWindowsBuiltinCommand(["ECHO", "HELLO"], "win32");
+    expect(result).toEqual(["cmd.exe", "/c", "ECHO", "HELLO"]);
   });
 });
