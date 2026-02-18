@@ -422,16 +422,21 @@ export function processLatexForTerminal(text: string): string {
     result = result.substring(0, index) + displayRendered + result.substring(index + full.length);
   }
 
-  // Process inline math ($...$) — avoid matching $$
+  // Process inline math ($...$) — avoid matching $$ and currency like $50
+  // Content must contain LaTeX-like characters (backslash, ^, _, {, }) to qualify
   const inlinePattern = /(?<!\$)\$(?!\$)([^$\n]+)\$(?!\$)/g;
+  const looksLikeLatex = (content: string) => /[\\^_{}]/.test(content);
   const inlineMatches: Array<{ full: string; latex: string; index: number }> = [];
 
   // Re-compute code ranges after display math replacement
   const updatedCodeRanges = getCodeBlockRanges(result);
 
   while ((match = inlinePattern.exec(result)) !== null) {
-    if (!isInCodeBlock(match.index, updatedCodeRanges)) {
+    if (!isInCodeBlock(match.index, updatedCodeRanges) && looksLikeLatex(match[1])) {
       inlineMatches.push({ full: match[0], latex: match[1], index: match.index });
+    } else {
+      // Reset to after opening $ so the closing $ can start a new match
+      inlinePattern.lastIndex = match.index + 1;
     }
   }
 
