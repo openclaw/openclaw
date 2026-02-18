@@ -618,12 +618,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - set `channels.telegram.webhookUrl`
     - set `channels.telegram.webhookSecret` (required when webhook URL is set)
     - optional `channels.telegram.webhookPath` (default `/telegram-webhook`)
-    - optional `channels.telegram.webhookHost` (default `127.0.0.1`)
 
-    Default local listener for webhook mode binds to `127.0.0.1:8787`.
+    Webhook listens on the gateway HTTP server (same port as gateway, default 18789).
 
-    If your public endpoint differs, place a reverse proxy in front and point `webhookUrl` at the public URL.
-    Set `webhookHost` (for example `0.0.0.0`) when you intentionally need external ingress.
+    Point your reverse proxy to forward webhook requests to the gateway port.
+    Example: `https://your-domain.com/telegram/webhook` → `http://127.0.0.1:18789/telegram/webhook`
 
   </Accordion>
 
