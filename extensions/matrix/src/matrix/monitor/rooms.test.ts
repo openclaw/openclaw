@@ -36,4 +36,79 @@ describe("resolveMatrixRoomConfig", () => {
     expect(byName.allowed).toBe(false);
     expect(byName.config).toBeUndefined();
   });
+
+  it("matches room IDs case-insensitively", () => {
+    const rooms = {
+      "!AbCdEf:Matrix.org": { allow: true, requireMention: false },
+    };
+
+    const exact = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!AbCdEf:Matrix.org",
+      aliases: [],
+    });
+    expect(exact.allowed).toBe(true);
+    expect(exact.config?.requireMention).toBe(false);
+
+    const lowerCase = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!abcdef:matrix.org",
+      aliases: [],
+    });
+    expect(lowerCase.allowed).toBe(true);
+    expect(lowerCase.config?.requireMention).toBe(false);
+    expect(lowerCase.matchSource).toBe("direct");
+
+    const upperCase = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!ABCDEF:MATRIX.ORG",
+      aliases: [],
+    });
+    expect(upperCase.allowed).toBe(true);
+    expect(upperCase.config?.requireMention).toBe(false);
+  });
+
+  it("matches room aliases case-insensitively", () => {
+    const rooms = {
+      "#MyRoom:example.org": { allow: true, requireMention: false },
+    };
+
+    const result = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!other:example.org",
+      aliases: ["#myroom:example.org"],
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.config?.requireMention).toBe(false);
+  });
+
+  it("prefers exact case match over normalized match", () => {
+    const rooms = {
+      "!room:example.org": { allow: true, requireMention: false },
+    };
+
+    const result = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!room:example.org",
+      aliases: [],
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.matchKey).toBe("!room:example.org");
+  });
+
+  it("falls back to wildcard when no case-insensitive match", () => {
+    const rooms = {
+      "!specific:example.org": { allow: true },
+      "*": { allow: true, requireMention: true },
+    };
+
+    const result = resolveMatrixRoomConfig({
+      rooms,
+      roomId: "!unrelated:example.org",
+      aliases: [],
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.config?.requireMention).toBe(true);
+    expect(result.matchSource).toBe("wildcard");
+  });
 });

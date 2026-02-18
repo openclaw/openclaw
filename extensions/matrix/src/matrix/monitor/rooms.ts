@@ -1,4 +1,7 @@
-import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "openclaw/plugin-sdk";
+import {
+  buildChannelKeyCandidates,
+  resolveChannelEntryMatchWithFallback,
+} from "openclaw/plugin-sdk";
 import type { MatrixRoomConfig } from "../../types.js";
 
 export type MatrixRoomConfigResolved = {
@@ -8,6 +11,8 @@ export type MatrixRoomConfigResolved = {
   matchKey?: string;
   matchSource?: "direct" | "wildcard";
 };
+
+const normalizeRoomKey = (key: string) => key.toLowerCase();
 
 export function resolveMatrixRoomConfig(params: {
   rooms?: Record<string, MatrixRoomConfig>;
@@ -23,25 +28,23 @@ export function resolveMatrixRoomConfig(params: {
     `room:${params.roomId}`,
     ...params.aliases,
   );
-  const {
-    entry: matched,
-    key: matchedKey,
-    wildcardEntry,
-    wildcardKey,
-  } = resolveChannelEntryMatch({
+  const match = resolveChannelEntryMatchWithFallback({
     entries: rooms,
     keys: candidates,
     wildcardKey: "*",
+    normalizeKey: normalizeRoomKey,
   });
-  const resolved = matched ?? wildcardEntry;
+  const resolved = match.entry;
   const allowed = resolved ? resolved.enabled !== false && resolved.allow !== false : false;
-  const matchKey = matchedKey ?? wildcardKey;
-  const matchSource = matched ? "direct" : wildcardEntry ? "wildcard" : undefined;
+  const matchSource =
+    match.matchSource === "direct" || match.matchSource === "wildcard"
+      ? match.matchSource
+      : undefined;
   return {
     allowed,
     allowlistConfigured,
     config: resolved,
-    matchKey,
+    matchKey: match.matchKey,
     matchSource,
   };
 }
