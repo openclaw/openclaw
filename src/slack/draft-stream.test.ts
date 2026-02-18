@@ -1,24 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSlackDraftStream } from "./draft-stream.js";
 
+type DraftStreamParams = Parameters<typeof createSlackDraftStream>[0];
+type DraftSendFn = NonNullable<DraftStreamParams["send"]>;
+type DraftEditFn = NonNullable<DraftStreamParams["edit"]>;
+type DraftRemoveFn = NonNullable<DraftStreamParams["remove"]>;
+type DraftWarnFn = NonNullable<DraftStreamParams["warn"]>;
+
 function createDraftStreamHarness(
   params: {
     maxChars?: number;
-    send?: ReturnType<typeof vi.fn>;
-    edit?: ReturnType<typeof vi.fn>;
-    remove?: ReturnType<typeof vi.fn>;
-    warn?: ReturnType<typeof vi.fn>;
+    send?: DraftSendFn;
+    edit?: DraftEditFn;
+    remove?: DraftRemoveFn;
+    warn?: DraftWarnFn;
   } = {},
 ) {
   const send =
     params.send ??
-    vi.fn(async () => ({
+    vi.fn<DraftSendFn>(async () => ({
       channelId: "C123",
       messageId: "111.222",
     }));
-  const edit = params.edit ?? vi.fn(async () => {});
-  const remove = params.remove ?? vi.fn(async () => {});
-  const warn = params.warn ?? vi.fn();
+  const edit = params.edit ?? vi.fn<DraftEditFn>(async () => {});
+  const remove = params.remove ?? vi.fn<DraftRemoveFn>(async () => {});
+  const warn = params.warn ?? vi.fn<DraftWarnFn>();
   const stream = createSlackDraftStream({
     target: "channel:C123",
     token: "xoxb-test",
@@ -63,7 +69,7 @@ describe("createSlackDraftStream", () => {
 
   it("supports forceNewMessage for subsequent assistant messages", async () => {
     const send = vi
-      .fn()
+      .fn<DraftSendFn>()
       .mockResolvedValueOnce({ channelId: "C123", messageId: "111.222" })
       .mockResolvedValueOnce({ channelId: "C123", messageId: "333.444" });
     const { stream, edit } = createDraftStreamHarness({ send });
@@ -117,10 +123,10 @@ describe("createSlackDraftStream", () => {
   });
 
   it("clear warns when cleanup fails", async () => {
-    const remove = vi.fn(async () => {
+    const remove = vi.fn<DraftRemoveFn>(async () => {
       throw new Error("cleanup failed");
     });
-    const warn = vi.fn();
+    const warn = vi.fn<DraftWarnFn>();
     const { stream } = createDraftStreamHarness({ remove, warn });
 
     stream.update("hello");
