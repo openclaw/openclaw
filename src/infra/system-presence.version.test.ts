@@ -1,46 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-
-const VERSION_ENV_KEYS = [
-  "OPENCLAW_VERSION",
-  "OPENCLAW_SERVICE_VERSION",
-  "npm_package_version",
-] as const;
-
-type VersionEnvKey = (typeof VERSION_ENV_KEYS)[number];
-type VersionEnv = Partial<Record<VersionEnvKey, string | undefined>>;
+import { withEnvAsync } from "../test-utils/env.js";
 
 async function withPresenceModule<T>(
-  env: VersionEnv,
+  env: Record<string, string | undefined>,
   run: (module: typeof import("./system-presence.js")) => Promise<T> | T,
 ): Promise<T> {
-  const previous = Object.fromEntries(
-    VERSION_ENV_KEYS.map((key) => [key, process.env[key]]),
-  ) as Record<VersionEnvKey, string | undefined>;
-
-  for (const key of VERSION_ENV_KEYS) {
-    const value = env[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-
-  vi.resetModules();
-  try {
-    const module = await import("./system-presence.js");
-    return await run(module);
-  } finally {
-    for (const key of VERSION_ENV_KEYS) {
-      const value = previous[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+  return withEnvAsync(env, async () => {
     vi.resetModules();
-  }
+    try {
+      const module = await import("./system-presence.js");
+      return await run(module);
+    } finally {
+      vi.resetModules();
+    }
+  });
 }
 
 describe("system-presence version fallback", () => {

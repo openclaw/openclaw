@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -63,39 +64,11 @@ function restoreGatewayToken(prevToken: string | undefined) {
   }
 }
 
-const RUNTIME_VERSION_ENV_KEYS = [
-  "OPENCLAW_VERSION",
-  "OPENCLAW_SERVICE_VERSION",
-  "npm_package_version",
-] as const;
-
-type RuntimeVersionEnvKey = (typeof RUNTIME_VERSION_ENV_KEYS)[number];
-type RuntimeVersionEnv = Partial<Record<RuntimeVersionEnvKey, string | undefined>>;
-
-async function withRuntimeVersionEnv<T>(env: RuntimeVersionEnv, run: () => Promise<T>): Promise<T> {
-  const previous = Object.fromEntries(
-    RUNTIME_VERSION_ENV_KEYS.map((key) => [key, process.env[key]]),
-  ) as Record<RuntimeVersionEnvKey, string | undefined>;
-  for (const key of RUNTIME_VERSION_ENV_KEYS) {
-    const value = env[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    for (const key of RUNTIME_VERSION_ENV_KEYS) {
-      const value = previous[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+async function withRuntimeVersionEnv<T>(
+  env: Record<string, string | undefined>,
+  run: () => Promise<T>,
+): Promise<T> {
+  return withEnvAsync(env, run);
 }
 
 const TEST_OPERATOR_CLIENT = {
