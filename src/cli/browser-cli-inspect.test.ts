@@ -69,7 +69,7 @@ describe("browser cli snapshot defaults", () => {
 
     const { registerBrowserInspectCommands } = await import("./browser-cli-inspect.js");
     const program = new Command();
-    const browser = program.command("browser").option("--json", false);
+    const browser = program.command("browser").option("--json", "JSON output", false);
     registerBrowserInspectCommands(browser, () => ({}));
 
     await program.parseAsync(["browser", "snapshot"], { from: "user" });
@@ -93,12 +93,12 @@ describe("browser cli snapshot defaults", () => {
       format: "aria",
       targetId: "t1",
       url: "https://example.com",
-      nodes: [],
+      snapshot: "ok",
     });
 
     const { registerBrowserInspectCommands } = await import("./browser-cli-inspect.js");
     const program = new Command();
-    const browser = program.command("browser").option("--json", false);
+    const browser = program.command("browser").option("--json", "JSON output", false);
     registerBrowserInspectCommands(browser, () => ({}));
 
     await program.parseAsync(["browser", "snapshot", "--format", "aria"], { from: "user" });

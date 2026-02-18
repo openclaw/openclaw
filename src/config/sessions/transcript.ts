@@ -1,10 +1,10 @@
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import type { SessionEntry } from "./types.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveDefaultSessionStorePath, resolveSessionTranscriptPath } from "./paths.js";
+import { resolveDefaultSessionStorePath, resolveSessionFilePath } from "./paths.js";
 import { loadSessionStore, updateSessionStore } from "./store.js";
+import type { SessionEntry } from "./types.js";
 
 function stripQuery(value: string): string {
   const noHash = value.split("#")[0] ?? value;
@@ -72,7 +72,10 @@ async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: process.cwd(),
   };
-  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {
@@ -103,8 +106,18 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
 
-  const sessionFile =
-    entry.sessionFile?.trim() || resolveSessionTranscriptPath(entry.sessionId, params.agentId);
+  let sessionFile: string;
+  try {
+    sessionFile = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
@@ -134,12 +147,16 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   });
 
   if (!entry.sessionFile || entry.sessionFile !== sessionFile) {
-    await updateSessionStore(storePath, (current) => {
-      current[sessionKey] = {
-        ...entry,
-        sessionFile,
-      };
-    });
+    await updateSessionStore(
+      storePath,
+      (current) => {
+        current[sessionKey] = {
+          ...entry,
+          sessionFile,
+        };
+      },
+      { activeSessionKey: sessionKey },
+    );
   }
 
   emitSessionTranscriptUpdate(sessionFile);

@@ -32,7 +32,7 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
     return { value: params.network.autoSelectFamily, source: "config" };
   }
   if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
-    return { value: false, source: "default-node22" };
+    return { value: true, source: "default-node22" };
   }
   return { value: null };
 }

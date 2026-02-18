@@ -10,8 +10,9 @@ export type LegacyConfigMigration = {
   apply: (raw: Record<string, unknown>, changes: string[]) => void;
 };
 
-export const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value && typeof value === "object" && !Array.isArray(value));
+import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { isRecord } from "../utils.js";
+export { isRecord };
 
 export const getRecord = (value: unknown): Record<string, unknown> | null =>
   isRecord(value) ? value : null;
@@ -45,24 +46,27 @@ export const mergeMissing = (target: Record<string, unknown>, source: Record<str
   }
 };
 
-const AUDIO_TRANSCRIPTION_CLI_ALLOWLIST = new Set(["whisper"]);
-
 export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {
   const transcriber = getRecord(value);
   const command = Array.isArray(transcriber?.command) ? transcriber?.command : null;
   if (!command || command.length === 0) {
     return null;
   }
-  const rawExecutable = String(command[0] ?? "").trim();
+  if (typeof command[0] !== "string") {
+    return null;
+  }
+  if (!command.every((part) => typeof part === "string")) {
+    return null;
+  }
+  const rawExecutable = command[0].trim();
   if (!rawExecutable) {
     return null;
   }
-  const executableName = rawExecutable.split(/[\\/]/).pop() ?? rawExecutable;
-  if (!AUDIO_TRANSCRIPTION_CLI_ALLOWLIST.has(executableName)) {
+  if (!isSafeExecutableValue(rawExecutable)) {
     return null;
   }
 
-  const args = command.slice(1).map((part) => String(part));
+  const args = command.slice(1);
   const timeoutSeconds =
     typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
 

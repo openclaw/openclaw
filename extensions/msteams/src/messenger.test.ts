@@ -1,6 +1,21 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
+const graphUploadMockState = vi.hoisted(() => ({
+  uploadAndShareOneDrive: vi.fn(),
+}));
+
+vi.mock("./graph-upload.js", async () => {
+  const actual = await vi.importActual<typeof import("./graph-upload.js")>("./graph-upload.js");
+  return {
+    ...actual,
+    uploadAndShareOneDrive: graphUploadMockState.uploadAndShareOneDrive,
+  };
+});
+
 import {
   type MSTeamsAdapter,
   renderReplyPayloadsToMessages,
@@ -36,6 +51,13 @@ const runtimeStub = {
 describe("msteams messenger", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
+    graphUploadMockState.uploadAndShareOneDrive.mockReset();
+    graphUploadMockState.uploadAndShareOneDrive.mockResolvedValue({
+      itemId: "item123",
+      webUrl: "https://onedrive.example.com/item123",
+      shareUrl: "https://onedrive.example.com/share/item123",
+      name: "upload.txt",
+    });
   });
 
   describe("renderReplyPayloadsToMessages", () => {
@@ -103,6 +125,7 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async () => {},
+        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -132,6 +155,7 @@ describe("msteams messenger", () => {
             },
           });
         },
+        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -153,6 +177,65 @@ describe("msteams messenger", () => {
       expect(ref.conversation?.id).toBe("19:abc@thread.tacv2");
     });
 
+    it("preserves parsed mentions when appending OneDrive fallback file links", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "msteams-mention-"));
+      const localFile = path.join(tmpDir, "note.txt");
+      await writeFile(localFile, "hello");
+
+      try {
+        const sent: Array<{ text?: string; entities?: unknown[] }> = [];
+        const ctx = {
+          sendActivity: async (activity: unknown) => {
+            sent.push(activity as { text?: string; entities?: unknown[] });
+            return { id: "id:one" };
+          },
+        };
+
+        const adapter: MSTeamsAdapter = {
+          continueConversation: async () => {},
+          process: async () => {},
+        };
+
+        const ids = await sendMSTeamsMessages({
+          replyStyle: "thread",
+          adapter,
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            conversation: {
+              ...baseRef.conversation,
+              conversationType: "channel",
+            },
+          },
+          context: ctx,
+          messages: [{ text: "Hello @[John](29:08q2j2o3jc09au90eucae)", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+        });
+
+        expect(ids).toEqual(["id:one"]);
+        expect(graphUploadMockState.uploadAndShareOneDrive).toHaveBeenCalledOnce();
+        expect(sent).toHaveLength(1);
+        expect(sent[0]?.text).toContain("Hello <at>John</at>");
+        expect(sent[0]?.text).toContain(
+          "📎 [upload.txt](https://onedrive.example.com/share/item123)",
+        );
+        expect(sent[0]?.entities).toEqual([
+          {
+            type: "mention",
+            text: "<at>John</at>",
+            mentioned: {
+              id: "29:08q2j2o3jc09au90eucae",
+              name: "John",
+            },
+          },
+        ]);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("retries thread sends on throttling (429)", async () => {
       const attempts: string[] = [];
       const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
@@ -170,6 +253,7 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async () => {},
+        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -197,6 +281,7 @@ describe("msteams messenger", () => {
 
       const adapter: MSTeamsAdapter = {
         continueConversation: async () => {},
+        process: async () => {},
       };
 
       await expect(
@@ -230,6 +315,7 @@ describe("msteams messenger", () => {
             },
           });
         },
+        process: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({

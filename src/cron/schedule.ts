@@ -1,6 +1,6 @@
 import { Cron } from "croner";
-import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import type { CronSchedule } from "./types.js";
 
 function resolveCronTimezone(tz?: string) {
   const trimmed = typeof tz === "string" ? tz.trim() : "";
@@ -49,17 +49,25 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  let cursor = nowMs;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const next = cron.nextRun(new Date(cursor));
-    if (!next) {
-      return undefined;
-    }
-    const nextMs = next.getTime();
-    if (Number.isFinite(nextMs) && nextMs > nowMs) {
-      return nextMs;
-    }
-    cursor += 1_000;
+  const next = cron.nextRun(new Date(nowMs));
+  if (!next) {
+    return undefined;
   }
-  return undefined;
+  const nextMs = next.getTime();
+  if (!Number.isFinite(nextMs)) {
+    return undefined;
+  }
+  if (nextMs > nowMs) {
+    return nextMs;
+  }
+
+  // Guard against same-second rescheduling loops: if croner returns
+  // "now" (or an earlier instant), retry from the next whole second.
+  const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+  const retry = cron.nextRun(new Date(nextSecondMs));
+  if (!retry) {
+    return undefined;
+  }
+  const retryMs = retry.getTime();
+  return Number.isFinite(retryMs) && retryMs > nowMs ? retryMs : undefined;
 }

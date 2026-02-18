@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
@@ -10,21 +9,12 @@ import {
   resolveAuthProfileOrder,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
+import { maskApiKey } from "../../utils/mask-api-key.js";
 
 export type ModelAuthDetailMode = "compact" | "verbose";
-
-const maskApiKey = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "missing";
-  }
-  if (trimmed.length <= 16) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
-};
 
 export const resolveAuthLabel = async (
   provider: string,
@@ -39,18 +29,7 @@ export const resolveAuthLabel = async (
   });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   const providerKey = normalizeProviderId(provider);
-  const lastGood = (() => {
-    const map = store.lastGood;
-    if (!map) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(map)) {
-      if (normalizeProviderId(key) === providerKey) {
-        return value;
-      }
-    }
-    return undefined;
-  })();
+  const lastGood = findNormalizedProviderValue(store.lastGood, providerKey);
   const nextProfileId = order[0];
   const now = Date.now();
 

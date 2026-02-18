@@ -1,5 +1,6 @@
+import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { TelegramAccountConfig } from "../config/types.js";
+import type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -80,6 +81,17 @@ function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): Tel
     {}) as TelegramAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
+}
+
+export function createTelegramActionGate(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean {
+  const accountId = normalizeAccountId(params.accountId);
+  return createAccountActionGate({
+    baseActions: params.cfg.channels?.telegram?.actions,
+    accountActions: resolveAccountConfig(params.cfg, accountId)?.actions,
+  });
 }
 
 export function resolveTelegramAccount(params: {

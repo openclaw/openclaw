@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
-import type { SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import { hashTextSha256 } from "./hash.js";
+import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
 type SandboxHashInput = {
   docker: SandboxDockerConfig;
@@ -8,24 +8,23 @@ type SandboxHashInput = {
   agentWorkspaceDir: string;
 };
 
-function isPrimitive(value: unknown): value is string | number | boolean | bigint | symbol | null {
-  return value === null || (typeof value !== "object" && typeof value !== "function");
-}
+type SandboxBrowserHashInput = {
+  docker: SandboxDockerConfig;
+  browser: Pick<
+    SandboxBrowserConfig,
+    "cdpPort" | "vncPort" | "noVncPort" | "headless" | "enableNoVnc"
+  >;
+  workspaceAccess: SandboxWorkspaceAccess;
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+};
+
 function normalizeForHash(value: unknown): unknown {
   if (value === undefined) {
     return undefined;
   }
   if (Array.isArray(value)) {
-    const normalized = value
-      .map(normalizeForHash)
-      .filter((item): item is unknown => item !== undefined);
-    const primitives = normalized.filter(isPrimitive);
-    if (primitives.length === normalized.length) {
-      return [...primitives].toSorted((a, b) =>
-        primitiveToString(a).localeCompare(primitiveToString(b)),
-      );
-    }
-    return normalized;
+    return value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
   }
   if (value && typeof value === "object") {
     const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
@@ -41,24 +40,16 @@ function normalizeForHash(value: unknown): unknown {
   return value;
 }
 
-function primitiveToString(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  return JSON.stringify(value);
+export function computeSandboxConfigHash(input: SandboxHashInput): string {
+  return computeHash(input);
 }
 
-export function computeSandboxConfigHash(input: SandboxHashInput): string {
+export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {
+  return computeHash(input);
+}
+
+function computeHash(input: unknown): string {
   const payload = normalizeForHash(input);
   const raw = JSON.stringify(payload);
-  return crypto.createHash("sha1").update(raw).digest("hex");
+  return hashTextSha256(raw);
 }

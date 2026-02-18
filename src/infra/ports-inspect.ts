@@ -1,8 +1,9 @@
 import net from "node:net";
-import type { PortListener, PortUsage, PortUsageStatus } from "./ports-types.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { isErrno } from "./errors.js";
 import { buildPortHints } from "./ports-format.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
+import type { PortListener, PortUsage, PortUsageStatus } from "./ports-types.js";
 
 type CommandResult = {
   stdout: string;
@@ -10,10 +11,6 @@ type CommandResult = {
   code: number;
   error?: string;
 };
-
-function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
-}
 
 async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
   try {

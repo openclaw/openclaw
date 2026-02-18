@@ -23,6 +23,61 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 describe("registerTelegramNativeCommands (plugin auth)", () => {
+  it("does not register plugin commands in menu when native=false but keeps handlers available", () => {
+    const specs = Array.from({ length: 101 }, (_, i) => ({
+      name: `cmd_${i}`,
+      description: `Command ${i}`,
+    }));
+    getPluginCommandSpecs.mockReturnValue(specs);
+    matchPluginCommand.mockReset();
+    executePluginCommand.mockReset();
+    deliverReplies.mockReset();
+
+    const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const log = vi.fn();
+    const bot = {
+      api: {
+        setMyCommands,
+        sendMessage: vi.fn(),
+      },
+      command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
+        handlers[name] = handler;
+      },
+    } as const;
+
+    registerTelegramNativeCommands({
+      bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      cfg: {} as OpenClawConfig,
+      runtime: { log } as unknown as RuntimeEnv,
+      accountId: "default",
+      telegramCfg: {} as TelegramAccountConfig,
+      allowFrom: [],
+      groupAllowFrom: [],
+      replyToMode: "off",
+      textLimit: 4000,
+      useAccessGroups: false,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+      nativeDisabledExplicit: false,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: false,
+          allowed: true,
+        }) as ChannelGroupPolicy,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: undefined,
+        topicConfig: undefined,
+      }),
+      shouldSkipUpdate: () => false,
+      opts: { token: "token" },
+    });
+
+    expect(setMyCommands).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("registering first 100"));
+    expect(Object.keys(handlers)).toHaveLength(101);
+  });
+
   it("allows requireAuth:false plugin command even when sender is unauthorized", async () => {
     const command = {
       name: "plugin",
@@ -57,7 +112,7 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
     registerTelegramNativeCommands({
       bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
       cfg,
-      runtime: {} as RuntimeEnv,
+      runtime: {} as unknown as RuntimeEnv,
       accountId: "default",
       telegramCfg,
       allowFrom: ["999"],

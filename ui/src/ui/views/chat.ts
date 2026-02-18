@@ -1,9 +1,6 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -11,6 +8,10 @@ import {
 } from "../chat/grouped-render.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
+import { detectTextDirection } from "../text-direction.ts";
+import type { SessionsListResult } from "../types.ts";
+import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -85,7 +86,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   // Show "compacting..." while active
   if (status.active) {
     return html`
-      <div class="callout info compaction-indicator compaction-indicator--active">
+      <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
         ${icons.loader} Compacting context...
       </div>
     `;
@@ -96,7 +97,7 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     const elapsed = Date.now() - status.completedAt;
     if (elapsed < COMPACTION_TOAST_DURATION_MS) {
       return html`
-        <div class="callout success compaction-indicator compaction-indicator--complete">
+        <div class="compaction-indicator compaction-indicator--complete" role="status" aria-live="polite">
           ${icons.check} Context compacted
         </div>
       `;
@@ -268,8 +269,6 @@ export function renderChat(props: ChatProps) {
 
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
 
-      ${renderCompactionIndicator(props.compactionStatus)}
-
       ${
         props.focusMode
           ? html`
@@ -353,6 +352,8 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
+      ${renderCompactionIndicator(props.compactionStatus)}
+
       ${
         props.showNewMessages
           ? html`
@@ -375,6 +376,7 @@ export function renderChat(props: ChatProps) {
             <textarea
               ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
               .value=${props.draft}
+              dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
                 if (e.key !== "Enter") {

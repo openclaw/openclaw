@@ -1,21 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
-import { normalizeProviderId } from "../model-selection.js";
-import { listProfilesForProvider } from "./profiles.js";
-import { isProfileInCooldown } from "./usage.js";
-
-function resolveProfileUnusableUntil(stats: {
-  cooldownUntil?: number;
-  disabledUntil?: number;
-}): number | null {
-  const values = [stats.cooldownUntil, stats.disabledUntil]
-    .filter((value): value is number => typeof value === "number")
-    .filter((value) => Number.isFinite(value) && value > 0);
-  if (values.length === 0) {
-    return null;
-  }
-  return Math.max(...values);
-}
+import {
+  clearExpiredCooldowns,
+  isProfileInCooldown,
+  resolveProfileUnusableUntil,
+} from "./usage.js";
 
 export function resolveAuthProfileOrder(params: {
   cfg?: OpenClawConfig;
@@ -26,30 +17,13 @@ export function resolveAuthProfileOrder(params: {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
   const now = Date.now();
-  const storedOrder = (() => {
-    const order = store.order;
-    if (!order) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(order)) {
-      if (normalizeProviderId(key) === providerKey) {
-        return value;
-      }
-    }
-    return undefined;
-  })();
-  const configuredOrder = (() => {
-    const order = cfg?.auth?.order;
-    if (!order) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(order)) {
-      if (normalizeProviderId(key) === providerKey) {
-        return value;
-      }
-    }
-    return undefined;
-  })();
+
+  // Clear any cooldowns that have expired since the last check so profiles
+  // get a fresh error count and are not immediately re-penalized on the
+  // next transient failure. See #3604.
+  clearExpiredCooldowns(store, now);
+  const storedOrder = findNormalizedProviderValue(store.order, providerKey);
+  const configuredOrder = findNormalizedProviderValue(cfg?.auth?.order, providerKey);
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
@@ -105,12 +79,7 @@ export function resolveAuthProfileOrder(params: {
     }
     return false;
   });
-  const deduped: string[] = [];
-  for (const entry of filtered) {
-    if (!deduped.includes(entry)) {
-      deduped.push(entry);
-    }
-  }
+  const deduped = dedupeProfileIds(filtered);
 
   // If user specified explicit order (store override or config), respect it
   // exactly, but still apply cooldown sorting to avoid repeatedly selecting

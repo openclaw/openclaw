@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
   if (method.endsWith(".get")) {
@@ -13,15 +14,7 @@ const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?:
   return { method, params };
 });
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const localSnapshot = {
   path: "/tmp/local-exec-approvals.json",
@@ -59,50 +52,37 @@ vi.mock("../infra/exec-approvals.js", async () => {
   };
 });
 
-describe("exec approvals CLI", () => {
-  it("loads local approvals by default", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    callGatewayFromCli.mockClear();
+const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+const execApprovals = await import("../infra/exec-approvals.js");
 
-    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+describe("exec approvals CLI", () => {
+  const createProgram = () => {
     const program = new Command();
     program.exitOverride();
     registerExecApprovalsCli(program);
+    return program;
+  };
 
-    await program.parseAsync(["approvals", "get"], { from: "user" });
+  it("routes get command to local, gateway, and node modes", async () => {
+    resetRuntimeCapture();
+    callGatewayFromCli.mockClear();
+
+    const localProgram = createProgram();
+    await localProgram.parseAsync(["approvals", "get"], { from: "user" });
 
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(runtimeErrors).toHaveLength(0);
-  });
-
-  it("loads gateway approvals when --gateway is set", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
 
-    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerExecApprovalsCli(program);
-
-    await program.parseAsync(["approvals", "get", "--gateway"], { from: "user" });
+    const gatewayProgram = createProgram();
+    await gatewayProgram.parseAsync(["approvals", "get", "--gateway"], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.get", expect.anything(), {});
     expect(runtimeErrors).toHaveLength(0);
-  });
-
-  it("loads node approvals when --node is set", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
 
-    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerExecApprovalsCli(program);
-
-    await program.parseAsync(["approvals", "get", "--node", "macbook"], { from: "user" });
+    const nodeProgram = createProgram();
+    await nodeProgram.parseAsync(["approvals", "get", "--node", "macbook"], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.node.get", expect.anything(), {
       nodeId: "node-1",
@@ -111,15 +91,12 @@ describe("exec approvals CLI", () => {
   });
 
   it("defaults allowlist add to wildcard agent", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGatewayFromCli.mockClear();
 
-    const execApprovals = await import("../infra/exec-approvals.js");
     const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
     saveExecApprovals.mockClear();
 
-    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
     const program = new Command();
     program.exitOverride();
     registerExecApprovalsCli(program);

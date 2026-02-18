@@ -1,7 +1,62 @@
 import type { BrowserRouteContext } from "../server-context.js";
-import type { BrowserRouteRegistrar } from "./types.js";
 import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
+import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+
+type StorageKind = "local" | "session";
+
+function resolveBodyTargetId(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+  const targetId = toStringOrEmpty((body as Record<string, unknown>).targetId);
+  return targetId || undefined;
+}
+
+function parseStorageKind(raw: string): StorageKind | null {
+  if (raw === "local" || raw === "session") {
+    return raw;
+  }
+  return null;
+}
+
+function parseStorageMutationRequest(
+  kindParam: unknown,
+  body: unknown,
+): { kind: StorageKind | null; targetId: string | undefined } {
+  return {
+    kind: parseStorageKind(toStringOrEmpty(kindParam)),
+    targetId: resolveBodyTargetId(body),
+  };
+}
+
+function resolveStorageMutationContext(params: {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  ctx: BrowserRouteContext;
+}): {
+  profileCtx: NonNullable<ReturnType<typeof resolveProfileContext>>;
+  body: Record<string, unknown>;
+  kind: StorageKind;
+  targetId: string | undefined;
+} | null {
+  const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
+  if (!profileCtx) {
+    return null;
+  }
+  const body = readBody(params.req);
+  const parsed = parseStorageMutationRequest(params.req.params.kind, body);
+  if (!parsed.kind) {
+    jsonError(params.res, 400, "kind must be local|session");
+    return null;
+  }
+  return {
+    profileCtx,
+    body,
+    kind: parsed.kind,
+    targetId: parsed.targetId,
+  };
+}
 
 export function registerBrowserAgentStorageRoutes(
   app: BrowserRouteRegistrar,
@@ -35,7 +90,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const cookie =
       body.cookie && typeof body.cookie === "object" && !Array.isArray(body.cookie)
         ? (body.cookie as Record<string, unknown>)
@@ -79,7 +134,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "cookies clear");
@@ -101,8 +156,8 @@ export function registerBrowserAgentStorageRoutes(
     if (!profileCtx) {
       return;
     }
-    const kind = toStringOrEmpty(req.params.kind);
-    if (kind !== "local" && kind !== "session") {
+    const kind = parseStorageKind(toStringOrEmpty(req.params.kind));
+    if (!kind) {
       return jsonError(res, 400, "kind must be local|session");
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
@@ -126,16 +181,11 @@ export function registerBrowserAgentStorageRoutes(
   });
 
   app.post("/storage/:kind/set", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
+    const mutation = resolveStorageMutationContext({ req, res, ctx });
+    if (!mutation) {
       return;
     }
-    const kind = toStringOrEmpty(req.params.kind);
-    if (kind !== "local" && kind !== "session") {
-      return jsonError(res, 400, "kind must be local|session");
-    }
-    const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const { profileCtx, body, kind, targetId } = mutation;
     const key = toStringOrEmpty(body.key);
     if (!key) {
       return jsonError(res, 400, "key is required");
@@ -161,16 +211,11 @@ export function registerBrowserAgentStorageRoutes(
   });
 
   app.post("/storage/:kind/clear", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
+    const mutation = resolveStorageMutationContext({ req, res, ctx });
+    if (!mutation) {
       return;
     }
-    const kind = toStringOrEmpty(req.params.kind);
-    if (kind !== "local" && kind !== "session") {
-      return jsonError(res, 400, "kind must be local|session");
-    }
-    const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const { profileCtx, kind, targetId } = mutation;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "storage clear");
@@ -194,7 +239,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const offline = toBoolean(body.offline);
     if (offline === undefined) {
       return jsonError(res, 400, "offline is required");
@@ -222,7 +267,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const headers =
       body.headers && typeof body.headers === "object" && !Array.isArray(body.headers)
         ? (body.headers as Record<string, unknown>)
@@ -259,7 +304,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const clear = toBoolean(body.clear) ?? false;
     const username = toStringOrEmpty(body.username) || undefined;
     const password = typeof body.password === "string" ? body.password : undefined;
@@ -288,7 +333,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const clear = toBoolean(body.clear) ?? false;
     const latitude = toNumber(body.latitude);
     const longitude = toNumber(body.longitude);
@@ -321,7 +366,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const schemeRaw = toStringOrEmpty(body.colorScheme);
     const colorScheme =
       schemeRaw === "dark" || schemeRaw === "light" || schemeRaw === "no-preference"
@@ -355,7 +400,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const timezoneId = toStringOrEmpty(body.timezoneId);
     if (!timezoneId) {
       return jsonError(res, 400, "timezoneId is required");
@@ -383,7 +428,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const locale = toStringOrEmpty(body.locale);
     if (!locale) {
       return jsonError(res, 400, "locale is required");
@@ -411,7 +456,7 @@ export function registerBrowserAgentStorageRoutes(
       return;
     }
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const targetId = resolveBodyTargetId(body);
     const name = toStringOrEmpty(body.name);
     if (!name) {
       return jsonError(res, 400, "name is required");

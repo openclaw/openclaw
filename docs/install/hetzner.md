@@ -113,12 +113,10 @@ Docker containers are ephemeral.
 All long-lived state must live on the host.
 
 ```bash
-mkdir -p /root/.openclaw
 mkdir -p /root/.openclaw/workspace
 
 # Set ownership to the container user (uid 1000):
 chown -R 1000:1000 /root/.openclaw
-chown -R 1000:1000 /root/.openclaw/workspace
 ```
 
 ---
@@ -179,10 +177,6 @@ services:
       # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
       # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
-
-      # Optional: only if you run iOS/Android nodes against this VPS and need Canvas host.
-      # If you expose this publicly, read /gateway/security and firewall accordingly.
-      # - "18793:18793"
     command:
       [
         "node",
@@ -192,8 +186,11 @@ services:
         "${OPENCLAW_GATEWAY_BIND}",
         "--port",
         "${OPENCLAW_GATEWAY_PORT}",
+        "--allow-unconfigured",
       ]
 ```
+
+`--allow-unconfigured` is only for bootstrap convenience, it is not a replacement for a proper gateway configuration. Still set auth (`gateway.auth.token` or password) and use safe bind settings for your deployment.
 
 ---
 
@@ -328,3 +325,24 @@ All long-lived state must survive restarts, rebuilds, and reboots.
 | Node runtime        | Container filesystem              | Docker image           | Rebuilt every image build        |
 | OS packages         | Container filesystem              | Docker image           | Do not install at runtime        |
 | Docker container    | Ephemeral                         | Restartable            | Safe to destroy                  |
+
+---
+
+## Infrastructure as Code (Terraform)
+
+For teams preferring infrastructure-as-code workflows, a community-maintained Terraform setup provides:
+
+- Modular Terraform configuration with remote state management
+- Automated provisioning via cloud-init
+- Deployment scripts (bootstrap, deploy, backup/restore)
+- Security hardening (firewall, UFW, SSH-only access)
+- SSH tunnel configuration for gateway access
+
+**Repositories:**
+
+- Infrastructure: [openclaw-terraform-hetzner](https://github.com/andreesg/openclaw-terraform-hetzner)
+- Docker config: [openclaw-docker-config](https://github.com/andreesg/openclaw-docker-config)
+
+This approach complements the Docker setup above with reproducible deployments, version-controlled infrastructure, and automated disaster recovery.
+
+> **Note:** Community-maintained. For issues or contributions, see the repository links above.

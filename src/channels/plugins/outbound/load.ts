@@ -1,6 +1,6 @@
 import type { PluginRegistry } from "../../../plugins/registry.js";
-import type { ChannelId, ChannelOutboundAdapter } from "../types.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
+import type { ChannelId, ChannelOutboundAdapter } from "../types.js";
 
 // Channel docking: outbound sends should stay cheap to import.
 //

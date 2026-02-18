@@ -1,8 +1,8 @@
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
@@ -124,7 +124,9 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
     if (dmScope === "main" && isMultiUserDm) {
       warnings.push(
-        `- ${params.label} DMs: multiple senders share the main session; set session.dmScope="per-channel-peer" (or "per-account-channel-peer" for multi-account channels) to isolate sessions.`,
+        `- ${params.label} DMs: multiple senders share the main session; run: ` +
+          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
+          ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
       );
     }
   };

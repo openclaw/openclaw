@@ -70,6 +70,14 @@ Set config under `plugins.entries.voice-call.config`:
             authToken: "...",
           },
 
+          telnyx: {
+            apiKey: "...",
+            connectionId: "...",
+            // Telnyx webhook public key from the Telnyx Mission Control Portal
+            // (Base64 string; can also be set via TELNYX_PUBLIC_KEY).
+            publicKey: "...",
+          },
+
           plivo: {
             authId: "MAxxxxxxxxxxxxxxxxxxxx",
             authToken: "...",
@@ -112,10 +120,40 @@ Notes:
 - Twilio/Telnyx require a **publicly reachable** webhook URL.
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
+- Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - `skipSignatureVerification` is for local testing only.
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
 - Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
+
+## Stale call reaper
+
+Use `staleCallReaperSeconds` to end calls that never receive a terminal webhook
+(for example, notify-mode calls that never complete). The default is `0`
+(disabled).
+
+Recommended ranges:
+
+- **Production:** `120`–`300` seconds for notify-style flows.
+- Keep this value **higher than `maxDurationSeconds`** so normal calls can
+  finish. A good starting point is `maxDurationSeconds + 30–60` seconds.
+
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          maxDurationSeconds: 300,
+          staleCallReaperSeconds: 360,
+        },
+      },
+    },
+  },
+}
+```
 
 ## Webhook Security
 

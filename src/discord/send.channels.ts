@@ -1,5 +1,6 @@
 import type { APIChannel } from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
+import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordChannelCreate,
   DiscordChannelEdit,
@@ -7,7 +8,6 @@ import type {
   DiscordChannelPermissionSet,
   DiscordReactOpts,
 } from "./send.types.js";
-import { resolveDiscordRest } from "./send.shared.js";
 
 export async function createChannelDiscord(
   payload: DiscordChannelCreate,
@@ -60,6 +60,15 @@ export async function editChannelDiscord(
   }
   if (payload.rateLimitPerUser !== undefined) {
     body.rate_limit_per_user = payload.rateLimitPerUser;
+  }
+  if (payload.archived !== undefined) {
+    body.archived = payload.archived;
+  }
+  if (payload.locked !== undefined) {
+    body.locked = payload.locked;
+  }
+  if (payload.autoArchiveDuration !== undefined) {
+    body.auto_archive_duration = payload.autoArchiveDuration;
   }
   return (await rest.patch(Routes.channel(payload.channelId), {
     body,

@@ -1,11 +1,11 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Command } from "commander";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -17,6 +17,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
+export type { AnyAgentTool } from "../agents/tools/common.js";
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -140,6 +141,8 @@ export type PluginCommandContext = {
   senderId?: string;
   /** The channel/surface (e.g., "telegram", "discord") */
   channel: string;
+  /** Provider channel id (e.g., "telegram") */
+  channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
   /** Raw command arguments after the command name */
@@ -148,6 +151,14 @@ export type PluginCommandContext = {
   commandBody: string;
   /** Current OpenClaw configuration */
   config: OpenClawConfig;
+  /** Raw "From" value (channel-scoped id) */
+  from?: string;
+  /** Raw "To" value (channel-scoped id) */
+  to?: string;
+  /** Account id for multi-account channels */
+  accountId?: string;
+  /** Thread/topic id if available */
+  messageThreadId?: number;
 };
 
 /**
@@ -285,16 +296,22 @@ export type PluginDiagnostic = {
 // ============================================================================
 
 export type PluginHookName =
+  | "before_model_resolve"
+  | "before_prompt_build"
   | "before_agent_start"
+  | "llm_input"
+  | "llm_output"
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
+  | "before_reset"
   | "message_received"
   | "message_sending"
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "before_message_write"
   | "session_start"
   | "session_end"
   | "gateway_start"
@@ -304,19 +321,73 @@ export type PluginHookName =
 export type PluginHookAgentContext = {
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
 };
 
-// before_agent_start hook
+// before_model_resolve hook
+export type PluginHookBeforeModelResolveEvent = {
+  /** User prompt for this run. No session messages are available yet in this phase. */
+  prompt: string;
+};
+
+export type PluginHookBeforeModelResolveResult = {
+  /** Override the model for this agent run. E.g. "llama3.3:8b" */
+  modelOverride?: string;
+  /** Override the provider for this agent run. E.g. "ollama" */
+  providerOverride?: string;
+};
+
+// before_prompt_build hook
+export type PluginHookBeforePromptBuildEvent = {
+  prompt: string;
+  /** Session messages prepared for this run. */
+  messages: unknown[];
+};
+
+export type PluginHookBeforePromptBuildResult = {
+  systemPrompt?: string;
+  prependContext?: string;
+};
+
+// before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
+  /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
 };
 
-export type PluginHookBeforeAgentStartResult = {
+export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
+  PluginHookBeforeModelResolveResult;
+
+// llm_input hook
+export type PluginHookLlmInputEvent = {
+  runId: string;
+  sessionId: string;
+  provider: string;
+  model: string;
   systemPrompt?: string;
-  prependContext?: string;
+  prompt: string;
+  historyMessages: unknown[];
+  imagesCount: number;
+};
+
+// llm_output hook
+export type PluginHookLlmOutputEvent = {
+  runId: string;
+  sessionId: string;
+  provider: string;
+  model: string;
+  assistantTexts: string[];
+  lastAssistant?: unknown;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
 };
 
 // agent_end hook
@@ -329,14 +400,33 @@ export type PluginHookAgentEndEvent = {
 
 // Compaction hooks
 export type PluginHookBeforeCompactionEvent = {
+  /** Total messages in the session before any truncation or compaction */
   messageCount: number;
+  /** Messages being fed to the compaction LLM (after history-limit truncation) */
+  compactingCount?: number;
   tokenCount?: number;
+  messages?: unknown[];
+  /** Path to the session JSONL transcript. All messages are already on disk
+   *  before compaction starts, so plugins can read this file asynchronously
+   *  and process in parallel with the compaction LLM call. */
+  sessionFile?: string;
+};
+
+// before_reset hook — fired when /new or /reset clears a session
+export type PluginHookBeforeResetEvent = {
+  sessionFile?: string;
+  messages?: unknown[];
+  reason?: string;
 };
 
 export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  /** Path to the session JSONL transcript. All pre-compaction messages are
+   *  preserved on disk, so plugins can read and process them asynchronously
+   *  without blocking the compaction pipeline. */
+  sessionFile?: string;
 };
 
 // Message context
@@ -426,6 +516,18 @@ export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
 };
 
+// before_message_write hook
+export type PluginHookBeforeMessageWriteEvent = {
+  message: AgentMessage;
+  sessionKey?: string;
+  agentId?: string;
+};
+
+export type PluginHookBeforeMessageWriteResult = {
+  block?: boolean; // If true, message is NOT written to JSONL
+  message?: AgentMessage; // Optional: modified message to write instead
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -462,10 +564,26 @@ export type PluginHookGatewayStopEvent = {
 
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
+  before_model_resolve: (
+    event: PluginHookBeforeModelResolveEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookBeforeModelResolveResult | void>
+    | PluginHookBeforeModelResolveResult
+    | void;
+  before_prompt_build: (
+    event: PluginHookBeforePromptBuildEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
   before_agent_start: (
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
+  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_output: (
+    event: PluginHookLlmOutputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
@@ -473,6 +591,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<void> | void;
   after_compaction: (
     event: PluginHookAfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  before_reset: (
+    event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
   message_received: (
@@ -499,6 +621,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ) => PluginHookToolResultPersistResult | void;
+  before_message_write: (
+    event: PluginHookBeforeMessageWriteEvent,
+    ctx: { agentId?: string; sessionKey?: string },
+  ) => PluginHookBeforeMessageWriteResult | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

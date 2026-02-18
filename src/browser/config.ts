@@ -5,6 +5,7 @@ import {
   deriveDefaultBrowserControlPort,
   DEFAULT_BROWSER_CONTROL_PORT,
 } from "../config/port-defaults.js";
+import { isLoopbackHost } from "../gateway/net.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -30,6 +31,7 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  extraArgs: string[];
 };
 
 export type ResolvedBrowserProfile = {
@@ -41,19 +43,6 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "extension";
 };
-
-function isLoopbackHost(host: string) {
-  const h = host.trim().toLowerCase();
-  return (
-    h === "localhost" ||
-    h === "127.0.0.1" ||
-    h === "0.0.0.0" ||
-    h === "[::1]" ||
-    h === "::1" ||
-    h === "[::]" ||
-    h === "::"
-  );
-}
 
 function normalizeHexColor(raw: string | undefined) {
   const value = (raw ?? "").trim();
@@ -208,6 +197,10 @@ export function resolveBrowserConfig(
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
 
+  const extraArgs = Array.isArray(cfg?.extraArgs)
+    ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+    : [];
+
   return {
     enabled,
     evaluateEnabled,
@@ -224,6 +217,7 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
+    extraArgs,
   };
 }
 

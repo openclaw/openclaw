@@ -31,9 +31,13 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
+Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
+specs are rejected.
+
 3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
+Looking for third-party listings? See [Community plugins](/plugins/community).
 
 ## Available plugins (official)
 
@@ -137,6 +141,10 @@ becomes `name/<fileBase>`.
 
 If your plugin imports npm deps, install them in that directory so
 `node_modules` is available (`npm install` / `pnpm install`).
+
+Security note: `openclaw plugins install` installs plugin dependencies with
+`npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
+trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 
 ### Channel catalog metadata
 
@@ -424,7 +432,7 @@ Notes:
 
 ### Write a new messaging channel (step‑by‑step)
 
-Use this when you want a **new chat surface** (a “messaging channel”), not a model provider.
+Use this when you want a **new chat surface** (a "messaging channel"), not a model provider.
 Model provider docs live under `/providers/*`.
 
 1. Pick an id + config shape

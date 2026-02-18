@@ -564,27 +564,51 @@
 
 /* Compaction indicator */
 .compaction-indicator {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
-  padding: 10px 12px;
+  line-height: 1.2;
+  padding: 6px 14px;
   margin-bottom: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
   animation: fade-in 0.2s var(--ease-out);
+}
+
+.compaction-indicator svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
 }
 
 .compaction-indicator--active {
-  animation: compaction-pulse 1.5s ease-in-out infinite;
+  color: var(--info);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.compaction-indicator--active svg {
+  animation: compaction-spin 1s linear infinite;
 }
 
 .compaction-indicator--complete {
-  animation: fade-in 0.2s var(--ease-out);
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.35);
 }
 
-@keyframes compaction-pulse {
-  0%,
-  100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
+@keyframes compaction-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

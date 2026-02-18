@@ -30,11 +30,15 @@ function resolveToCwd(filePath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
+export function resolveSandboxInputPath(filePath: string, cwd: string): string {
+  return resolveToCwd(filePath, cwd);
+}
+
 export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
   resolved: string;
   relative: string;
 } {
-  const resolved = resolveToCwd(params.filePath, params.cwd);
+  const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
   if (!relative || relative === "") {
@@ -46,9 +50,16 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   return { resolved, relative };
 }
 
-export async function assertSandboxPath(params: { filePath: string; cwd: string; root: string }) {
+export async function assertSandboxPath(params: {
+  filePath: string;
+  cwd: string;
+  root: string;
+  allowFinalSymlink?: boolean;
+}) {
   const resolved = resolveSandboxPath(params);
-  await assertNoSymlink(resolved.relative, path.resolve(params.root));
+  await assertNoSymlinkEscape(resolved.relative, path.resolve(params.root), {
+    allowFinalSymlink: params.allowFinalSymlink,
+  });
   return resolved;
 }
 
@@ -86,18 +97,36 @@ export async function resolveSandboxedMediaSource(params: {
   return resolved.resolved;
 }
 
-async function assertNoSymlink(relative: string, root: string) {
+async function assertNoSymlinkEscape(
+  relative: string,
+  root: string,
+  options?: { allowFinalSymlink?: boolean },
+) {
   if (!relative) {
     return;
   }
+  const rootReal = await tryRealpath(root);
   const parts = relative.split(path.sep).filter(Boolean);
   let current = root;
-  for (const part of parts) {
+  for (let idx = 0; idx < parts.length; idx += 1) {
+    const part = parts[idx];
+    const isLast = idx === parts.length - 1;
     current = path.join(current, part);
     try {
       const stat = await fs.lstat(current);
       if (stat.isSymbolicLink()) {
-        throw new Error(`Symlink not allowed in sandbox path: ${current}`);
+        // Unlinking a symlink itself is safe even if it points outside the root. What we
+        // must prevent is traversing through a symlink to reach targets outside root.
+        if (options?.allowFinalSymlink && isLast) {
+          return;
+        }
+        const target = await tryRealpath(current);
+        if (!isPathInside(rootReal, target)) {
+          throw new Error(
+            `Symlink escapes sandbox root (${shortPath(rootReal)}): ${shortPath(current)}`,
+          );
+        }
+        current = target;
       }
     } catch (err) {
       const anyErr = err as { code?: string };
@@ -107,6 +136,22 @@ async function assertNoSymlink(relative: string, root: string) {
       throw err;
     }
   }
+}
+
+async function tryRealpath(value: string): Promise<string> {
+  try {
+    return await fs.realpath(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  if (!relative || relative === "") {
+    return true;
+  }
+  return !(relative.startsWith("..") || path.isAbsolute(relative));
 }
 
 function shortPath(value: string) {

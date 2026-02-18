@@ -1,31 +1,18 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { BlueBubblesAttachment } from "./types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
-
-vi.mock("./accounts.js", () => ({
-  resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
-    const config = cfg?.channels?.bluebubbles ?? {};
-    return {
-      accountId: accountId ?? "default",
-      enabled: config.enabled !== false,
-      configured: Boolean(config.serverUrl && config.password),
-      config,
-    };
-  }),
-}));
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
+import type { BlueBubblesAttachment } from "./types.js";
 
 const mockFetch = vi.fn();
 
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+});
+
 describe("downloadBlueBubblesAttachment", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    mockFetch.mockReset();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("throws when guid is missing", async () => {
     const attachment: BlueBubblesAttachment = {};
     await expect(
@@ -242,6 +229,8 @@ describe("sendBlueBubblesAttachment", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -341,5 +330,28 @@ describe("sendBlueBubblesAttachment", () => {
     const bodyText = decodeBody(body);
     expect(bodyText).toContain('filename="evil.mp3"');
     expect(bodyText).toContain('name="evil.mp3"');
+  });
+
+  it("downgrades attachment reply threading when private API is disabled", async () => {
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-4" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      replyToMessageGuid: "reply-guid-123",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).not.toContain('name="method"');
+    expect(bodyText).not.toContain('name="selectedMessageGuid"');
+    expect(bodyText).not.toContain('name="partIndex"');
   });
 });

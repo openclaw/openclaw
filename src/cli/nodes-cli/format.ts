@@ -1,22 +1,5 @@
 import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./types.js";
 
-export function formatAge(msAgo: number) {
-  const s = Math.max(0, Math.floor(msAgo / 1000));
-  if (s < 60) {
-    return `${s}s`;
-  }
-  const m = Math.floor(s / 60);
-  if (m < 60) {
-    return `${m}m`;
-  }
-  const h = Math.floor(m / 60);
-  if (h < 24) {
-    return `${h}h`;
-  }
-  const d = Math.floor(h / 24);
-  return `${d}d`;
-}
-
 export function parsePairingList(value: unknown): PairingList {
   const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];

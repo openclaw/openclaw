@@ -1,7 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
-import { normalizeAccountId } from "../routing/session-key.js";
 
 export type GroupPolicyChannel = ChannelId;
 
@@ -19,6 +19,29 @@ export type ChannelGroupPolicy = {
 };
 
 type ChannelGroups = Record<string, ChannelGroupConfig>;
+
+function resolveChannelGroupConfig(
+  groups: ChannelGroups | undefined,
+  groupId: string,
+  caseInsensitive = false,
+): ChannelGroupConfig | undefined {
+  if (!groups) {
+    return undefined;
+  }
+  const direct = groups[groupId];
+  if (direct) {
+    return direct;
+  }
+  if (!caseInsensitive) {
+    return undefined;
+  }
+  const target = groupId.toLowerCase();
+  const matchedKey = Object.keys(groups).find((key) => key !== "*" && key.toLowerCase() === target);
+  if (!matchedKey) {
+    return undefined;
+  }
+  return groups[matchedKey];
+}
 
 export type GroupToolPolicySender = {
   senderId?: string | null;
@@ -125,18 +148,18 @@ export function resolveChannelGroupPolicy(params: {
   channel: GroupPolicyChannel;
   groupId?: string | null;
   accountId?: string | null;
+  groupIdCaseInsensitive?: boolean;
 }): ChannelGroupPolicy {
   const { cfg, channel } = params;
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
   const allowlistEnabled = Boolean(groups && Object.keys(groups).length > 0);
   const normalizedId = params.groupId?.trim();
-  const groupConfig = normalizedId && groups ? groups[normalizedId] : undefined;
+  const groupConfig = normalizedId
+    ? resolveChannelGroupConfig(groups, normalizedId, params.groupIdCaseInsensitive)
+    : undefined;
   const defaultConfig = groups?.["*"];
   const allowAll = allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
-  const allowed =
-    !allowlistEnabled ||
-    allowAll ||
-    (normalizedId ? Boolean(groups && Object.hasOwn(groups, normalizedId)) : false);
+  const allowed = !allowlistEnabled || allowAll || Boolean(groupConfig);
   return {
     allowlistEnabled,
     allowed,
@@ -150,6 +173,7 @@ export function resolveChannelGroupRequireMention(params: {
   channel: GroupPolicyChannel;
   groupId?: string | null;
   accountId?: string | null;
+  groupIdCaseInsensitive?: boolean;
   requireMentionOverride?: boolean;
   overrideOrder?: "before-config" | "after-config";
 }): boolean {
@@ -180,6 +204,7 @@ export function resolveChannelGroupToolsPolicy(
     channel: GroupPolicyChannel;
     groupId?: string | null;
     accountId?: string | null;
+    groupIdCaseInsensitive?: boolean;
   } & GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
   const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);

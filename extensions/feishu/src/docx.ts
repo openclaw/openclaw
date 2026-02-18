@@ -1,10 +1,11 @@
-import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { Type } from "@sinclair/typebox";
 import { Readable } from "stream";
+import type * as Lark from "@larksuiteoapi/node-sdk";
+import { Type } from "@sinclair/typebox";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
+import { getFeishuRuntime } from "./runtime.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 // ============ Helpers ============
@@ -92,6 +93,14 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
   };
 }
 
+function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
+  if (!firstLevelIds || firstLevelIds.length === 0) return blocks;
+  const sorted = firstLevelIds.map((id) => blocks.find((b) => b.block_id === id)).filter(Boolean);
+  const sortedIds = new Set(firstLevelIds);
+  const remaining = blocks.filter((b) => !sortedIds.has(b.block_id));
+  return [...sorted, ...remaining];
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function insertBlocks(
   client: Lark.Client,
@@ -167,12 +176,9 @@ async function uploadImageToDocx(
   return fileToken;
 }
 
-async function downloadImage(url: string): Promise<Buffer> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download image: ${response.status} ${response.statusText}`);
-  }
-  return Buffer.from(await response.arrayBuffer());
+async function downloadImage(url: string, maxBytes: number): Promise<Buffer> {
+  const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+  return fetched.buffer;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
@@ -181,6 +187,7 @@ async function processImages(
   docToken: string,
   markdown: string,
   insertedBlocks: any[],
+  maxBytes: number,
 ): Promise<number> {
   /* eslint-enable @typescript-eslint/no-explicit-any */
   const imageUrls = extractImageUrls(markdown);
@@ -196,7 +203,7 @@ async function processImages(
     const blockId = imageBlocks[i].block_id;
 
     try {
-      const buffer = await downloadImage(url);
+      const buffer = await downloadImage(url, maxBytes);
       const urlPath = new URL(url).pathname;
       const fileName = urlPath.split("/").pop() || `image_${i}.png`;
       const fileToken = await uploadImageToDocx(client, blockId, buffer, fileName);
@@ -276,16 +283,17 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   };
 }
 
-async function writeDoc(client: Lark.Client, docToken: string, markdown: string) {
+async function writeDoc(client: Lark.Client, docToken: string, markdown: string, maxBytes: number) {
   const deleted = await clearDocumentContent(client, docToken);
 
-  const { blocks } = await convertMarkdown(client, markdown);
+  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
   if (blocks.length === 0) {
     return { success: true, blocks_deleted: deleted, blocks_added: 0, images_processed: 0 };
   }
+  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
 
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, blocks);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted);
+  const { children: inserted, skipped } = await insertBlocks(client, docToken, sortedBlocks);
+  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
 
   return {
     success: true,
@@ -298,14 +306,20 @@ async function writeDoc(client: Lark.Client, docToken: string, markdown: string)
   };
 }
 
-async function appendDoc(client: Lark.Client, docToken: string, markdown: string) {
-  const { blocks } = await convertMarkdown(client, markdown);
+async function appendDoc(
+  client: Lark.Client,
+  docToken: string,
+  markdown: string,
+  maxBytes: number,
+) {
+  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
   if (blocks.length === 0) {
     throw new Error("Content is empty");
   }
+  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
 
-  const { children: inserted, skipped } = await insertBlocks(client, docToken, blocks);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted);
+  const { children: inserted, skipped } = await insertBlocks(client, docToken, sortedBlocks);
+  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
 
   return {
     success: true,
@@ -443,6 +457,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   // Use first account's config for tools configuration
   const firstAccount = accounts[0];
   const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+  const mediaMaxBytes = (firstAccount.config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
   // Helper to get client for the default account
   const getClient = () => createFeishuClient(firstAccount);
@@ -465,9 +480,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               case "read":
                 return json(await readDoc(client, p.doc_token));
               case "write":
-                return json(await writeDoc(client, p.doc_token, p.content));
+                return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "append":
-                return json(await appendDoc(client, p.doc_token, p.content));
+                return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
               case "create":
                 return json(await createDoc(client, p.title, p.folder_token));
               case "list_blocks":

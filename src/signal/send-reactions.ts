@@ -5,6 +5,7 @@
 import { loadConfig } from "../config/config.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
+import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
   baseUrl?: string;
@@ -19,6 +20,13 @@ export type SignalReactionOpts = {
 export type SignalReactionResult = {
   ok: boolean;
   timestamp?: number;
+};
+
+type SignalReactionErrorMessages = {
+  missingRecipient: string;
+  invalidTargetTimestamp: string;
+  missingEmoji: string;
+  missingTargetAuthor: string;
 };
 
 function normalizeSignalId(raw: string): string {
@@ -59,26 +67,67 @@ function resolveTargetAuthorParams(params: {
   return {};
 }
 
-function resolveReactionRpcContext(
-  opts: SignalReactionOpts,
-  accountInfo?: ReturnType<typeof resolveSignalAccount>,
-) {
-  const hasBaseUrl = Boolean(opts.baseUrl?.trim());
-  const hasAccount = Boolean(opts.account?.trim());
-  const resolvedAccount =
-    accountInfo ||
-    (!hasBaseUrl || !hasAccount
-      ? resolveSignalAccount({
-          cfg: loadConfig(),
-          accountId: opts.accountId,
-        })
-      : undefined);
-  const baseUrl = opts.baseUrl?.trim() || resolvedAccount?.baseUrl;
-  if (!baseUrl) {
-    throw new Error("Signal base URL is required");
+async function sendReactionSignalCore(params: {
+  recipient: string;
+  targetTimestamp: number;
+  emoji: string;
+  remove: boolean;
+  opts: SignalReactionOpts;
+  errors: SignalReactionErrorMessages;
+}): Promise<SignalReactionResult> {
+  const accountInfo = resolveSignalAccount({
+    cfg: loadConfig(),
+    accountId: params.opts.accountId,
+  });
+  const { baseUrl, account } = resolveSignalRpcContext(params.opts, accountInfo);
+
+  const normalizedRecipient = normalizeSignalUuid(params.recipient);
+  const groupId = params.opts.groupId?.trim();
+  if (!normalizedRecipient && !groupId) {
+    throw new Error(params.errors.missingRecipient);
   }
-  const account = opts.account?.trim() || resolvedAccount?.config.account?.trim();
-  return { baseUrl, account };
+  if (!Number.isFinite(params.targetTimestamp) || params.targetTimestamp <= 0) {
+    throw new Error(params.errors.invalidTargetTimestamp);
+  }
+  const normalizedEmoji = params.emoji?.trim();
+  if (!normalizedEmoji) {
+    throw new Error(params.errors.missingEmoji);
+  }
+
+  const targetAuthorParams = resolveTargetAuthorParams({
+    targetAuthor: params.opts.targetAuthor,
+    targetAuthorUuid: params.opts.targetAuthorUuid,
+    fallback: normalizedRecipient,
+  });
+  if (groupId && !targetAuthorParams.targetAuthor) {
+    throw new Error(params.errors.missingTargetAuthor);
+  }
+
+  const requestParams: Record<string, unknown> = {
+    emoji: normalizedEmoji,
+    targetTimestamp: params.targetTimestamp,
+    ...(params.remove ? { remove: true } : {}),
+    ...targetAuthorParams,
+  };
+  if (normalizedRecipient) {
+    requestParams.recipients = [normalizedRecipient];
+  }
+  if (groupId) {
+    requestParams.groupIds = [groupId];
+  }
+  if (account) {
+    requestParams.account = account;
+  }
+
+  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
+    baseUrl,
+    timeoutMs: params.opts.timeoutMs,
+  });
+
+  return {
+    ok: true,
+    timestamp: result?.timestamp,
+  };
 }
 
 /**
@@ -94,57 +143,19 @@ export async function sendReactionSignal(
   emoji: string,
   opts: SignalReactionOpts = {},
 ): Promise<SignalReactionResult> {
-  const accountInfo = resolveSignalAccount({
-    cfg: loadConfig(),
-    accountId: opts.accountId,
-  });
-  const { baseUrl, account } = resolveReactionRpcContext(opts, accountInfo);
-
-  const normalizedRecipient = normalizeSignalUuid(recipient);
-  const groupId = opts.groupId?.trim();
-  if (!normalizedRecipient && !groupId) {
-    throw new Error("Recipient or groupId is required for Signal reaction");
-  }
-  if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
-    throw new Error("Valid targetTimestamp is required for Signal reaction");
-  }
-  if (!emoji?.trim()) {
-    throw new Error("Emoji is required for Signal reaction");
-  }
-
-  const targetAuthorParams = resolveTargetAuthorParams({
-    targetAuthor: opts.targetAuthor,
-    targetAuthorUuid: opts.targetAuthorUuid,
-    fallback: normalizedRecipient,
-  });
-  if (groupId && !targetAuthorParams.targetAuthor) {
-    throw new Error("targetAuthor is required for group reactions");
-  }
-
-  const params: Record<string, unknown> = {
-    emoji: emoji.trim(),
+  return await sendReactionSignalCore({
+    recipient,
     targetTimestamp,
-    ...targetAuthorParams,
-  };
-  if (normalizedRecipient) {
-    params.recipients = [normalizedRecipient];
-  }
-  if (groupId) {
-    params.groupIds = [groupId];
-  }
-  if (account) {
-    params.account = account;
-  }
-
-  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", params, {
-    baseUrl,
-    timeoutMs: opts.timeoutMs,
+    emoji,
+    remove: false,
+    opts,
+    errors: {
+      missingRecipient: "Recipient or groupId is required for Signal reaction",
+      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction",
+      missingEmoji: "Emoji is required for Signal reaction",
+      missingTargetAuthor: "targetAuthor is required for group reactions",
+    },
   });
-
-  return {
-    ok: true,
-    timestamp: result?.timestamp,
-  };
 }
 
 /**
@@ -160,56 +171,17 @@ export async function removeReactionSignal(
   emoji: string,
   opts: SignalReactionOpts = {},
 ): Promise<SignalReactionResult> {
-  const accountInfo = resolveSignalAccount({
-    cfg: loadConfig(),
-    accountId: opts.accountId,
-  });
-  const { baseUrl, account } = resolveReactionRpcContext(opts, accountInfo);
-
-  const normalizedRecipient = normalizeSignalUuid(recipient);
-  const groupId = opts.groupId?.trim();
-  if (!normalizedRecipient && !groupId) {
-    throw new Error("Recipient or groupId is required for Signal reaction removal");
-  }
-  if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
-    throw new Error("Valid targetTimestamp is required for Signal reaction removal");
-  }
-  if (!emoji?.trim()) {
-    throw new Error("Emoji is required for Signal reaction removal");
-  }
-
-  const targetAuthorParams = resolveTargetAuthorParams({
-    targetAuthor: opts.targetAuthor,
-    targetAuthorUuid: opts.targetAuthorUuid,
-    fallback: normalizedRecipient,
-  });
-  if (groupId && !targetAuthorParams.targetAuthor) {
-    throw new Error("targetAuthor is required for group reaction removal");
-  }
-
-  const params: Record<string, unknown> = {
-    emoji: emoji.trim(),
+  return await sendReactionSignalCore({
+    recipient,
     targetTimestamp,
+    emoji,
     remove: true,
-    ...targetAuthorParams,
-  };
-  if (normalizedRecipient) {
-    params.recipients = [normalizedRecipient];
-  }
-  if (groupId) {
-    params.groupIds = [groupId];
-  }
-  if (account) {
-    params.account = account;
-  }
-
-  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", params, {
-    baseUrl,
-    timeoutMs: opts.timeoutMs,
+    opts,
+    errors: {
+      missingRecipient: "Recipient or groupId is required for Signal reaction removal",
+      invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction removal",
+      missingEmoji: "Emoji is required for Signal reaction removal",
+      missingTargetAuthor: "targetAuthor is required for group reaction removal",
+    },
   });
-
-  return {
-    ok: true,
-    timestamp: result?.timestamp,
-  };
 }

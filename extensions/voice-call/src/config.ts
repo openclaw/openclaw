@@ -1,3 +1,9 @@
+import {
+  TtsAutoSchema,
+  TtsConfigSchema,
+  TtsModeSchema,
+  TtsProviderSchema,
+} from "openclaw/plugin-sdk";
 import { z } from "zod";
 
 // -----------------------------------------------------------------------------
@@ -77,81 +83,7 @@ export const SttConfigSchema = z
   .default({ provider: "openai", model: "whisper-1" });
 export type SttConfig = z.infer<typeof SttConfigSchema>;
 
-export const TtsProviderSchema = z.enum(["openai", "elevenlabs", "edge"]);
-export const TtsModeSchema = z.enum(["final", "all"]);
-export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
-
-export const TtsConfigSchema = z
-  .object({
-    auto: TtsAutoSchema.optional(),
-    enabled: z.boolean().optional(),
-    mode: TtsModeSchema.optional(),
-    provider: TtsProviderSchema.optional(),
-    summaryModel: z.string().optional(),
-    modelOverrides: z
-      .object({
-        enabled: z.boolean().optional(),
-        allowText: z.boolean().optional(),
-        allowProvider: z.boolean().optional(),
-        allowVoice: z.boolean().optional(),
-        allowModelId: z.boolean().optional(),
-        allowVoiceSettings: z.boolean().optional(),
-        allowNormalization: z.boolean().optional(),
-        allowSeed: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    elevenlabs: z
-      .object({
-        apiKey: z.string().optional(),
-        baseUrl: z.string().optional(),
-        voiceId: z.string().optional(),
-        modelId: z.string().optional(),
-        seed: z.number().int().min(0).max(4294967295).optional(),
-        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
-        languageCode: z.string().optional(),
-        voiceSettings: z
-          .object({
-            stability: z.number().min(0).max(1).optional(),
-            similarityBoost: z.number().min(0).max(1).optional(),
-            style: z.number().min(0).max(1).optional(),
-            useSpeakerBoost: z.boolean().optional(),
-            speed: z.number().min(0.5).max(2).optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
-    openai: z
-      .object({
-        apiKey: z.string().optional(),
-        model: z.string().optional(),
-        voice: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    edge: z
-      .object({
-        enabled: z.boolean().optional(),
-        voice: z.string().optional(),
-        lang: z.string().optional(),
-        outputFormat: z.string().optional(),
-        pitch: z.string().optional(),
-        rate: z.string().optional(),
-        volume: z.string().optional(),
-        saveSubtitles: z.boolean().optional(),
-        proxy: z.string().optional(),
-        timeoutMs: z.number().int().min(1000).max(120000).optional(),
-      })
-      .strict()
-      .optional(),
-    prefsPath: z.string().optional(),
-    maxTextLength: z.number().int().min(1).optional(),
-    timeoutMs: z.number().int().min(1000).max(120000).optional(),
-  })
-  .strict()
-  .optional();
+export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema };
 export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 
 // -----------------------------------------------------------------------------
@@ -207,8 +139,10 @@ export const VoiceCallTunnelConfigSchema = z
     ngrokDomain: z.string().min(1).optional(),
     /**
      * Allow ngrok free tier compatibility mode.
-     * When true, signature verification failures on ngrok-free.app URLs
-     * will be allowed only for loopback requests (ngrok local agent).
+     * When true, forwarded headers may be trusted for loopback requests
+     * to reconstruct the public ngrok URL used for signing.
+     *
+     * IMPORTANT: This does NOT bypass signature verification.
      */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
@@ -338,6 +272,14 @@ export const VoiceCallConfigSchema = z
 
     /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
+
+    /**
+     * Maximum age of a call in seconds before it is automatically reaped.
+     * Catches calls stuck in unexpected states (e.g., notify-mode calls that
+     * never receive a terminal webhook). Set to 0 to disable.
+     * Default: 0 (disabled). Recommended: 120-300 for production.
+     */
+    staleCallReaperSeconds: z.number().int().nonnegative().default(0),
 
     /** Silence timeout for end-of-speech detection (ms) */
     silenceTimeoutMs: z.number().int().positive().default(800),
@@ -483,12 +425,9 @@ export function validateProviderConfig(config: VoiceCallConfig): {
         "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
       );
     }
-    if (
-      (config.inboundPolicy === "allowlist" || config.inboundPolicy === "pairing") &&
-      !config.telnyx?.publicKey
-    ) {
+    if (!config.skipSignatureVerification && !config.telnyx?.publicKey) {
       errors.push(
-        "plugins.entries.voice-call.config.telnyx.publicKey is required for inboundPolicy allowlist/pairing",
+        "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
       );
     }
   }

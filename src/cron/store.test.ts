@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { loadCronStore } from "./store.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadCronStore, resolveCronStorePath } from "./store.js";
 
 async function makeStorePath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-"));
@@ -14,6 +14,20 @@ async function makeStorePath() {
     },
   };
 }
+
+describe("resolveCronStorePath", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("uses OPENCLAW_HOME for tilde expansion", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    const result = resolveCronStorePath("~/cron/jobs.json");
+    expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
+  });
+});
 
 describe("cron store", () => {
   it("returns empty store when file does not exist", async () => {

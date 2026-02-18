@@ -1,35 +1,11 @@
-export type DeviceAuthEntry = {
-  token: string;
-  role: string;
-  scopes: string[];
-  updatedAtMs: number;
-};
-
-type DeviceAuthStore = {
-  version: 1;
-  deviceId: string;
-  tokens: Record<string, DeviceAuthEntry>;
-};
+import {
+  type DeviceAuthEntry,
+  type DeviceAuthStore,
+  normalizeDeviceAuthRole,
+  normalizeDeviceAuthScopes,
+} from "../../../src/shared/device-auth.js";
 
 const STORAGE_KEY = "openclaw.device.auth.v1";
-
-function normalizeRole(role: string): string {
-  return role.trim();
-}
-
-function normalizeScopes(scopes: string[] | undefined): string[] {
-  if (!Array.isArray(scopes)) {
-    return [];
-  }
-  const out = new Set<string>();
-  for (const scope of scopes) {
-    const trimmed = scope.trim();
-    if (trimmed) {
-      out.add(trimmed);
-    }
-  }
-  return [...out].toSorted();
-}
 
 function readStore(): DeviceAuthStore | null {
   try {
@@ -69,7 +45,7 @@ export function loadDeviceAuthToken(params: {
   if (!store || store.deviceId !== params.deviceId) {
     return null;
   }
-  const role = normalizeRole(params.role);
+  const role = normalizeDeviceAuthRole(params.role);
   const entry = store.tokens[role];
   if (!entry || typeof entry.token !== "string") {
     return null;
@@ -83,7 +59,7 @@ export function storeDeviceAuthToken(params: {
   token: string;
   scopes?: string[];
 }): DeviceAuthEntry {
-  const role = normalizeRole(params.role);
+  const role = normalizeDeviceAuthRole(params.role);
   const next: DeviceAuthStore = {
     version: 1,
     deviceId: params.deviceId,
@@ -96,7 +72,7 @@ export function storeDeviceAuthToken(params: {
   const entry: DeviceAuthEntry = {
     token: params.token,
     role,
-    scopes: normalizeScopes(params.scopes),
+    scopes: normalizeDeviceAuthScopes(params.scopes),
     updatedAtMs: Date.now(),
   };
   next.tokens[role] = entry;
@@ -109,7 +85,7 @@ export function clearDeviceAuthToken(params: { deviceId: string; role: string })
   if (!store || store.deviceId !== params.deviceId) {
     return;
   }
-  const role = normalizeRole(params.role);
+  const role = normalizeDeviceAuthRole(params.role);
   if (!store.tokens[role]) {
     return;
   }

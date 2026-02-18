@@ -1,3 +1,4 @@
+import Darwin
 import Testing
 @testable import OpenClawDiscovery
 

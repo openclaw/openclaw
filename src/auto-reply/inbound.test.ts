@@ -12,7 +12,6 @@ import {
   resetInboundDedupe,
   shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
-import { formatInboundBodyWithSenderMeta } from "./reply/inbound-sender-meta.js";
 import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
 import {
   buildMentionRegexes,
@@ -62,16 +61,19 @@ describe("normalizeInboundTextNewlines", () => {
     expect(normalizeInboundTextNewlines("a\rb")).toBe("a\nb");
   });
 
-  it("decodes literal \\n to newlines when no real newlines exist", () => {
-    expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\nb");
+  it("preserves literal backslash-n sequences (Windows paths)", () => {
+    // Windows paths like C:\Work\nxxx should NOT have \n converted to newlines
+    expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\\nb");
+    expect(normalizeInboundTextNewlines("C:\\Work\\nxxx")).toBe("C:\\Work\\nxxx");
   });
 });
 
 describe("finalizeInboundContext", () => {
   it("fills BodyForAgent/BodyForCommands and normalizes newlines", () => {
     const ctx: MsgContext = {
-      Body: "a\\nb\r\nc",
-      RawBody: "raw\\nline",
+      // Use actual CRLF for newline normalization test, not literal \n sequences
+      Body: "a\r\nb\r\nc",
+      RawBody: "raw\r\nline",
       ChatType: "channel",
       From: "whatsapp:group:123@g.us",
       GroupSubject: "Test",
@@ -80,11 +82,26 @@ describe("finalizeInboundContext", () => {
     const out = finalizeInboundContext(ctx);
     expect(out.Body).toBe("a\nb\nc");
     expect(out.RawBody).toBe("raw\nline");
-    expect(out.BodyForAgent).toBe("a\nb\nc");
+    // Prefer clean text over legacy envelope-shaped Body when RawBody is present.
+    expect(out.BodyForAgent).toBe("raw\nline");
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("preserves literal backslash-n in Windows paths", () => {
+    const ctx: MsgContext = {
+      Body: "C:\\Work\\nxxx\\README.md",
+      RawBody: "C:\\Work\\nxxx\\README.md",
+      ChatType: "direct",
+      From: "web:user",
+    };
+
+    const out = finalizeInboundContext(ctx);
+    expect(out.Body).toBe("C:\\Work\\nxxx\\README.md");
+    expect(out.BodyForAgent).toBe("C:\\Work\\nxxx\\README.md");
+    expect(out.BodyForCommands).toBe("C:\\Work\\nxxx\\README.md");
   });
 
   it("can force BodyForCommands to follow updated CommandBody", () => {
@@ -99,57 +116,42 @@ describe("finalizeInboundContext", () => {
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
   });
-});
 
-describe("formatInboundBodyWithSenderMeta", () => {
-  it("does nothing for direct messages", () => {
-    const ctx: MsgContext = { ChatType: "direct", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe("[X] hi");
-  });
-
-  it("appends a sender meta line for non-direct messages", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe(
-      "[X] hi\n[from: Alice (A1)]",
-    );
-  });
-
-  it("prefers SenderE164 in the label when present", () => {
-    const ctx: MsgContext = {
-      ChatType: "group",
-      SenderName: "Bob",
-      SenderId: "bob@s.whatsapp.net",
-      SenderE164: "+222",
+  it("fills MediaType/MediaTypes defaults only when media exists", () => {
+    const withMedia: MsgContext = {
+      Body: "hi",
+      MediaPath: "/tmp/file.bin",
     };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe(
-      "[X] hi\n[from: Bob (+222)]",
-    );
+    const outWithMedia = finalizeInboundContext(withMedia);
+    expect(outWithMedia.MediaType).toBe("application/octet-stream");
+    expect(outWithMedia.MediaTypes).toEqual(["application/octet-stream"]);
+
+    const withoutMedia: MsgContext = { Body: "hi" };
+    const outWithoutMedia = finalizeInboundContext(withoutMedia);
+    expect(outWithoutMedia.MediaType).toBeUndefined();
+    expect(outWithoutMedia.MediaTypes).toBeUndefined();
   });
 
-  it("appends with a real newline even if the body contains literal \\n", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Bob", SenderId: "+222" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] one\\n[X] two" })).toBe(
-      "[X] one\\n[X] two\n[from: Bob (+222)]",
-    );
+  it("pads MediaTypes to match MediaPaths/MediaUrls length", () => {
+    const ctx: MsgContext = {
+      Body: "hi",
+      MediaPaths: ["/tmp/a", "/tmp/b"],
+      MediaTypes: ["image/png"],
+    };
+    const out = finalizeInboundContext(ctx);
+    expect(out.MediaType).toBe("image/png");
+    expect(out.MediaTypes).toEqual(["image/png", "application/octet-stream"]);
   });
 
-  it("does not duplicate a sender meta line when one is already present", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi\n[from: Alice (A1)]" })).toBe(
-      "[X] hi\n[from: Alice (A1)]",
-    );
-  });
-
-  it("does not append when the body already includes a sender prefix", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "Alice (A1): hi" })).toBe("Alice (A1): hi");
-  });
-
-  it("does not append when the sender prefix follows an envelope header", () => {
-    const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[Signal Group] Alice (A1): hi" })).toBe(
-      "[Signal Group] Alice (A1): hi",
-    );
+  it("derives MediaType from MediaTypes when missing", () => {
+    const ctx: MsgContext = {
+      Body: "hi",
+      MediaPath: "/tmp/a",
+      MediaTypes: ["image/jpeg"],
+    };
+    const out = finalizeInboundContext(ctx);
+    expect(out.MediaType).toBe("image/jpeg");
+    expect(out.MediaTypes).toEqual(["image/jpeg"]);
   });
 });
 
@@ -256,8 +258,8 @@ describe("createInboundDebouncer", () => {
   });
 });
 
-describe("initSessionState sender meta", () => {
-  it("injects sender meta into BodyStripped for group chats", async () => {
+describe("initSessionState BodyStripped", () => {
+  it("prefers BodyForAgent over Body for group chats", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-"));
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -265,6 +267,7 @@ describe("initSessionState sender meta", () => {
     const result = await initSessionState({
       ctx: {
         Body: "[WhatsApp 123@g.us] ping",
+        BodyForAgent: "ping",
         ChatType: "group",
         SenderName: "Bob",
         SenderE164: "+222",
@@ -275,10 +278,10 @@ describe("initSessionState sender meta", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionCtx.BodyStripped).toBe("[WhatsApp 123@g.us] ping\n[from: Bob (+222)]");
+    expect(result.sessionCtx.BodyStripped).toBe("ping");
   });
 
-  it("does not inject sender meta for direct chats", async () => {
+  it("prefers BodyForAgent over Body for direct chats", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-direct-"));
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -286,6 +289,7 @@ describe("initSessionState sender meta", () => {
     const result = await initSessionState({
       ctx: {
         Body: "[WhatsApp +1] ping",
+        BodyForAgent: "ping",
         ChatType: "direct",
         SenderName: "Bob",
         SenderE164: "+222",
@@ -295,7 +299,7 @@ describe("initSessionState sender meta", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionCtx.BodyStripped).toBe("[WhatsApp +1] ping");
+    expect(result.sessionCtx.BodyStripped).toBe("ping");
   });
 });
 
@@ -366,6 +370,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
       channel: "discord",
       id: "123",
       chatType: "group",
@@ -390,6 +395,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
       channel: "slack",
       id: "C123",
       chatType: "group",

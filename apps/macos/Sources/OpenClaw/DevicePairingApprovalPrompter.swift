@@ -1,8 +1,8 @@
 import AppKit
-import OpenClawKit
-import OpenClawProtocol
 import Foundation
 import Observation
+import OpenClawKit
+import OpenClawProtocol
 import OSLog
 
 @MainActor
@@ -21,11 +21,6 @@ final class DevicePairingApprovalPrompter {
     private var activeRequestId: String?
     private var alertHostWindow: NSWindow?
     private var resolvedByRequestId: Set<String> = []
-
-    private final class AlertHostWindow: NSWindow {
-        override var canBecomeKey: Bool { true }
-        override var canBecomeMain: Bool { true }
-    }
 
     private struct PairingList: Codable {
         let pending: [PendingRequest]
@@ -55,7 +50,9 @@ final class DevicePairingApprovalPrompter {
         let isRepair: Bool?
         let ts: Double
 
-        var id: String { self.requestId }
+        var id: String {
+            self.requestId
+        }
     }
 
     private struct PairingResolvedEvent: Codable {
@@ -231,35 +228,11 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func endActiveAlert() {
-        guard let alert = self.activeAlert else { return }
-        if let parent = alert.window.sheetParent {
-            parent.endSheet(alert.window, returnCode: .abort)
-        }
-        self.activeAlert = nil
-        self.activeRequestId = nil
+        PairingAlertSupport.endActiveAlert(activeAlert: &self.activeAlert, activeRequestId: &self.activeRequestId)
     }
 
     private func requireAlertHostWindow() -> NSWindow {
-        if let alertHostWindow {
-            return alertHostWindow
-        }
-
-        let window = AlertHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 1),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false)
-        window.title = ""
-        window.isReleasedWhenClosed = false
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.isOpaque = false
-        window.hasShadow = false
-        window.backgroundColor = .clear
-        window.ignoresMouseEvents = true
-
-        self.alertHostWindow = window
-        return window
+        PairingAlertSupport.requireAlertHostWindow(alertHostWindow: &self.alertHostWindow)
     }
 
     private func handle(push: GatewayPush) {

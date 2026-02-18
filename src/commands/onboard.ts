@@ -1,37 +1,33 @@
-import type { RuntimeEnv } from "../runtime.js";
-import type { OnboardOptions } from "./onboard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
+import type { OnboardOptions } from "./onboard-types.js";
 
 export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
   assertSupportedRuntime(runtime);
-  const authChoice = opts.authChoice === "oauth" ? ("setup-token" as const) : opts.authChoice;
-  const normalizedAuthChoice =
-    authChoice === "claude-cli"
-      ? ("setup-token" as const)
-      : authChoice === "codex-cli"
-        ? ("openai-codex" as const)
-        : authChoice;
-  if (opts.nonInteractive && (authChoice === "claude-cli" || authChoice === "codex-cli")) {
+  const originalAuthChoice = opts.authChoice;
+  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
+  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
     runtime.error(
       [
-        `Auth choice "${authChoice}" is deprecated.`,
+        `Auth choice "${String(originalAuthChoice)}" is deprecated.`,
         'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
       ].join("\n"),
     );
     runtime.exit(1);
     return;
   }
-  if (authChoice === "claude-cli") {
+  if (originalAuthChoice === "claude-cli") {
     runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
   }
-  if (authChoice === "codex-cli") {
+  if (originalAuthChoice === "codex-cli") {
     runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;

@@ -1,4 +1,5 @@
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../../infra/exec-approvals.js";
+import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 
 type ExecDirectiveParse = {
   cleaned: string;
@@ -48,17 +49,8 @@ function parseExecDirectiveArgs(raw: string): Omit<
 > & {
   consumed: number;
 } {
-  let i = 0;
   const len = raw.length;
-  while (i < len && /\s/.test(raw[i])) {
-    i += 1;
-  }
-  if (raw[i] === ":") {
-    i += 1;
-    while (i < len && /\s/.test(raw[i])) {
-      i += 1;
-    }
-  }
+  let i = skipDirectiveArgPrefix(raw);
   let consumed = i;
   let execHost: ExecHost | undefined;
   let execSecurity: ExecSecurity | undefined;
@@ -75,21 +67,9 @@ function parseExecDirectiveArgs(raw: string): Omit<
   let invalidNode = false;
 
   const takeToken = (): string | null => {
-    if (i >= len) {
-      return null;
-    }
-    const start = i;
-    while (i < len && !/\s/.test(raw[i])) {
-      i += 1;
-    }
-    if (start === i) {
-      return null;
-    }
-    const token = raw.slice(start, i);
-    while (i < len && /\s/.test(raw[i])) {
-      i += 1;
-    }
-    return token;
+    const res = takeDirectiveToken(raw, i);
+    i = res.nextIndex;
+    return res.token;
   };
 
   const splitToken = (token: string): { key: string; value: string } | null => {

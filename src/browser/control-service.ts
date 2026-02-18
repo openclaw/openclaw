@@ -1,8 +1,9 @@
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
-import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
+import { resolveBrowserConfig } from "./config.js";
+import { ensureBrowserControlAuth } from "./control-auth.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
+import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -15,6 +16,7 @@ export function getBrowserControlState(): BrowserServerState | null {
 export function createBrowserControlContext() {
   return createBrowserRouteContext({
     getState: () => state,
+    refreshConfigFromDisk: true,
   });
 }
 
@@ -28,6 +30,14 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   if (!resolved.enabled) {
     return null;
   }
+  try {
+    const ensured = await ensureBrowserControlAuth({ cfg });
+    if (ensured.generatedToken) {
+      logService.info("No browser auth configured; generated gateway.auth.token automatically.");
+    }
+  } catch (err) {
+    logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
+  }
 
   state = {
     server: null,
@@ -36,17 +46,10 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     profiles: new Map(),
   };
 
-  // If any profile uses the Chrome extension relay, start the local relay server eagerly
-  // so the extension can connect before the first browser action.
-  for (const name of Object.keys(resolved.profiles)) {
-    const profile = resolveProfile(resolved, name);
-    if (!profile || profile.driver !== "extension") {
-      continue;
-    }
-    await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch((err) => {
-      logService.warn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
-    });
-  }
+  await ensureExtensionRelayForProfiles({
+    resolved,
+    onWarn: (message) => logService.warn(message),
+  });
 
   logService.info(
     `Browser control service ready (profiles=${Object.keys(resolved.profiles).length})`,
@@ -60,21 +63,10 @@ export async function stopBrowserControlService(): Promise<void> {
     return;
   }
 
-  const ctx = createBrowserRouteContext({
+  await stopKnownBrowserProfiles({
     getState: () => state,
+    onWarn: (message) => logService.warn(message),
   });
-
-  try {
-    for (const name of Object.keys(current.resolved.profiles)) {
-      try {
-        await ctx.forProfile(name).stopRunningBrowser();
-      } catch {
-        // ignore
-      }
-    }
-  } catch (err) {
-    logService.warn(`openclaw browser stop failed: ${String(err)}`);
-  }
 
   state = null;
 

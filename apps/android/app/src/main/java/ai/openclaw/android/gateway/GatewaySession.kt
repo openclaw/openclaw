@@ -193,7 +193,9 @@ class GatewaySession(
     suspend fun connect() {
       val scheme = if (tls != null) "wss" else "ws"
       val url = "$scheme://${endpoint.host}:${endpoint.port}"
-      val request = Request.Builder().url(url).build()
+      val httpScheme = if (tls != null) "https" else "http"
+      val origin = "$httpScheme://${endpoint.host}:${endpoint.port}"
+      val request = Request.Builder().url(url).header("Origin", origin).build()
       socket = client.newWebSocket(request, Listener())
       try {
         connectDeferred.await()
@@ -241,6 +243,9 @@ class GatewaySession(
 
     private fun buildClient(): OkHttpClient {
       val builder = OkHttpClient.Builder()
+        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+        .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
       val tlsConfig = buildGatewayTlsConfig(tls) { fingerprint ->
         onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
       }
@@ -619,7 +624,18 @@ class GatewaySession(
     val port = parsed?.port ?: -1
     val scheme = parsed?.scheme?.trim().orEmpty().ifBlank { "http" }
 
+    // Detect TLS reverse proxy: endpoint on port 443, or domain-based host
+    val tls = endpoint.port == 443 || endpoint.host.contains(".")
+
+    // If raw URL is a non-loopback address AND we're behind TLS reverse proxy,
+    // fix the port (gateway sends its internal port like 18789, but we need 443 via Caddy)
     if (trimmed.isNotBlank() && !isLoopbackHost(host)) {
+      if (tls && port > 0 && port != 443) {
+        // Rewrite the URL to use the reverse proxy port instead of the raw gateway port
+        val fixedScheme = "https"
+        val formattedHost = if (host.contains(":")) "[${host}]" else host
+        return "$fixedScheme://$formattedHost"
+      }
       return trimmed
     }
 
@@ -629,9 +645,14 @@ class GatewaySession(
         ?: endpoint.host.trim()
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
-    val fallbackPort = endpoint.canvasPort ?: if (port > 0) port else 18793
+    // When connecting through a reverse proxy (TLS on standard port), use the
+    // connection endpoint's scheme and port instead of the raw canvas port.
+    val fallbackScheme = if (tls) "https" else scheme
+    // Behind reverse proxy, always use the proxy port (443), not the raw canvas port
+    val fallbackPort = if (tls) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
     val formattedHost = if (fallbackHost.contains(":")) "[${fallbackHost}]" else fallbackHost
-    return "$scheme://$formattedHost:$fallbackPort"
+    val portSuffix = if ((fallbackScheme == "https" && fallbackPort == 443) || (fallbackScheme == "http" && fallbackPort == 80)) "" else ":$fallbackPort"
+    return "$fallbackScheme://$formattedHost$portSuffix"
   }
 
   private fun isLoopbackHost(raw: String?): Boolean {

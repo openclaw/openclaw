@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import type { NostrProfile } from "./src/config-schema.js";
 import { nostrPlugin } from "./src/channel.js";
+import type { NostrProfile } from "./src/config-schema.js";
 import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
 import { setNostrRuntime, getNostrRuntime } from "./src/runtime.js";
 import { resolveNostrAccount } from "./src/types.js";

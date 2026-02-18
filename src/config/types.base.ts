@@ -1,4 +1,4 @@
-import type { NormalizedChatType } from "../channels/chat-type.js";
+import type { ChatType } from "../channels/chat-type.js";
 
 export type ReplyMode = "text" | "command";
 export type TypingMode = "never" | "instant" | "thinking" | "message";
@@ -50,8 +50,14 @@ export type HumanDelayConfig = {
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   channel?: string;
-  chatType?: NormalizedChatType;
+  chatType?: ChatType;
+  /**
+   * Session key prefix match.
+   * Note: some consumers match against a normalized key (for example, stripping `agent:<id>:`).
+   */
   keyPrefix?: string;
+  /** Optional raw session-key prefix match for consumers that normalize session keys. */
+  rawKeyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
   action: SessionSendPolicyAction;
@@ -71,6 +77,8 @@ export type SessionResetConfig = {
   idleMinutes?: number;
 };
 export type SessionResetByTypeConfig = {
+  direct?: SessionResetConfig;
+  /** @deprecated Use `direct` instead. Kept for backward compatibility. */
   dm?: SessionResetConfig;
   group?: SessionResetConfig;
   thread?: SessionResetConfig;
@@ -97,6 +105,23 @@ export type SessionConfig = {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
+  /** Automatic session store maintenance (pruning, capping, file rotation). */
+  maintenance?: SessionMaintenanceConfig;
+};
+
+export type SessionMaintenanceMode = "enforce" | "warn";
+
+export type SessionMaintenanceConfig = {
+  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  mode?: SessionMaintenanceMode;
+  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  pruneAfter?: string | number;
+  /** Deprecated. Use pruneAfter instead. */
+  pruneDays?: number;
+  /** Maximum number of session entries to keep. Default: 500. */
+  maxEntries?: number;
+  /** Rotate sessions.json when it exceeds this size (e.g. "10mb"). Default: 10mb. */
+  rotateBytes?: number | string;
 };
 
 export type LoggingConfig = {

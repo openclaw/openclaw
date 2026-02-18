@@ -1,8 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
+import { retryAsync } from "../infra/retry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
-import { repairToolUseResultPairing } from "./session-transcript-repair.js";
+import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
 export const BASE_CHUNK_RATIO = 0.4;
 export const MIN_CHUNK_RATIO = 0.15;
@@ -14,7 +15,9 @@ const MERGE_SUMMARIES_INSTRUCTIONS =
   " TODOs, open questions, and any constraints.";
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
-  return messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+  // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.
+  const safe = stripToolResultDetails(messages);
+  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
 }
 
 function normalizeParts(parts: number, messageCount: number): number {
@@ -151,18 +154,31 @@ async function summarizeChunks(params: {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
-  const chunks = chunkMessagesByMaxTokens(params.messages, params.maxChunkTokens);
+  // SECURITY: never feed toolResult.details into summarization prompts.
+  const safeMessages = stripToolResultDetails(params.messages);
+  const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
   let summary = params.previousSummary;
 
   for (const chunk of chunks) {
-    summary = await generateSummary(
-      chunk,
-      params.model,
-      params.reserveTokens,
-      params.apiKey,
-      params.signal,
-      params.customInstructions,
-      summary,
+    summary = await retryAsync(
+      () =>
+        generateSummary(
+          chunk,
+          params.model,
+          params.reserveTokens,
+          params.apiKey,
+          params.signal,
+          params.customInstructions,
+          summary,
+        ),
+      {
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 5000,
+        jitter: 0.2,
+        label: "compaction/generateSummary",
+        shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
+      },
     );
   }
 

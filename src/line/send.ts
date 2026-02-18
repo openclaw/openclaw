@@ -1,9 +1,10 @@
 import { messagingApi } from "@line/bot-sdk";
-import type { LineSendResult } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveLineAccount } from "./accounts.js";
+import { resolveLineChannelAccessToken } from "./channel-access-token.js";
+import type { LineSendResult } from "./types.js";
 
 // Use the messaging API types directly
 type Message = messagingApi.Message;
@@ -31,21 +32,6 @@ interface LineSendOpts {
   replyToken?: string;
 }
 
-function resolveToken(
-  explicit: string | undefined,
-  params: { accountId: string; channelAccessToken: string },
-): string {
-  if (explicit?.trim()) {
-    return explicit.trim();
-  }
-  if (!params.channelAccessToken) {
-    throw new Error(
-      `LINE channel access token missing for account "${params.accountId}" (set channels.line.channelAccessToken or LINE_CHANNEL_ACCESS_TOKEN).`,
-    );
-  }
-  return params.channelAccessToken.trim();
-}
-
 function normalizeTarget(to: string): string {
   const trimmed = to.trim();
   if (!trimmed) {
@@ -64,6 +50,35 @@ function normalizeTarget(to: string): string {
   }
 
   return normalized;
+}
+
+function createLineMessagingClient(opts: { channelAccessToken?: string; accountId?: string }): {
+  account: ReturnType<typeof resolveLineAccount>;
+  client: messagingApi.MessagingApiClient;
+} {
+  const cfg = loadConfig();
+  const account = resolveLineAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
+  const client = new messagingApi.MessagingApiClient({
+    channelAccessToken: token,
+  });
+  return { account, client };
+}
+
+function createLinePushContext(
+  to: string,
+  opts: { channelAccessToken?: string; accountId?: string },
+): {
+  account: ReturnType<typeof resolveLineAccount>;
+  client: messagingApi.MessagingApiClient;
+  chatId: string;
+} {
+  const { account, client } = createLineMessagingClient(opts);
+  const chatId = normalizeTarget(to);
+  return { account, client, chatId };
 }
 
 function createTextMessage(text: string): TextMessage {
@@ -121,7 +136,7 @@ export async function sendMessageLine(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
 
   const client = new messagingApi.MessagingApiClient({
@@ -203,16 +218,7 @@ export async function replyMessageLine(
   messages: Message[],
   opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
 ): Promise<void> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { account, client } = createLineMessagingClient(opts);
 
   await client.replyMessage({
     replyToken,
@@ -239,17 +245,7 @@ export async function pushMessagesLine(
     throw new Error("Message must be non-empty for LINE sends");
   }
 
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { account, client, chatId } = createLinePushContext(to, opts);
 
   await client
     .pushMessage({
@@ -297,17 +293,7 @@ export async function pushImageMessage(
   previewImageUrl?: string,
   opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { account, client, chatId } = createLinePushContext(to, opts);
 
   const imageMessage = createImageMessage(originalContentUrl, previewImageUrl);
 
@@ -345,17 +331,7 @@ export async function pushLocationMessage(
   },
   opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { account, client, chatId } = createLinePushContext(to, opts);
 
   const locationMessage = createLocationMessage(location);
 
@@ -389,17 +365,7 @@ export async function pushFlexMessage(
   contents: FlexContainer,
   opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { account, client, chatId } = createLinePushContext(to, opts);
 
   const flexMessage: FlexMessage = {
     type: "flex",
@@ -441,17 +407,7 @@ export async function pushTemplateMessage(
   template: TemplateMessage,
   opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { account, client, chatId } = createLinePushContext(to, opts);
 
   await client.pushMessage({
     to: chatId,
@@ -483,17 +439,7 @@ export async function pushTextMessageWithQuickReplies(
   quickReplyLabels: string[],
   opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { account, client, chatId } = createLinePushContext(to, opts);
 
   const message = createTextMessageWithQuickReplies(text, quickReplyLabels);
 
@@ -559,7 +505,7 @@ export async function showLoadingAnimation(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   const client = new messagingApi.MessagingApiClient({
     channelAccessToken: token,
@@ -599,7 +545,7 @@ export async function getUserProfile(
     cfg,
     accountId: opts.accountId,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
 
   const client = new messagingApi.MessagingApiClient({
     channelAccessToken: token,

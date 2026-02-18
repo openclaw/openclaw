@@ -56,8 +56,9 @@ TRASH
   wait_for_log() {
     local needle="$1"
     local timeout_s="${2:-45}"
+    local quiet_on_timeout="${3:-false}"
     local needle_compact
-    needle_compact="$(printf "%s" "$needle" | tr -cd "[:alnum:]")"
+    needle_compact="$(printf "%s" "$needle" | tr -cd "[:alpha:]")"
     local start_s
     start_s="$(date +%s)"
     while true; do
@@ -71,9 +72,17 @@ TRASH
           const needle = process.env.NEEDLE ?? \"\";
           let text = \"\";
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
-          if (text.length > 20000) text = text.slice(-20000);
-          const stripAnsi = (value) => value.replace(/\\x1b\\[[0-9;]*[A-Za-z]/g, \"\");
-          const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z0-9]+/g, \"\");
+          // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
+          if (text.length > 120000) text = text.slice(-120000);
+          const stripAnsi = (value) =>
+            value
+              // OSC: ESC ] ... BEL or ESC \\
+              .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
+              // CSI: ESC [ ... cmd
+              .replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, \"\");
+          // Letters-only: script output sometimes fragments ANSI sequences into digits/letters that
+          // can otherwise break substring matching.
+          const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z]+/g, \"\");
           const haystack = compact(text);
           const compactNeedle = compact(needle);
           if (!compactNeedle) process.exit(1);
@@ -83,6 +92,9 @@ TRASH
         fi
       fi
       if [ $(( $(date +%s) - start_s )) -ge "$timeout_s" ]; then
+        if [ "$quiet_on_timeout" = "true" ]; then
+          return 1
+        fi
         echo "Timeout waiting for log: $needle"
         if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
           tail -n 140 "$WIZARD_LOG_PATH" || true
@@ -221,7 +233,7 @@ TRASH
 
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
-    wait_for_log "Enable hooks?" 60 || true
+    wait_for_log "Enable hooks?" 60 true || true
     send $'"'"' \r'"'"' 0.6
   }
 
@@ -229,24 +241,21 @@ TRASH
     # Risk acknowledgement (default is "No").
     wait_for_log "Continue?" 60
     send $'"'"'y\r'"'"' 0.6
-    # Choose local gateway, accept defaults, skip channels/skills/daemon, skip UI.
-    if wait_for_log "Where will the Gateway run?" 20; then
-      send $'"'"'\r'"'"' 0.5
-    fi
+    # Non-interactive flow; no gateway-location prompt.
     select_skip_hooks
   }
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
-    wait_for_log "Continue?" 40 || true
+    wait_for_log "Continue?" 40 true || true
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
-    wait_for_log "Config handling" 40 || true
+    wait_for_log "Config handling" 40 true || true
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\r'"'"' 0.4
     # Reset scope -> Config only (default).
-    wait_for_log "Reset scope" 40 || true
+    wait_for_log "Reset scope" 40 true || true
     send $'"'"'\r'"'"' 0.4
     select_skip_hooks
   }
@@ -265,13 +274,12 @@ TRASH
   }
 
   send_skills_flow() {
-    # Select skills section and skip optional installs.
-    wait_for_log "Where will the Gateway run?" 60 || true
-    send $'"'"'\r'"'"' 0.6
-    # Configure skills now? -> No
-    wait_for_log "Configure skills now?" 60 || true
+    # configure --section skills still runs the configure wizard; the first prompt is gateway location.
+    # Avoid log-based synchronization here; clack output can fragment ANSI sequences and break matching.
+    send $'"'"'\r'"'"' 3.0
+    wait_for_log "Configure skills now?" 120 true || true
     send $'"'"'n\r'"'"' 0.8
-    send "" 1.0
+    send "" 2.0
   }
 
 	  run_case_local_basic() {

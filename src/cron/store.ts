@@ -1,9 +1,9 @@
-import JSON5 from "json5";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import type { CronStoreFile } from "./types.js";
+import JSON5 from "json5";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { CONFIG_DIR } from "../utils.js";
+import type { CronStoreFile } from "./types.js";
 
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
@@ -12,7 +12,7 @@ export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
     if (raw.startsWith("~")) {
-      return path.resolve(raw.replace("~", os.homedir()));
+      return path.resolve(expandHomePrefix(raw));
     }
     return path.resolve(raw);
   }

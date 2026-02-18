@@ -64,6 +64,10 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
   return handle.isStreaming();
 }
 
+export function getActiveEmbeddedRunCount(): number {
+  return ACTIVE_EMBEDDED_RUNS.size;
+}
+
 export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
   if (!sessionId || !ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
     return Promise.resolve(true);
@@ -111,11 +115,16 @@ function notifyEmbeddedRunEnded(sessionId: string) {
   }
 }
 
-export function setActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle) {
+export function setActiveEmbeddedRun(
+  sessionId: string,
+  handle: EmbeddedPiQueueHandle,
+  sessionKey?: string,
+) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   logSessionStateChange({
     sessionId,
+    sessionKey,
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
@@ -124,10 +133,14 @@ export function setActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueH
   }
 }
 
-export function clearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle) {
+export function clearActiveEmbeddedRun(
+  sessionId: string,
+  handle: EmbeddedPiQueueHandle,
+  sessionKey?: string,
+) {
   if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    logSessionStateChange({ sessionId, state: "idle", reason: "run_completed" });
+    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }

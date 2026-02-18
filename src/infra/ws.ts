@@ -1,5 +1,5 @@
-import type WebSocket from "ws";
 import { Buffer } from "node:buffer";
+import type WebSocket from "ws";
 
 export function rawDataToString(
   data: WebSocket.RawData,

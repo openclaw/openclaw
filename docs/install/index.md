@@ -142,6 +142,9 @@ The **installer script** is the recommended way to install OpenClaw. It handles 
   <Card title="Docker" href="/install/docker" icon="container">
     Containerized or headless deployments.
   </Card>
+  <Card title="Podman" href="/install/podman" icon="container">
+    Rootless container: run `setup-podman.sh` once, then the launch script.
+  </Card>
   <Card title="Nix" href="/install/nix" icon="snowflake">
     Declarative install via Nix.
   </Card>
@@ -162,6 +165,14 @@ openclaw doctor         # check for config issues
 openclaw status         # gateway status
 openclaw dashboard      # open the browser UI
 ```
+
+If you need custom runtime paths, use:
+
+- `OPENCLAW_HOME` for home-directory based internal paths
+- `OPENCLAW_STATE_DIR` for mutable state location
+- `OPENCLAW_CONFIG_PATH` for config file location
+
+See [Environment vars](/help/environment) for precedence and full details.
 
 ## Troubleshooting: `openclaw` not found
 

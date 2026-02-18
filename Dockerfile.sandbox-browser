@@ -23,6 +23,10 @@ RUN apt-get update \
 COPY scripts/sandbox-browser-entrypoint.sh /usr/local/bin/openclaw-sandbox-browser
 RUN chmod +x /usr/local/bin/openclaw-sandbox-browser
 
+RUN useradd --create-home --shell /bin/bash sandbox
+USER sandbox
+WORKDIR /home/sandbox
+
 EXPOSE 9222 5900 6080
 
 CMD ["openclaw-sandbox-browser"]

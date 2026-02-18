@@ -1,12 +1,12 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatDurationMs } from "../infra/format-duration.js";
+import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
@@ -25,6 +25,7 @@ export type MonitorTelegramOpts = {
   webhookPath?: string;
   webhookPort?: number;
   webhookSecret?: string;
+  webhookHost?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
 };
@@ -157,7 +158,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         config: cfg,
         path: opts.webhookPath,
         port: opts.webhookPort,
-        secret: opts.webhookSecret,
+        secret: opts.webhookSecret ?? account.config.webhookSecret,
+        host: opts.webhookHost ?? account.config.webhookHost,
         runtime: opts.runtime as RuntimeEnv,
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,
@@ -195,7 +197,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         const reason = isConflict ? "getUpdates conflict" : "network error";
         const errMsg = formatErrorMessage(err);
         (opts.runtime?.error ?? console.error)(
-          `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`,
+          `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationPrecise(delayMs)}.`,
         );
         try {
           await sleepWithAbort(delayMs, opts.abortSignal);

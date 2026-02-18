@@ -36,9 +36,9 @@ Hooks (4/4 ready)
 
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
+  📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
   💾 session-memory ✓ - Save session context to memory when /new command is issued
-  😈 soul-evil ✓ - Swap injected SOUL content during a purge window or by random chance
 ```
 
 **Example (verbose):**
@@ -90,7 +90,7 @@ Details:
   Source: openclaw-bundled
   Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/hooks#session-memory
+  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
   Events: command:new
 
 Requirements:
@@ -192,6 +192,9 @@ openclaw hooks install <path-or-spec>
 
 Install a hook pack from a local folder/archive or npm.
 
+Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
+specs are rejected. Dependency installs run with `--ignore-scripts` for safety.
+
 **What it does:**
 
 - Copies the hook pack into `~/.openclaw/hooks/<id>`
@@ -250,6 +253,18 @@ openclaw hooks enable session-memory
 
 **See:** [session-memory documentation](/automation/hooks#session-memory)
 
+### bootstrap-extra-files
+
+Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
+
+**Enable:**
+
+```bash
+openclaw hooks enable bootstrap-extra-files
+```
+
+**See:** [bootstrap-extra-files documentation](/automation/hooks#bootstrap-extra-files)
+
 ### command-logger
 
 Logs all command events to a centralized audit file.
@@ -276,18 +291,6 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```
 
 **See:** [command-logger documentation](/automation/hooks#command-logger)
-
-### soul-evil
-
-Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
-
-**Enable:**
-
-```bash
-openclaw hooks enable soul-evil
-```
-
-**See:** [SOUL Evil Hook](/hooks/soul-evil)
 
 ### boot-md
 

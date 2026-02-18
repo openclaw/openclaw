@@ -48,10 +48,10 @@ actor VoiceWakeRuntime {
     private var isStarting: Bool = false
     private var triggerOnlyTask: Task<Void, Never>?
 
-    // Tunables
-    // Silence threshold once we've captured user speech (post-trigger).
+    /// Tunables
+    /// Silence threshold once we've captured user speech (post-trigger).
     private let silenceWindow: TimeInterval = 2.0
-    // Silence threshold when we only heard the trigger but no post-trigger speech yet.
+    /// Silence threshold when we only heard the trigger but no post-trigger speech yet.
     private let triggerOnlySilenceWindow: TimeInterval = 5.0
     // Maximum capture duration from trigger until we force-send, to avoid runaway sessions.
     private let captureHardStop: TimeInterval = 120.0
@@ -735,12 +735,13 @@ actor VoiceWakeRuntime {
     }
 
     private static func trimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
-        let lower = text.lowercased()
         for trigger in triggers {
-            let token = trigger.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !token.isEmpty, let range = lower.range(of: token) else { continue }
-            let after = range.upperBound
-            let trimmed = text[after...].trimmingCharacters(in: .whitespacesAndNewlines)
+            let token = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { continue }
+            guard let range = text.range(
+                of: token,
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) else { continue }
+            let trimmed = text[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
             return String(trimmed)
         }
         return text

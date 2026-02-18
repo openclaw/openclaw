@@ -97,7 +97,17 @@ export function createMattermostClient(params: {
         `Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`,
       );
     }
-    return (await res.json()) as T;
+
+    if (res.status === 204) {
+      return undefined as T;
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return (await res.json()) as T;
+    }
+
+    return (await res.text()) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request };

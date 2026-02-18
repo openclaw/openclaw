@@ -1,50 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
 import {
-  __setModelCatalogImportForTest,
-  loadModelCatalog,
-  resetModelCatalogCacheForTest,
-} from "./model-catalog.js";
-
-type PiSdkModule = typeof import("./pi-model-discovery.js");
-
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
-}));
-
-vi.mock("./agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/openclaw",
-}));
+  installModelCatalogTestHooks,
+  mockCatalogImportFailThenRecover,
+  type PiSdkModule,
+} from "./model-catalog.test-harness.js";
 
 describe("loadModelCatalog", () => {
-  beforeEach(() => {
-    resetModelCatalogCacheForTest();
-  });
-
-  afterEach(() => {
-    __setModelCatalogImportForTest();
-    resetModelCatalogCacheForTest();
-    vi.restoreAllMocks();
-  });
+  installModelCatalogTestHooks();
 
   it("retries after import failure without poisoning the cache", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let call = 0;
-
-    __setModelCatalogImportForTest(async () => {
-      call += 1;
-      if (call === 1) {
-        throw new Error("boom");
-      }
-      return {
-        AuthStorage: class {},
-        ModelRegistry: class {
-          getAll() {
-            return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
-          }
-        },
-      } as unknown as PiSdkModule;
-    });
+    const getCallCount = mockCatalogImportFailThenRecover();
 
     const cfg = {} as OpenClawConfig;
     const first = await loadModelCatalog({ config: cfg });
@@ -52,7 +20,7 @@ describe("loadModelCatalog", () => {
 
     const second = await loadModelCatalog({ config: cfg });
     expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
-    expect(call).toBe(2);
+    expect(getCallCount()).toBe(2);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -83,5 +51,44 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "gpt-5.3-codex",
+                  provider: "openai-codex",
+                  name: "GPT-5.3 Codex",
+                  reasoning: true,
+                  contextWindow: 200000,
+                  input: ["text"],
+                },
+                {
+                  id: "gpt-5.2-codex",
+                  provider: "openai-codex",
+                  name: "GPT-5.2 Codex",
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+    const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
+    expect(spark?.name).toBe("gpt-5.3-codex-spark");
+    expect(spark?.reasoning).toBe(true);
   });
 });

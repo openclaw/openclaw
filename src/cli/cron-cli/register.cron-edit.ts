@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -41,6 +42,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
       .option("--tz <iana>", "Timezone for cron expressions (IANA)")
+      .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
+      .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
       .option("--thinking <level>", "Thinking level for agent jobs")
@@ -71,6 +74,24 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.announce && typeof opts.deliver === "boolean") {
             throw new Error("Choose --announce or --no-deliver (not multiple).");
           }
+          const staggerRaw = typeof opts.stagger === "string" ? opts.stagger.trim() : "";
+          const useExact = Boolean(opts.exact);
+          if (staggerRaw && useExact) {
+            throw new Error("Choose either --stagger or --exact, not both");
+          }
+          const requestedStaggerMs = (() => {
+            if (useExact) {
+              return 0;
+            }
+            if (!staggerRaw) {
+              return undefined;
+            }
+            const parsed = parseDurationMs(staggerRaw);
+            if (!parsed) {
+              throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
+            }
+            return parsed;
+          })();
 
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
@@ -117,6 +138,12 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleChosen > 1) {
             throw new Error("Choose at most one schedule change");
           }
+          if (
+            (requestedStaggerMs !== undefined || typeof opts.tz === "string") &&
+            (opts.at || opts.every)
+          ) {
+            throw new Error("--stagger/--exact/--tz are only valid for cron schedules");
+          }
           if (opts.at) {
             const atIso = parseAt(String(opts.at));
             if (!atIso) {
@@ -134,6 +161,27 @@ export function registerCronEditCommand(cron: Command) {
               kind: "cron",
               expr: String(opts.cron),
               tz: typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined,
+              staggerMs: requestedStaggerMs,
+            };
+          } else if (requestedStaggerMs !== undefined || typeof opts.tz === "string") {
+            const listed = (await callGatewayFromCli("cron.list", opts, {
+              includeDisabled: true,
+            })) as { jobs?: CronJob[] } | null;
+            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            if (!existing) {
+              throw new Error(`unknown cron job id: ${id}`);
+            }
+            if (existing.schedule.kind !== "cron") {
+              throw new Error("Current job is not a cron schedule; use --cron to convert first");
+            }
+            const tz =
+              typeof opts.tz === "string" ? opts.tz.trim() || undefined : existing.schedule.tz;
+            patch.schedule = {
+              kind: "cron",
+              expr: existing.schedule.expr,
+              tz,
+              staggerMs:
+                requestedStaggerMs !== undefined ? requestedStaggerMs : existing.schedule.staggerMs,
             };
           }
 

@@ -1,4 +1,3 @@
-import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
@@ -7,22 +6,7 @@ import {
   getChromeExtensionRelayAuthHeaders,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
-
-async function getFreePort(): Promise<number> {
-  while (true) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const s = createServer();
-      s.once("error", reject);
-      s.listen(0, "127.0.0.1", () => {
-        const assigned = (s.address() as AddressInfo).port;
-        s.close((err) => (err ? reject(err) : resolve(assigned)));
-      });
-    });
-    if (port < 65535) {
-      return port;
-    }
-  }
-}
+import { getFreePort } from "./test-port.js";
 
 function waitForOpen(ws: WebSocket) {
   return new Promise<void>((resolve, reject) => {
@@ -121,17 +105,20 @@ async function waitForListMatch<T>(
   timeoutMs = 2000,
   intervalMs = 50,
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const value = await fetchList();
-    if (predicate(value)) {
-      return value;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error("timeout waiting for list update");
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  let latest: T | undefined;
+  await expect
+    .poll(
+      async () => {
+        latest = await fetchList();
+        return predicate(latest);
+      },
+      { timeout: timeoutMs, interval: intervalMs },
+    )
+    .toBe(true);
+  if (latest === undefined) {
+    throw new Error("expected list value");
   }
+  return latest;
 }
 
 describe("chrome extension relay server", () => {
@@ -167,6 +154,23 @@ describe("chrome extension relay server", () => {
     expect(String(v2.webSocketDebuggerUrl ?? "")).toContain(`/cdp`);
 
     ext.close();
+  });
+
+  it("derives relay auth headers from gateway token for loopback URLs", async () => {
+    const port = await getFreePort();
+    const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token";
+    try {
+      const headers = getChromeExtensionRelayAuthHeaders(`http://127.0.0.1:${port}`);
+      expect(Object.keys(headers)).toContain("x-openclaw-relay-token");
+      expect((headers["x-openclaw-relay-token"] ?? "").length).toBeGreaterThan(20);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prev;
+      }
+    }
   });
 
   it("rejects CDP access without relay auth token", async () => {
@@ -365,5 +369,58 @@ describe("chrome extension relay server", () => {
 
     cdp.close();
     ext.close();
+  });
+
+  it("reuses an already-bound relay port when another process owns it", async () => {
+    const port = await getFreePort();
+    const fakeRelay = createServer((req, res) => {
+      if (req.url?.startsWith("/extension/status")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ connected: false }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("OK");
+    });
+    await new Promise<void>((resolve, reject) => {
+      fakeRelay.listen(port, "127.0.0.1", () => resolve());
+      fakeRelay.once("error", reject);
+    });
+
+    const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token";
+    try {
+      cdpUrl = `http://127.0.0.1:${port}`;
+      const relay = await ensureChromeExtensionRelayServer({ cdpUrl });
+      expect(relay.port).toBe(port);
+      const status = (await fetch(`${cdpUrl}/extension/status`).then((r) => r.json())) as {
+        connected?: boolean;
+      };
+      expect(status.connected).toBe(false);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prev;
+      }
+      await new Promise<void>((resolve) => fakeRelay.close(() => resolve()));
+    }
+  });
+
+  it("does not swallow EADDRINUSE when occupied port is not an openclaw relay", async () => {
+    const port = await getFreePort();
+    const blocker = createServer((_, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("not-relay");
+    });
+    await new Promise<void>((resolve, reject) => {
+      blocker.listen(port, "127.0.0.1", () => resolve());
+      blocker.once("error", reject);
+    });
+    const blockedUrl = `http://127.0.0.1:${port}`;
+    await expect(ensureChromeExtensionRelayServer({ cdpUrl: blockedUrl })).rejects.toThrow(
+      /EADDRINUSE/i,
+    );
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
   });
 });

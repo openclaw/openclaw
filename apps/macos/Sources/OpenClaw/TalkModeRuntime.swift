@@ -1,7 +1,7 @@
 import AVFoundation
+import Foundation
 import OpenClawChatUI
 import OpenClawKit
-import Foundation
 import OSLog
 import Speech
 
@@ -800,8 +800,8 @@ extension TalkModeRuntime {
 
         do {
             let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                method: .configGet,
-                params: nil,
+                method: .talkConfig,
+                params: ["includeSecrets": AnyCodable(true)],
                 timeoutMs: 8000)
             let talk = snap.config?["talk"]?.dictionaryValue
             let ui = snap.config?["ui"]?.dictionaryValue

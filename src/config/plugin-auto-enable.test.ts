@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 describe("applyPluginAutoEnable", () => {
-  it("configures channel plugins with disabled state and updates allowlist", () => {
+  it("auto-enables channel plugins and updates allowlist", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
@@ -11,9 +11,9 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "slack"]);
-    expect(result.changes.join("\n")).toContain("Slack configured, not enabled yet.");
+    expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
   });
 
   it("respects explicit disable", () => {
@@ -29,7 +29,20 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
-  it("configures provider auth plugins as disabled when profiles exist", () => {
+  it("auto-enables irc when configured via env", () => {
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: {
+        IRC_HOST: "irc.libera.chat",
+        IRC_NICK: "openclaw-bot",
+      },
+    });
+
+    expect(result.config.plugins?.entries?.irc?.enabled).toBe(true);
+    expect(result.changes.join("\n")).toContain("IRC configured, enabled automatically.");
+  });
+
+  it("auto-enables provider auth plugins when profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
         auth: {
@@ -44,7 +57,7 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-antigravity-auth"]?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.["google-antigravity-auth"]?.enabled).toBe(true);
   });
 
   it("skips when plugins are globally disabled", () => {
@@ -72,10 +85,12 @@ describe("applyPluginAutoEnable", () => {
         env: {},
       });
 
-      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
-      expect(result.changes.join("\n")).toContain("bluebubbles configured, not enabled yet.");
-      expect(result.changes.join("\n")).not.toContain("iMessage configured, not enabled yet.");
+      expect(result.changes.join("\n")).toContain("bluebubbles configured, enabled automatically.");
+      expect(result.changes.join("\n")).not.toContain(
+        "iMessage configured, enabled automatically.",
+      );
     });
 
     it("keeps imessage enabled if already explicitly enabled (non-destructive)", () => {
@@ -90,7 +105,7 @@ describe("applyPluginAutoEnable", () => {
         env: {},
       });
 
-      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
     });
 
@@ -107,8 +122,8 @@ describe("applyPluginAutoEnable", () => {
       });
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(false);
-      expect(result.changes.join("\n")).toContain("iMessage configured, not enabled yet.");
+      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
     });
 
     it("allows imessage auto-configure when bluebubbles is in deny list", () => {
@@ -124,10 +139,10 @@ describe("applyPluginAutoEnable", () => {
       });
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBeUndefined();
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
     });
 
-    it("configures imessage as disabled when only imessage is configured", () => {
+    it("auto-enables imessage when only imessage is configured", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { imessage: { cliPath: "/usr/local/bin/imsg" } },
@@ -135,8 +150,8 @@ describe("applyPluginAutoEnable", () => {
         env: {},
       });
 
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(false);
-      expect(result.changes.join("\n")).toContain("iMessage configured, not enabled yet.");
+      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
     });
   });
 });

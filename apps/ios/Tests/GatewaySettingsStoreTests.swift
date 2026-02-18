@@ -7,8 +7,8 @@ private struct KeychainEntry: Hashable {
     let account: String
 }
 
-private let gatewayService = "bot.molt.gateway"
-private let nodeService = "bot.molt.node"
+private let gatewayService = "ai.openclaw.gateway"
+private let nodeService = "ai.openclaw.node"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
@@ -123,5 +123,77 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
         #expect(defaults.string(forKey: "node.instanceId") == "node-from-keychain")
         #expect(defaults.string(forKey: "gateway.preferredStableID") == "preferred-from-keychain")
         #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == "last-from-keychain")
+    }
+
+    @Test func lastGateway_manualRoundTrip() {
+        let keys = [
+            "gateway.last.kind",
+            "gateway.last.host",
+            "gateway.last.port",
+            "gateway.last.tls",
+            "gateway.last.stableID",
+        ]
+        let snapshot = snapshotDefaults(keys)
+        defer { restoreDefaults(snapshot) }
+
+        GatewaySettingsStore.saveLastGatewayConnectionManual(
+            host: "example.com",
+            port: 443,
+            useTLS: true,
+            stableID: "manual|example.com|443")
+
+        let loaded = GatewaySettingsStore.loadLastGatewayConnection()
+        #expect(loaded == .manual(host: "example.com", port: 443, useTLS: true, stableID: "manual|example.com|443"))
+    }
+
+    @Test func lastGateway_discoveredDoesNotPersistResolvedHostPort() {
+        let keys = [
+            "gateway.last.kind",
+            "gateway.last.host",
+            "gateway.last.port",
+            "gateway.last.tls",
+            "gateway.last.stableID",
+        ]
+        let snapshot = snapshotDefaults(keys)
+        defer { restoreDefaults(snapshot) }
+
+        // Simulate a prior manual record that included host/port.
+        applyDefaults([
+            "gateway.last.host": "10.0.0.99",
+            "gateway.last.port": 18789,
+            "gateway.last.tls": true,
+            "gateway.last.stableID": "manual|10.0.0.99|18789",
+            "gateway.last.kind": "manual",
+        ])
+
+        GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: "gw|abc", useTLS: true)
+
+        let defaults = UserDefaults.standard
+        #expect(defaults.object(forKey: "gateway.last.host") == nil)
+        #expect(defaults.object(forKey: "gateway.last.port") == nil)
+        #expect(GatewaySettingsStore.loadLastGatewayConnection() == .discovered(stableID: "gw|abc", useTLS: true))
+    }
+
+    @Test func lastGateway_backCompat_manualLoadsWhenKindMissing() {
+        let keys = [
+            "gateway.last.kind",
+            "gateway.last.host",
+            "gateway.last.port",
+            "gateway.last.tls",
+            "gateway.last.stableID",
+        ]
+        let snapshot = snapshotDefaults(keys)
+        defer { restoreDefaults(snapshot) }
+
+        applyDefaults([
+            "gateway.last.kind": nil,
+            "gateway.last.host": "example.org",
+            "gateway.last.port": 18789,
+            "gateway.last.tls": false,
+            "gateway.last.stableID": "manual|example.org|18789",
+        ])
+
+        let loaded = GatewaySettingsStore.loadLastGatewayConnection()
+        #expect(loaded == .manual(host: "example.org", port: 18789, useTLS: false, stableID: "manual|example.org|18789"))
     }
 }

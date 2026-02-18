@@ -12,9 +12,9 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
-import type { VoiceCallProvider } from "./base.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
+import type { VoiceCallProvider } from "./base.js";
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */

@@ -1,7 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveBlueBubblesAccount } from "./accounts.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { postMultipartFormData } from "./multipart.js";
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesChatOpts = {
@@ -13,19 +15,15 @@ export type BlueBubblesChatOpts = {
 };
 
 function resolveAccount(params: BlueBubblesChatOpts) {
-  const account = resolveBlueBubblesAccount({
-    cfg: params.cfg ?? {},
-    accountId: params.accountId,
-  });
-  const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
-  const password = params.password?.trim() || account.config.password?.trim();
-  if (!baseUrl) {
-    throw new Error("BlueBubbles serverUrl is required");
+  return resolveBlueBubblesServerAccount(params);
+}
+
+function assertPrivateApiEnabled(accountId: string, feature: string): void {
+  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
+    throw new Error(
+      `BlueBubbles ${feature} requires Private API, but it is disabled on the BlueBubbles server.`,
+    );
   }
-  if (!password) {
-    throw new Error("BlueBubbles password is required");
-  }
-  return { baseUrl, password };
 }
 
 export async function markBlueBubblesChatRead(
@@ -36,7 +34,10 @@ export async function markBlueBubblesChatRead(
   if (!trimmed) {
     return;
   }
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
+    return;
+  }
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmed)}/read`,
@@ -58,7 +59,10 @@ export async function sendBlueBubblesTyping(
   if (!trimmed) {
     return;
   }
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
+    return;
+  }
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmed)}/typing`,
@@ -93,7 +97,8 @@ export async function editBlueBubblesMessage(
     throw new Error("BlueBubbles edit requires newText");
   }
 
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  assertPrivateApiEnabled(accountId, "edit");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/message/${encodeURIComponent(trimmedGuid)}/edit`,
@@ -135,7 +140,8 @@ export async function unsendBlueBubblesMessage(
     throw new Error("BlueBubbles unsend requires messageGuid");
   }
 
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  assertPrivateApiEnabled(accountId, "unsend");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/message/${encodeURIComponent(trimmedGuid)}/unsend`,
@@ -175,7 +181,8 @@ export async function renameBlueBubblesChat(
     throw new Error("BlueBubbles rename requires chatGuid");
   }
 
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  assertPrivateApiEnabled(accountId, "renameGroup");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}`,
@@ -215,7 +222,8 @@ export async function addBlueBubblesParticipant(
     throw new Error("BlueBubbles addParticipant requires address");
   }
 
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  assertPrivateApiEnabled(accountId, "addParticipant");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/participant`,
@@ -255,7 +263,8 @@ export async function removeBlueBubblesParticipant(
     throw new Error("BlueBubbles removeParticipant requires address");
   }
 
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  assertPrivateApiEnabled(accountId, "removeParticipant");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/participant`,
@@ -292,7 +301,8 @@ export async function leaveBlueBubblesChat(
     throw new Error("BlueBubbles leaveChat requires chatGuid");
   }
 
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  assertPrivateApiEnabled(accountId, "leaveGroup");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/leave`,
@@ -325,7 +335,8 @@ export async function setGroupIconBlueBubbles(
     throw new Error("BlueBubbles setGroupIcon requires image buffer");
   }
 
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, accountId } = resolveAccount(opts);
+  assertPrivateApiEnabled(accountId, "setGroupIcon");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/icon`,
@@ -354,26 +365,12 @@ export async function setGroupIconBlueBubbles(
   // Close multipart body
   parts.push(encoder.encode(`--${boundary}--\r\n`));
 
-  // Combine into single buffer
-  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
-  const body = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    body.set(part, offset);
-    offset += part.length;
-  }
-
-  const res = await blueBubblesFetchWithTimeout(
+  const res = await postMultipartFormData({
     url,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-      },
-      body,
-    },
-    opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-  );
+    boundary,
+    parts,
+    timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+  });
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => "");

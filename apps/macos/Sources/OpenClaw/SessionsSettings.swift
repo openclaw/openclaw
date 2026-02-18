@@ -85,7 +85,6 @@ struct SessionsSettings: View {
         }
     }
 
-    @ViewBuilder
     private func sessionRow(_ row: SessionRow) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {

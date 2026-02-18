@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import type { MessageCliHelpers } from "./helpers.js";
 import { CHANNEL_TARGETS_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
+import type { MessageCliHelpers } from "./helpers.js";
 
 export function registerMessageBroadcastCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
