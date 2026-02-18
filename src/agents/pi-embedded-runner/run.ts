@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -189,6 +190,7 @@ export async function runEmbeddedPiAgent(
         : "plain"
       : "markdown");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+  const diagnosticsEnabled = isDiagnosticsEnabled(params.config);
 
   return enqueueSession(() =>
     enqueueGlobal(async () => {
@@ -212,6 +214,39 @@ export async function runEmbeddedPiAgent(
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const emitOverflowRecoveryEvent = (event: {
+        stage: "detected" | "decision" | "action" | "result" | "finalized";
+        branch?:
+          | "retry_after_in_attempt_compaction"
+          | "compact"
+          | "truncate_tool_results"
+          | "give_up"
+          | "reset_after_compaction_failure"
+          | "fallback_payload_returned"
+          | "fallback_payload_injected_after_empty";
+        outcome?: "retrying" | "compacted" | "truncated" | "failed" | "returned_error_payload";
+        attempt?: number;
+        maxAttempts?: number;
+        errorKind?: "context_overflow" | "compaction_failure";
+        reasonClass?:
+          | "prompt_error"
+          | "assistant_error"
+          | "embedded_meta_error"
+          | "empty_payload_after_error";
+      }) => {
+        if (!diagnosticsEnabled) {
+          return;
+        }
+        emitDiagnosticEvent({
+          type: "overflow.recovery",
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          provider,
+          model: modelId,
+          ...event,
+        });
+      };
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
@@ -607,8 +642,19 @@ export async function runEmbeddedPiAgent(
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
-            const isCompactionFailure = isCompactionFailureError(errorText);
+            const isCompactionFailure =
+              isCompactionFailureError(errorText) || /summarization failed/i.test(errorText);
+            const errorKind = isCompactionFailure ? "compaction_failure" : "context_overflow";
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            const reasonClass =
+              contextOverflowError.source === "promptError" ? "prompt_error" : "assistant_error";
+            emitOverflowRecoveryEvent({
+              stage: "detected",
+              attempt: overflowCompactionAttempts,
+              maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+              errorKind,
+              reasonClass,
+            });
             // If this attempt already compacted (SDK auto-compaction), avoid immediately
             // running another explicit compaction for the same overflow trigger.
             if (
@@ -617,6 +663,15 @@ export async function runEmbeddedPiAgent(
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
               overflowCompactionAttempts++;
+              emitOverflowRecoveryEvent({
+                stage: "decision",
+                branch: "retry_after_in_attempt_compaction",
+                outcome: "retrying",
+                attempt: overflowCompactionAttempts,
+                maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                errorKind,
+                reasonClass,
+              });
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
@@ -637,9 +692,26 @@ export async function runEmbeddedPiAgent(
                 );
               }
               overflowCompactionAttempts++;
+              emitOverflowRecoveryEvent({
+                stage: "decision",
+                branch: "compact",
+                outcome: "retrying",
+                attempt: overflowCompactionAttempts,
+                maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                errorKind,
+                reasonClass,
+              });
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
+              emitOverflowRecoveryEvent({
+                stage: "action",
+                branch: "compact",
+                attempt: overflowCompactionAttempts,
+                maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                errorKind,
+                reasonClass,
+              });
               const compactResult = await compactEmbeddedPiSessionDirect({
                 sessionId: params.sessionId,
                 sessionKey: params.sessionKey,
@@ -666,19 +738,38 @@ export async function runEmbeddedPiAgent(
                 attempt: overflowCompactionAttempts,
                 maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
               });
-              if (compactResult.compacted) {
+              if (compactResult?.compacted) {
+                emitOverflowRecoveryEvent({
+                  stage: "result",
+                  branch: "compact",
+                  outcome: "compacted",
+                  attempt: overflowCompactionAttempts,
+                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  errorKind,
+                  reasonClass,
+                });
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }
+              emitOverflowRecoveryEvent({
+                stage: "result",
+                branch: "compact",
+                outcome: "failed",
+                attempt: overflowCompactionAttempts,
+                maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                errorKind,
+                reasonClass,
+              });
               log.warn(
-                `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+                `auto-compaction failed for ${provider}/${modelId}: ${compactResult?.reason ?? "nothing to compact"}`,
               );
             }
             // Fallback: try truncating oversized tool results in the session.
             // This handles the case where a single tool result exceeds the
             // context window and compaction cannot reduce it further.
             if (!toolResultTruncationAttempted) {
+              let didEmitGiveUpDecision = false;
               const contextWindowTokens = ctxInfo.tokens;
               const hasOversized = attempt.messagesSnapshot
                 ? sessionLikelyHasOversizedToolResults({
@@ -688,6 +779,15 @@ export async function runEmbeddedPiAgent(
                 : false;
 
               if (hasOversized) {
+                emitOverflowRecoveryEvent({
+                  stage: "decision",
+                  branch: "truncate_tool_results",
+                  outcome: "retrying",
+                  attempt: overflowCompactionAttempts,
+                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  errorKind,
+                  reasonClass,
+                });
                 if (log.isEnabled("debug")) {
                   log.debug(
                     `[compaction-diag] decision diagId=${overflowDiagId} branch=truncate_tool_results ` +
@@ -700,6 +800,14 @@ export async function runEmbeddedPiAgent(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
+                emitOverflowRecoveryEvent({
+                  stage: "action",
+                  branch: "truncate_tool_results",
+                  attempt: overflowCompactionAttempts,
+                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  errorKind,
+                  reasonClass,
+                });
                 const truncResult = await truncateOversizedToolResultsInSession({
                   sessionFile: params.sessionFile,
                   contextWindowTokens,
@@ -707,6 +815,15 @@ export async function runEmbeddedPiAgent(
                   sessionKey: params.sessionKey,
                 });
                 if (truncResult.truncated) {
+                  emitOverflowRecoveryEvent({
+                    stage: "result",
+                    branch: "truncate_tool_results",
+                    outcome: "truncated",
+                    attempt: overflowCompactionAttempts,
+                    maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                    errorKind,
+                    reasonClass,
+                  });
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
@@ -714,15 +831,52 @@ export async function runEmbeddedPiAgent(
                   overflowCompactionAttempts = 0;
                   continue;
                 }
+                emitOverflowRecoveryEvent({
+                  stage: "result",
+                  branch: "truncate_tool_results",
+                  outcome: "failed",
+                  attempt: overflowCompactionAttempts,
+                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  errorKind,
+                  reasonClass,
+                });
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
                 );
-              } else if (log.isEnabled("debug")) {
-                log.debug(
-                  `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
-                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-                );
+              } else {
+                emitOverflowRecoveryEvent({
+                  stage: "decision",
+                  branch: "give_up",
+                  outcome: "failed",
+                  attempt: overflowCompactionAttempts,
+                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  errorKind,
+                  reasonClass,
+                });
+                didEmitGiveUpDecision = true;
+                if (log.isEnabled("debug")) {
+                  log.debug(
+                    `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
+                      `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
+                      `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                  );
+                }
+              }
+              if (
+                (isCompactionFailure ||
+                  overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS ||
+                  toolResultTruncationAttempted) &&
+                !didEmitGiveUpDecision
+              ) {
+                emitOverflowRecoveryEvent({
+                  stage: "decision",
+                  branch: "give_up",
+                  outcome: "failed",
+                  attempt: overflowCompactionAttempts,
+                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  errorKind,
+                  reasonClass,
+                });
               }
             }
             if (
@@ -738,6 +892,15 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            emitOverflowRecoveryEvent({
+              stage: "finalized",
+              branch: "give_up",
+              outcome: "returned_error_payload",
+              attempt: overflowCompactionAttempts,
+              maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+              errorKind: kind,
+              reasonClass,
+            });
             return {
               payloads: [
                 {

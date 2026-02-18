@@ -147,6 +147,33 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticOverflowRecoveryEvent = DiagnosticBaseEvent & {
+  type: "overflow.recovery";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  stage: "detected" | "decision" | "action" | "result" | "finalized";
+  branch?:
+    | "retry_after_in_attempt_compaction"
+    | "compact"
+    | "truncate_tool_results"
+    | "give_up"
+    | "reset_after_compaction_failure"
+    | "fallback_payload_returned"
+    | "fallback_payload_injected_after_empty";
+  outcome?: "retrying" | "compacted" | "truncated" | "failed" | "returned_error_payload";
+  attempt?: number;
+  maxAttempts?: number;
+  errorKind?: "context_overflow" | "compaction_failure";
+  reasonClass?:
+    | "prompt_error"
+    | "assistant_error"
+    | "embedded_meta_error"
+    | "empty_payload_after_error";
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -160,7 +187,8 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticOverflowRecoveryEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

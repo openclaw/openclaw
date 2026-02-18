@@ -105,6 +105,30 @@ describe("infra store", () => {
 
       expect(types).toEqual(["webhook.received", "message.queued", "session.state"]);
     });
+
+    it("emits overflow recovery events", async () => {
+      resetDiagnosticEventsForTest();
+      const types: string[] = [];
+      const stop = onDiagnosticEvent((evt) => types.push(evt.type));
+
+      emitDiagnosticEvent({
+        type: "overflow.recovery",
+        runId: "run-1",
+        sessionKey: "main",
+        sessionId: "session-1",
+        provider: "anthropic",
+        model: "claude",
+        stage: "finalized",
+        branch: "give_up",
+        outcome: "returned_error_payload",
+        errorKind: "context_overflow",
+        reasonClass: "prompt_error",
+      });
+
+      stop();
+
+      expect(types).toEqual(["overflow.recovery"]);
+    });
   });
 
   describe("channel activity", () => {

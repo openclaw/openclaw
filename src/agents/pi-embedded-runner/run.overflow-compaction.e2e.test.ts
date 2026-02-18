@@ -47,6 +47,7 @@ vi.mock("../pi-embedded-helpers.js", async () => {
   };
 });
 
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { log } from "./logger.js";
 import { runEmbeddedPiAgent } from "./run.js";
@@ -73,11 +74,15 @@ const baseParams = {
   prompt: "hello",
   timeoutMs: 30000,
   runId: "run-1",
+  config: {
+    diagnostics: { enabled: true },
+  },
 };
 
 describe("overflow compaction in run loop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticEventsForTest();
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
       truncated: false,
@@ -136,6 +141,23 @@ describe("overflow compaction in run loop", () => {
 
   it("returns error if compaction fails", async () => {
     const overflowError = new Error("request_too_large: Request size exceeds model context window");
+    const overflowEvents: Array<{
+      stage: string;
+      branch?: string;
+      outcome?: string;
+      reasonClass?: string;
+    }> = [];
+    const stop = onDiagnosticEvent((evt) => {
+      if (evt.type !== "overflow.recovery") {
+        return;
+      }
+      overflowEvents.push({
+        stage: evt.stage,
+        branch: evt.branch,
+        outcome: evt.outcome,
+        reasonClass: evt.reasonClass,
+      });
+    });
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
 
@@ -152,10 +174,34 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
+    expect(overflowEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: "detected", reasonClass: "prompt_error" }),
+        expect.objectContaining({ stage: "decision", branch: "compact" }),
+        expect.objectContaining({ stage: "result", branch: "compact", outcome: "failed" }),
+        expect.objectContaining({
+          stage: "finalized",
+          branch: "give_up",
+          outcome: "returned_error_payload",
+        }),
+      ]),
+    );
+    stop();
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
     const overflowError = new Error("request_too_large: Request size exceeds model context window");
+    const overflowEvents: Array<{ stage: string; branch?: string; outcome?: string }> = [];
+    const stop = onDiagnosticEvent((evt) => {
+      if (evt.type !== "overflow.recovery") {
+        return;
+      }
+      overflowEvents.push({
+        stage: evt.stage,
+        branch: evt.branch,
+        outcome: evt.outcome,
+      });
+    });
 
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
@@ -194,6 +240,17 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining("Truncated 1 tool result(s)"));
     expect(result.meta.error).toBeUndefined();
+    expect(overflowEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: "decision", branch: "truncate_tool_results" }),
+        expect.objectContaining({
+          stage: "result",
+          branch: "truncate_tool_results",
+          outcome: "truncated",
+        }),
+      ]),
+    );
+    stop();
   });
 
   it("retries compaction up to 3 times before giving up", async () => {
