@@ -138,7 +138,6 @@ function buildConnectCommand(target: RemoteExecTarget): string {
 
   if (target.host === "remote-container") {
     const shellTokens = parseShellTokens(target.containerShell);
-    const dockerExec = ["docker", "exec", "-it", target.containerName, ...shellTokens];
     if (target.containerContext?.trim()) {
       return quoteCommandArgs([
         "docker",
@@ -151,6 +150,7 @@ function buildConnectCommand(target: RemoteExecTarget): string {
       ]);
     }
     if (target.containerSshTarget?.trim()) {
+      const dockerExec = ["docker", "exec", "-it", target.containerName, ...shellTokens];
       return quoteCommandArgs(
         buildSshConnectArgs({
           sshTarget: target.containerSshTarget.trim(),
