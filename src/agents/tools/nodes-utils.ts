@@ -1,54 +1,13 @@
+import type {
+  NodeListNode,
+  PairedNode,
+  PairingList,
+  PendingRequest,
+} from "../../shared/node-list-types.js";
 import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
-export type NodeListNode = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  paired?: boolean;
-  connected?: boolean;
-};
-
-type PendingRequest = {
-  requestId: string;
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
-  isRepair?: boolean;
-  ts: number;
-};
-
-type PairedNode = {
-  nodeId: string;
-  token?: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
-  permissions?: Record<string, boolean>;
-  createdAtMs?: number;
-  approvedAtMs?: number;
-};
-
-type PairingList = {
-  pending: PendingRequest[];
-  paired: PairedNode[];
-};
+export type { NodeListNode };
 
 function parseNodeList(value: unknown): NodeListNode[] {
   const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
