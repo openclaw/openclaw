@@ -1,3 +1,4 @@
+import { isBlockedHostname, isPrivateIpAddress } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
@@ -163,6 +164,30 @@ export async function navigateViaPlaywright(opts: {
   if (!url) {
     throw new Error("url is required");
   }
+
+  // SSRF validation
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Invalid URL");
+  }
+
+  // Block dangerous protocols
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Protocol not allowed: ${parsed.protocol}`);
+  }
+
+  // Block internal hostnames
+  if (isBlockedHostname(parsed.hostname)) {
+    throw new Error(`Blocked hostname: ${parsed.hostname}`);
+  }
+
+  // Block private IP literals
+  if (isPrivateIpAddress(parsed.hostname)) {
+    throw new Error("Blocked: private/internal IP address");
+  }
+
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.goto(url, {
