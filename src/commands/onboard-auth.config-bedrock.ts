@@ -118,7 +118,10 @@ export function setBedrockApiKey(
   apiKey: string,
   _agentDir?: string,
 ): { path: string; region: string } {
-  const region = BEDROCK_DEFAULT_REGION;
+  const region =
+    process.env.AWS_REGION?.trim() ||
+    process.env.AWS_DEFAULT_REGION?.trim() ||
+    BEDROCK_DEFAULT_REGION;
 
   const result = upsertSharedEnvVar({
     key: "AWS_BEARER_TOKEN_BEDROCK",
