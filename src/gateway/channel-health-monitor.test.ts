@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
 
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
@@ -322,9 +322,9 @@ describe("channel-health-monitor", () => {
   });
 
   it("runs checks single-flight when restart work is still in progress", async () => {
-    let releaseStart: (() => void) | null = null;
+    let releaseStart: (() => void) | undefined;
     const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
+      releaseStart = () => resolve();
     });
     const manager = createMockChannelManager({
       getRuntimeSnapshot: vi.fn(() =>
