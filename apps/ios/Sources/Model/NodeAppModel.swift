@@ -127,6 +127,8 @@ final class NodeAppModel {
     private var operatorConnected = false
     private var shareDeliveryChannel: String?
     private var shareDeliveryTo: String?
+    private var apnsDeviceTokenHex: String?
+    private var apnsLastRegisteredTokenHex: String?
     var gatewaySession: GatewayNodeSession { self.nodeGateway }
     var operatorSession: GatewayNodeSession { self.operatorGateway }
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -164,6 +166,7 @@ final class NodeAppModel {
         self.motionService = motionService
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
+        self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         GatewayDiagnostics.bootstrap()
 
         self.voiceWake.configure { [weak self] cmd in
@@ -409,6 +412,14 @@ final class NodeAppModel {
     }
 
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
+    private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
+    private static var apnsEnvironment: String {
+#if DEBUG
+        "sandbox"
+#else
+        "production"
+#endif
+    }
 
     private static func color(fromHex raw: String?) -> Color? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1702,6 +1713,7 @@ private extension NodeAppModel {
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
+        self.apnsLastRegisteredTokenHex = nil
     }
 
     func startOperatorGatewayLoop(
@@ -2109,7 +2121,55 @@ extension NodeAppModel {
     }
 
     /// Back-compat hook retained for older gateway-connect flows.
-    func onNodeGatewayConnected() async {}
+    func onNodeGatewayConnected() async {
+        await self.registerAPNsTokenIfNeeded()
+    }
+
+    func updateAPNsDeviceToken(_ tokenData: Data) {
+        let tokenHex = tokenData.map { String(format: "%02x", $0) }.joined()
+        let trimmed = tokenHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        self.apnsDeviceTokenHex = trimmed
+        UserDefaults.standard.set(trimmed, forKey: Self.apnsDeviceTokenUserDefaultsKey)
+        Task { [weak self] in
+            await self?.registerAPNsTokenIfNeeded()
+        }
+    }
+
+    private func registerAPNsTokenIfNeeded() async {
+        guard self.gatewayConnected else { return }
+        guard let token = self.apnsDeviceTokenHex?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty
+        else {
+            return
+        }
+        if token == self.apnsLastRegisteredTokenHex {
+            return
+        }
+        guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !topic.isEmpty
+        else {
+            return
+        }
+
+        struct PushRegistrationPayload: Codable {
+            var token: String
+            var topic: String
+            var environment: String
+        }
+
+        let payload = PushRegistrationPayload(
+            token: token,
+            topic: topic,
+            environment: Self.apnsEnvironment)
+        do {
+            let json = try Self.encodePayload(payload)
+            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: json)
+            self.apnsLastRegisteredTokenHex = token
+        } catch {
+            // Best-effort only.
+        }
+    }
 }
 
 #if DEBUG
