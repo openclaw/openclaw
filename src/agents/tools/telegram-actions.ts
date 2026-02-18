@@ -245,7 +245,8 @@ export async function handleTelegramAction(
       {
         question,
         options,
-        maxSelections: maxSelections ?? (allowMultiselect ? Math.max(2, options.length) : undefined),
+        maxSelections:
+          maxSelections ?? (allowMultiselect ? Math.max(2, options.length) : undefined),
         durationSeconds: durationSeconds ?? undefined,
         durationHours: durationHours ?? undefined,
       },
