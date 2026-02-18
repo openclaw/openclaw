@@ -423,27 +423,21 @@ function extractFirstUserMessageFromTranscriptChunk(
   return null;
 }
 
-export function readFirstUserMessageFromTranscript(
+function findExistingTranscriptPath(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
-  opts?: { includeInterSession?: boolean },
 ): string | null {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
-    return null;
-  }
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
 
+function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | null): T | null {
   let fd: number | null = null;
   try {
     fd = fs.openSync(filePath, "r");
-    const chunk = readTranscriptHeadChunk(fd);
-    if (!chunk) {
-      return null;
-    }
-    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+    return read(fd);
   } catch {
     // file read error
   } finally {
@@ -452,6 +446,27 @@ export function readFirstUserMessageFromTranscript(
     }
   }
   return null;
+}
+
+export function readFirstUserMessageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+  opts?: { includeInterSession?: boolean },
+): string | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const chunk = readTranscriptHeadChunk(fd);
+    if (!chunk) {
+      return null;
+    }
+    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+  });
 }
 
 const LAST_MSG_MAX_BYTES = 16384;
@@ -495,29 +510,19 @@ export function readLastMessagePreviewFromTranscript(
   sessionFile?: string,
   agentId?: string,
 ): string | null {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return null;
   }
 
-  let fd: number | null = null;
-  try {
-    fd = fs.openSync(filePath, "r");
+  return withOpenTranscriptFd(filePath, (fd) => {
     const stat = fs.fstatSync(fd);
     const size = stat.size;
     if (size === 0) {
       return null;
     }
     return readLastMessagePreviewFromOpenTranscript({ fd, size });
-  } catch {
-    // file error
-  } finally {
-    if (fd !== null) {
-      fs.closeSync(fd);
-    }
-  }
-  return null;
+  });
 }
 
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
