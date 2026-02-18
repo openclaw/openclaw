@@ -21,6 +21,7 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
+    sessionKey?: string;
   },
 ): Promise<{
   channel: Exclude<OutboundChannel, "none">;
@@ -38,7 +39,12 @@ export async function resolveDeliveryTarget(
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const main = store[mainSessionKey];
+
+  // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
+  // then fall back to the main session entry.
+  const threadSessionKey = jobPayload.sessionKey?.trim();
+  const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
+  const main = threadEntry ?? store[mainSessionKey];
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -86,12 +92,13 @@ export async function resolveDeliveryTarget(
     }
   }
 
-  // Only carry threadId when delivering to the same recipient as the session's
-  // last conversation. This prevents stale thread IDs (e.g. from a Telegram
-  // supergroup topic) from being sent to a different target (e.g. a private
-  // chat) where they would cause API errors.
+  // Carry threadId when it was explicitly set (from :topic: parsing or config)
+  // or when delivering to the same recipient as the session's last conversation.
+  // Session-derived threadIds are dropped when the target differs to prevent
+  // stale thread IDs from leaking to a different chat.
   const threadId =
-    resolved.threadId && resolved.to && resolved.to === resolved.lastTo
+    resolved.threadId &&
+    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
       ? resolved.threadId
       : undefined;
 
