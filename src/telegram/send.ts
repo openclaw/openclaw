@@ -6,6 +6,7 @@ import type {
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
 import type { RetryConfig } from "../infra/retry.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -18,15 +19,21 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramThreadParams,
+  resolveTelegramForumThreadId,
+} from "./bot/helpers.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { recordSentPoll } from "./poll-vote-cache.js";
+import { recordSentPollContext } from "./poll-answer-cache.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
@@ -1017,12 +1024,10 @@ export async function sendPollTelegram(
     input: to,
   });
 
-  const durationSeconds = normalizedPoll.durationSeconds;
-  if (durationSeconds === undefined && normalizedPoll.durationHours !== undefined) {
-    throw new Error(
-      "Telegram poll durationHours is not supported. Use durationSeconds (5-600) instead.",
-    );
-  }
+  const durationSeconds =
+    normalizedPoll.durationSeconds ??
+    (normalizedPoll.durationHours ? normalizedPoll.durationHours * 3600 : undefined);
+
   if (durationSeconds !== undefined && (durationSeconds < 5 || durationSeconds > 600)) {
     throw new Error("Telegram poll durationSeconds must be between 5 and 600");
   }
@@ -1069,6 +1074,29 @@ export async function sendPollTelegram(
     accountId: account.accountId,
     direction: "outbound",
   });
+
+  if (pollId) {
+    const isGroup = chatId.startsWith("-");
+    const resolvedThreadId = resolveTelegramForumThreadId({
+      isForum: isGroup,
+      messageThreadId: target.messageThreadId ?? opts.messageThreadId ?? undefined,
+    });
+    const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: account.accountId,
+      peer: { kind: isGroup ? "group" : "direct", id: peerId },
+    });
+    recordSentPollContext({
+      pollId,
+      sessionKey: route.sessionKey || `agent:${resolveDefaultAgentId(cfg)}:main`,
+      question: normalizedPoll.question,
+      options: normalizedPoll.options,
+      chatId: resolvedChatId,
+      messageId,
+    });
+  }
 
   return { messageId, chatId: resolvedChatId, pollId };
 }

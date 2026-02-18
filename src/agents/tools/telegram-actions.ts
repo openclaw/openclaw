@@ -200,20 +200,26 @@ export async function handleTelegramAction(
     });
   }
 
-  if (action === "poll") {
+  if (action === "sendPoll" || action === "poll") {
     if (!isActionEnabled("polls")) {
       throw new Error("Telegram polls are disabled.");
     }
     const to = readStringParam(params, "to", { required: true });
     const question = readStringParam(params, "question", { required: true });
-    const options = params.options ?? params.answers;
-    if (!Array.isArray(options)) {
-      throw new Error("options must be an array of strings");
+    const optionsRaw = params.options ?? params.answers;
+    if (!Array.isArray(optionsRaw)) {
+      throw new Error("options must be an array");
     }
-    const pollOptions = options.filter((option): option is string => typeof option === "string");
-    if (pollOptions.length !== options.length) {
-      throw new Error("options must be an array of strings");
+    const options = optionsRaw
+      .map((entry) => (typeof entry === "string" ? entry : String(entry ?? "")))
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (options.length < 2) {
+      throw new Error("options requires at least two values");
     }
+    const maxSelections = readNumberParam(params, "maxSelections", { integer: true });
+    const allowMultiselect =
+      typeof params.allowMultiselect === "boolean" ? params.allowMultiselect : undefined;
     const durationSeconds = readNumberParam(params, "durationSeconds", {
       integer: true,
     });
@@ -226,8 +232,8 @@ export async function handleTelegramAction(
     const messageThreadId = readNumberParam(params, "messageThreadId", {
       integer: true,
     });
-    const maxSelections =
-      typeof params.allowMultiselect === "boolean" && params.allowMultiselect ? 2 : 1;
+    const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+    const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -238,8 +244,8 @@ export async function handleTelegramAction(
       to,
       {
         question,
-        options: pollOptions,
-        maxSelections,
+        options,
+        maxSelections: maxSelections ?? (allowMultiselect ? Math.max(2, options.length) : undefined),
         durationSeconds: durationSeconds ?? undefined,
         durationHours: durationHours ?? undefined,
       },
@@ -248,8 +254,8 @@ export async function handleTelegramAction(
         accountId: accountId ?? undefined,
         replyToMessageId: replyToMessageId ?? undefined,
         messageThreadId: messageThreadId ?? undefined,
-        silent: typeof params.silent === "boolean" ? params.silent : undefined,
-        isAnonymous: typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined,
+        silent,
+        isAnonymous,
       },
     );
     return jsonResult({

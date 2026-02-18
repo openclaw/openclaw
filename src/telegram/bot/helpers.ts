@@ -161,7 +161,7 @@ export function resolveTelegramStreamMode(telegramCfg?: {
   if (raw === "off" || raw === "partial" || raw === "block") {
     return raw;
   }
-  return "partial";
+  return "off";
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {

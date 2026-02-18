@@ -5,6 +5,7 @@ import {
   expandTextLinks,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
+  resolveTelegramStreamMode,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -82,6 +83,13 @@ describe("buildTypingThreadParams", () => {
 
   it("normalizes thread ids to integers", () => {
     expect(buildTypingThreadParams(42.9)).toEqual({ message_thread_id: 42 });
+  });
+});
+
+describe("resolveTelegramStreamMode", () => {
+  it("defaults to off when not configured", () => {
+    expect(resolveTelegramStreamMode(undefined)).toBe("off");
+    expect(resolveTelegramStreamMode({})).toBe("off");
   });
 });
 

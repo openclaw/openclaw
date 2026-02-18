@@ -48,6 +48,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     const gate = createActionGate(cfg.channels?.telegram?.actions);
     const actions = new Set<ChannelMessageActionName>(["send"]);
+    actions.add("poll");
     if (gate("reactions")) {
       actions.add("react");
     }
@@ -87,6 +88,48 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         {
           action: "sendMessage",
           ...sendParams,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      if (options.length < 2) {
+        throw new Error("pollOption requires at least two values");
+      }
+      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : false;
+      const pollAnonymous =
+        typeof params.pollAnonymous === "boolean" ? params.pollAnonymous : undefined;
+      const pollPublic = typeof params.pollPublic === "boolean" ? params.pollPublic : undefined;
+      if (pollAnonymous && pollPublic) {
+        throw new Error("pollAnonymous and pollPublic are mutually exclusive");
+      }
+      const isAnonymous = pollAnonymous ? true : pollPublic ? false : undefined;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
+        integer: true,
+      });
+      const durationHours = readNumberParam(params, "pollDurationHours", {
+        integer: true,
+      });
+      const threadId = readNumberParam(params, "threadId", { integer: true });
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+      return await handleTelegramAction(
+        {
+          action: "sendPoll",
+          to,
+          question,
+          options,
+          maxSelections,
+          durationSeconds: durationSeconds ?? undefined,
+          durationHours: durationHours ?? undefined,
+          messageThreadId: threadId ?? undefined,
+          silent,
+          isAnonymous,
           accountId: accountId ?? undefined,
         },
         cfg,

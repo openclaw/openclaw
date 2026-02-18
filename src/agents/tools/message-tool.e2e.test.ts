@@ -93,6 +93,17 @@ describe("message tool path passthrough", () => {
   });
 });
 
+describe("message tool poll schema", () => {
+  it("exposes telegram poll-specific fields", () => {
+    const tool = createMessageTool({ config: {} as never });
+    const schema = tool.parameters as { properties?: Record<string, unknown> };
+    const props = schema.properties ?? {};
+    expect(props.pollDurationSeconds).toBeTruthy();
+    expect(props.pollAnonymous).toBeTruthy();
+    expect(props.pollPublic).toBeTruthy();
+  });
+});
+
 describe("message tool description", () => {
   const bluebubblesPlugin: ChannelPlugin = {
     id: "bluebubbles",

@@ -10,5 +10,8 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
   if (!updates.includes("message_reaction")) {
     updates.push("message_reaction");
   }
+  if (!updates.includes("poll_answer")) {
+    updates.push("poll_answer");
+  }
   return updates;
 }

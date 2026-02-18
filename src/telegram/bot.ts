@@ -27,6 +27,7 @@ import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -43,6 +44,7 @@ import {
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { enqueuePollAnswerEvent } from "./poll-answer-cache.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotOptions = {
@@ -443,6 +445,45 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
+    }
+  });
+
+  // Handle poll votes and route them back into the originating session.
+  bot.on("poll_answer", async (ctx) => {
+    try {
+      const answer = ctx.pollAnswer;
+      if (!answer) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+      const user = answer.user;
+      const senderName = user
+        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
+        : undefined;
+      const senderUsername = user?.username ? `@${user.username}` : undefined;
+      const senderLabel = senderName
+        ? senderUsername
+          ? `${senderName} (${senderUsername})`
+          : senderName
+        : senderUsername || (user?.id ? `id:${user.id}` : "unknown");
+
+      const summary = enqueuePollAnswerEvent({
+        pollId: answer.poll_id,
+        userLabel: senderLabel,
+        optionIds: answer.option_ids ?? [],
+      });
+      if (summary?.chatId) {
+        const ackText = `Got it. You selected: ${summary.selectionText}`;
+        await withTelegramApiErrorLogging({
+          operation: "poll_answer_ack",
+          runtime,
+          fn: () => bot.api.sendMessage(summary.chatId as string, ackText),
+        });
+      }
+    } catch (err) {
+      runtime.error?.(danger(`telegram poll answer handler failed: ${String(err)}`));
     }
   });
 
