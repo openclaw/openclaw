@@ -50,6 +50,11 @@ describe("profile CRUD endpoints", () => {
     state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
     state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+    // Avoid auth coupling: if OPENCLAW_GATEWAY_TOKEN is set on the developer's
+    // machine, the browser control server would require auth and return 401
+    // instead of the 400/404 status codes these tests assert on.
+    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
     vi.stubGlobal(
       "fetch",
@@ -70,6 +75,11 @@ describe("profile CRUD endpoints", () => {
       delete process.env.OPENCLAW_GATEWAY_PORT;
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
+    }
+    if (state.prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
     }
     await stopBrowserControlServer();
   });
