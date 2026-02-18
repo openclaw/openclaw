@@ -496,6 +496,7 @@ export async function startGatewayServer(
       } else if (typeof msg.content === "string") {
         text = msg.content;
       }
+      text = text?.trim() ?? "";
 
       let source: "user" | "agent" | undefined;
       if (role === "user") {
