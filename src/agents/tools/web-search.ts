@@ -744,7 +744,19 @@ export function createWebSearchTool(options?: {
         return jsonResult(missingSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;
-      const query = readStringParam(params, "query", { required: true });
+      const query =
+        readStringParam(params, "query", { required: true, allowEmpty: true })?.trim() ?? "";
+      if (!query) {
+        return jsonResult({
+          query: "",
+          provider,
+          count: 0,
+          results: [],
+          content: "", // For Perplexity/Grok consistency
+          citations: [],
+        });
+      }
+
       const count =
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
       const country = readStringParam(params, "country");
