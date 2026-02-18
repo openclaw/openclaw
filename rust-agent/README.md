@@ -72,6 +72,7 @@ systemctl --user status openclaw-agent-rs.service
 - Extends `sessions.history` lookups to accept `key` aliases and direct `sessionId` lookups.
 - Matches upstream patch semantics where `reasoningLevel="off"` and `responseUsage="off"` clear stored overrides.
 - Preserves caller-provided key strings in `sessions.preview` results while still resolving canonical aliases internally.
+- Tightens session label parity to upstream rules (max 64 chars, over-limit values rejected instead of truncated).
 - Responds to gateway introspection RPCs (`health`, `status`) with runtime/session metadata.
 - Responds to usage RPCs (`usage.status`, `usage.cost`) with Rust-side aggregate usage/cost placeholder summaries.
 - Tracks session metadata (`label`, `spawnedBy`) via `sessions.patch` and uses it for filtered `sessions.resolve` lookups.

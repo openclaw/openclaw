@@ -360,7 +360,7 @@ impl RpcDispatcher {
                 include_unknown: params.include_unknown.unwrap_or(true),
                 search: normalize_optional_text(params.search, 128),
                 agent_id: normalize_optional_text(params.agent_id, 64),
-                label: normalize_optional_text(params.label, 128),
+                label: normalize_optional_text(params.label, 64),
                 spawned_by: normalize_optional_text(params.spawned_by, 128),
                 include_derived_titles: params.include_derived_titles.unwrap_or(false),
                 include_last_message: params.include_last_message.unwrap_or(false),
@@ -451,7 +451,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
-        let label = match parse_patch_text(param_patch_value(&req.params, &["label"]), "label", 128)
+        let label = match parse_patch_text(param_patch_value(&req.params, &["label"]), "label", 64)
         {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(err),
@@ -607,7 +607,7 @@ impl RpcDispatcher {
             return RpcDispatchOutcome::not_found("session not found");
         }
 
-        let label = normalize_optional_text(params.label, 128);
+        let label = normalize_optional_text(params.label, 64);
         if label.is_none() {
             return RpcDispatchOutcome::bad_request(
                 "sessionKey|key|sessionId or label is required",
@@ -2429,9 +2429,10 @@ fn parse_patch_text(
             if trimmed.is_empty() {
                 return Err(format!("{field_name} cannot be empty"));
             }
-            let normalized = normalize_optional_text(Some(raw), max_len)
-                .ok_or_else(|| format!("{field_name} cannot be empty"))?;
-            Ok(PatchValue::Set(normalized))
+            if trimmed.chars().count() > max_len {
+                return Err(format!("{field_name} too long (max {max_len})"));
+            }
+            Ok(PatchValue::Set(trimmed.to_owned()))
         }
         Some(_) => Err(format!("{field_name} must be string or null")),
     }
@@ -3040,6 +3041,10 @@ mod tests {
             serde_json::json!({
                 "key": "agent:main:discord:group:g1",
                 "sendPolicy": "inherit"
+            }),
+            serde_json::json!({
+                "key": "agent:main:discord:group:g1",
+                "label": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm"
             }),
         ]
         .into_iter()
