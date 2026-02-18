@@ -1,10 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
-import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -23,23 +18,29 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -55,6 +56,7 @@ import {
   requestHeartbeatNow,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -62,7 +64,19 @@ import {
 } from "./outbound/targets.js";
 import { peekSystemEventEntries } from "./system-events.js";
 
-type HeartbeatDeps = OutboundSendDeps &
+// Circuit breaker configuration
+const CIRCUIT_BREAKER_THRESHOLD = 5;
+const CIRCUIT_BREAKER_RESET_MS = 5 * 60 * 1000; // 5 minutes
+const CIRCUIT_BREAKER_BACKOFF_MAX_MS = 30 * 60 * 1000; // 30 minutes max backoff
+
+// Extended wake params type for internal use (extends the base HeartbeatWakeHandler params)
+type ExtendedHeartbeatWakeParams = {
+  reason?: string;
+  agentId?: string;
+  sessionKey?: string;
+};
+
+export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
@@ -109,6 +123,10 @@ type HeartbeatAgentState = {
   intervalMs: number;
   lastRunMs?: number;
   nextDueMs: number;
+  // Circuit breaker fields
+  consecutiveFailures: number;
+  lastFailureMs?: number;
+  circuitOpen: boolean;
 };
 
 export type HeartbeatRunner = {
@@ -257,6 +275,7 @@ function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId?: string,
   heartbeat?: HeartbeatConfig,
+  forcedSessionKey?: string,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -272,6 +291,31 @@ function resolveHeartbeatSession(
 
   if (scope === "global") {
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
+
+  const forced = forcedSessionKey?.trim();
+  if (forced) {
+    const forcedCandidate = toAgentStoreSessionKey({
+      agentId: resolvedAgentId,
+      requestKey: forced,
+      mainKey: cfg.session?.mainKey,
+    });
+    const forcedCanonical = canonicalizeMainSessionAlias({
+      cfg,
+      agentId: resolvedAgentId,
+      sessionKey: forcedCandidate,
+    });
+    if (forcedCanonical !== "global") {
+      const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
+      if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+        return {
+          sessionKey: forcedCanonical,
+          storePath,
+          store,
+          entry: store[forcedCanonical],
+        };
+      }
+    }
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
@@ -350,12 +394,84 @@ async function restoreHeartbeatUpdatedAt(params: {
   });
 }
 
+/**
+ * Prune heartbeat transcript entries by truncating the file back to a previous size.
+ * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
+ * preventing context pollution from zero-information exchanges.
+ */
+async function pruneHeartbeatTranscript(params: {
+  transcriptPath?: string;
+  preHeartbeatSize?: number;
+}) {
+  const { transcriptPath, preHeartbeatSize } = params;
+  if (!transcriptPath || typeof preHeartbeatSize !== "number" || preHeartbeatSize < 0) {
+    return;
+  }
+  try {
+    const stat = await fs.stat(transcriptPath);
+    // Only truncate if the file has grown during the heartbeat run
+    if (stat.size > preHeartbeatSize) {
+      await fs.truncate(transcriptPath, preHeartbeatSize);
+    }
+  } catch {
+    // File may not exist or may have been removed - ignore errors
+  }
+}
+
+/**
+ * Get the transcript file path and its current size before a heartbeat run.
+ * Returns undefined values if the session or transcript doesn't exist yet.
+ */
+async function captureTranscriptState(params: {
+  storePath: string;
+  sessionKey: string;
+  agentId?: string;
+}): Promise<{ transcriptPath?: string; preHeartbeatSize?: number }> {
+  const { storePath, sessionKey, agentId } = params;
+  try {
+    const store = loadSessionStore(storePath);
+    const entry = store[sessionKey];
+    if (!entry?.sessionId) {
+      return {};
+    }
+    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    const stat = await fs.stat(transcriptPath);
+    return { transcriptPath, preHeartbeatSize: stat.size };
+  } catch {
+    // Session or transcript doesn't exist yet - nothing to prune
+    return {};
+  }
+}
+
+function stripLeadingHeartbeatResponsePrefix(
+  text: string,
+  responsePrefix: string | undefined,
+): string {
+  const normalizedPrefix = responsePrefix?.trim();
+  if (!normalizedPrefix) {
+    return text;
+  }
+
+  // Require a boundary after the configured prefix so short prefixes like "Hi"
+  // do not strip the beginning of normal words like "History".
+  const prefixPattern = new RegExp(
+    `^${escapeRegExp(normalizedPrefix)}(?=$|\\s|[\\p{P}\\p{S}])\\s*`,
+    "iu",
+  );
+  return text.replace(prefixPattern, "");
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
 ) {
-  const stripped = stripHeartbeatToken(payload.text, {
+  const rawText = typeof payload.text === "string" ? payload.text : "";
+  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
@@ -377,6 +493,7 @@ function normalizeHeartbeatReply(
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
+  sessionKey?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
   deps?: HeartbeatDeps;
@@ -433,7 +550,12 @@ export async function runHeartbeatOnce(opts: {
     // The LLM prompt says "if it exists" so this is expected behavior.
   }
 
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
+  const { entry, sessionKey, storePath } = resolveHeartbeatSession(
+    cfg,
+    agentId,
+    heartbeat,
+    opts.sessionKey,
+  );
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -531,6 +653,7 @@ export async function runHeartbeatOnce(opts: {
       channel: delivery.channel,
       to: delivery.to,
       accountId: delivery.accountId,
+      // threadId removed - not available on OutboundTarget type
       payloads: [{ text: heartbeatOkText }],
       agentId,
       deps: opts.deps,
@@ -539,7 +662,15 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK
+    const transcriptState = await captureTranscriptState({
+      storePath,
+      sessionKey,
+      agentId,
+    });
+
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    // suppressToolErrorWarnings removed - not available on HeartbeatConfig type
     const replyOpts = heartbeatModelOverride
       ? { isHeartbeat: true, heartbeatModelOverride }
       : { isHeartbeat: true };
@@ -559,6 +690,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // Prune the transcript to remove HEARTBEAT_OK turns
+      await pruneHeartbeatTranscript(transcriptState);
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-empty",
@@ -593,6 +726,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // Prune the transcript to remove HEARTBEAT_OK turns
+      await pruneHeartbeatTranscript(transcriptState);
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
@@ -629,6 +764,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // Prune the transcript to remove duplicate heartbeat turns
+      await pruneHeartbeatTranscript(transcriptState);
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
@@ -712,6 +849,7 @@ export async function runHeartbeatOnce(opts: {
       to: delivery.to,
       accountId: deliveryAccountId,
       agentId,
+      // threadId removed - not available on OutboundTarget type
       payloads: [
         ...reasoningPayloads,
         ...(shouldSkipMain
@@ -766,6 +904,18 @@ export async function runHeartbeatOnce(opts: {
   }
 }
 
+// Circuit breaker helper functions
+function calculateCircuitBreakerDelay(consecutiveFailures: number, baseIntervalMs: number): number {
+  const failureTier = Math.max(0, consecutiveFailures - CIRCUIT_BREAKER_THRESHOLD + 1);
+  const multiplier = Math.pow(2, Math.min(failureTier, 5)); // Cap at 32x
+  return Math.min(baseIntervalMs * multiplier, CIRCUIT_BREAKER_BACKOFF_MAX_MS);
+}
+
+function shouldAttemptReset(circuitOpen: boolean, lastFailureMs: number | undefined, now: number): boolean {
+  if (!circuitOpen || !lastFailureMs) return true;
+  return now - lastFailureMs >= CIRCUIT_BREAKER_RESET_MS;
+}
+
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
@@ -784,6 +934,26 @@ export function startHeartbeatRunner(opts: {
   let initialized = false;
 
   const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
+    // Check if circuit breaker is open
+    if (prevState?.circuitOpen && prevState.lastFailureMs) {
+      const timeSinceFailure = now - prevState.lastFailureMs;
+      if (timeSinceFailure < CIRCUIT_BREAKER_RESET_MS) {
+        // Circuit still open - schedule next check for when it might close
+        // Use exponential backoff based on failure count
+        const failureMultiplier = Math.min(
+          prevState.consecutiveFailures - CIRCUIT_BREAKER_THRESHOLD + 1,
+          5 // Cap multiplier at 5x
+        );
+        const backoffMs = Math.min(
+          intervalMs * Math.pow(2, failureMultiplier),
+          CIRCUIT_BREAKER_BACKOFF_MAX_MS
+        );
+        return now + backoffMs;
+      }
+      // Circuit breaker reset period elapsed - allow retry
+      // Don't reset state here, let the run handle that on success
+    }
+
     if (typeof prevState?.lastRunMs === "number") {
       return prevState.lastRunMs + intervalMs;
     }
@@ -850,6 +1020,10 @@ export function startHeartbeatRunner(opts: {
         intervalMs,
         lastRunMs: prevState?.lastRunMs,
         nextDueMs,
+        // Initialize circuit breaker fields
+        consecutiveFailures: prevState?.consecutiveFailures ?? 0,
+        lastFailureMs: prevState?.lastFailureMs,
+        circuitOpen: prevState?.circuitOpen ?? false,
       });
     }
 
@@ -874,7 +1048,8 @@ export function startHeartbeatRunner(opts: {
     scheduleNext();
   };
 
-  const run: HeartbeatWakeHandler = async (params) => {
+  // Internal run function with extended params type
+  const run = async (params?: ExtendedHeartbeatWakeParams): Promise<HeartbeatRunResult> => {
     if (state.stopped) {
       return {
         status: "skipped",
@@ -895,13 +1070,92 @@ export function startHeartbeatRunner(opts: {
     }
 
     const reason = params?.reason;
+    const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
 
+    if (requestedSessionKey || requestedAgentId) {
+      const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
+      const targetAgent = state.agents.get(targetAgentId);
+      if (!targetAgent) {
+        scheduleNext();
+        return { status: "skipped", reason: "disabled" };
+      }
+
+      // Check circuit breaker
+      if (targetAgent.circuitOpen && !shouldAttemptReset(targetAgent.circuitOpen, targetAgent.lastFailureMs, now)) {
+        log.warn(`heartbeat: circuit breaker open for ${targetAgentId}, skipping`);
+        scheduleNext();
+        return { status: "skipped", reason: "circuit-open" };
+      }
+
+      try {
+        const res = await runOnce({
+          cfg: state.cfg,
+          agentId: targetAgent.agentId,
+          heartbeat: targetAgent.heartbeat,
+          reason,
+          sessionKey: requestedSessionKey,
+          deps: { runtime: state.runtime },
+        });
+
+        // Update circuit breaker state based on result
+        if (res.status === "failed") {
+          targetAgent.consecutiveFailures++;
+          targetAgent.lastFailureMs = now;
+          if (targetAgent.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+            targetAgent.circuitOpen = true;
+            const backoffMs = calculateCircuitBreakerDelay(targetAgent.consecutiveFailures, targetAgent.intervalMs);
+            log.error(`heartbeat: circuit breaker opened for ${targetAgent.agentId} after ${targetAgent.consecutiveFailures} failures, next retry in ${Math.round(backoffMs / 1000)}s`);
+          }
+        } else if (res.status === "ran") {
+          // Reset circuit breaker on success
+          if (targetAgent.consecutiveFailures > 0 || targetAgent.circuitOpen) {
+            if (targetAgent.circuitOpen) {
+              log.info(`heartbeat: circuit breaker closed for ${targetAgent.agentId} after successful run`);
+            }
+            targetAgent.consecutiveFailures = 0;
+            targetAgent.circuitOpen = false;
+            targetAgent.lastFailureMs = undefined;
+          }
+        }
+
+        if (res.status !== "skipped" || res.reason !== "disabled") {
+          advanceAgentSchedule(targetAgent, now);
+        }
+        scheduleNext();
+        return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
+      } catch (err) {
+        const errMsg = formatErrorMessage(err);
+        log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
+          error: errMsg,
+        });
+        // Count throws as failures too
+        targetAgent.consecutiveFailures++;
+        targetAgent.lastFailureMs = now;
+        if (targetAgent.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+          targetAgent.circuitOpen = true;
+        }
+        advanceAgentSchedule(targetAgent, now);
+        scheduleNext();
+        return { status: "failed", reason: errMsg };
+      }
+    }
+
     for (const agent of state.agents.values()) {
       if (isInterval && now < agent.nextDueMs) {
+        continue;
+      }
+
+      // Check circuit breaker before attempting run
+      if (agent.circuitOpen && !shouldAttemptReset(agent.circuitOpen, agent.lastFailureMs, now)) {
+        log.warn(`heartbeat: circuit breaker open for ${agent.agentId}, deferring`);
+        // Advance schedule with backoff to check again later
+        const backoffMs = calculateCircuitBreakerDelay(agent.consecutiveFailures, agent.intervalMs);
+        agent.nextDueMs = now + backoffMs;
         continue;
       }
 
@@ -919,9 +1173,41 @@ export function startHeartbeatRunner(opts: {
         // advance the timer and call scheduleNext so heartbeats keep firing.
         const errMsg = formatErrorMessage(err);
         log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+        
+        // Count throws as failures for circuit breaker
+        agent.consecutiveFailures++;
+        agent.lastFailureMs = now;
+        if (agent.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+          agent.circuitOpen = true;
+          const backoffMs = calculateCircuitBreakerDelay(agent.consecutiveFailures, agent.intervalMs);
+          log.error(`heartbeat: circuit breaker opened for ${agent.agentId} after ${agent.consecutiveFailures} failures (exception), next retry in ${Math.round(backoffMs / 1000)}s`);
+        }
+        
         advanceAgentSchedule(agent, now);
         continue;
       }
+
+      // Update circuit breaker state based on result
+      if (res.status === "failed") {
+        agent.consecutiveFailures++;
+        agent.lastFailureMs = now;
+        if (agent.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+          agent.circuitOpen = true;
+          const backoffMs = calculateCircuitBreakerDelay(agent.consecutiveFailures, agent.intervalMs);
+          log.error(`heartbeat: circuit breaker opened for ${agent.agentId} after ${agent.consecutiveFailures} failures, next retry in ${Math.round(backoffMs / 1000)}s`);
+        }
+      } else if (res.status === "ran") {
+        // Reset circuit breaker on success
+        if (agent.consecutiveFailures > 0 || agent.circuitOpen) {
+          if (agent.circuitOpen) {
+            log.info(`heartbeat: circuit breaker closed for ${agent.agentId} after successful run`);
+          }
+          agent.consecutiveFailures = 0;
+          agent.circuitOpen = false;
+          agent.lastFailureMs = undefined;
+        }
+      }
+
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
         advanceAgentSchedule(agent, now);
         scheduleNext();
@@ -942,7 +1228,13 @@ export function startHeartbeatRunner(opts: {
     return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
-  const wakeHandler: HeartbeatWakeHandler = async (params) => run({ reason: params.reason });
+  // Wrapper that conforms to HeartbeatWakeHandler type
+  const wakeHandler: HeartbeatWakeHandler = async (params) => {
+    // Cast to extended type to access agentId and sessionKey
+    const extendedParams = params as ExtendedHeartbeatWakeParams;
+    return run(extendedParams);
+  };
+  
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);
 
