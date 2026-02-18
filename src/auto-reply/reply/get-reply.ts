@@ -11,6 +11,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -349,6 +350,18 @@ export async function getReplyFromConfig(
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+
+  // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_agent_reply")) {
+    const hookResult = await hookRunner.runBeforeAgentReply(
+      { cleanedBody },
+      { agentId, sessionKey: agentSessionKey, sessionId, workspaceDir },
+    );
+    if (hookResult?.reply) {
+      return hookResult.reply;
+    }
+  }
 
   await stageSandboxMedia({
     ctx,
