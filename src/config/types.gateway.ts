@@ -318,4 +318,10 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Send a notification to the active session after a gateway restart (config-patch, update, etc.).
+   * Set to false to suppress the post-restart ping entirely.
+   * Default: true.
+   */
+  restartNotify?: boolean;
 };
