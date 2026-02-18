@@ -52,20 +52,6 @@ function extractUserJidPhone(jid: string): string | null {
   return null;
 }
 
-function normalizeBrazilianMobileForWhatsApp(e164: string): string {
-  const match = /^\+55(\d{2})(9\d{8})$/.exec(e164);
-  if (!match) {
-    return e164;
-  }
-  const ddd = Number(match[1]);
-  // WhatsApp often stores BR mobiles without the carrier-added 9th digit
-  // for DDDs outside 11-28.
-  if (ddd >= 11 && ddd <= 28) {
-    return e164;
-  }
-  return `+55${match[1]}${match[2].slice(1)}`;
-}
-
 export function normalizeWhatsAppTarget(value: string): string | null {
   const candidate = stripWhatsAppTargetPrefixes(value);
   if (!candidate) {
@@ -81,7 +67,7 @@ export function normalizeWhatsAppTarget(value: string): string | null {
     if (!phone) {
       return null;
     }
-    const normalized = normalizeBrazilianMobileForWhatsApp(normalizeE164(phone));
+    const normalized = normalizeE164(phone);
     return normalized.length > 1 ? normalized : null;
   }
   // If the caller passed a JID-ish string that we don't understand, fail fast.
@@ -89,6 +75,6 @@ export function normalizeWhatsAppTarget(value: string): string | null {
   if (candidate.includes("@")) {
     return null;
   }
-  const normalized = normalizeBrazilianMobileForWhatsApp(normalizeE164(candidate));
+  const normalized = normalizeE164(candidate);
   return normalized.length > 1 ? normalized : null;
 }

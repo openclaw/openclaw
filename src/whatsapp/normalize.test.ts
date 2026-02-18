@@ -14,17 +14,6 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("1555123@s.whatsapp.net")).toBe("+1555123");
   });
 
-  it("normalizes Brazilian mobile numbers to WhatsApp format for DDDs outside 11-28", () => {
-    expect(normalizeWhatsAppTarget("+5547984178525")).toBe("+554784178525");
-    expect(normalizeWhatsAppTarget("whatsapp:+5547984178525")).toBe("+554784178525");
-    expect(normalizeWhatsAppTarget("5547984178525@s.whatsapp.net")).toBe("+554784178525");
-  });
-
-  it("keeps Brazilian mobile numbers unchanged for DDDs 11-28", () => {
-    expect(normalizeWhatsAppTarget("+5511984178525")).toBe("+5511984178525");
-    expect(normalizeWhatsAppTarget("5511984178525@s.whatsapp.net")).toBe("+5511984178525");
-  });
-
   it("normalizes user JIDs with device suffix to E.164", () => {
     // This is the bug fix: JIDs like "41796666864:0@s.whatsapp.net" should
     // normalize to "+41796666864", not "+417966668640" (extra digit from ":0")
