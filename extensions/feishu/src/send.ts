@@ -1,12 +1,12 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { MentionTarget } from "./mention.js";
+import type { FeishuSendResult, ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
-import type { FeishuSendResult, ResolvedFeishuAccount } from "./types.js";
 
 export type FeishuMessageInfo = {
   messageId: string;
@@ -271,6 +271,42 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
       ],
     },
   };
+}
+
+/**
+ * Build a Feishu interactive card with caption-style content (grey muted text).
+ * Used as a "caption" for media messages (e.g. TTS transcript after audio).
+ */
+export function buildCaptionCard(text: string): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    config: {
+      wide_screen_mode: true,
+    },
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content: `<font color="grey">${text}</font>`,
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Send a caption-style card (grey muted text) for media messages.
+ */
+export async function sendCaptionCardFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  text: string;
+  replyToMessageId?: string;
+  accountId?: string;
+}): Promise<FeishuSendResult> {
+  const { cfg, to, text, replyToMessageId, accountId } = params;
+  const card = buildCaptionCard(text);
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
 }
 
 /**

@@ -14,7 +14,7 @@ build: ## Build the project (pnpm build)
 
 global-install: build ## Build and install openclaw globally (copy, not symlink)
 	npm pack --ignore-scripts --pack-destination /tmp
-	sudo npm i -g --ignore-scripts --prefer-offline /tmp/openclaw-$$(node -p "require('./package.json').version").tgz
+	sudo npm i -g --ignore-scripts /tmp/openclaw-$$(node -p "require('./package.json').version").tgz
 
 dev: ## Run in dev mode
 	pnpm dev
