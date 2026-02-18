@@ -1,7 +1,7 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
 
 export const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
-export const VENICE_DEFAULT_MODEL_ID = "llama-3.3-70b";
+export const VENICE_DEFAULT_MODEL_ID = "kimi-k2.5";
 export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
 
 // Venice uses credit-based pricing, not per-token costs.
@@ -147,6 +147,66 @@ export const VENICE_MODEL_CATALOG = [
     privacy: "private",
   },
 
+  // Kimi models (private - fully private inference)
+  {
+    id: "kimi-k2.5",
+    name: "Kimi K2.5",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 262144,
+    maxTokens: 8192,
+    privacy: "private",
+  },
+  {
+    id: "kimi-k2-thinking",
+    name: "Kimi K2 Thinking (via Venice)",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 8192,
+    privacy: "private",
+  },
+
+  // MiniMax models
+  {
+    id: "minimax-m25",
+    name: "MiniMax M2.5 (via Venice)",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    privacy: "private",
+  },
+  {
+    id: "minimax-m21",
+    name: "MiniMax M2.1 (via Venice)",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    privacy: "private",
+  },
+
+  // Zai/GLM models (private)
+  {
+    id: "zai-org-glm-4.7-flash",
+    name: "GLM 4.7 Flash",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    privacy: "private",
+  },
+  {
+    id: "zai-org-glm-5",
+    name: "GLM 5",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 8192,
+    privacy: "private",
+  },
+
   // Other private models
   {
     id: "google-gemma-3-27b-it",
@@ -183,8 +243,26 @@ export const VENICE_MODEL_CATALOG = [
 
   // Anthropic (via Venice)
   {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6 (via Venice)",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    privacy: "anonymized",
+  },
+  {
     id: "claude-opus-45",
     name: "Claude Opus 4.5 (via Venice)",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    privacy: "anonymized",
+  },
+  {
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6 (via Venice)",
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 202752,
@@ -260,26 +338,6 @@ export const VENICE_MODEL_CATALOG = [
     maxTokens: 8192,
     privacy: "anonymized",
   },
-
-  // Other anonymized models
-  {
-    id: "kimi-k2-thinking",
-    name: "Kimi K2 Thinking (via Venice)",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 262144,
-    maxTokens: 8192,
-    privacy: "anonymized",
-  },
-  {
-    id: "minimax-m21",
-    name: "MiniMax M2.1 (via Venice)",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 202752,
-    maxTokens: 8192,
-    privacy: "anonymized",
-  },
 ] as const;
 
 export type VeniceCatalogEntry = (typeof VENICE_MODEL_CATALOG)[number];
@@ -323,6 +381,8 @@ interface VeniceModelSpec {
 interface VeniceModel {
   id: string;
   model_spec: VeniceModelSpec;
+  // Some API responses may include status information
+  status?: string;
 }
 
 interface VeniceModelsResponse {
@@ -341,7 +401,7 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
 
   try {
     const response = await fetch(`${VENICE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
@@ -364,6 +424,11 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     const models: ModelDefinitionConfig[] = [];
 
     for (const apiModel of data.data) {
+      // Filter out offline models
+      if (apiModel.status === "offline") {
+        continue;
+      }
+
       const catalogEntry = catalogById.get(apiModel.id);
       if (catalogEntry) {
         // Use catalog metadata for known models
