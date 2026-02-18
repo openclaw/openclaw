@@ -96,6 +96,7 @@ export function createFollowupRunner(params: {
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
           cfg: queued.run.config,
+          mirror: false,
         });
         if (!result.ok) {
           // Log error and fall back to dispatcher if available.
