@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureFullEnv } from "../test-utils/env.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -8,31 +9,24 @@ vi.mock("node:child_process", () => ({
 
 import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
 
-const originalEnv = { ...process.env };
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
-
-function restoreEnv() {
-  for (const key of Object.keys(process.env)) {
-    if (!(key in originalEnv)) {
-      delete process.env[key];
-    }
-  }
-  for (const [key, value] of Object.entries(originalEnv)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
+const envSnapshot = captureFullEnv();
 
 afterEach(() => {
-  restoreEnv();
+  envSnapshot.restore();
   process.argv = [...originalArgv];
   process.execArgv = [...originalExecArgv];
   spawnMock.mockReset();
 });
+
+function clearSupervisorHints() {
+  delete process.env.LAUNCH_JOB_LABEL;
+  delete process.env.LAUNCH_JOB_NAME;
+  delete process.env.INVOCATION_ID;
+  delete process.env.SYSTEMD_EXEC_PID;
+  delete process.env.JOURNAL_STREAM;
+}
 
 describe("restartGatewayProcessWithFreshPid", () => {
   it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
@@ -51,7 +45,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("spawns detached child with current exec argv", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
-    delete process.env.LAUNCH_JOB_LABEL;
+    clearSupervisorHints();
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
     spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
@@ -70,6 +64,9 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns failed when spawn throws", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+
     spawnMock.mockImplementation(() => {
       throw new Error("spawn failed");
     });

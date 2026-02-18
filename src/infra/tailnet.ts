@@ -5,7 +5,7 @@ export type TailnetAddresses = {
   ipv6: string[];
 };
 
-function isTailnetIPv4(address: string): boolean {
+export function isTailnetIPv4(address: string): boolean {
   const parts = address.split(".");
   if (parts.length !== 4) {
     return false;
