@@ -267,10 +267,11 @@ async function installPluginFromPackageDir(
 
   const packageDir = path.resolve(params.packageDir);
   const forcedScanEntries: string[] = [];
+  const invalidExtensions: string[] = [];
   for (const entry of extensions) {
     const resolvedEntry = path.resolve(packageDir, entry);
     if (!isPathInside(packageDir, resolvedEntry)) {
-      logger.warn?.(`extension entry escapes plugin directory and will not be scanned: ${entry}`);
+      invalidExtensions.push(entry);
       continue;
     }
     if (extensionUsesSkippedScannerPath(entry)) {
@@ -279,6 +280,13 @@ async function installPluginFromPackageDir(
       );
     }
     forcedScanEntries.push(resolvedEntry);
+  }
+
+  if (invalidExtensions.length > 0) {
+    return {
+      ok: false,
+      error: `openclaw.extensions entry escapes plugin directory: ${invalidExtensions.join(", ")}`,
+    };
   }
 
   // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
@@ -350,14 +358,11 @@ async function installPluginFromPackageDir(
     hasDeps,
     depsLogMessage: "Installing plugin dependencies…",
     afterCopy: async () => {
-      for (const entry of extensions) {
-        const resolvedEntry = path.resolve(targetDir, entry);
-        if (!isPathInside(targetDir, resolvedEntry)) {
-          logger.warn?.(`extension entry escapes plugin directory: ${entry}`);
-          continue;
-        }
-        if (!(await fileExists(resolvedEntry))) {
-          logger.warn?.(`extension entry not found: ${entry}`);
+      for (const entry of forcedScanEntries) {
+        const relativeEntry = path.relative(packageDir, entry);
+        const installedEntry = path.join(targetDir, relativeEntry);
+        if (!(await fileExists(installedEntry))) {
+          logger.warn?.(`extension entry not found: ${relativeEntry}`);
         }
       }
     },
