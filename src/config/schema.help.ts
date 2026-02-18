@@ -341,10 +341,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Base URL for the classification provider. Ollama default: http://localhost:11434.",
   "router.apiKey":
     'API key for the classification provider. Supports "env:VAR_NAME" syntax to read from environment.',
-  "router.model":
-    'Model to use for classification (default: "qwen3:4b-instruct-2507-q4_K_M").',
-  "router.timeoutMs":
-    "Timeout in ms for the classification call (default: 10000).",
+  "router.model": 'Model to use for classification (default: "qwen3:4b-instruct-2507-q4_K_M").',
+  "router.timeoutMs": "Timeout in ms for the classification call (default: 10000).",
   "router.tiers":
     'Routing table mapping tier labels to OpenClaw model references (e.g. { "1": "minimax/MiniMax-Text-01", "2": "anthropic/claude-haiku-4-5-20251001", "3": "anthropic/claude-opus-4-6" }).',
   "router.defaultTier":

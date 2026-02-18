@@ -665,7 +665,9 @@ export const OpenClawSchema = z
       })
       .strict()
       .superRefine((router, ctx) => {
-        if (router.enabled === false) return;
+        if (router.enabled === false) {
+          return;
+        }
         if (!router.tiers || Object.keys(router.tiers).length === 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

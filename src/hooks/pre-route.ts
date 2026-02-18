@@ -120,7 +120,9 @@ function resolveRouterPrompt(): string {
     const filePath = path.join(resolveStateDir(), "router", "ROUTER.md");
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, "utf8").trim();
-      if (content) return content;
+      if (content) {
+        return content;
+      }
     }
   } catch {
     /* ignore */
@@ -133,7 +135,9 @@ function resolveRouterPrompt(): string {
 // ---------------------------------------------------------------------------
 
 function resolveApiKey(apiKey: string | undefined): string | undefined {
-  if (!apiKey) return undefined;
+  if (!apiKey) {
+    return undefined;
+  }
   if (apiKey.startsWith("env:")) {
     return process.env[apiKey.slice(4)] ?? undefined;
   }
@@ -151,7 +155,10 @@ function parseTierFromResponse(
   raw: string,
   tiers: Record<string, string>,
 ): { tier: string; modelRef: string } | null {
-  const cleaned = raw.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 
   // Match first character against tier keys (e.g. 1, 2, 3)
   const firstChar = cleaned.charAt(0);
@@ -269,8 +276,7 @@ export async function routeMessage(
 ): Promise<RouteResult> {
   const start = Date.now();
   const provider = config.provider ?? "ollama";
-  const baseUrl =
-    config.baseUrl ?? (provider === "ollama" ? "http://localhost:11434" : undefined);
+  const baseUrl = config.baseUrl ?? (provider === "ollama" ? "http://localhost:11434" : undefined);
   const model = config.model ?? "qwen3:4b-instruct-2507-q4_K_M";
   const timeoutMs = config.timeoutMs ?? 10_000;
   const systemPrompt = resolveRouterPrompt();
@@ -284,14 +290,17 @@ export async function routeMessage(
   let classifierInput = truncatedMessage;
   if (recentContext && recentContext.length > 0) {
     const contextLines = recentContext.map((msg) => {
-      const truncated = msg.length > MAX_CONTEXT_CHARS ? msg.slice(0, MAX_CONTEXT_CHARS) + "…" : msg;
+      const truncated =
+        msg.length > MAX_CONTEXT_CHARS ? msg.slice(0, MAX_CONTEXT_CHARS) + "…" : msg;
       return `[Previous: ${truncated}]`;
     });
     classifierInput = contextLines.join("\n") + "\n\n" + truncatedMessage;
   }
 
   if (!baseUrl) {
-    console.warn("[pre-route] No baseUrl configured for openai-compatible provider, falling back to default tier");
+    console.warn(
+      "[pre-route] No baseUrl configured for openai-compatible provider, falling back to default tier",
+    );
     return {
       tier: config.defaultTier,
       modelRef: config.tiers[config.defaultTier],
@@ -303,7 +312,14 @@ export async function routeMessage(
   try {
     const raw =
       provider === "openai-compatible"
-        ? await callOpenAICompatible(baseUrl, model, systemPrompt, classifierInput, timeoutMs, resolvedApiKey)
+        ? await callOpenAICompatible(
+            baseUrl,
+            model,
+            systemPrompt,
+            classifierInput,
+            timeoutMs,
+            resolvedApiKey,
+          )
         : await callOllama(baseUrl, model, systemPrompt, classifierInput, timeoutMs);
 
     const latencyMs = Date.now() - start;
@@ -314,7 +330,10 @@ export async function routeMessage(
     }
 
     // Unrecognized output — use default
-    const cleaned = raw.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const cleaned = raw
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
     console.warn(
       `[pre-route] Unrecognized tier "${cleaned}" from ${provider} model, using default "${config.defaultTier}"`,
     );
@@ -357,7 +376,9 @@ export function resolveRouterConfig(
 ): RouterConfig | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const router = (config as any).router;
-  if (!router || router.enabled === false) return null;
+  if (!router || router.enabled === false) {
+    return null;
+  }
 
   if (!router.tiers || typeof router.tiers !== "object") {
     console.warn("[pre-route] Router enabled but no tiers configured, disabling");

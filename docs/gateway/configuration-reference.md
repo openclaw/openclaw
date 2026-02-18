@@ -2364,16 +2364,16 @@ The classifier never sees the system prompt, tools, or conversation history — 
 }
 ```
 
-| Field         | Type                                | Default                              | Description                                                                 |
-| ------------- | ----------------------------------- | ------------------------------------ | --------------------------------------------------------------------------- |
-| `enabled`     | `boolean`                           | `false`                              | Enable/disable the router.                                                  |
-| `provider`    | `"ollama"` \| `"openai-compatible"` | `"ollama"`                           | Provider type for the classifier model.                                     |
-| `baseUrl`     | `string`                            | `"http://localhost:11434"` (Ollama)  | Base URL for the provider API.                                              |
-| `apiKey`      | `string`                            | —                                    | API key. Supports `"env:VAR_NAME"` to read from environment.                |
-| `model`       | `string`                            | `"qwen3:4b-instruct-2507-q4_K_M"`   | Model used for classification.                                              |
-| `timeoutMs`   | `number`                            | `10000`                              | Timeout in ms for the classification call.                                  |
-| `tiers`       | `Record<string, string>`            | (required)                           | Routing table: maps tier labels to OpenClaw model references.               |
-| `defaultTier` | `string`                            | (required)                           | Fallback tier when classification fails or returns an unrecognized value.   |
+| Field         | Type                                | Default                             | Description                                                               |
+| ------------- | ----------------------------------- | ----------------------------------- | ------------------------------------------------------------------------- |
+| `enabled`     | `boolean`                           | `false`                             | Enable/disable the router.                                                |
+| `provider`    | `"ollama"` \| `"openai-compatible"` | `"ollama"`                          | Provider type for the classifier model.                                   |
+| `baseUrl`     | `string`                            | `"http://localhost:11434"` (Ollama) | Base URL for the provider API.                                            |
+| `apiKey`      | `string`                            | —                                   | API key. Supports `"env:VAR_NAME"` to read from environment.              |
+| `model`       | `string`                            | `"qwen3:4b-instruct-2507-q4_K_M"`   | Model used for classification.                                            |
+| `timeoutMs`   | `number`                            | `10000`                             | Timeout in ms for the classification call.                                |
+| `tiers`       | `Record<string, string>`            | (required)                          | Routing table: maps tier labels to OpenClaw model references.             |
+| `defaultTier` | `string`                            | (required)                          | Fallback tier when classification fails or returns an unrecognized value. |
 
 <Accordion title="How it works">
 

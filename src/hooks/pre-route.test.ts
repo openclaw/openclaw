@@ -34,12 +34,8 @@ describe("resolveRouterConfig", () => {
   });
 
   it("returns null and warns when tiers is missing", () => {
-    expect(
-      resolveRouterConfig({ router: { enabled: true, defaultTier: "1" } }),
-    ).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("no tiers configured"),
-    );
+    expect(resolveRouterConfig({ router: { enabled: true, defaultTier: "1" } })).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("no tiers configured"));
   });
 
   it("returns null and warns when defaultTier is missing", () => {
@@ -48,9 +44,7 @@ describe("resolveRouterConfig", () => {
         router: { enabled: true, tiers: { "1": "a/b" } },
       }),
     ).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("defaultTier missing"),
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("defaultTier missing"));
   });
 
   it("returns null and warns when defaultTier is not in tiers", () => {
@@ -59,9 +53,7 @@ describe("resolveRouterConfig", () => {
         router: { enabled: true, tiers: { "1": "a/b" }, defaultTier: "99" },
       }),
     ).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("defaultTier missing"),
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("defaultTier missing"));
   });
 
   it("returns a valid RouterConfig when properly configured", () => {
@@ -202,9 +194,7 @@ describe("routeMessage", () => {
     expect(result.tier).toBe("2");
     expect(result.modelRef).toBe("anthropic/claude-haiku-4-5-20251001");
     expect(result.fallback).toBe(true);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Unrecognized tier"),
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Unrecognized tier"));
   });
 
   it("falls back on fetch error", async () => {
@@ -213,15 +203,11 @@ describe("routeMessage", () => {
 
     expect(result.tier).toBe("2");
     expect(result.fallback).toBe(true);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Classification failed"),
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Classification failed"));
   });
 
   it("falls back on non-ok HTTP status", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response("Internal Server Error", { status: 500 }),
-    );
+    fetchSpy.mockResolvedValueOnce(new Response("Internal Server Error", { status: 500 }));
     const result = await routeMessage("hello", baseCfg);
 
     expect(result.tier).toBe("2");
@@ -261,9 +247,6 @@ describe("routeMessage", () => {
       baseUrl: "http://jetson:11434",
     });
 
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "http://jetson:11434/api/generate",
-      expect.anything(),
-    );
+    expect(fetchSpy).toHaveBeenCalledWith("http://jetson:11434/api/generate", expect.anything());
   });
 });

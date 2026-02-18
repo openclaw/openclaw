@@ -1,3 +1,4 @@
+import type { RouterConfig } from "../hooks/pre-route.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
@@ -19,7 +20,6 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
-import type { RouterConfig } from "../hooks/pre-route.js";
 import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";

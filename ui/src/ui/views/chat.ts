@@ -269,7 +269,8 @@ export function renderChat(props: ChatProps) {
                 showReasoning,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
-                routedModel: item.key === lastAssistantGroupKey ? (props.routedModel ?? undefined) : undefined,
+                routedModel:
+                  item.key === lastAssistantGroupKey ? (props.routedModel ?? undefined) : undefined,
               });
             }
 
