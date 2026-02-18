@@ -53,27 +53,29 @@ describe("NVIDIA provider", () => {
     const modelIds = provider.models.map((m) => m.id);
     // Legacy defaults
     expect(modelIds).toContain("nvidia/llama-3.1-nemotron-70b-instruct");
-    expect(modelIds).toContain("nvidia/mistral-nemo-minitron-8b-8k-instruct");
     // Flagship chat
     expect(modelIds).toContain("meta/llama-3.3-70b-instruct");
     expect(modelIds).toContain("deepseek-ai/deepseek-v3.2");
     expect(modelIds).toContain("mistralai/mistral-large-3-675b-instruct-2512");
+    expect(modelIds).toContain("moonshotai/kimi-k2.5");
+    expect(modelIds).toContain("openai/gpt-oss-120b");
     // Reasoning
     expect(modelIds).toContain("deepseek-ai/deepseek-r1-distill-qwen-32b");
     expect(modelIds).toContain("qwen/qwq-32b");
     // Vision
     expect(modelIds).toContain("meta/llama-3.2-90b-vision-instruct");
+    expect(modelIds).toContain("google/gemma-3n-e4b-it");
   });
 
-  it("should have at least 20 models in the catalog", () => {
+  it("should have at least 35 models in the catalog", () => {
     const provider = buildNvidiaProvider();
-    expect(provider.models.length).toBeGreaterThanOrEqual(20);
+    expect(provider.models.length).toBeGreaterThanOrEqual(35);
   });
 
   it("should mark vision models with image input", () => {
     const provider = buildNvidiaProvider();
     const visionModels = provider.models.filter((m) => m.input.includes("image"));
-    expect(visionModels.length).toBeGreaterThanOrEqual(2);
+    expect(visionModels.length).toBeGreaterThanOrEqual(5);
     for (const model of visionModels) {
       expect(model.input).toContain("text");
       expect(model.input).toContain("image");
