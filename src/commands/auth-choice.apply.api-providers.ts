@@ -646,7 +646,7 @@ export async function applyAuthChoiceApiProviders(
 
     // Auto-configure Z.AI MCP tools (zread, vision, web-search)
     try {
-      if (apiKey) {
+      if (apiKey && params.agentDir) {
         await configureZaiMcpTools(apiKey, params.agentDir);
         await params.prompter.note(
           "Z.AI MCP tools (zread, vision, web-search) auto-configured.",
