@@ -557,6 +557,16 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("updateStatusCommand validates timeout option", async () => {
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+
+    await updateStatusCommand({ timeout: "invalid" });
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("persists update channel when --channel is set", async () => {
     const mockResult: UpdateRunResult = {
       status: "ok",
@@ -608,6 +618,17 @@ describe("update-cli", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("Update wizard requires a TTY"),
     );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("updateWizardCommand validates timeout option", async () => {
+    setTty(true);
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+
+    await updateWizardCommand({ timeout: "invalid" });
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
