@@ -10,6 +10,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
@@ -284,6 +285,18 @@ export async function getReplyFromConfig(
   }
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+
+  // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_agent_reply")) {
+    const hookResult = await hookRunner.runBeforeAgentReply(
+      { cleanedBody },
+      { agentId, sessionKey: agentSessionKey, sessionId, workspaceDir },
+    );
+    if (hookResult?.reply) {
+      return hookResult.reply;
+    }
+  }
 
   await stageSandboxMedia({
     ctx,

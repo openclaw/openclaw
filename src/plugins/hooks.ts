@@ -11,6 +11,8 @@ import type {
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
+  PluginHookBeforeAgentReplyEvent,
+  PluginHookBeforeAgentReplyResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
@@ -47,6 +49,8 @@ import type {
 // Re-export types for consumers
 export type {
   PluginHookAgentContext,
+  PluginHookBeforeAgentReplyEvent,
+  PluginHookBeforeAgentReplyResult,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
@@ -261,6 +265,31 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         ...mergeBeforePromptBuild(acc, next),
         ...mergeBeforeModelResolve(acc, next),
       }),
+    );
+  }
+
+  const mergeBeforeAgentReply = (
+    acc: PluginHookBeforeAgentReplyResult | undefined,
+    next: PluginHookBeforeAgentReplyResult,
+  ): PluginHookBeforeAgentReplyResult => ({
+    reply: acc?.reply ?? next.reply,
+    reason: acc?.reason ?? next.reason,
+  });
+
+  /**
+   * Run before_agent_reply hook.
+   * Allows plugins to intercept messages and return a synthetic reply,
+   * short-circuiting the LLM agent. Runs sequentially by priority.
+   */
+  async function runBeforeAgentReply(
+    event: PluginHookBeforeAgentReplyEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeAgentReplyResult | undefined> {
+    return runModifyingHook<"before_agent_reply", PluginHookBeforeAgentReplyResult>(
+      "before_agent_reply",
+      event,
+      ctx,
+      mergeBeforeAgentReply,
     );
   }
 
@@ -619,6 +648,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeModelResolve,
     runBeforePromptBuild,
     runBeforeAgentStart,
+    runBeforeAgentReply,
     runLlmInput,
     runLlmOutput,
     runAgentEnd,
