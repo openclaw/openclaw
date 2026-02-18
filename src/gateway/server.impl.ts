@@ -527,37 +527,15 @@ export async function startGatewayServer(
     }
   });
 
-  // Register chat event handler FIRST so emitChatFinal stores finalTexts
-  // before the watchdog handler reads it.
-  const agentUnsub = onAgentEvent(
-    createAgentEventHandler({
-      broadcast,
-      broadcastToConnIds,
-      nodeSendToSession,
-      agentRunSeq,
-      chatRunState,
-      resolveSessionKeyForRun,
-      clearAgentRunContext,
-      toolEventRecipients,
-    }),
-  );
-
+  // Watchdog handler MUST be registered BEFORE createAgentEventHandler,
+  // because the latter calls registry.shift() which removes the run entry.
   const stallAgentEndUnsub = onAgentEvent((evt) => {
     if (evt.stream === "lifecycle" && (evt.data?.phase === "end" || evt.data?.phase === "error")) {
       const sessionKey = resolveSessionKeyForRun(evt.runId);
       if (sessionKey) {
         const chatLink = chatRunState.registry.peek(evt.runId);
         const clientRunId = chatLink?.clientRunId ?? evt.runId;
-        // Read from finalTexts (set by emitChatFinal with complete text)
-        // falling back to buffers. finalTexts is the source of truth because
-        // the buffer may be incomplete when lifecycle:end fires.
-        const text = (
-          chatRunState.finalTexts.get(clientRunId) ??
-          chatRunState.buffers.get(clientRunId) ??
-          ""
-        ).trim();
-        // Clean up
-        chatRunState.finalTexts.delete(clientRunId);
+        const text = chatRunState.buffers.get(clientRunId)?.trim();
 
         const isSignOff =
           !text ||
@@ -572,7 +550,7 @@ export async function startGatewayServer(
             JSON.stringify({
               runId: evt.runId,
               clientRunId,
-              hasFinalText: chatRunState.finalTexts.has(clientRunId),
+              hasBuffer: chatRunState.buffers.has(clientRunId),
               textLen: text?.length,
               textTail: text?.slice(-30),
               isSignOff,
@@ -580,7 +558,6 @@ export async function startGatewayServer(
         );
 
         if (isSignOff) {
-          // Agent signed off — disarm watchdog
           replyEnforcer.onTranscriptUpdate({
             sessionKey,
             source: "agent",
@@ -590,8 +567,9 @@ export async function startGatewayServer(
         } else if (evt.data.phase === "error") {
           replyEnforcer.onAgentLifecycle({ sessionKey, phase: "error" });
         } else {
-          // Agent replied without signing off — arm watchdog
-          // This is the core use case: agent promised an action but didn't deliver
+          // Agent replied without signing off — arm watchdog.
+          // Buffer may be incomplete (last chunk race). The transcript file
+          // watcher will correct by disarming if NO_REPLY is in the file.
           replyEnforcer.onTranscriptUpdate({
             sessionKey,
             source: "agent",
@@ -601,6 +579,19 @@ export async function startGatewayServer(
       }
     }
   });
+
+  const agentUnsub = onAgentEvent(
+    createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun,
+      clearAgentRunContext,
+      toolEventRecipients,
+    }),
+  );
 
   const stallAgentStartUnsub = onAgentEvent((evt) => {
     if (evt.stream === "lifecycle" && evt.data?.phase === "start") {
