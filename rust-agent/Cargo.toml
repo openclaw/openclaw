@@ -23,7 +23,14 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 sha2 = "0.10.8"
 smallvec = "1.15.1"
-tokio = { version = "1.44.2", features = ["fs", "macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.44.2", features = [
+  "fs",
+  "macros",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+] }
 tokio-tungstenite = { version = "0.24.0", features = ["rustls-tls-webpki-roots"] }
 toml = "0.8.20"
 tracing = "0.1.41"

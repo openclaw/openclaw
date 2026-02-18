@@ -19,13 +19,13 @@ Deliver a production Rust implementation that can fully replace the current Type
 
 Feature parity is achieved only when all required checks pass:
 
-| Area | Parity Requirement | Evidence |
-|---|---|---|
-| Protocol | Rust accepts and emits protocol-equivalent WS frames for supported methods/events | Differential protocol tests against TS snapshots |
-| Functional | Same user-visible outcomes for channels/tools/sessions/nodes | End-to-end integration suite and scenario replay |
-| Operational | Same or better uptime, restart behavior, migrations, diagnostics | Soak tests + ops runbook verification |
-| Performance | Equal or better latency, throughput, and memory under target load | Benchmark suite with pass thresholds |
-| Security | Equal baseline + new defender controls without regressions | Security regression suite + threat model checks |
+| Area        | Parity Requirement                                                                | Evidence                                         |
+| ----------- | --------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Protocol    | Rust accepts and emits protocol-equivalent WS frames for supported methods/events | Differential protocol tests against TS snapshots |
+| Functional  | Same user-visible outcomes for channels/tools/sessions/nodes                      | End-to-end integration suite and scenario replay |
+| Operational | Same or better uptime, restart behavior, migrations, diagnostics                  | Soak tests + ops runbook verification            |
+| Performance | Equal or better latency, throughput, and memory under target load                 | Benchmark suite with pass thresholds             |
+| Security    | Equal baseline + new defender controls without regressions                        | Security regression suite + threat model checks  |
 
 ## 3) Current Baseline
 
@@ -375,13 +375,13 @@ Initial target SLOs (adjust after baseline measurements):
 
 ## 12) Risks and Mitigations
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Hidden TS behavior not documented | Parity drift | Expand golden traces from real sessions and channel logs |
-| Channel API volatility | Breakage during migration | Adapter isolation + contract tests per channel |
-| Performance regression during parity work | Operational instability | Continuous perf CI and resource budgets |
-| Config incompatibility | User-facing breakage | Translation layer + strict validation + migration tool |
-| Long migration window | Feature drift with upstream | Freeze windows and regular upstream diff reviews |
+| Risk                                      | Impact                      | Mitigation                                               |
+| ----------------------------------------- | --------------------------- | -------------------------------------------------------- |
+| Hidden TS behavior not documented         | Parity drift                | Expand golden traces from real sessions and channel logs |
+| Channel API volatility                    | Breakage during migration   | Adapter isolation + contract tests per channel           |
+| Performance regression during parity work | Operational instability     | Continuous perf CI and resource budgets                  |
+| Config incompatibility                    | User-facing breakage        | Translation layer + strict validation + migration tool   |
+| Long migration window                     | Feature drift with upstream | Freeze windows and regular upstream diff reviews         |
 
 ## 13) Definition of Done
 

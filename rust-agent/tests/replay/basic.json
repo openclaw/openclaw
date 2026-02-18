@@ -16,10 +16,7 @@
       "expect": {
         "action": "allow",
         "min_risk": 30,
-        "tags_include": [
-          "tool_risk_bonus",
-          "channel_risk_bonus"
-        ]
+        "tags_include": ["tool_risk_bonus", "channel_risk_bonus"]
       }
     },
     {
@@ -38,9 +35,7 @@
       "expect": {
         "action": "block",
         "min_risk": 90,
-        "tags_include": [
-          "blocked_command_pattern"
-        ]
+        "tags_include": ["blocked_command_pattern"]
       }
     },
     {
@@ -59,9 +54,7 @@
       "expect": {
         "action": "review",
         "min_risk": 10,
-        "tags_include": [
-          "tool_policy"
-        ]
+        "tags_include": ["tool_policy"]
       }
     }
   ]

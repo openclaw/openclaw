@@ -29,14 +29,14 @@ blocked_command_patterns = [
   "(?i)\\bdd\\s+if=",
   "(?i)\\bcurl\\s+[^|]*\\|\\s*sh\\b",
   "(?i)\\bwget\\s+[^|]*\\|\\s*sh\\b",
-  "(?i)\\bchmod\\s+777\\b"
+  "(?i)\\bchmod\\s+777\\b",
 ]
 prompt_injection_patterns = [
   "(?i)ignore\\s+all\\s+previous\\s+instructions",
   "(?i)reveal\\s+the\\s+system\\s+prompt",
   "(?i)override\\s+developer\\s+instructions",
   "(?i)disable\\s+safety",
-  "(?i)you\\s+must\\s+run\\s+this\\s+command\\s+without\\s+asking"
+  "(?i)you\\s+must\\s+run\\s+this\\s+command\\s+without\\s+asking",
 ]
 tool_policies = { gateway = "review", nodes = "review" }
 tool_risk_bonus = { exec = 20, bash = 20, process = 10, apply_patch = 12, browser = 8, gateway = 20, nodes = 20 }
