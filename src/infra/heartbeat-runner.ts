@@ -941,8 +941,8 @@ export function startHeartbeatRunner(opts: {
         // Circuit still open - schedule next check for when it might close
         // Use exponential backoff based on failure count
         const failureMultiplier = Math.min(
-          prevState.consecutiveFailures - CIRCUIT_BREAKER_THRESHOLD + 1,
-          5 // Cap multiplier at 5x
+          Math.max(0, prevState.consecutiveFailures - CIRCUIT_BREAKER_THRESHOLD + 1),
+          5 // Cap exponent at 5 → max multiplier 32x
         );
         const backoffMs = Math.min(
           intervalMs * Math.pow(2, failureMultiplier),
