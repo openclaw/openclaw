@@ -594,13 +594,24 @@ impl RpcDispatcher {
             .or(params.key)
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty());
+        let window = resolve_usage_window(params.start_date, params.end_date, None);
         let usage = self
             .sessions
-            .usage(session_key.as_deref(), params.limit)
+            .usage(
+                session_key.as_deref(),
+                params.limit,
+                Some((window.start_day, window.end_day)),
+                params.include_context_weight.unwrap_or(false),
+            )
             .await;
         RpcDispatchOutcome::Handled(json!({
             "generatedAtMs": now_ms(),
             "sessionKey": session_key,
+            "range": {
+                "startDate": window.start_date,
+                "endDate": window.end_date,
+                "days": window.days
+            },
             "sessions": usage,
             "count": usage.len()
         }))
@@ -1164,6 +1175,8 @@ impl SessionRegistry {
         &self,
         session_key: Option<&str>,
         limit: Option<usize>,
+        window: Option<(i64, i64)>,
+        include_context_weight: bool,
     ) -> Vec<SessionUsageView> {
         let lim = limit.unwrap_or(100).clamp(1, 1_000);
         let guard = self.entries.lock().await;
@@ -1179,22 +1192,84 @@ impl SessionRegistry {
         });
         items
             .into_iter()
-            .take(lim)
-            .map(|entry| SessionUsageView {
-                key: entry.key,
-                kind: entry.kind,
-                agent_id: entry.agent_id,
-                channel: entry.channel,
-                label: entry.label,
-                spawned_by: entry.spawned_by,
-                total_requests: entry.total_requests,
-                allowed_count: entry.allowed_count,
-                review_count: entry.review_count,
-                blocked_count: entry.blocked_count,
-                last_action: entry.last_action,
-                last_risk_score: entry.last_risk_score,
-                updated_at_ms: entry.updated_at_ms,
+            .filter_map(|entry| {
+                let (
+                    total_requests,
+                    allowed_count,
+                    review_count,
+                    blocked_count,
+                    last_action,
+                    last_risk_score,
+                    updated_at_ms,
+                ) = if let Some((start_day, end_day)) = window {
+                    let mut total_requests = 0_u64;
+                    let mut allowed_count = 0_u64;
+                    let mut review_count = 0_u64;
+                    let mut blocked_count = 0_u64;
+                    let mut last_action = None;
+                    let mut last_risk_score = 0_u8;
+                    let mut updated_at_ms = entry.updated_at_ms;
+                    for event in &entry.history {
+                        let day = (event.at_ms / 86_400_000) as i64;
+                        if day < start_day || day > end_day {
+                            continue;
+                        }
+                        if event.kind != SessionHistoryKind::Decision {
+                            continue;
+                        }
+                        total_requests += 1;
+                        match event.action {
+                            Some(DecisionAction::Allow) => allowed_count += 1,
+                            Some(DecisionAction::Review) => review_count += 1,
+                            Some(DecisionAction::Block) => blocked_count += 1,
+                            None => {}
+                        }
+                        last_action = event.action;
+                        last_risk_score = event.risk_score.unwrap_or(0);
+                        updated_at_ms = event.at_ms;
+                    }
+                    if total_requests == 0 && session_key.is_none() {
+                        return None;
+                    }
+                    (
+                        total_requests,
+                        allowed_count,
+                        review_count,
+                        blocked_count,
+                        last_action,
+                        last_risk_score,
+                        updated_at_ms,
+                    )
+                } else {
+                    (
+                        entry.total_requests,
+                        entry.allowed_count,
+                        entry.review_count,
+                        entry.blocked_count,
+                        entry.last_action,
+                        entry.last_risk_score,
+                        entry.updated_at_ms,
+                    )
+                };
+
+                Some(SessionUsageView {
+                    key: entry.key,
+                    kind: entry.kind,
+                    agent_id: entry.agent_id,
+                    channel: entry.channel,
+                    label: entry.label,
+                    spawned_by: entry.spawned_by,
+                    total_requests,
+                    allowed_count,
+                    review_count,
+                    blocked_count,
+                    last_action,
+                    last_risk_score,
+                    updated_at_ms,
+                    context_weight: include_context_weight.then_some(Value::Null),
+                })
             })
+            .take(lim)
             .collect()
     }
 
@@ -1504,6 +1579,8 @@ struct SessionUsageView {
     last_risk_score: u8,
     #[serde(rename = "updatedAtMs")]
     updated_at_ms: u64,
+    #[serde(rename = "contextWeight", skip_serializing_if = "Option::is_none")]
+    context_weight: Option<Value>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1689,6 +1766,12 @@ struct SessionsUsageParams {
     session_key: Option<String>,
     key: Option<String>,
     limit: Option<usize>,
+    #[serde(rename = "startDate", alias = "start_date")]
+    start_date: Option<String>,
+    #[serde(rename = "endDate", alias = "end_date")]
+    end_date: Option<String>,
+    #[serde(rename = "includeContextWeight", alias = "include_context_weight")]
+    include_context_weight: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1816,11 +1899,20 @@ fn format_utc_date(ms: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-fn normalize_usage_range(
+#[derive(Debug, Clone)]
+struct UsageWindow {
+    start_date: String,
+    end_date: String,
+    start_day: i64,
+    end_day: i64,
+    days: u32,
+}
+
+fn resolve_usage_window(
     start_date: Option<String>,
     end_date: Option<String>,
     days: Option<u32>,
-) -> Value {
+) -> UsageWindow {
     let today = format_utc_date(now_ms());
     let normalized_start = normalize_date_yyyy_mm_dd(start_date);
     let normalized_end = normalize_date_yyyy_mm_dd(end_date);
@@ -1852,13 +1944,28 @@ fn normalize_usage_range(
         }
     };
 
-    let start_days = parse_date_to_days(&start).unwrap_or(0);
-    let end_days = parse_date_to_days(&end).unwrap_or(start_days);
-    let day_span = end_days.saturating_sub(start_days) + 1;
+    let start_day = parse_date_to_days(&start).unwrap_or(0);
+    let end_day = parse_date_to_days(&end).unwrap_or(start_day);
+    let day_span = end_day.saturating_sub(start_day) + 1;
+    UsageWindow {
+        start_date: start,
+        end_date: end,
+        start_day,
+        end_day,
+        days: day_span.max(1) as u32,
+    }
+}
+
+fn normalize_usage_range(
+    start_date: Option<String>,
+    end_date: Option<String>,
+    days: Option<u32>,
+) -> Value {
+    let window = resolve_usage_window(start_date, end_date, days);
     json!({
-        "startDate": start,
-        "endDate": end,
-        "days": if day_span > 0 { day_span } else { 1 }
+        "startDate": window.start_date,
+        "endDate": window.end_date,
+        "days": window.days
     })
 }
 
@@ -2546,6 +2653,58 @@ mod tests {
                 );
             }
             _ => panic!("expected usage handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_usage_honors_range_and_context_weight_flag() {
+        let dispatcher = RpcDispatcher::new();
+        let request = ActionRequest {
+            id: "req-usage-range-1".to_owned(),
+            source: "agent".to_owned(),
+            session_id: Some("agent:main:discord:group:g-usage-range".to_owned()),
+            prompt: Some("hello".to_owned()),
+            command: None,
+            tool_name: None,
+            channel: Some("discord".to_owned()),
+            url: None,
+            file_path: None,
+            raw: serde_json::json!({}),
+        };
+        let decision = Decision {
+            action: DecisionAction::Allow,
+            risk_score: 5,
+            reasons: vec![],
+            tags: vec![],
+            source: "openclaw-agent-rs".to_owned(),
+        };
+        dispatcher.record_decision(&request, &decision).await;
+
+        let today = super::format_utc_date(super::now_ms());
+        let usage = RpcRequestFrame {
+            id: "req-usage-range".to_owned(),
+            method: "sessions.usage".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-usage-range",
+                "startDate": today,
+                "endDate": today,
+                "includeContextWeight": true
+            }),
+        };
+        let out = dispatcher.handle_request(&usage).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/range/startDate")
+                        .and_then(serde_json::Value::as_str),
+                    payload
+                        .pointer("/range/endDate")
+                        .and_then(serde_json::Value::as_str)
+                );
+                assert!(payload.pointer("/sessions/0/contextWeight").is_some());
+            }
+            _ => panic!("expected ranged usage handled"),
         }
     }
 

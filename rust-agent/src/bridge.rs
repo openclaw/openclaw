@@ -1369,6 +1369,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_sessions_usage_includes_range_and_context_weight_hint() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let _connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "event",
+                        "event": "agent",
+                        "payload": {
+                            "id": "req-usage-range-seed",
+                            "sessionKey": "agent:main:discord:group:g16",
+                            "chatType": "group",
+                            "wasMentioned": true,
+                            "command": "git status"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let _decision = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for decision"))?
+                .ok_or_else(|| anyhow::anyhow!("decision stream ended"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-usage-range-rpc",
+                        "method": "sessions.usage",
+                        "params": {
+                            "sessionKey": "agent:main:discord:group:g16",
+                            "includeContextWeight": true
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let usage_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for usage response"))?
+                .ok_or_else(|| anyhow::anyhow!("usage response stream ended"))??;
+            let usage_json: Value = serde_json::from_str(usage_response.to_text()?)?;
+            assert_eq!(
+                usage_json
+                    .pointer("/result/range/days")
+                    .and_then(Value::as_i64),
+                Some(30)
+            );
+            assert!(usage_json
+                .pointer("/result/sessions/0/contextWeight")
+                .is_some());
+
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let bridge = GatewayBridge::new(
+            GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            "security.decision".to_owned(),
+            16,
+            SessionQueueMode::Followup,
+            GroupActivationMode::Always,
+        );
+        let evaluator: Arc<dyn ActionEvaluator> = Arc::new(StubEvaluator);
+        bridge.run_once(evaluator).await?;
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn rpc_sessions_usage_timeseries_and_logs_roundtrip() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
