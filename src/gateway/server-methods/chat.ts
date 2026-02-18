@@ -572,7 +572,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -637,6 +637,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: rawSessionKey });
         await updateSessionStore(storePath, (store) => {
           const existing = store[canonicalKey];
+          // Race condition fix: another concurrent message may have already set sessionId
+          if (existing?.sessionId) {
+            return;
+          }
           store[canonicalKey] = {
             sessionId: resolvedSessionId,
             updatedAt: now,
