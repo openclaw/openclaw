@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,12 @@ const noopLogger = {
   debug: vi.fn(),
   trace: vi.fn(),
 };
+const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
+
+function topOfHourOffsetMs(jobId: string) {
+  const digest = crypto.createHash("sha256").update(jobId).digest();
+  return digest.readUInt32BE(0) % TOP_OF_HOUR_STAGGER_MS;
+}
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -101,13 +108,14 @@ describe("Cron issue regressions", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
-    expect(created.state.nextRunAtMs).toBe(Date.parse("2026-02-06T11:00:00.000Z"));
+    const offsetMs = topOfHourOffsetMs(created.id);
+    expect(created.state.nextRunAtMs).toBe(Date.parse("2026-02-06T11:00:00.000Z") + offsetMs);
 
     const updated = await cron.update(created.id, {
       schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
     });
 
-    expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T12:00:00.000Z"));
+    expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T12:00:00.000Z") + offsetMs);
 
     const forceNow = await cron.add({
       name: "force-now",

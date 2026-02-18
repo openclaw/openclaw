@@ -674,7 +674,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     }
 
     const result = await spawnSubagentDirect(
-      { task, agentId, model, thinking, cleanup: "keep" },
+      { task, agentId, model, thinking, cleanup: "keep", expectsCompletionMessage: true },
       {
         agentSessionKey: requesterKey,
         agentChannel: params.command.channel,

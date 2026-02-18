@@ -10,6 +10,7 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   type DeliveryContext,
   deliveryContextFromSession,
@@ -28,7 +29,90 @@ import {
 } from "./pi-embedded.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { readLatestAssistantReply } from "./tools/agent-step.js";
+import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
+
+type ToolResultMessage = {
+  role?: unknown;
+  content?: unknown;
+};
+
+function extractToolResultText(content: unknown): string {
+  if (typeof content === "string") {
+    return sanitizeTextContent(content);
+  }
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const obj = content as {
+      text?: unknown;
+      output?: unknown;
+      content?: unknown;
+    };
+    if (typeof obj.text === "string") {
+      return sanitizeTextContent(obj.text);
+    }
+    if (typeof obj.output === "string") {
+      return sanitizeTextContent(obj.output);
+    }
+    if (typeof obj.content === "string") {
+      return sanitizeTextContent(obj.content);
+    }
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const joined = extractTextFromChatContent(content, {
+    sanitizeText: sanitizeTextContent,
+    normalizeText: (text) => text,
+    joinWith: "\n",
+  });
+  return joined?.trim() ?? "";
+}
+
+function extractSubagentOutputText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const role = (message as { role?: unknown }).role;
+  if (role === "assistant") {
+    return extractAssistantText(message) ?? "";
+  }
+  if (role === "toolResult" || role === "tool") {
+    return extractToolResultText((message as ToolResultMessage).content);
+  }
+  return "";
+}
+
+async function readLatestSubagentOutput(sessionKey: string): Promise<string | undefined> {
+  const history = await callGateway<{ messages?: Array<unknown> }>({
+    method: "chat.history",
+    params: { sessionKey, limit: 50 },
+  });
+  const messages = Array.isArray(history?.messages) ? history.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    const text = extractSubagentOutputText(msg);
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+async function readLatestSubagentOutputWithRetry(params: {
+  sessionKey: string;
+  maxWaitMs: number;
+}): Promise<string | undefined> {
+  const RETRY_INTERVAL_MS = 100;
+  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
+  let result: string | undefined;
+  while (Date.now() < deadline) {
+    result = await readLatestSubagentOutput(params.sessionKey);
+    if (result?.trim()) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+  }
+  return result;
+}
 
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -238,28 +322,6 @@ function loadSessionEntryByKey(sessionKey: string) {
   return store[sessionKey];
 }
 
-async function readLatestAssistantReplyWithRetry(params: {
-  sessionKey: string;
-  initialReply?: string;
-  maxWaitMs: number;
-}): Promise<string | undefined> {
-  const RETRY_INTERVAL_MS = 100;
-  let reply = params.initialReply?.trim() ? params.initialReply : undefined;
-  if (reply) {
-    return reply;
-  }
-
-  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
-    const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey });
-    if (latest?.trim()) {
-      return latest;
-    }
-  }
-  return reply;
-}
-
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
   requesterOrigin?: DeliveryContext;
@@ -296,6 +358,7 @@ export function buildSubagentSystemPrompt(params: {
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
     "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
+    "6. **Recover from compacted/truncated tool output** - If you see `[compacted: tool output removed to free context]` or `[truncated: output exceeded context limit]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
@@ -359,7 +422,11 @@ function buildAnnounceReplyInstruction(params: {
   remainingActiveSubagentRuns: number;
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
+  expectsCompletionMessage?: boolean;
 }): string {
+  if (params.expectsCompletionMessage) {
+    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+  }
   if (params.remainingActiveSubagentRuns > 0) {
     const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
     return `There are still ${params.remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`;
@@ -386,8 +453,10 @@ export async function runSubagentAnnounceFlow(params: {
   label?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  expectsCompletionMessage?: boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
+  const expectsCompletionMessage = params.expectsCompletionMessage === true;
   let shouldDeleteChildSession = params.cleanup === "delete";
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
@@ -448,17 +517,16 @@ export async function runSubagentAnnounceFlow(params: {
           outcome = { status: "timeout" };
         }
       }
-      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
+      reply = await readLatestSubagentOutput(params.childSessionKey);
     }
 
     if (!reply) {
-      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
+      reply = await readLatestSubagentOutput(params.childSessionKey);
     }
 
     if (!reply?.trim()) {
-      reply = await readLatestAssistantReplyWithRetry({
+      reply = await readLatestSubagentOutputWithRetry({
         sessionKey: params.childSessionKey,
-        initialReply: reply,
         maxWaitMs: params.timeoutMs,
       });
     }
@@ -505,7 +573,7 @@ export async function runSubagentAnnounceFlow(params: {
     let triggerMessage = "";
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-    let requesterIsSubagent = requesterDepth >= 1;
+    let requesterIsSubagent = !expectsCompletionMessage && requesterDepth >= 1;
     // If the requester subagent has already finished, bubble the announce to its
     // requester (typically main) so descendant completion is not silently lost.
     // BUT: only fallback if the parent SESSION is deleted, not just if the current
@@ -558,6 +626,7 @@ export async function runSubagentAnnounceFlow(params: {
       remainingActiveSubagentRuns,
       requesterIsSubagent,
       announceType,
+      expectsCompletionMessage,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -579,20 +648,22 @@ export async function runSubagentAnnounceFlow(params: {
       childSessionKey: params.childSessionKey,
       childRunId: params.childRunId,
     });
-    const queued = await maybeQueueSubagentAnnounce({
-      requesterSessionKey: targetRequesterSessionKey,
-      announceId,
-      triggerMessage,
-      summaryLine: taskLabel,
-      requesterOrigin: targetRequesterOrigin,
-    });
-    if (queued === "steered") {
-      didAnnounce = true;
-      return true;
-    }
-    if (queued === "queued") {
-      didAnnounce = true;
-      return true;
+    if (!expectsCompletionMessage) {
+      const queued = await maybeQueueSubagentAnnounce({
+        requesterSessionKey: targetRequesterSessionKey,
+        announceId,
+        triggerMessage,
+        summaryLine: taskLabel,
+        requesterOrigin: targetRequesterOrigin,
+      });
+      if (queued === "steered") {
+        didAnnounce = true;
+        return true;
+      }
+      if (queued === "queued") {
+        didAnnounce = true;
+        return true;
+      }
     }
 
     // Send to the requester session. For nested subagents this is an internal
