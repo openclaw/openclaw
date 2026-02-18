@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, extensi
 read_when:
   - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
-  - You want to use the Chrome extension relay (attach/detach via toolbar button)
+  - You want to use the Chrome extension relay (attach via toolbar button or CLI launch)
 title: "browser"
 ---
 
@@ -83,9 +83,16 @@ openclaw browser click <ref>
 openclaw browser type <ref> "hello"
 ```
 
-## Chrome extension relay (attach via toolbar button)
+## Chrome extension relay (manual attach or CLI launch)
 
-This mode lets the agent control an existing Chrome tab that you attach manually (it does not auto-attach).
+This mode lets the agent control an existing Chrome tab that you attach manually or via the CLI launcher.
+
+Auto-attach via CLI (launches Chrome with the extension loaded and attempts to start the relay server via the Gateway):
+
+```bash
+openclaw browser relay launch
+openclaw browser relay launch https://example.com
+```
 
 Install the unpacked extension to a stable path:
 

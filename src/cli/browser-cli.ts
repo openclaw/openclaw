@@ -11,6 +11,7 @@ import { browserActionExamples, browserCoreExamples } from "./browser-cli-exampl
 import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
 import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
+import { registerBrowserRelayCommands } from "./browser-cli-relay.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions } from "./gateway-rpc.js";
@@ -47,6 +48,7 @@ export function registerBrowserCli(program: Command) {
 
   registerBrowserManageCommands(browser, parentOpts);
   registerBrowserExtensionCommands(browser, parentOpts);
+  registerBrowserRelayCommands(browser, parentOpts);
   registerBrowserInspectCommands(browser, parentOpts);
   registerBrowserActionInputCommands(browser, parentOpts);
   registerBrowserActionObserveCommands(browser, parentOpts);

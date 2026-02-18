@@ -17,6 +17,13 @@ Purpose: attach OpenClaw to an existing Chrome tab so the Gateway can automate i
 5. “Load unpacked” → select the path printed above.
 6. Pin the extension. Click the icon on a tab to attach/detach.
 
+Optional: auto-attach a launch tab via CLI:
+
+```bash
+openclaw browser relay launch
+openclaw browser relay launch https://example.com
+```
+
 ## Options
 
 - `Relay port`: defaults to `18792`.

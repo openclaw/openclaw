@@ -1,7 +1,7 @@
 ---
 summary: "Chrome extension: let OpenClaw drive your existing Chrome tab"
 read_when:
-  - You want the agent to drive an existing Chrome tab (toolbar button)
+  - You want the agent to drive an existing Chrome tab (toolbar button or CLI launch)
   - You need remote Gateway + local browser automation via Tailscale
   - You want to understand the security implications of browser takeover
 title: "Chrome Extension"
@@ -12,6 +12,7 @@ title: "Chrome Extension"
 The OpenClaw Chrome extension lets the agent control your **existing Chrome tabs** (your normal Chrome window) instead of launching a separate openclaw-managed Chrome profile.
 
 Attach/detach happens via a **single Chrome toolbar button**.
+You can also launch Chrome from the CLI and auto-attach the relay tab.
 
 ## What it is (concept)
 
@@ -70,6 +71,15 @@ openclaw browser create-profile \
   --driver extension \
   --cdp-url http://127.0.0.1:18792 \
   --color "#00AA00"
+```
+
+## Launch and auto-attach (CLI)
+
+Launch Chrome with the extension loaded and auto-attach the relay tab (the CLI will attempt to start the relay server via the Gateway):
+
+```bash
+openclaw browser relay launch
+openclaw browser relay launch https://example.com
 ```
 
 ## Attach / detach (toolbar button)
