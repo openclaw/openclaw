@@ -87,4 +87,17 @@ export type ResolveQueueSettingsParams = {
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
+  /**
+   * The raw inbound message body.
+   * When provided, checked against `messages.queue.steerTriggers` to allow
+   * per-message steer override without permanently changing the session mode.
+   */
+  prompt?: string;
+};
+
+export type SteerTriggerMatch = {
+  /** True when the prompt matched a configured steer trigger. */
+  matched: boolean;
+  /** The prompt with the matched trigger prefix stripped (ready to pass to the agent). */
+  cleanedPrompt: string;
 };

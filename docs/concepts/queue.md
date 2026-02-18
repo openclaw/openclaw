@@ -69,6 +69,34 @@ Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` when
 Summarize keeps a short bullet list of dropped messages and injects it as a synthetic followup prompt.
 Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
+## Per-message steer triggers
+
+You can configure a list of prefix strings that force `steer` mode for a single message,
+without changing the global or session queue mode. This is useful when you want `collect`
+as the default but need a quick way to interrupt an active run in exceptional cases.
+
+```json5
+{
+  messages: {
+    queue: {
+      mode: "collect",          // default for all messages
+      steerTriggers: ["!", "STOP", "URGENT"],  // prefix → one-shot steer
+    },
+  },
+}
+```
+
+When a message starts with a configured trigger (case-insensitive), OpenClaw:
+
+1. Overrides the queue mode to `steer` **for that message only** — the session and global
+   settings are not modified.
+2. Strips the trigger prefix from the message body before passing it to the agent.
+
+Priority (highest first): inline `/queue` directive → steer trigger → session override →
+`byChannel` config → global `mode` → default (`collect`).
+
+> **Tip:** Leave `steerTriggers` empty or omit it entirely to disable the feature (backward-compatible default).
+
 ## Per-session overrides
 
 - Send `/queue <mode>` as a standalone command to store the mode for the current session.

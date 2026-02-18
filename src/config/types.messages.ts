@@ -18,6 +18,17 @@ export type QueueConfig = {
   debounceMsByChannel?: InboundDebounceByProvider;
   cap?: number;
   drop?: QueueDropPolicy;
+  /**
+   * Per-message steer triggers: if a message starts with any of these strings
+   * (case-insensitive), the queue mode is overridden to `steer` for that message,
+   * regardless of the global or session queue setting.
+   * The trigger prefix is stripped from the message before processing.
+   *
+   * Example: `["!", "STOP", "URGENT"]`
+   *
+   * Leave empty or omit to disable (default behaviour).
+   */
+  steerTriggers?: string[];
 };
 
 export type InboundDebounceByProvider = Record<string, number>;
