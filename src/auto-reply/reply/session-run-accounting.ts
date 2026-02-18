@@ -21,6 +21,7 @@ export async function persistRunSessionUsage(params: PersistRunSessionUsageParam
     promptTokens: params.promptTokens,
     modelUsed: params.modelUsed,
     providerUsed: params.providerUsed,
+    resolvedModel: params.resolvedModel,
     contextTokensUsed: params.contextTokensUsed,
     systemPromptReport: params.systemPromptReport,
     cliSessionId: params.cliSessionId,

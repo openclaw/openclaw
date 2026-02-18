@@ -190,6 +190,7 @@ export function createSessionsListTool(opts?: {
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
+          resolvedModel: typeof entry.resolvedModel === "string" ? entry.resolvedModel : undefined,
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
           abortedLastRun:
             typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,

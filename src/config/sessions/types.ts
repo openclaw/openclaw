@@ -80,6 +80,8 @@ export type SessionEntry = {
   totalTokensFresh?: boolean;
   modelProvider?: string;
   model?: string;
+  /** The actual model resolved by the provider (e.g. when using openrouter/auto). */
+  resolvedModel?: string;
   contextTokens?: number;
   compactionCount?: number;
   memoryFlushAt?: number;

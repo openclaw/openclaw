@@ -431,6 +431,7 @@ export async function runReplyAgent(params: {
       promptTokens,
       modelUsed,
       providerUsed,
+      resolvedModel: runResult.meta.agentMeta?.resolvedModel,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
@@ -538,6 +539,10 @@ export async function runReplyAgent(params: {
         showCost,
         costConfig,
       });
+      const agentResolvedModel = runResult.meta.agentMeta?.resolvedModel;
+      if (formatted && agentResolvedModel && agentResolvedModel !== modelUsed) {
+        formatted = `${formatted} · ${modelUsed} → ${agentResolvedModel}`;
+      }
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session ${sessionKey}`;
       }

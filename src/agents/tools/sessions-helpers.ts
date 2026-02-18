@@ -24,6 +24,7 @@ export {
   resolveSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
+import type { SessionStatusFields } from "../../config/sessions.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
@@ -40,7 +41,7 @@ export type SessionListDeliveryContext = {
   accountId?: string;
 };
 
-export type SessionListRow = {
+export type SessionListRow = Partial<SessionStatusFields> & {
   key: string;
   kind: SessionKind;
   channel: string;
@@ -50,12 +51,6 @@ export type SessionListRow = {
   updatedAt?: number | null;
   sessionId?: string;
   model?: string;
-  contextTokens?: number | null;
-  totalTokens?: number | null;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
   sendPolicy?: string;
   lastChannel?: string;
   lastTo?: string;

@@ -431,9 +431,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "reset":
         try {
           // Clear token counts immediately to avoid stale display (#1523)
-          state.sessionInfo.inputTokens = null;
-          state.sessionInfo.outputTokens = null;
-          state.sessionInfo.totalTokens = null;
+          state.sessionInfo.inputTokens = undefined;
+          state.sessionInfo.outputTokens = undefined;
+          state.sessionInfo.totalTokens = undefined;
           tui.requestRender();
 
           await client.resetSession(state.currentSessionKey, name);

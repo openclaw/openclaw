@@ -45,6 +45,8 @@ export async function persistSessionUsageUpdate(params: {
   lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
+  /** The actual model resolved by the provider (e.g. openrouter/auto → anthropic/claude-haiku-4.5). */
+  resolvedModel?: string;
   contextTokensUsed?: number;
   promptTokens?: number;
   systemPromptReport?: SessionSystemPromptReport;
@@ -91,6 +93,7 @@ export async function persistSessionUsageUpdate(params: {
             totalTokensFresh: typeof totalTokens === "number",
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
+            resolvedModel: params.resolvedModel,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
@@ -113,6 +116,7 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
+            resolvedModel: params.resolvedModel,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),

@@ -5,6 +5,8 @@ export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  /** The actual model resolved by the provider (e.g. when using openrouter/auto). */
+  resolvedModel?: string;
   compactionCount?: number;
   promptTokens?: number;
   usage?: {

@@ -1,5 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry, SessionStatusFields } from "../config/sessions.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 
 export type GatewaySessionsDefaults = {
@@ -8,7 +8,7 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
-export type GatewaySessionRow = {
+export type GatewaySessionRow = Partial<SessionStatusFields> & {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
@@ -23,21 +23,9 @@ export type GatewaySessionRow = {
   origin?: SessionEntry["origin"];
   updatedAt: number | null;
   sessionId?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
-  contextTokens?: number;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
