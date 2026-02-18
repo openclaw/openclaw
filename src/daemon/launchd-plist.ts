@@ -106,5 +106,31 @@ export function buildLaunchAgentPlist({
     ? `\n    <key>Comment</key>\n    <string>${plistEscape(comment.trim())}</string>`
     : "";
   const envXml = renderEnvDict(environment);
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${plistEscape(label)}</string>
+    ${commentXml}
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+      <key>SuccessfulExit</key>
+      <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>ProgramArguments</key>
+    <array>${argsXml}
+    </array>
+    ${workingDirXml}
+    <key>StandardOutPath</key>
+    <string>${plistEscape(stdoutPath)}</string>
+    <key>StandardErrorPath</key>
+    <string>${plistEscape(stderrPath)}</string>${envXml}
+  </dict>
+</plist>
+`;
 }
