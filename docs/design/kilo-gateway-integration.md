@@ -31,7 +31,7 @@ Rationale:
 
 **Recommendation: Hardcoded default with config override**
 
-- **Default Base URL:** `https://api.kilo.ai/api/openrouter/`
+- **Default Base URL:** `https://api.kilo.ai/api/gateway/`
 - **Configurable:** Yes, via `models.providers.kilocode.baseUrl`
 
 This matches the pattern used by other providers like Moonshot, Venice, and Synthetic.
@@ -103,7 +103,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
 
 Add new functions:
 ```typescript
-export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/openrouter/";
+export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 
 export function applyKilocodeProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   const models = { ...cfg.agents?.defaults?.models };
@@ -446,7 +446,7 @@ const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRout
     "mode": "merge",
     "providers": {
       "kilocode": {
-        "baseUrl": "https://api.kilo.ai/api/openrouter/",
+        "baseUrl": "https://api.kilo.ai/api/gateway/",
         "apiKey": "xxxxx",
         "api": "openai-completions",
         "models": [

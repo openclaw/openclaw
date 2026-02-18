@@ -657,7 +657,7 @@ export function buildNvidiaProvider(): ProviderConfig {
 }
 
 // Kilo Gateway provider
-const KILOCODE_BASE_URL = "https://api.kilo.ai/api/openrouter/";
+const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 const KILOCODE_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
 const KILOCODE_DEFAULT_CONTEXT_WINDOW = 200000;
 const KILOCODE_DEFAULT_MAX_TOKENS = 8192;

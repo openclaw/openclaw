@@ -44,6 +44,6 @@ export KILOCODE_API_KEY="your-api-key"
 
 - Model refs are `kilocode/<provider>/<model>` (e.g., `kilocode/anthropic/claude-opus-4.5`).
 - Default model: `kilocode/anthropic/claude-opus-4.5`
-- Base URL: `https://api.kilo.ai/api/openrouter/`
+- Base URL: `https://api.kilo.ai/api/gateway/`
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - Kilo Gateway uses a Bearer token with your API key under the hood.
