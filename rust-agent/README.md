@@ -67,6 +67,7 @@ systemctl --user status openclaw-agent-rs.service
 - Tracks a stable per-session `sessionId` in session metadata, resolves keys by `sessionId` in `sessions.resolve`, and rotates `sessionId` on `sessions.reset`.
 - Normalizes alias and short-form session keys (`main`, `discord:group:*`, etc.) to canonical `agent:*` keys across session RPC handlers.
 - Aligns reset/compact parity semantics with upstream defaults (`sessions.reset` reason must be `new|reset`; `sessions.compact` defaults to 400 lines and rejects `maxLines < 1`).
+- Enforces upstream `sessions.patch.sendPolicy` parity (`allow|deny|null`); legacy `inherit` is rejected at the RPC boundary.
 - Responds to gateway introspection RPCs (`health`, `status`) with runtime/session metadata.
 - Responds to usage RPCs (`usage.status`, `usage.cost`) with Rust-side aggregate usage/cost placeholder summaries.
 - Tracks session metadata (`label`, `spawnedBy`) via `sessions.patch` and uses it for filtered `sessions.resolve` lookups.

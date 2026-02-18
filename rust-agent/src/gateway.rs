@@ -2011,7 +2011,6 @@ struct UsageTotals {
 pub enum SendPolicyOverride {
     Allow,
     Deny,
-    Inherit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -2293,15 +2292,6 @@ fn param_patch_value(params: &Value, keys: &[&str]) -> Option<Option<Value>> {
     None
 }
 
-fn parse_send_policy(value: &str) -> Option<SendPolicyOverride> {
-    match normalize(value).as_str() {
-        "allow" => Some(SendPolicyOverride::Allow),
-        "deny" => Some(SendPolicyOverride::Deny),
-        "inherit" => Some(SendPolicyOverride::Inherit),
-        _ => None,
-    }
-}
-
 fn parse_group_activation_mode(value: &str) -> Option<GroupActivationMode> {
     match normalize(value).as_str() {
         "mention" => Some(GroupActivationMode::Mention),
@@ -2371,9 +2361,11 @@ fn parse_patch_send_policy(
         None => Ok(PatchValue::Keep),
         Some(None) => Ok(PatchValue::Clear),
         Some(Some(Value::Null)) => Ok(PatchValue::Clear),
-        Some(Some(Value::String(v))) => parse_send_policy(&v)
-            .map(PatchValue::Set)
-            .ok_or_else(|| "sendPolicy must be allow|deny|inherit|null".to_owned()),
+        Some(Some(Value::String(v))) => match normalize(&v).as_str() {
+            "allow" => Ok(PatchValue::Set(SendPolicyOverride::Allow)),
+            "deny" => Ok(PatchValue::Set(SendPolicyOverride::Deny)),
+            _ => Err("sendPolicy must be allow|deny|null".to_owned()),
+        },
         Some(_) => Err("sendPolicy must be string or null".to_owned()),
     }
 }
@@ -2938,6 +2930,10 @@ mod tests {
             serde_json::json!({
                 "key": "agent:main:discord:group:g1",
                 "execHost": "remote"
+            }),
+            serde_json::json!({
+                "key": "agent:main:discord:group:g1",
+                "sendPolicy": "inherit"
             }),
         ]
         .into_iter()
