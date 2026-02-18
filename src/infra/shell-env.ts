@@ -6,6 +6,13 @@ const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 
+function resolveTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_TIMEOUT_MS;
+  }
+  return Math.max(0, timeoutMs);
+}
+
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
   return shell && shell.length > 0 ? shell : "/bin/sh";
@@ -76,10 +83,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
   }
 
-  const timeoutMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-      ? Math.max(0, opts.timeoutMs)
-      : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
 
   const shell = resolveShell(opts.env);
 
@@ -146,10 +150,7 @@ export function getShellPathFromLoginShell(opts: {
   }
 
   const exec = opts.exec ?? execFileSync;
-  const timeoutMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-      ? Math.max(0, opts.timeoutMs)
-      : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
   const shell = resolveShell(opts.env);
 
   let stdout: Buffer;
