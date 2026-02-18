@@ -99,6 +99,74 @@ describe("before_tool_call hook integration", () => {
     );
   });
 
+  it("returns approval-pending result when hook returns needsApproval=true", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      needsApproval: true,
+      approvalReason: "requires operator approval",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      agentId: "a1",
+      sessionKey: "s1",
+    });
+
+    const result = await tool.execute("call-approval", { cmd: "deploy" }, undefined, undefined);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result).toBeDefined();
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
+    expect(details.status).toBe("approval-pending");
+    expect(details.tool).toBe("exec");
+    expect(details.agentId).toBe("a1");
+    expect(details.sessionKey).toBe("s1");
+    expect(details.reason).toBe("requires operator approval");
+  });
+
+  it("uses default approval reason when approvalReason is missing", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({ needsApproval: true });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+
+    const result = await tool.execute("call-default-reason", { x: 1 }, undefined, undefined);
+
+    expect(execute).not.toHaveBeenCalled();
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
+    expect(details.status).toBe("approval-pending");
+    expect(details.reason).toBe("Tool call requires approval");
+  });
+
+  it("prefers needsApproval over block when both are set", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      needsApproval: true,
+      approvalReason: "approval",
+      block: true,
+      blockReason: "hard block",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+
+    // Should not throw — needsApproval takes precedence, returning a result.
+    const result = await tool.execute("call-both", {}, undefined, undefined);
+    expect(execute).not.toHaveBeenCalled();
+    const details = (result as unknown as Record<string, unknown>).details as Record<
+      string,
+      unknown
+    >;
+    expect(details.status).toBe("approval-pending");
+  });
+
   it("normalizes non-object params for hook contract", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockResolvedValue(undefined);

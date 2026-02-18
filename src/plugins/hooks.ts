@@ -393,6 +393,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         params: next.params ?? acc?.params,
         block: next.block ?? acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
+        needsApproval: next.needsApproval ?? acc?.needsApproval,
+        approvalReason: next.approvalReason ?? acc?.approvalReason,
       }),
     );
   }
