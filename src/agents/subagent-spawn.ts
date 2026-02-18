@@ -49,7 +49,6 @@ export type SpawnSubagentResult = {
   runId?: string;
   note?: string;
   modelApplied?: boolean;
-  warning?: string;
   error?: string;
 };
 
