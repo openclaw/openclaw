@@ -20,7 +20,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/camsnap@latest",
+              "module": "github.com/steipete/camsnap/cmd/camsnap@latest",
               "bins": ["camsnap"],
               "label": "Install camsnap (go)",
             },

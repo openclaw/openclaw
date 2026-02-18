@@ -21,7 +21,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/goplaces@latest",
+              "module": "github.com/steipete/goplaces/cmd/goplaces@latest",
               "bins": ["goplaces"],
               "label": "Install goplaces (go)",
             },

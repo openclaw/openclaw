@@ -20,7 +20,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/gogcli@latest",
+              "module": "github.com/steipete/gogcli/cmd/gog@latest",
               "bins": ["gog"],
               "label": "Install gog (go)",
             },

@@ -20,7 +20,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/summarize@latest",
+              "module": "github.com/steipete/summarize/cmd/summarize@latest",
               "bins": ["summarize"],
               "label": "Install summarize (go)",
             },

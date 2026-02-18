@@ -21,7 +21,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/sag@latest",
+              "module": "github.com/steipete/sag/cmd/sag@latest",
               "bins": ["sag"],
               "label": "Install sag (go)",
             },

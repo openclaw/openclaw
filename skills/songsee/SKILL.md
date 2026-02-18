@@ -20,7 +20,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/songsee@latest",
+              "module": "github.com/steipete/songsee/cmd/songsee@latest",
               "bins": ["songsee"],
               "label": "Install songsee (go)",
             },
