@@ -177,6 +177,30 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("sets disable_notification when silent is true", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hi" }],
+      runtime,
+      bot,
+      silent: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        disable_notification: true,
+      }),
+    );
+  });
+
   it("includes message_thread_id for DM topics", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
