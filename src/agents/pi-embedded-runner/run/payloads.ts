@@ -50,16 +50,18 @@ function shouldShowToolErrorWarning(params: {
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
 }): boolean {
-  if (params.suppressToolErrorWarnings) {
+  // Check suppression flags first — these should always take priority,
+  // even for mutating tools. Previously, mutating tool errors returned
+  // true before reaching the suppressToolErrors check, making the config
+  // option ineffective for tools like exec, write, edit, etc.
+  // See: https://github.com/openclaw/openclaw/issues/19321
+  if (params.suppressToolErrorWarnings || params.suppressToolErrors) {
     return false;
   }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return true;
-  }
-  if (params.suppressToolErrors) {
-    return false;
   }
   return !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error);
 }
