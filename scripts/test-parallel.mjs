@@ -186,7 +186,10 @@ const maxWorkersForRun = (name) => {
     return null;
   }
   if (isCI && isMacOS) {
-    return 1;
+    // macOS CI with a single worker causes heavy cross-file state leakage in
+    // Vitest pools (timers/env stubs/singletons), producing widespread flakes.
+    // Keep this conservative but non-serial to preserve isolation boundaries.
+    return 2;
   }
   if (name === "unit-isolated") {
     return defaultWorkerBudget.unitIsolated;
