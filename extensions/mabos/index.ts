@@ -324,14 +324,40 @@ export default function register(api: OpenClawPluginApi) {
     { commands: ["mabos"] },
   );
 
-  // ── 4. Dashboard HTTP Routes ────────────────────────────────────
+  // ── 4. Dashboard HTTP Routes & API Endpoints ─────────────────────
 
-  // API endpoint for live data
+  // Helper: read JSON file safely
+  const readJsonSafe = async (p: string) => {
+    try {
+      const { readFile } = await import("node:fs/promises");
+      return JSON.parse(await readFile(p, "utf-8"));
+    } catch {
+      return null;
+    }
+  };
+
+  // Helper: read Markdown file safely, extract lines as items
+  const readMdLines = async (p: string) => {
+    try {
+      const { readFile } = await import("node:fs/promises");
+      const content = await readFile(p, "utf-8");
+      return content
+        .split("\n")
+        .filter((l: string) => l.trim() && !l.startsWith("#"))
+        .map((l: string) => l.replace(/^[-*]\s*/, "").trim())
+        .filter(Boolean)
+        .slice(0, 50);
+    } catch {
+      return [];
+    }
+  };
+
+  // API: System status (enhanced)
   api.registerHttpRoute({
     path: "/mabos/api/status",
     handler: async (_req, res) => {
       try {
-        const { discoverAgents, getAgentsSummary } = (await import(
+        const { getAgentsSummary } = (await import(
           /* webpackIgnore: true */ BDI_RUNTIME_PATH
         )) as any;
         const agents = await getAgentsSummary(workspaceDir);
@@ -351,6 +377,7 @@ export default function register(api: OpenClawPluginApi) {
             agents,
             businessCount: businesses.length,
             workspaceDir,
+            reasoningToolCount: 20,
           }),
         );
       } catch (err) {
@@ -361,99 +388,298 @@ export default function register(api: OpenClawPluginApi) {
     },
   });
 
-  // Dashboard HTML page
+  // API: Pending decisions across all businesses
+  api.registerHttpRoute({
+    path: "/mabos/api/decisions",
+    handler: async (_req, res) => {
+      try {
+        const { readdir, stat: fsStat } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const businessDir = join(workspaceDir, "businesses");
+        const entries = await readdir(businessDir).catch(() => []);
+        const allDecisions: any[] = [];
+
+        for (const entry of entries) {
+          const s = await fsStat(join(businessDir, entry)).catch(() => null);
+          if (!s?.isDirectory()) continue;
+          const queuePath = join(businessDir, entry, "decision-queue.json");
+          const queue = await readJsonSafe(queuePath);
+          if (Array.isArray(queue)) {
+            for (const d of queue) {
+              if (d.status === "pending") {
+                allDecisions.push({ ...d, business_id: entry });
+              }
+            }
+          }
+        }
+
+        // Sort by urgency
+        const urgencyOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+        allDecisions.sort(
+          (a, b) => (urgencyOrder[a.urgency] ?? 2) - (urgencyOrder[b.urgency] ?? 2),
+        );
+
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ decisions: allDecisions }));
+      } catch (err) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // API: Resolve a decision
+  api.registerHttpRoute({
+    path: "/mabos/api/decisions/:id/resolve",
+    handler: async (req, res) => {
+      try {
+        const { readFile, writeFile, mkdir } = await import("node:fs/promises");
+        const { join, dirname } = await import("node:path");
+
+        let body = "";
+        for await (const chunk of req as any) body += chunk;
+        const params = JSON.parse(body);
+
+        const queuePath = join(
+          workspaceDir,
+          "businesses",
+          params.business_id,
+          "decision-queue.json",
+        );
+        const queue = await readJsonSafe(queuePath);
+        if (!Array.isArray(queue)) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: "Decision queue not found" }));
+          return;
+        }
+
+        const idx = queue.findIndex((d: any) => d.id === params.decision_id);
+        if (idx === -1) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: "Decision not found" }));
+          return;
+        }
+
+        const decision = queue[idx];
+        decision.status = params.resolution;
+        decision.feedback = params.feedback;
+        decision.resolved_at = new Date().toISOString();
+
+        await mkdir(dirname(queuePath), { recursive: true });
+        await writeFile(queuePath, JSON.stringify(queue, null, 2), "utf-8");
+
+        // Notify agent
+        if (decision.agent) {
+          const inboxPath = join(
+            workspaceDir,
+            "businesses",
+            params.business_id,
+            "agents",
+            decision.agent,
+            "inbox.json",
+          );
+          const inbox = (await readJsonSafe(inboxPath)) || [];
+          inbox.push({
+            id: `DEC-${params.decision_id}-resolved`,
+            from: "stakeholder",
+            to: decision.agent,
+            performative:
+              params.resolution === "approved"
+                ? "ACCEPT"
+                : params.resolution === "rejected"
+                  ? "REJECT"
+                  : "INFORM",
+            content: `Decision ${params.decision_id} ${params.resolution}${params.feedback ? `. Feedback: ${params.feedback}` : ""}`,
+            priority: "high",
+            timestamp: new Date().toISOString(),
+            read: false,
+          });
+          await mkdir(dirname(inboxPath), { recursive: true });
+          await writeFile(inboxPath, JSON.stringify(inbox, null, 2), "utf-8");
+        }
+
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ok: true, decision }));
+      } catch (err) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // API: Agent detail
+  api.registerHttpRoute({
+    path: "/mabos/api/agents/:id",
+    handler: async (req, res) => {
+      try {
+        const { join } = await import("node:path");
+        const url = new URL(req.url || "", "http://localhost");
+        const agentId = url.pathname.split("/").pop() || "";
+        const agentDir = join(workspaceDir, "agents", agentId);
+
+        const beliefs = await readMdLines(join(agentDir, "Beliefs.md"));
+        const goals = await readMdLines(join(agentDir, "Goals.md"));
+        const intentions = await readMdLines(join(agentDir, "Intentions.md"));
+        const desires = await readMdLines(join(agentDir, "Desires.md"));
+
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify({
+            agentId,
+            beliefCount: beliefs.length,
+            goalCount: goals.length,
+            intentionCount: intentions.length,
+            desireCount: desires.length,
+            beliefs,
+            goals,
+            intentions,
+            desires,
+          }),
+        );
+      } catch (err) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // API: Business list
+  api.registerHttpRoute({
+    path: "/mabos/api/businesses",
+    handler: async (_req, res) => {
+      try {
+        const { readdir, stat: fsStat } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const businessDir = join(workspaceDir, "businesses");
+        const entries = await readdir(businessDir).catch(() => []);
+        const businesses: any[] = [];
+
+        for (const entry of entries) {
+          const s = await fsStat(join(businessDir, entry)).catch(() => null);
+          if (!s?.isDirectory()) continue;
+          const manifest = await readJsonSafe(join(businessDir, entry, "manifest.json"));
+          const agentsDir = join(businessDir, entry, "agents");
+          const agentEntries = await readdir(agentsDir).catch(() => []);
+          businesses.push({
+            id: entry,
+            name: manifest?.name ?? entry,
+            industry: manifest?.industry ?? "general",
+            status: manifest?.status ?? "active",
+            agentCount: agentEntries.length,
+          });
+        }
+
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ businesses }));
+      } catch (err) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // API: Metrics for a business
+  api.registerHttpRoute({
+    path: "/mabos/api/metrics/:business",
+    handler: async (req, res) => {
+      try {
+        const { join } = await import("node:path");
+        const url = new URL(req.url || "", "http://localhost");
+        const businessId = url.pathname.split("/").pop() || "";
+        const metricsPath = join(workspaceDir, "businesses", businessId, "metrics.json");
+        const metrics = await readJsonSafe(metricsPath);
+
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ business: businessId, metrics: metrics || {} }));
+      } catch (err) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // API: Contractors
+  api.registerHttpRoute({
+    path: "/mabos/api/contractors",
+    handler: async (_req, res) => {
+      try {
+        const { join } = await import("node:path");
+        const contractorsPath = join(workspaceDir, "contractors.json");
+        const contractors = (await readJsonSafe(contractorsPath)) || [];
+
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ contractors: Array.isArray(contractors) ? contractors : [] }));
+      } catch (err) {
+        res.setHeader("Content-Type", "application/json");
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // Dashboard: serve SPA HTML
   api.registerHttpRoute({
     path: "/mabos/dashboard",
     handler: async (_req, res) => {
-      const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>MABOS Dashboard</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 960px; margin: 0 auto; padding: 24px; background: #0d1117; color: #c9d1d9; }
-    h1 { color: #58a6ff; font-size: 1.8em; margin-bottom: 4px; }
-    h2 { color: #58a6ff; font-size: 1.2em; margin-bottom: 12px; }
-    .subtitle { color: #8b949e; margin-bottom: 24px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
-    .stat { font-size: 2em; font-weight: bold; color: #58a6ff; }
-    .stat-label { color: #8b949e; font-size: 0.85em; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th { text-align: left; padding: 8px 12px; color: #8b949e; font-size: 0.85em; border-bottom: 1px solid #30363d; }
-    td { padding: 8px 12px; border-bottom: 1px solid #21262d; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75em; font-weight: bold; }
-    .badge-active { background: #238636; color: #fff; }
-    .badge-bundled { background: #1f6feb; color: #fff; }
-    .loading { color: #8b949e; font-style: italic; }
-    code { background: #21262d; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
-  </style>
-</head>
-<body>
-  <h1>MABOS Dashboard</h1>
-  <p class="subtitle">Multi-Agent Business Operating System</p>
+      try {
+        const { readFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const { fileURLToPath } = await import("node:url");
+        const thisDir = join(fileURLToPath(import.meta.url), "..");
+        const htmlPath = join(thisDir, "src", "dashboard", "index.html");
+        const html = await readFile(htmlPath, "utf-8");
+        res.setHeader("Content-Type", "text/html");
+        res.end(html);
+      } catch {
+        // Fallback: inline minimal HTML
+        res.setHeader("Content-Type", "text/html");
+        res.end(
+          `<!DOCTYPE html><html><head><title>MABOS</title></head><body style="background:#0d1117;color:#c9d1d9;font-family:sans-serif;padding:40px"><h1 style="color:#58a6ff">MABOS Dashboard</h1><p>Dashboard files not found. Ensure src/dashboard/ exists.</p></body></html>`,
+        );
+      }
+    },
+  });
 
-  <div class="grid">
-    <div class="card">
-      <div class="stat" id="agent-count">-</div>
-      <div class="stat-label">BDI Agents</div>
-    </div>
-    <div class="card">
-      <div class="stat" id="business-count">-</div>
-      <div class="stat-label">Managed Businesses</div>
-    </div>
-    <div class="card">
-      <div class="stat"><span class="badge badge-active">Active</span></div>
-      <div class="stat-label">BDI Heartbeat (${bdiIntervalMinutes}min)</div>
-    </div>
-    <div class="card">
-      <div class="stat"><span class="badge badge-bundled">Bundled</span></div>
-      <div class="stat-label">Extension Mode</div>
-    </div>
-  </div>
+  // Dashboard: serve CSS
+  api.registerHttpRoute({
+    path: "/mabos/dashboard/styles.css",
+    handler: async (_req, res) => {
+      try {
+        const { readFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const { fileURLToPath } = await import("node:url");
+        const thisDir = join(fileURLToPath(import.meta.url), "..");
+        const cssPath = join(thisDir, "src", "dashboard", "styles.css");
+        res.setHeader("Content-Type", "text/css");
+        res.end(await readFile(cssPath, "utf-8"));
+      } catch {
+        res.statusCode = 404;
+        res.end("/* not found */");
+      }
+    },
+  });
 
-  <div class="card" style="margin-bottom: 16px;">
-    <h2>Agents</h2>
-    <div id="agents-table" class="loading">Loading...</div>
-  </div>
-
-  <div class="card">
-    <h2>CLI Commands</h2>
-    <table>
-      <tr><td><code>mabos onboard &lt;name&gt;</code></td><td>Create a new business</td></tr>
-      <tr><td><code>mabos agents</code></td><td>List agents with cognitive state</td></tr>
-      <tr><td><code>mabos bdi cycle &lt;agent&gt;</code></td><td>Run BDI maintenance cycle</td></tr>
-      <tr><td><code>mabos business list</code></td><td>List managed businesses</td></tr>
-      <tr><td><code>mabos migrate</code></td><td>Migrate from OpenClaw</td></tr>
-    </table>
-  </div>
-
-  <script>
-    fetch('/mabos/api/status')
-      .then(r => r.json())
-      .then(data => {
-        document.getElementById('agent-count').textContent = data.agents?.length ?? 0;
-        document.getElementById('business-count').textContent = data.businessCount ?? 0;
-        if (data.agents?.length > 0) {
-          let html = '<table><tr><th>Agent</th><th>Beliefs</th><th>Goals</th><th>Intentions</th><th>Desires</th></tr>';
-          for (const a of data.agents) {
-            html += '<tr><td>' + a.agentId + '</td><td>' + a.beliefCount + '</td><td>' + a.goalCount + '</td><td>' + a.intentionCount + '</td><td>' + a.desireCount + '</td></tr>';
-          }
-          html += '</table>';
-          document.getElementById('agents-table').innerHTML = html;
-        } else {
-          document.getElementById('agents-table').innerHTML = '<p>No agents found. Run <code>mabos onboard</code> to get started.</p>';
-        }
-      })
-      .catch(() => {
-        document.getElementById('agents-table').innerHTML = '<p>Could not load agent data.</p>';
-      });
-  </script>
-</body>
-</html>`;
-      res.setHeader("Content-Type", "text/html");
-      res.end(html);
+  // Dashboard: serve JS
+  api.registerHttpRoute({
+    path: "/mabos/dashboard/app.js",
+    handler: async (_req, res) => {
+      try {
+        const { readFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const { fileURLToPath } = await import("node:url");
+        const thisDir = join(fileURLToPath(import.meta.url), "..");
+        const jsPath = join(thisDir, "src", "dashboard", "app.js");
+        res.setHeader("Content-Type", "application/javascript");
+        res.end(await readFile(jsPath, "utf-8"));
+      } catch {
+        res.statusCode = 404;
+        res.end("// not found");
+      }
     },
   });
 

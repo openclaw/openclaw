@@ -1,11 +1,26 @@
 /**
- * Reasoning Tools — 35+ reasoning methods via meta-reasoning router
+ * Reasoning Tools — 20 reasoning tools via meta-reasoning router
+ *
+ * Central registration hub. The upgraded `reason` tool supports:
+ * - Backward-compatible single-method invocation (method param)
+ * - Auto-selection via problem_classification
+ * - Multi-method fusion via multi_method flag
  */
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
+import { createCausalReasoningTools } from "../reasoning/causal/index.js";
+import { createExperienceReasoningTools } from "../reasoning/experience/index.js";
+import { createFormalReasoningTools } from "../reasoning/formal/index.js";
+import { fuseResults, formatFusionPrompt } from "../reasoning/fusion.js";
+import { createMetaReasoningTools } from "../reasoning/meta/index.js";
+import { scoreMethodsForProblem } from "../reasoning/meta/meta-reasoning.js";
+import { REASONING_METHODS } from "../reasoning/methods.js";
+import { createProbabilisticReasoningTools } from "../reasoning/probabilistic/index.js";
+import { createSocialReasoningTools } from "../reasoning/social/index.js";
+import type { ProblemClassification, ReasoningResult } from "../reasoning/types.js";
 import { textResult, resolveWorkspaceDir } from "./common.js";
 
 async function readMd(p: string) {
@@ -16,157 +31,83 @@ async function readMd(p: string) {
   }
 }
 
-const REASONING_METHODS: Record<string, { category: string; description: string; prompt: string }> =
-  {
-    deductive: {
-      category: "formal",
-      description: "Derive conclusions from premises using logical rules",
-      prompt: "Apply deductive logic: if premises are true, conclusion must be true.",
-    },
-    inductive: {
-      category: "formal",
-      description: "Generalize from specific observations",
-      prompt: "Apply inductive reasoning: identify patterns and form general conclusions.",
-    },
-    abductive: {
-      category: "formal",
-      description: "Infer best explanation for observations",
-      prompt: "Apply abductive reasoning: what is the most likely explanation?",
-    },
-    analogical: {
-      category: "formal",
-      description: "Reason by analogy from similar situations",
-      prompt: "Apply analogical reasoning: find structural similarities with known cases.",
-    },
-    bayesian: {
-      category: "probabilistic",
-      description: "Update probabilities given new evidence",
-      prompt:
-        "Apply Bayesian updating: P(H|E) = P(E|H)·P(H)/P(E). State priors, likelihood, and posterior.",
-    },
-    fuzzy: {
-      category: "probabilistic",
-      description: "Handle partial truth values",
-      prompt: "Apply fuzzy logic: assign membership degrees and compute fuzzy outcomes.",
-    },
-    decision_theory: {
-      category: "probabilistic",
-      description: "Maximize expected utility",
-      prompt: "Apply decision theory: enumerate options, probabilities, utilities, compute EU.",
-    },
-    causal: {
-      category: "causal",
-      description: "Identify cause-effect relationships",
-      prompt: "Apply causal reasoning: identify mechanisms, confounders, and causal chains.",
-    },
-    counterfactual: {
-      category: "causal",
-      description: "What-if analysis",
-      prompt: "Apply counterfactual reasoning: if X had been different, what would have changed?",
-    },
-    temporal: {
-      category: "causal",
-      description: "Reason about time-dependent sequences",
-      prompt: "Apply temporal reasoning: analyze sequences, dependencies, and timing.",
-    },
-    heuristic: {
-      category: "experience",
-      description: "Apply rules of thumb",
-      prompt: "Apply heuristic reasoning: use practical rules and shortcuts.",
-    },
-    cbr: {
-      category: "experience",
-      description: "Learn from past cases",
-      prompt: "Apply case-based reasoning: retrieve, reuse, revise, retain.",
-    },
-    means_ends: {
-      category: "experience",
-      description: "Reduce gap between current and goal state",
-      prompt: "Apply means-ends analysis: identify gaps and operators to close them.",
-    },
-    spatial: {
-      category: "formal",
-      description: "Reason about spatial relationships",
-      prompt: "Apply spatial reasoning: analyze positions, distances, and arrangements.",
-    },
-    game_theory: {
-      category: "social",
-      description: "Strategic interaction analysis",
-      prompt: "Apply game theory: identify players, strategies, payoffs, and equilibria.",
-    },
-    stakeholder: {
-      category: "social",
-      description: "Multi-perspective analysis",
-      prompt: "Apply stakeholder analysis: identify interests, power, influence of each party.",
-    },
-    ethical: {
-      category: "social",
-      description: "Moral reasoning frameworks",
-      prompt:
-        "Apply ethical reasoning: consider utilitarian, deontological, and virtue perspectives.",
-    },
-  };
+const ProblemClassificationSchema = Type.Object({
+  uncertainty: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
+  complexity: Type.Union([
+    Type.Literal("simple"),
+    Type.Literal("moderate"),
+    Type.Literal("complex"),
+  ]),
+  domain: Type.Union([
+    Type.Literal("formal"),
+    Type.Literal("empirical"),
+    Type.Literal("social"),
+    Type.Literal("mixed"),
+  ]),
+  time_pressure: Type.Union([
+    Type.Literal("none"),
+    Type.Literal("moderate"),
+    Type.Literal("urgent"),
+  ]),
+  data_availability: Type.Union([
+    Type.Literal("rich"),
+    Type.Literal("moderate"),
+    Type.Literal("sparse"),
+  ]),
+  stakes: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
+});
 
 const ReasonParams = Type.Object({
   agent_id: Type.String({ description: "Agent ID" }),
-  method: Type.String({
-    description: `Reasoning method: ${Object.keys(REASONING_METHODS).join(", ")}`,
-  }),
+  method: Type.Optional(
+    Type.String({
+      description: `Reasoning method: ${Object.keys(REASONING_METHODS).join(", ")}`,
+    }),
+  ),
   problem: Type.String({ description: "Problem statement" }),
   context: Type.Optional(
     Type.Record(Type.String(), Type.Unknown(), { description: "Additional context" }),
   ),
   constraints: Type.Optional(Type.Array(Type.String(), { description: "Constraints to satisfy" })),
-});
-
-const BayesianParams = Type.Object({
-  agent_id: Type.String({ description: "Agent ID" }),
-  hypothesis: Type.String({ description: "Hypothesis to evaluate" }),
-  prior: Type.Number({ description: "Prior probability P(H)" }),
-  evidence: Type.Array(
-    Type.Object({
-      description: Type.String(),
-      likelihood: Type.Number({ description: "P(E|H)" }),
-      marginal: Type.Number({ description: "P(E)" }),
+  problem_classification: Type.Optional(ProblemClassificationSchema),
+  multi_method: Type.Optional(
+    Type.Boolean({ description: "Run multiple methods and fuse results" }),
+  ),
+  methods: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Explicit list of methods to run (with multi_method)",
     }),
-    { description: "Evidence items with likelihoods" },
   ),
 });
 
-const CausalParams = Type.Object({
-  agent_id: Type.String({ description: "Agent ID" }),
-  effect: Type.String({ description: "Observed effect to explain" }),
-  candidate_causes: Type.Array(Type.String(), { description: "Candidate causes" }),
-  observations: Type.Optional(
-    Type.Array(Type.String(), { description: "Additional observations" }),
-  ),
-});
+function createReasonRouter(api: OpenClawPluginApi): AnyAgentTool {
+  return {
+    name: "reason",
+    label: "Reason",
+    description:
+      "Apply reasoning to a problem. Supports 35 methods across formal, probabilistic, causal, experience, social, and meta categories. " +
+      "Use `method` for a single method (backward compatible), `problem_classification` for auto-selection, or `multi_method` for fusion.",
+    parameters: ReasonParams,
+    async execute(_id: string, params: Static<typeof ReasonParams>) {
+      const ws = resolveWorkspaceDir(api);
+      const beliefs = await readMd(join(ws, "agents", params.agent_id, "Beliefs.md"));
+      const kb = await readMd(join(ws, "agents", params.agent_id, "Knowledge.md"));
 
-const CounterfactualParams = Type.Object({
-  agent_id: Type.String({ description: "Agent ID" }),
-  actual: Type.String({ description: "What actually happened" }),
-  counterfactual: Type.String({ description: "What-if scenario" }),
-  variables: Type.Optional(Type.Array(Type.String(), { description: "Variables affected" })),
-});
+      const agentContext = `**Agent Beliefs:**\n${beliefs || "None."}\n\n**Knowledge Base:**\n${kb || "None."}`;
+      const extraContext = params.context
+        ? `**Context:**\n\`\`\`json\n${JSON.stringify(params.context, null, 2)}\n\`\`\``
+        : "";
+      const constraintText = params.constraints?.length
+        ? `**Constraints:** ${params.constraints.join("; ")}`
+        : "";
 
-export function createReasoningTools(api: OpenClawPluginApi): AnyAgentTool[] {
-  return [
-    {
-      name: "reason",
-      label: "Reason",
-      description:
-        "Apply a specific reasoning method to a problem. Supports 17+ methods across formal, probabilistic, causal, experience, and social categories.",
-      parameters: ReasonParams,
-      async execute(_id: string, params: Static<typeof ReasonParams>) {
+      // ── Mode 1: Explicit single method (backward compatible) ──
+      if (params.method && !params.multi_method) {
         const method = REASONING_METHODS[params.method];
         if (!method)
           return textResult(
             `Unknown method '${params.method}'. Available: ${Object.keys(REASONING_METHODS).join(", ")}`,
           );
-
-        const ws = resolveWorkspaceDir(api);
-        const beliefs = await readMd(join(ws, "agents", params.agent_id, "Beliefs.md"));
-        const kb = await readMd(join(ws, "agents", params.agent_id, "Knowledge.md"));
 
         return textResult(`## ${params.method} Reasoning (${method.category}) — ${params.agent_id}
 
@@ -174,97 +115,133 @@ export function createReasoningTools(api: OpenClawPluginApi): AnyAgentTool[] {
 
 ${method.prompt}
 
-**Agent Beliefs:**
-${beliefs || "None."}
+${agentContext}
 
-**Knowledge Base:**
-${kb || "None."}
-
-${params.context ? `**Context:**\n\`\`\`json\n${JSON.stringify(params.context, null, 2)}\n\`\`\`` : ""}
-${params.constraints?.length ? `**Constraints:** ${params.constraints.join("; ")}` : ""}
+${extraContext}
+${constraintText}
 
 Apply ${params.method} reasoning systematically and state your conclusion with confidence level.`);
-      },
-    },
+      }
 
-    {
-      name: "reason_bayesian",
-      label: "Bayesian Reasoning",
-      description: "Update probability of a hypothesis given evidence using Bayes' theorem.",
-      parameters: BayesianParams,
-      async execute(_id: string, params: Static<typeof BayesianParams>) {
-        let posterior = params.prior;
-        const steps: string[] = [];
+      // ── Mode 2: Auto-select via problem classification ──
+      if (params.problem_classification && !params.multi_method) {
+        const recommendations = scoreMethodsForProblem(params.problem_classification);
+        const topMethod = recommendations[0];
+        const method = REASONING_METHODS[topMethod.method];
 
-        for (const ev of params.evidence) {
-          const newPosterior = (ev.likelihood * posterior) / ev.marginal;
-          steps.push(
-            `- Evidence: ${ev.description}\n  P(E|H)=${ev.likelihood}, P(E)=${ev.marginal}\n  P(H|E) = ${ev.likelihood} × ${posterior.toFixed(4)} / ${ev.marginal} = ${newPosterior.toFixed(4)}`,
+        return textResult(`## Auto-Selected: ${topMethod.method} Reasoning (${method.category}) — ${params.agent_id}
+
+**Problem:** ${params.problem}
+
+**Selection rationale:** ${topMethod.rationale} (score: ${(topMethod.score * 100).toFixed(0)}%)
+
+${method.prompt}
+
+${agentContext}
+
+${extraContext}
+${constraintText}
+
+Apply ${topMethod.method} reasoning systematically and state your conclusion with confidence level.`);
+      }
+
+      // ── Mode 3: Multi-method fusion ──
+      if (params.multi_method) {
+        let selectedMethods: string[];
+
+        if (params.methods && params.methods.length > 0) {
+          // Use explicitly provided methods
+          selectedMethods = params.methods.filter((m) => m in REASONING_METHODS);
+        } else if (params.problem_classification) {
+          // Auto-select top 3 from classification
+          const recommendations = scoreMethodsForProblem(params.problem_classification);
+          selectedMethods = recommendations.slice(0, 3).map((r) => r.method);
+        } else {
+          // Default: pick diverse methods
+          selectedMethods = ["deductive", "heuristic", "causal"].filter(
+            (m) => m in REASONING_METHODS,
           );
-          posterior = newPosterior;
         }
 
-        return textResult(`## Bayesian Update — ${params.agent_id}
+        if (selectedMethods.length === 0) {
+          return textResult("No valid methods selected for multi-method reasoning.");
+        }
 
-**Hypothesis:** ${params.hypothesis}
-**Prior:** P(H) = ${params.prior}
+        // Generate simulated results for LLM synthesis
+        const results: ReasoningResult[] = selectedMethods.map((methodName) => {
+          const method = REASONING_METHODS[methodName];
+          return {
+            method: methodName,
+            category: method.category,
+            conclusion: `[Pending ${methodName} analysis]`,
+            confidence: 0.5,
+            reasoning_trace: method.prompt,
+          };
+        });
 
-**Updates:**
-${steps.join("\n\n")}
+        const fusion = fuseResults(results);
+        const fusionPrompt = formatFusionPrompt(fusion);
 
-**Posterior:** P(H|all evidence) = ${posterior.toFixed(4)}
+        const methodPrompts = selectedMethods
+          .map((methodName) => {
+            const method = REASONING_METHODS[methodName];
+            return `### Method: ${methodName} (${method.category})\n${method.prompt}`;
+          })
+          .join("\n\n");
 
-**Interpretation:** ${posterior > 0.8 ? "Strong support" : posterior > 0.5 ? "Moderate support" : posterior > 0.2 ? "Weak support" : "Against hypothesis"}`);
-      },
+        return textResult(`## Multi-Method Reasoning — ${params.agent_id}
+
+**Problem:** ${params.problem}
+
+**Methods selected:** ${selectedMethods.join(", ")}
+
+${agentContext}
+
+${extraContext}
+${constraintText}
+
+---
+
+Apply EACH of the following methods to the problem, then synthesize:
+
+${methodPrompts}
+
+---
+
+## Synthesis Instructions
+
+After applying each method independently:
+1. State the conclusion from each method with confidence level
+2. Identify agreements and disagreements
+3. Produce a unified conclusion that weighs each method's strengths
+4. State overall confidence`);
+      }
+
+      // ── Fallback: no method specified, use default reasoning ──
+      return textResult(`## General Reasoning — ${params.agent_id}
+
+**Problem:** ${params.problem}
+
+${agentContext}
+
+${extraContext}
+${constraintText}
+
+Analyze this problem using the most appropriate reasoning approach. Consider formal logic, probabilistic analysis, causal relationships, and practical experience. State your conclusion with confidence level.
+
+Tip: For targeted reasoning, specify a \`method\` (${Object.keys(REASONING_METHODS).slice(0, 5).join(", ")}, ...) or provide \`problem_classification\` for auto-selection.`);
     },
+  };
+}
 
-    {
-      name: "reason_causal",
-      label: "Causal Reasoning",
-      description:
-        "Identify cause-effect relationships and evaluate candidate causes for an observed effect.",
-      parameters: CausalParams,
-      async execute(_id: string, params: Static<typeof CausalParams>) {
-        const candidates = params.candidate_causes.map((c, i) => `${i + 1}. ${c}`).join("\n");
-        return textResult(`## Causal Analysis — ${params.agent_id}
-
-**Effect:** ${params.effect}
-
-**Candidate Causes:**
-${candidates}
-
-${params.observations?.length ? `**Observations:** ${params.observations.join("; ")}` : ""}
-
-For each candidate, evaluate:
-1. Temporal precedence (did it occur before the effect?)
-2. Mechanism (how would it cause the effect?)
-3. Confounders (alternative explanations?)
-4. Strength of association
-5. Consistency with observations
-
-Rank candidates by causal plausibility.`);
-      },
-    },
-
-    {
-      name: "reason_counterfactual",
-      label: "Counterfactual Reasoning",
-      description: "What-if analysis: explore alternative scenarios and their implications.",
-      parameters: CounterfactualParams,
-      async execute(_id: string, params: Static<typeof CounterfactualParams>) {
-        return textResult(`## Counterfactual Analysis — ${params.agent_id}
-
-**Actual:** ${params.actual}
-**What if:** ${params.counterfactual}
-${params.variables?.length ? `**Variables affected:** ${params.variables.join(", ")}` : ""}
-
-Analyze:
-1. What causal chain led to the actual outcome?
-2. How would the counterfactual change that chain?
-3. What downstream effects would differ?
-4. Confidence in the counterfactual outcome?
-5. Key uncertainties?`);
-      },
-    },
+export function createReasoningTools(api: OpenClawPluginApi): AnyAgentTool[] {
+  return [
+    createReasonRouter(api),
+    ...createFormalReasoningTools(api),
+    ...createProbabilisticReasoningTools(api),
+    ...createCausalReasoningTools(api),
+    ...createExperienceReasoningTools(api),
+    ...createSocialReasoningTools(api),
+    ...createMetaReasoningTools(api),
   ];
 }
