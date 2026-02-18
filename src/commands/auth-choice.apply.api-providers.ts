@@ -549,7 +549,7 @@ export async function applyAuthChoiceApiProviders(
 
     // Input API key
     let hasCredential = false;
-    let apiKey = "";
+    let apiKey: string = "";
 
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "zai") {
       apiKey = normalizeApiKeyInput(params.opts.token);
