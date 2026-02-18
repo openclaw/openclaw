@@ -7,8 +7,9 @@ import { resolveTelegramAutoSelectFamilyDecision } from "./network-config.js";
 let appliedAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
 
-// Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
-// Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
+// Node 22 workaround: disable autoSelectFamily to avoid Happy Eyeballs timeouts with Telegram API.
+// The Happy Eyeballs algorithm can cause long delays when IPv6 is misconfigured.
+// Users with broken IPv6 can explicitly enable this via config or OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY.
 // See: https://github.com/nodejs/node/issues/54359
 function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void {
   const decision = resolveTelegramAutoSelectFamilyDecision({ network });

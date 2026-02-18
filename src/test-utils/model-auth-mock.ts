@@ -6,8 +6,9 @@ type ModelAuthMockModule = {
 };
 
 export function createModelAuthMockModule(): ModelAuthMockModule {
+  const resolveApiKeyForProvider: (...args: unknown[]) => unknown = vi.fn();
   return {
-    resolveApiKeyForProvider: vi.fn() as (...args: unknown[]) => unknown,
+    resolveApiKeyForProvider,
     requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
       if (auth?.apiKey) {
         return auth.apiKey;
