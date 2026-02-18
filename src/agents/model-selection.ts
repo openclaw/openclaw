@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelCatalogEntry } from "./model-catalog.js";
 import { resolveAgentConfig, resolveAgentModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
 
 export type ModelRef = {
@@ -331,18 +331,28 @@ export function resolveSubagentConfiguredModelSelection(params: {
 export function resolveSubagentSpawnModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  /** Caller's agent id — used to inherit the caller's configured model when
+   * the target has no explicit model override. Implements the "inherits the
+   * caller" semantics documented in docs/tools/subagents.md. */
+  callerAgentId?: string;
   modelOverride?: unknown;
 }): string {
   const runtimeDefault = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  const callerAgentConfig = params.callerAgentId
+    ? resolveAgentConfig(params.cfg, params.callerAgentId)
+    : undefined;
   return (
     normalizeModelSelection(params.modelOverride) ??
     resolveSubagentConfiguredModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,
     }) ??
+    // Fall back to caller's configured model so subagents inherit the
+    // spawning agent's model when no explicit override is set.
+    normalizeModelSelection(callerAgentConfig?.model) ??
     normalizeModelSelection(params.cfg.agents?.defaults?.model?.primary) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );

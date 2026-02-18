@@ -152,6 +152,7 @@ export async function spawnSubagentDirect(
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
     agentId: targetAgentId,
+    callerAgentId: requesterAgentId,
     modelOverride,
   });
 
