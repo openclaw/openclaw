@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { createLineWebhookMiddleware } from "./webhook.js";
+import { createLineWebhookMiddleware, startLineWebhook } from "./webhook.js";
 
 const sign = (body: string, secret: string) =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
@@ -18,6 +18,15 @@ const createRes = () => {
 };
 
 describe("createLineWebhookMiddleware", () => {
+  it("rejects startup when channel secret is missing", () => {
+    expect(() =>
+      startLineWebhook({
+        channelSecret: "   ",
+        onEvents: async () => {},
+      }),
+    ).toThrow(/requires a non-empty channel secret/i);
+  });
+
   it("parses JSON from raw string body", async () => {
     const onEvents = vi.fn(async () => {});
     const secret = "secret";
