@@ -700,6 +700,7 @@ async function maybeQueueSubagentAnnounce(params: {
     enqueueAnnounce({
       key: canonicalKey,
       item: {
+        announceId: params.announceId,
         prompt: params.triggerMessage,
         summaryLine: params.summaryLine,
         enqueuedAt: Date.now(),
