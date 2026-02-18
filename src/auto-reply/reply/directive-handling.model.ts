@@ -24,6 +24,31 @@ import {
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
+function pushUniqueCatalogEntry(params: {
+  keys: Set<string>;
+  out: ModelPickerCatalogEntry[];
+  provider: string;
+  id: string;
+  name?: string;
+  fallbackNameToId: boolean;
+}) {
+  const provider = normalizeProviderId(params.provider);
+  const id = String(params.id ?? "").trim();
+  if (!provider || !id) {
+    return;
+  }
+  const key = modelKey(provider, id);
+  if (params.keys.has(key)) {
+    return;
+  }
+  params.keys.add(key);
+  params.out.push({
+    provider,
+    id,
+    name: params.fallbackNameToId ? (params.name ?? id) : params.name,
+  });
+}
+
 function buildModelPickerCatalog(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
@@ -42,17 +67,14 @@ function buildModelPickerCatalog(params: {
     const keys = new Set<string>();
 
     const pushRef = (ref: { provider: string; model: string }, name?: string) => {
-      const provider = normalizeProviderId(ref.provider);
-      const id = String(ref.model ?? "").trim();
-      if (!provider || !id) {
-        return;
-      }
-      const key = modelKey(provider, id);
-      if (keys.has(key)) {
-        return;
-      }
-      keys.add(key);
-      out.push({ provider, id, name: name ?? id });
+      pushUniqueCatalogEntry({
+        keys,
+        out,
+        provider: ref.provider,
+        id: ref.model,
+        name,
+        fallbackNameToId: true,
+      });
     };
 
     const pushRaw = (raw?: string) => {
@@ -99,17 +121,14 @@ function buildModelPickerCatalog(params: {
   const out: ModelPickerCatalogEntry[] = [];
 
   const push = (entry: ModelPickerCatalogEntry) => {
-    const provider = normalizeProviderId(entry.provider);
-    const id = String(entry.id ?? "").trim();
-    if (!provider || !id) {
-      return;
-    }
-    const key = modelKey(provider, id);
-    if (keys.has(key)) {
-      return;
-    }
-    keys.add(key);
-    out.push({ provider, id, name: entry.name });
+    pushUniqueCatalogEntry({
+      keys,
+      out,
+      provider: entry.provider,
+      id: String(entry.id ?? ""),
+      name: entry.name,
+      fallbackNameToId: false,
+    });
   };
 
   const hasAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0;
