@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating } from "./monitor/group-gating.js";
+import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
 import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
 
 let sessionDir: string | undefined;
@@ -41,7 +41,7 @@ function runGroupGating(params: {
   conversationId?: string;
   agentId?: string;
 }) {
-  const groupHistories = new Map<string, unknown[]>();
+  const groupHistories = new Map<string, GroupHistoryEntry[]>();
   const conversationId = params.conversationId ?? "123@g.us";
   const agentId = params.agentId ?? "main";
   const sessionKey = `agent:${agentId}:whatsapp:group:${conversationId}`;

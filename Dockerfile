@@ -38,10 +38,6 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
 
 COPY . .
 RUN pnpm build
-
-# Ensure memory-lancedb extension dependencies are installed.
-# LanceDB has native bindings that may not be hoisted by pnpm in all configurations.
-RUN pnpm install --filter @openclaw/memory-lancedb --prod --no-frozen-lockfile || true
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
@@ -55,11 +51,6 @@ RUN chown -R node:node /app
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
-
-# Support custom init scripts mounted at /openclaw-init.d/
-# Scripts must be executable. They run before the gateway starts.
-# Example: docker run -v ./my-scripts:/openclaw-init.d:ro openclaw
-ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.

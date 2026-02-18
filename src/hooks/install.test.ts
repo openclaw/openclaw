@@ -180,7 +180,14 @@ describe("installHooksFromPath", () => {
     );
 
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
 
     const res = await installHooksFromPath({
       path: pkgDir,
@@ -239,9 +246,16 @@ describe("installHooksFromNpmSpec", () => {
     const packedName = "test-hooks-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
       if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(opts?.cwd ?? "");
+        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
-        return { code: 0, stdout: `${packedName}\n`, stderr: "", signal: null, killed: false };
+        return {
+          code: 0,
+          stdout: `${packedName}\n`,
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
@@ -269,7 +283,8 @@ describe("installHooksFromNpmSpec", () => {
     }
     const [argv, options] = packCall;
     expect(argv).toEqual(["npm", "pack", "@openclaw/test-hooks@0.0.1", "--ignore-scripts"]);
-    expect(options?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
+    const commandOptions = typeof options === "number" ? undefined : options;
+    expect(commandOptions?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);

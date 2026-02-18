@@ -1,24 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  ChannelCapabilities,
-  ChannelCommandAdapter,
-  ChannelElevatedAdapter,
-  ChannelGroupAdapter,
-  ChannelId,
-  ChannelAgentPromptAdapter,
-  ChannelMentionAdapter,
-  ChannelPlugin,
-  ChannelThreadingContext,
-  ChannelThreadingAdapter,
-  ChannelThreadingToolContext,
-} from "./plugins/types.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
-import { resolveLinqAccount } from "../linq/accounts.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
@@ -42,6 +28,20 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
+import { normalizeSignalMessagingTarget } from "./plugins/normalize/signal.js";
+import type {
+  ChannelCapabilities,
+  ChannelCommandAdapter,
+  ChannelElevatedAdapter,
+  ChannelGroupAdapter,
+  ChannelId,
+  ChannelAgentPromptAdapter,
+  ChannelMentionAdapter,
+  ChannelPlugin,
+  ChannelThreadingContext,
+  ChannelThreadingAdapter,
+  ChannelThreadingToolContext,
+} from "./plugins/types.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
 export type ChannelDock = {
@@ -83,16 +83,47 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
 
-function buildDirectOrGroupThreadToolContext(params: {
+const formatDiscordAllowFrom = (allowFrom: Array<string | number>) =>
+  allowFrom
+    .map((entry) =>
+      String(entry)
+        .trim()
+        .replace(/^<@!?/, "")
+        .replace(/>$/, "")
+        .replace(/^discord:/i, "")
+        .replace(/^user:/i, "")
+        .replace(/^pk:/i, "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+
+function resolveDirectOrGroupChannelId(context: ChannelThreadingContext): string | undefined {
+  const isDirect = context.ChatType?.toLowerCase() === "direct";
+  return (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
+}
+
+function buildSignalThreadToolContext(params: {
   context: ChannelThreadingContext;
   hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
 }): ChannelThreadingToolContext {
-  const isDirect = params.context.ChatType?.toLowerCase() === "direct";
-  const channelId =
-    (isDirect ? (params.context.From ?? params.context.To) : params.context.To)?.trim() ||
-    undefined;
+  const currentChannelIdRaw = resolveDirectOrGroupChannelId(params.context);
+  const currentChannelId = currentChannelIdRaw
+    ? (normalizeSignalMessagingTarget(currentChannelIdRaw) ?? currentChannelIdRaw.trim())
+    : undefined;
   return {
-    currentChannelId: channelId,
+    currentChannelId,
+    currentThreadTs: params.context.ReplyToId,
+    hasRepliedRef: params.hasRepliedRef,
+  };
+}
+
+function buildIMessageThreadToolContext(params: {
+  context: ChannelThreadingContext;
+  hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
+}): ChannelThreadingToolContext {
+  return {
+    currentChannelId: resolveDirectOrGroupChannelId(params.context),
     currentThreadTs: params.context.ReplyToId,
     hasRepliedRef: params.hasRepliedRef,
   };
@@ -219,17 +250,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           String(entry),
         );
       },
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom
-          .map((entry) => String(entry).trim())
-          .filter(Boolean)
-          .map((entry) =>
-            entry
-              .replace(/^discord:/i, "")
-              .replace(/^user:/i, "")
-              .replace(/^pk:/i, "")
-              .toLowerCase(),
-          ),
+      formatAllowFrom: ({ allowFrom }) => formatDiscordAllowFrom(allowFrom),
     },
     groups: {
       resolveRequireMention: resolveDiscordGroupRequireMention,
@@ -433,7 +454,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
-        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
+        buildSignalThreadToolContext({ context, hasRepliedRef }),
     },
   },
   imessage: {
@@ -458,24 +479,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
-        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
-    },
-  },
-  linq: {
-    id: "linq",
-    capabilities: {
-      chatTypes: ["direct", "group"],
-      reactions: true,
-      media: true,
-    },
-    outbound: { textChunkLimit: 4000 },
-    config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveLinqAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-          String(entry),
-        ),
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+        buildIMessageThreadToolContext({ context, hasRepliedRef }),
     },
   },
 };

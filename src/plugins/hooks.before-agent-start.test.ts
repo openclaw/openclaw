@@ -6,9 +6,9 @@
  * backward compatibility.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import type { PluginHookBeforeAgentStartResult, TypedPluginHookRegistration } from "./types.js";
 import { createHookRunner } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import type { PluginHookBeforeAgentStartResult, PluginHookRegistration } from "./types.js";
 
 function addBeforeAgentStartHook(
   registry: PluginRegistry,
@@ -22,7 +22,7 @@ function addBeforeAgentStartHook(
     handler,
     priority,
     source: "test",
-  } as TypedPluginHookRegistration);
+  } as PluginHookRegistration);
 }
 
 const stubCtx = {

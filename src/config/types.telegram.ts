@@ -14,14 +14,12 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
-  /** Enable poll actions (send polls). */
-  polls?: boolean;
   deleteMessage?: boolean;
   editMessage?: boolean;
-  /** Enable poll actions (sendPoll). */
-  poll?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
+  /** Enable forum topic creation. */
+  createForumTopic?: boolean;
 };
 
 export type TelegramNetworkConfig = {

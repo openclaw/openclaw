@@ -1,14 +1,15 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { DiscordConfig } from "../../config/types.js";
-import type {
-  GroupToolPolicyBySenderConfig,
-  GroupToolPolicyConfig,
-} from "../../config/types.tools.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
   resolveToolsBySender,
 } from "../../config/group-policy.js";
+import type { DiscordConfig } from "../../config/types.js";
+import type {
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+} from "../../config/types.tools.js";
+import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 
 type GroupMentionParams = {
@@ -36,16 +37,6 @@ function normalizeDiscordSlug(value?: string | null) {
   text = text.replace(/[^a-z0-9-]+/g, "-");
   text = text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
   return text;
-}
-
-function normalizeSlackSlug(raw?: string | null) {
-  const trimmed = raw?.trim().toLowerCase() ?? "";
-  if (!trimmed) {
-    return "";
-  }
-  const dashed = trimmed.replace(/\s+/g, "-");
-  const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
-  return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
 function parseTelegramGroupId(value?: string | null) {
@@ -231,7 +222,7 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
   const channelId = params.groupId?.trim();
   const groupChannel = params.groupChannel;
   const channelName = groupChannel?.replace(/^#/, "");
-  const normalizedName = normalizeSlackSlug(channelName);
+  const normalizedName = normalizeHyphenSlug(channelName);
   const candidates = [
     channelId ?? "",
     channelName ? `#${channelName}` : "",
@@ -363,7 +354,7 @@ export function resolveSlackGroupToolPolicy(
   const channelId = params.groupId?.trim();
   const groupChannel = params.groupChannel;
   const channelName = groupChannel?.replace(/^#/, "");
-  const normalizedName = normalizeSlackSlug(channelName);
+  const normalizedName = normalizeHyphenSlug(channelName);
   const candidates = [
     channelId ?? "",
     channelName ? `#${channelName}` : "",

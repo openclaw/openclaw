@@ -7,8 +7,8 @@ import {
   type ChannelOnboardingAdapter,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import type { TlonResolvedAccount } from "./types.js";
 import { buildTlonAccountFields } from "./account-fields.js";
+import type { TlonResolvedAccount } from "./types.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
 

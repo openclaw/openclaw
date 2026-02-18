@@ -1,6 +1,6 @@
-import type { TemplateContext } from "../templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -61,7 +61,9 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const isDirect = !chatType || chatType === "direct";
 
   const conversationInfo = {
+    message_id: safeTrim(ctx.MessageSid),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
+    sender: safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername),
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),

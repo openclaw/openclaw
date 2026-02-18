@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -133,6 +133,18 @@ export function makeCfg(home: string): OpenClawConfig {
     },
     session: { store: join(home, "sessions.json") },
   } as OpenClawConfig;
+}
+
+export async function loadGetReplyFromConfig() {
+  return (await import("./reply.js")).getReplyFromConfig;
+}
+
+export function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
 }
 
 export function makeWhatsAppElevatedCfg(

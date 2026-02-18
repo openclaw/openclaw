@@ -1,6 +1,6 @@
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { IMessageAccountConfig } from "../config/types.js";
-import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
 export type ResolvedIMessageAccount = {

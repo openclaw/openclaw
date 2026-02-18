@@ -123,7 +123,6 @@ export {
   DiscordConfigSchema,
   GoogleChatConfigSchema,
   IMessageConfigSchema,
-  LinqConfigSchema,
   MSTeamsConfigSchema,
   SignalConfigSchema,
   SlackConfigSchema,
@@ -277,7 +276,11 @@ export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
-export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
+export {
+  addWildcardAllowFrom,
+  mergeAllowFromEntries,
+  promptAccountId,
+} from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 
 export {
@@ -451,16 +454,6 @@ export {
   stripMarkdown,
 } from "../line/markdown-to-line.js";
 export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
-
-// Channel: Linq
-export {
-  listLinqAccountIds,
-  resolveDefaultLinqAccountId,
-  resolveLinqAccount,
-  type ResolvedLinqAccount,
-} from "../linq/accounts.js";
-export { linqOnboardingAdapter } from "../channels/plugins/onboarding/linq.js";
-export type { LinqProbe } from "../linq/types.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";

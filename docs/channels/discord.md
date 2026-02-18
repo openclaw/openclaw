@@ -430,7 +430,7 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
   </Accordion>
 
   <Accordion title="Gateway proxy">
-    Route Discord gateway WebSocket traffic through an HTTP(S) proxy with `channels.discord.proxy`.
+    Route Discord gateway WebSocket traffic and startup REST lookups (application ID + allowlist resolution) through an HTTP(S) proxy with `channels.discord.proxy`.
 
 ```json5
 {
@@ -708,5 +708,6 @@ High-signal Discord fields:
 
 - [Pairing](/channels/pairing)
 - [Channel routing](/channels/channel-routing)
+- [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)
 - [Slash commands](/tools/slash-commands)

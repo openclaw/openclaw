@@ -23,9 +23,9 @@ describe("runInteractiveOnboarding", () => {
     createClackPrompterMock.mockReset();
     runOnboardingWizardMock.mockReset();
     restoreTerminalStateMock.mockReset();
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
+    (runtime.log as ReturnType<typeof vi.fn>).mockClear();
+    (runtime.error as ReturnType<typeof vi.fn>).mockClear();
+    (runtime.exit as ReturnType<typeof vi.fn>).mockClear();
 
     createClackPrompterMock.mockReturnValue({});
     runOnboardingWizardMock.mockResolvedValue(undefined);

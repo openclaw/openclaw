@@ -12,9 +12,9 @@ vi.mock("./agent.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import * as configModule from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { agentCliCommand } from "./agent-via-gateway.js";
 import { agentCommand } from "./agent.js";
 
@@ -70,8 +70,11 @@ function mockGatewaySuccessReply(text = "hello") {
 
 function mockLocalAgentReply(text = "local") {
   vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
-    rt.log?.(text);
-    return { payloads: [{ text }], meta: { stub: true } };
+    rt?.log?.(text);
+    return {
+      payloads: [{ text }],
+      meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
+    } as unknown as Awaited<ReturnType<typeof agentCommand>>;
   });
 }
 

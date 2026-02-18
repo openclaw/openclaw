@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { SessionPreviewItem } from "./session-utils.types.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
@@ -11,6 +10,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
+import type { SessionPreviewItem } from "./session-utils.types.js";
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -195,6 +195,67 @@ export function archiveSessionTranscripts(opts: {
     }
   }
   return archived;
+}
+
+function restoreArchiveTimestamp(raw: string): string {
+  const [datePart, timePart] = raw.split("T");
+  if (!datePart || !timePart) {
+    return raw;
+  }
+  return `${datePart}T${timePart.replace(/-/g, ":")}`;
+}
+
+function parseArchivedTimestamp(fileName: string, reason: ArchiveFileReason): number | null {
+  const marker = `.${reason}.`;
+  const index = fileName.lastIndexOf(marker);
+  if (index < 0) {
+    return null;
+  }
+  const raw = fileName.slice(index + marker.length);
+  if (!raw) {
+    return null;
+  }
+  const timestamp = Date.parse(restoreArchiveTimestamp(raw));
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+export async function cleanupArchivedSessionTranscripts(opts: {
+  directories: string[];
+  olderThanMs: number;
+  reason?: "deleted";
+  nowMs?: number;
+}): Promise<{ removed: number; scanned: number }> {
+  if (!Number.isFinite(opts.olderThanMs) || opts.olderThanMs < 0) {
+    return { removed: 0, scanned: 0 };
+  }
+  const now = opts.nowMs ?? Date.now();
+  const reason: ArchiveFileReason = opts.reason ?? "deleted";
+  const directories = Array.from(new Set(opts.directories.map((dir) => path.resolve(dir))));
+  let removed = 0;
+  let scanned = 0;
+
+  for (const dir of directories) {
+    const entries = await fs.promises.readdir(dir).catch(() => []);
+    for (const entry of entries) {
+      const timestamp = parseArchivedTimestamp(entry, reason);
+      if (timestamp == null) {
+        continue;
+      }
+      scanned += 1;
+      if (now - timestamp <= opts.olderThanMs) {
+        continue;
+      }
+      const fullPath = path.join(dir, entry);
+      const stat = await fs.promises.stat(fullPath).catch(() => null);
+      if (!stat?.isFile()) {
+        continue;
+      }
+      await fs.promises.rm(fullPath).catch(() => undefined);
+      removed += 1;
+    }
+  }
+
+  return { removed, scanned };
 }
 
 function jsonUtf8Bytes(value: unknown): number {

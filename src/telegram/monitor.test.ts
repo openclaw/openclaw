@@ -3,6 +3,7 @@ import { monitorTelegramProvider } from "./monitor.js";
 
 type MockCtx = {
   message: {
+    message_id?: number;
     chat: { id: number; type: string; title?: string };
     text?: string;
     caption?: string;
@@ -87,7 +88,7 @@ vi.mock("../infra/backoff.js", () => ({
 }));
 
 vi.mock("./webhook.js", () => ({
-  startTelegramWebhook: (...args: unknown[]) => startTelegramWebhookSpy(...args),
+  startTelegramWebhook: startTelegramWebhookSpy,
 }));
 
 vi.mock("../auto-reply/reply.js", () => ({

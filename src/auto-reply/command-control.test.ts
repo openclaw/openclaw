@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { MsgContext } from "./templating.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
@@ -8,6 +7,7 @@ import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.j
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
+import type { MsgContext } from "./templating.js";
 
 const createRegistry = () =>
   createTestRegistry([
@@ -253,6 +253,15 @@ describe("resolveCommandAuthorization", () => {
       } as MsgContext;
     }
 
+    function makeDiscordContext(senderId: string, fromOverride?: string): MsgContext {
+      return {
+        Provider: "discord",
+        Surface: "discord",
+        From: fromOverride ?? `discord:${senderId}`,
+        SenderId: senderId,
+      } as MsgContext;
+    }
+
     function resolveWithCommandsAllowFrom(senderId: string, commandAuthorized: boolean) {
       return resolveCommandAuthorization({
         ctx: makeWhatsAppContext(senderId),
@@ -371,6 +380,48 @@ describe("resolveCommandAuthorization", () => {
       });
 
       expect(auth.isAuthorizedSender).toBe(true);
+    });
+
+    it("normalizes Discord commands.allowFrom prefixes and mentions", () => {
+      const cfg = {
+        commands: {
+          allowFrom: {
+            discord: ["user:123", "<@!456>", "pk:member-1"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const userAuth = resolveCommandAuthorization({
+        ctx: makeDiscordContext("123"),
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(userAuth.isAuthorizedSender).toBe(true);
+
+      const mentionAuth = resolveCommandAuthorization({
+        ctx: makeDiscordContext("456"),
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(mentionAuth.isAuthorizedSender).toBe(true);
+
+      const pkAuth = resolveCommandAuthorization({
+        ctx: makeDiscordContext("member-1", "discord:999"),
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(pkAuth.isAuthorizedSender).toBe(true);
+
+      const deniedAuth = resolveCommandAuthorization({
+        ctx: makeDiscordContext("other"),
+        cfg,
+        commandAuthorized: false,
+      });
+
+      expect(deniedAuth.isAuthorizedSender).toBe(false);
     });
   });
 });

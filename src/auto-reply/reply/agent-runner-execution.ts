@@ -1,10 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
@@ -33,10 +28,20 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import {
+  buildEmbeddedContextFromTemplate,
+  buildTemplateSenderContext,
+  resolveRunAuthProfile,
+} from "./agent-runner-utils.js";
+import { resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import type { TypingSignaler } from "./typing-mode.js";
 
 export type AgentRunLoopResult =
   | {
@@ -257,32 +262,20 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
-          const authProfileId =
-            provider === params.followupRun.run.provider
-              ? params.followupRun.run.authProfileId
-              : undefined;
+          const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
+          const embeddedContext = buildEmbeddedContextFromTemplate({
+            run: params.followupRun.run,
+            sessionCtx: params.sessionCtx,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+          });
+          const senderContext = buildTemplateSenderContext(params.sessionCtx);
           return runEmbeddedPiAgent({
-            sessionId: params.followupRun.run.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.followupRun.run.agentId,
-            messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-            agentAccountId: params.sessionCtx.AccountId,
-            messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-            messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+            ...embeddedContext,
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
             groupChannel:
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
-            senderId: params.sessionCtx.SenderId?.trim() || undefined,
-            senderName: params.sessionCtx.SenderName?.trim() || undefined,
-            senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-            senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
-            // Provider threading context for tool auto-injection
-            ...buildThreadingToolContext({
-              sessionCtx: params.sessionCtx,
-              config: params.followupRun.run.config,
-              hasRepliedRef: params.opts?.hasRepliedRef,
-            }),
+            ...senderContext,
             sessionFile: params.followupRun.run.sessionFile,
             workspaceDir: params.followupRun.run.workspaceDir,
             agentDir: params.followupRun.run.agentDir,
@@ -294,10 +287,7 @@ export async function runAgentTurnWithFallback(params: {
             enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
             provider,
             model,
-            authProfileId,
-            authProfileIdSource: authProfileId
-              ? params.followupRun.run.authProfileIdSource
-              : undefined,
+            ...authProfile,
             thinkLevel: params.followupRun.run.thinkLevel,
             verboseLevel: params.followupRun.run.verboseLevel,
             reasoningLevel: params.followupRun.run.reasoningLevel,
