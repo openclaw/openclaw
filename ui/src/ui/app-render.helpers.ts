@@ -90,8 +90,10 @@ export function renderChatControls(state: AppViewState) {
     mainSessionKey,
   );
   const disableThinkingToggle = state.onboarding;
+  const disableToolUseToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolUse = state.onboarding ? false : state.settings.chatShowToolUse;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   // Refresh icon
   const refreshIcon = html`
@@ -208,6 +210,23 @@ export function renderChatControls(state: AppViewState) {
         title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
       >
         ${icons.brain}
+      </button>
+      <button
+        class="btn btn--sm btn--icon ${showToolUse ? "active" : ""}"
+        ?disabled=${disableToolUseToggle}
+        @click=${() => {
+          if (disableToolUseToggle) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatShowToolUse: !state.settings.chatShowToolUse,
+          });
+        }}
+        aria-pressed=${showToolUse}
+        title=${disableToolUseToggle ? t("chat.onboardingDisabled") : t("chat.toolUseToggle")}
+      >
+        ${icons.wrench}
       </button>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"

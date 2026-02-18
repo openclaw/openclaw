@@ -19,6 +19,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSessionKeyChange: () => undefined,
     thinkingLevel: null,
     showThinking: false,
+    showToolUse: true,
     loading: false,
     sending: false,
     canAbort: false,

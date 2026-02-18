@@ -92,7 +92,7 @@ export function renderStreamingGroup(
             content: [{ type: "text", text }],
             timestamp: startedAt,
           },
-          { isStreaming: true, showReasoning: false },
+          { isStreaming: true, showReasoning: false, showToolUse: true },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">
@@ -109,6 +109,7 @@ export function renderMessageGroup(
   opts: {
     onOpenSidebar?: (content: string) => void;
     showReasoning: boolean;
+    showToolUse?: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
   },
@@ -141,6 +142,7 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              showToolUse: opts.showToolUse ?? true,
             },
             opts.onOpenSidebar,
           ),
@@ -218,7 +220,7 @@ function renderMessageImages(images: ImageBlock[]) {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: { isStreaming: boolean; showReasoning: boolean; showToolUse: boolean },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -253,10 +255,14 @@ function renderGroupedMessage(
     .join(" ");
 
   if (!markdown && hasToolCards && isToolResult) {
+    if (!opts.showToolUse) {
+      return nothing;
+    }
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
-  if (!markdown && !hasToolCards && !hasImages) {
+  const visibleToolCards = hasToolCards && opts.showToolUse;
+  if (!markdown && !visibleToolCards && !hasImages) {
     return nothing;
   }
 
@@ -276,7 +282,7 @@ function renderGroupedMessage(
           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
-      ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
+      ${opts.showToolUse ? toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar)) : nothing}
     </div>
   `;
 }
