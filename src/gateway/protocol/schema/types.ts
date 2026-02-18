@@ -66,6 +66,7 @@ import type {
 import type {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
+  DevicePairRemoveParamsSchema,
   DevicePairRejectParamsSchema,
   DeviceTokenRevokeParamsSchema,
   DeviceTokenRotateParamsSchema,
@@ -234,6 +235,7 @@ export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsS
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
+export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
 export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
 export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
