@@ -27,7 +27,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import { resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
@@ -462,8 +462,9 @@ export async function compactEmbeddedPiSessionDirect(
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(provider);
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-    const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+    // Note: We intentionally do NOT generate userTime here.
+    // Including timestamps in system prompts breaks Anthropic prompt caching.
+    // Agents should use session_status to get current date/time if needed.
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
@@ -501,8 +502,6 @@ export async function compactEmbeddedPiSessionDirect(
       tools,
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,
-      userTime,
-      userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
