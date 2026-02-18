@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "./types.js";
-import type { ModelDefinitionConfig } from "./types.models.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveTalkApiKey } from "./talk.js";
+import type { OpenClawConfig } from "./types.js";
+import type { ModelDefinitionConfig } from "./types.models.js";
 
 type WarnState = { warned: boolean };
 
@@ -12,8 +12,12 @@ let defaultWarnState: WarnState = { warned: false };
 type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Anthropic: resolved from config aliases (agents.defaults.models[key].alias)
-  // — no hardcoded versions here to avoid breakage on model upgrades.
+  // Anthropic: bare shorthand aliases for backwards compat.
+  // Versioned aliases (e.g. "opus-4.6") are handled by ANTHROPIC_ALIAS_RE
+  // in model-selection.ts and do NOT need entries here.
+  opus: "anthropic/claude-opus-4-6",
+  sonnet: "anthropic/claude-sonnet-4-6",
+  haiku: "anthropic/claude-haiku-4-5",
 
   // OpenAI
   gpt: "openai/gpt-5.2",
