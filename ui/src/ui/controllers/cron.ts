@@ -14,7 +14,7 @@ export type CronState = {
   cronRunsJobId: string | null;
   cronRuns: CronRunLogEntry[];
   cronBusy: boolean;
-  cronEditingId: string | null;
+  cronEditingId?: string | null;
 };
 
 export function supportsAnnounceDelivery(
