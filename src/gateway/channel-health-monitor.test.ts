@@ -67,7 +67,7 @@ async function startAndRunCheck(
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.startupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
-  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 500);
+  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
 }
 
