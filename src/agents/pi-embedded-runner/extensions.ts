@@ -20,6 +20,7 @@ import { computeEffectiveSettings } from "../pi-extensions/context-pruning/setti
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { log } from "./logger.js";
 
 function resolvePiExtensionPath(id: string): string {
   const self = fileURLToPath(import.meta.url);
@@ -189,6 +190,13 @@ export function buildEmbeddedExtensionPaths(params: {
   });
   if (decay.additionalExtensionPaths) {
     paths.push(...decay.additionalExtensionPaths);
+  }
+  if (pruning.additionalExtensionPaths && decay.additionalExtensionPaths) {
+    log.warn(
+      "contextDecay and contextPruning (cache-ttl) are both active — " +
+        "they serve overlapping purposes and may interfere. " +
+        "Consider setting contextPruning.mode to 'off' when using contextDecay.",
+    );
   }
   return { paths, contextDecayConfig: decay.resolvedConfig, lifecycleEmitter };
 }
