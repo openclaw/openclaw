@@ -278,13 +278,15 @@ describe("subagent registry steer restarts", () => {
       expect(announceSpy).toHaveBeenCalledTimes(1);
       expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(1);
 
-      await vi.advanceTimersByTimeAsync(999);
+      // Retry 2: delay = resolveAnnounceRetryDelayMs(1) = 1000 * 2^1 = 2000ms
+      await vi.advanceTimersByTimeAsync(1_999);
       expect(announceSpy).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(announceSpy).toHaveBeenCalledTimes(2);
       expect(mod.listSubagentRunsForRequester("agent:main:main")[0]?.announceRetryCount).toBe(2);
 
-      await vi.advanceTimersByTimeAsync(1_999);
+      // Retry 3: delay = resolveAnnounceRetryDelayMs(2) = 1000 * 2^2 = 4000ms
+      await vi.advanceTimersByTimeAsync(3_999);
       expect(announceSpy).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
       expect(announceSpy).toHaveBeenCalledTimes(3);
