@@ -38,6 +38,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
+import { buildAgentFreezeContext, buildUserVerificationText } from "./compaction-held-messages.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
@@ -220,48 +221,19 @@ export async function runPreparedReply(
       try {
         const ctxTransferPath = path.join(workspaceDir, ".context-transfer.json");
         const raw = await fs.readFile(ctxTransferPath, "utf-8");
-        const data = JSON.parse(raw);
+        const data = JSON.parse(raw) as Record<string, unknown>;
         if (data && typeof data === "object") {
-          const agentLines: string[] = ["[POST-COMPACTION FREEZE PROTOCOL]"];
-          agentLines.push("Do not process queued messages without explicit user approval.");
-
-          const nextActions = Array.isArray(data.nextActions) ? data.nextActions : [];
-          if (nextActions.length > 0) {
-            agentLines.push("\nNext actions:");
-            for (const item of nextActions) {
-              const action =
-                item && typeof item === "object"
-                  ? typeof item.action === "string"
-                    ? item.action
-                    : JSON.stringify(item)
-                  : String(item);
-              agentLines.push(`• ${action}`);
-            }
-          }
-
-          const doNotTouch = Array.isArray(data.doNotTouch) ? data.doNotTouch : [];
-          if (doNotTouch.length > 0) {
-            agentLines.push("\nDo not touch:");
-            for (const d of doNotTouch) {
-              agentLines.push(`• ${typeof d === "string" ? d : JSON.stringify(d)}`);
-            }
-          }
-
-          const heldMsgs = sessionEntry.compactionHeldMessages ?? [];
-          if (heldMsgs.length > 0) {
-            agentLines.push("\nQueued messages (awaiting user triage):");
-            heldMsgs.forEach((msg, i) => {
-              agentLines.push(`[Q${i + 1}] ${msg.body}`);
-            });
-            agentLines.push(
-              "\nOnly act on items the user explicitly approves (e.g. 'do Q1 and Q3, skip Q2'). Unaddressed queued items are discarded — do not act on them.",
-            );
-          }
-
-          postCompactionAgentContext = agentLines.join("\n");
+          postCompactionAgentContext = buildAgentFreezeContext({
+            contextData: data,
+            heldMessages: sessionEntry.compactionHeldMessages ?? [],
+          });
         }
       } catch {
-        // .context-transfer.json may not exist — that's fine
+        // .context-transfer.json may not exist — use held messages only
+        postCompactionAgentContext = buildAgentFreezeContext({
+          contextData: null,
+          heldMessages: sessionEntry.compactionHeldMessages ?? [],
+        });
       }
 
       // Clear the gate and held messages, then proceed with normal processing
@@ -312,70 +284,22 @@ export async function runPreparedReply(
 
       // Build user-facing verification message (no agent internals — just context + held msgs)
       typing.cleanup();
-      const heldMsgs = sessionEntry.compactionHeldMessages;
-      const userLines: string[] = [];
+      const heldMsgs = sessionEntry.compactionHeldMessages ?? [];
+      let contextData: Record<string, unknown> | null = null;
       try {
         const ctxTransferPath = path.join(workspaceDir, ".context-transfer.json");
         const raw = await fs.readFile(ctxTransferPath, "utf-8");
-        const data = JSON.parse(raw);
-        if (data && typeof data === "object") {
-          // What was happening (next actions + active tasks)
-          const taskLines: string[] = [];
-          const nextActions = Array.isArray(data.nextActions) ? data.nextActions : [];
-          for (const item of nextActions) {
-            if (item && typeof item === "object") {
-              const action = typeof item.action === "string" ? item.action : JSON.stringify(item);
-              const p = typeof item.priority === "number" ? `${item.priority}. ` : "• ";
-              taskLines.push(`${p}${action}`);
-            } else if (typeof item === "string") {
-              taskLines.push(`• ${item}`);
-            }
-          }
-          const activeTasks = Array.isArray(data.activeTasks) ? data.activeTasks : [];
-          for (const task of activeTasks) {
-            if (task && typeof task === "object") {
-              const desc =
-                typeof task.description === "string" ? task.description : JSON.stringify(task);
-              const status = typeof task.status === "string" ? ` [${task.status}]` : "";
-              taskLines.push(`• ${desc}${status}`);
-            }
-          }
-          if (taskLines.length > 0) {
-            userLines.push("⚠️ I was compacting. Here's what I think I was doing:");
-            userLines.push(...taskLines);
-          } else {
-            userLines.push("⚠️ I was compacting.");
-          }
-
-          // Pending decisions
-          const decisions = Array.isArray(data.pendingDecisions) ? data.pendingDecisions : [];
-          if (decisions.length > 0) {
-            userLines.push("\nPending decisions:");
-            for (const d of decisions) {
-              userLines.push(`• ${typeof d === "string" ? d : JSON.stringify(d)}`);
-            }
-          }
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === "object") {
+          contextData = parsed as Record<string, unknown>;
         }
       } catch {
-        // .context-transfer.json may not exist
-        userLines.push("⚠️ I was compacting. (No context transfer summary available.)");
+        // .context-transfer.json may not exist — contextData stays null
       }
-
-      // Held messages section
-      if (userLines.length === 0) {
-        userLines.push("⚠️ I was compacting.");
-      }
-      if (heldMsgs.length > 0) {
-        userLines.push("\nMessages that came in while I was compacting:");
-        heldMsgs.forEach((msg, i) => {
-          userLines.push(`[Q${i + 1}] ${msg.body}`);
-        });
-        userLines.push("\nWhat should I do? Type 'ok' to resume.");
-      } else {
-        userLines.push("\nType 'ok' to resume.");
-      }
-
-      const verificationText = userLines.join("\n");
+      const verificationText = buildUserVerificationText({
+        contextData,
+        heldMessages: heldMsgs,
+      });
       const verificationPayload: ReplyPayload = { text: verificationText };
 
       // If dmChannelId is configured and we're not already in a DM, route the
