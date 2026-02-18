@@ -244,9 +244,7 @@ describe("channel-health-monitor", () => {
       cooldownCycles: 1,
       maxRestartsPerHour: 3,
     });
-    await vi.advanceTimersByTimeAsync(1_500);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(5_500);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
