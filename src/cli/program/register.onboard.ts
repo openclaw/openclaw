@@ -82,7 +82,6 @@ export function registerOnboardCommand(program: Command) {
   }
 
   command
-    .option("--kilocode-api-key <key>", "Kilo Gateway API key")
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
