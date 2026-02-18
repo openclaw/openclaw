@@ -70,7 +70,7 @@ function isRegistryFile<T extends RegistryEntry>(value: unknown): value is Regis
 }
 
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({ sessionFile: registryPath });
+  const lock = await acquireSessionWriteLock({ sessionFile: registryPath, allowReentrant: false });
   try {
     return await fn();
   } finally {
