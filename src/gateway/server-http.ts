@@ -16,7 +16,7 @@ import {
 } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -26,6 +26,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import { createControlUiLoopbackGuard } from "./control-ui-loopback-guard.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -441,6 +442,7 @@ export function createGatewayHttpServer(opts: {
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
+  strictLoopback?: boolean;
   openAiChatCompletionsEnabled: boolean;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
@@ -451,6 +453,8 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   tlsOptions?: TlsOptions;
 }): HttpServer {
+  const log = createSubsystemLogger("gateway/http");
+  const controlUiLoopbackGuard = createControlUiLoopbackGuard(log, opts.strictLoopback ?? false);
   const {
     canvasHost,
     clients,
@@ -565,6 +569,11 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (controlUiEnabled) {
+        // Apply loopback guard ONLY to Control UI requests
+        const guardResult = controlUiLoopbackGuard(req, res);
+        if (!guardResult.allowed) {
+          return; // Request was rejected by guard
+        }
         if (
           handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,
@@ -587,7 +596,12 @@ export function createGatewayHttpServer(opts: {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    } catch {
+    } catch (err) {
+      log.error("Request handler failed", {
+        error: String(err),
+        url: req.url,
+        method: req.method,
+      });
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Internal Server Error");
