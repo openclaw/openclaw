@@ -88,8 +88,12 @@ export async function resolveDiscordUserAllowlist(params: {
     }));
   }
   const fetcher = params.fetcher ?? fetch;
-  const guilds = await listGuilds(token, fetcher);
   const results: DiscordUserResolution[] = [];
+
+  // Defer guild listing until we actually need to resolve a username.
+  // This avoids an API call (and potential failure) when all entries are
+  // already numeric user ids.
+  let guilds: DiscordGuildSummary[] | null = null;
 
   for (const input of params.entries) {
     const parsed = parseDiscordUserInput(input);
@@ -106,6 +110,11 @@ export async function resolveDiscordUserAllowlist(params: {
     if (!query) {
       results.push({ input, resolved: false });
       continue;
+    }
+
+    // First username entry: fetch guilds now.
+    if (guilds === null) {
+      guilds = await listGuilds(token, fetcher);
     }
 
     const guildName = parsed.guildName?.trim();

@@ -219,9 +219,16 @@ async function promptDiscordAllowFrom(params: {
     const results = await resolveDiscordUserAllowlist({
       token,
       entries: parts,
-    }).catch(() => null);
-    if (!results) {
-      await params.prompter.note("Failed to resolve usernames. Try again.", "Discord allowlist");
+    }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      return { error: message } as const;
+    });
+    if (!results || "error" in results) {
+      const detail = results && "error" in results ? `: ${results.error}` : "";
+      await params.prompter.note(
+        `Failed to resolve usernames${detail}. Try numeric user ids instead.`,
+        "Discord allowlist",
+      );
       continue;
     }
     const unresolved = results.filter((res) => !res.resolved || !res.id);
