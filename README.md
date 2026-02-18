@@ -1,4 +1,4 @@
-# 🦞 OpenClaw 2.0 — Personal AI Assistant
+# 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">
     <picture>
@@ -18,7 +18,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw 2.0** is a _personal AI assistant_ you run on your own devices.
+**OpenClaw** is a _personal AI assistant_ you run on your own devices.
 Introducing the **Self-Evolving Dynamic Tools** engine — OpenClaw can now build its own tools and skills, adapting to your needs in real-time.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 

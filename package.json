@@ -1,6 +1,6 @@
 {
-  "name": "openclaw-2.0",
-  "version": "2.0.0",
+  "name": "openclaw",
+  "version": "2026.2.18",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
