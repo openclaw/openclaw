@@ -262,7 +262,10 @@ describe("gateway send mirroring", () => {
   });
 
   it("returns invalid request when outbound target resolution fails", async () => {
-    vi.mocked(resolveOutboundTarget).mockReturnValue({ ok: false, error: "target not found" });
+    vi.mocked(resolveOutboundTarget).mockReturnValue({
+      ok: false,
+      error: new Error("target not found"),
+    });
 
     const { respond } = await runSend({
       to: "channel:C1",
