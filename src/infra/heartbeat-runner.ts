@@ -292,12 +292,21 @@ function resolveHeartbeatSession(
     if (forcedCanonical !== "global") {
       const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
       if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-        return {
-          sessionKey: forcedCanonical,
-          storePath,
-          store,
-          entry: store[forcedCanonical],
-        };
+        const forcedEntry = store[forcedCanonical];
+        if (forcedEntry) {
+          return {
+            sessionKey: forcedCanonical,
+            storePath,
+            store,
+            entry: forcedEntry,
+          };
+        }
+        // Target session not found in store — fall back to main session
+        // so the event still gets delivered somewhere useful.
+        log.warn(
+          `heartbeat: forced sessionKey "${forcedCanonical}" not found in store, falling back to main session`,
+        );
+        return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
       }
     }
   }
@@ -325,12 +334,20 @@ function resolveHeartbeatSession(
   if (canonical !== "global") {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      return {
-        sessionKey: canonical,
-        storePath,
-        store,
-        entry: store[canonical],
-      };
+      const candidateEntry = store[canonical];
+      if (candidateEntry) {
+        return {
+          sessionKey: canonical,
+          storePath,
+          store,
+          entry: candidateEntry,
+        };
+      }
+      // Configured heartbeat session not found — fall back to main
+      log.warn(
+        `heartbeat: configured session "${canonical}" not found in store, falling back to main session`,
+      );
+      return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
     }
   }
 
