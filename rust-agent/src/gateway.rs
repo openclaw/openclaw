@@ -722,13 +722,115 @@ impl RpcDispatcher {
                 params.include_context_weight.unwrap_or(false),
             )
             .await;
+        let total_tokens = usage.iter().map(|item| item.total_requests).sum::<u64>();
+        let total_allow = usage.iter().map(|item| item.allowed_count).sum::<u64>();
+        let total_review = usage.iter().map(|item| item.review_count).sum::<u64>();
+        let total_block = usage.iter().map(|item| item.blocked_count).sum::<u64>();
+
+        let mut by_agent_totals = HashMap::<String, u64>::new();
+        let mut by_channel_totals = HashMap::<String, u64>::new();
+        for item in &usage {
+            if let Some(agent_id) = &item.agent_id {
+                let next = by_agent_totals.entry(agent_id.clone()).or_insert(0);
+                *next += item.total_requests;
+            }
+            if let Some(channel) = &item.channel {
+                let next = by_channel_totals.entry(channel.clone()).or_insert(0);
+                *next += item.total_requests;
+            }
+        }
+        let by_agent = by_agent_totals
+            .into_iter()
+            .map(|(agent_id, total_tokens)| {
+                json!({
+                    "agentId": agent_id,
+                    "totals": {
+                        "input": 0,
+                        "output": 0,
+                        "cacheRead": 0,
+                        "cacheWrite": 0,
+                        "totalTokens": total_tokens,
+                        "totalCost": 0.0,
+                        "inputCost": 0.0,
+                        "outputCost": 0.0,
+                        "cacheReadCost": 0.0,
+                        "cacheWriteCost": 0.0,
+                        "missingCostEntries": 0
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let by_channel = by_channel_totals
+            .into_iter()
+            .map(|(channel, total_tokens)| {
+                json!({
+                    "channel": channel,
+                    "totals": {
+                        "input": 0,
+                        "output": 0,
+                        "cacheRead": 0,
+                        "cacheWrite": 0,
+                        "totalTokens": total_tokens,
+                        "totalCost": 0.0,
+                        "inputCost": 0.0,
+                        "outputCost": 0.0,
+                        "cacheReadCost": 0.0,
+                        "cacheWriteCost": 0.0,
+                        "missingCostEntries": 0
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let updated_at = now_ms();
         RpcDispatchOutcome::Handled(json!({
-            "generatedAtMs": now_ms(),
+            "updatedAt": updated_at,
+            "generatedAtMs": updated_at,
             "sessionKey": session_key,
+            "startDate": window.start_date,
+            "endDate": window.end_date,
             "range": {
                 "startDate": window.start_date,
                 "endDate": window.end_date,
                 "days": window.days
+            },
+            "totals": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": total_tokens,
+                "totalCost": 0.0,
+                "inputCost": 0.0,
+                "outputCost": 0.0,
+                "cacheReadCost": 0.0,
+                "cacheWriteCost": 0.0,
+                "missingCostEntries": 0
+            },
+            "aggregates": {
+                "messages": {
+                    "total": total_tokens,
+                    "user": 0,
+                    "assistant": 0,
+                    "toolCalls": 0,
+                    "toolResults": 0,
+                    "errors": 0
+                },
+                "tools": {
+                    "totalCalls": 0,
+                    "uniqueTools": 0,
+                    "tools": []
+                },
+                "byModel": [],
+                "byProvider": [],
+                "byAgent": by_agent,
+                "byChannel": by_channel,
+                "daily": []
+            },
+            "actions": {
+                "allow": total_allow,
+                "review": total_review,
+                "block": total_block
             },
             "sessions": usage,
             "count": usage.len()
@@ -3537,6 +3639,33 @@ mod tests {
                     payload
                         .pointer("/range/endDate")
                         .and_then(serde_json::Value::as_str)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/startDate")
+                        .and_then(serde_json::Value::as_str),
+                    payload
+                        .pointer("/endDate")
+                        .and_then(serde_json::Value::as_str)
+                );
+                assert!(
+                    payload
+                        .pointer("/updatedAt")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0)
+                        > 0
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/totals/totalTokens")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/aggregates/messages/total")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
                 );
                 assert!(payload.pointer("/sessions/0/contextWeight").is_some());
             }

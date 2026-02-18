@@ -1530,6 +1530,19 @@ mod tests {
                     .and_then(Value::as_i64),
                 Some(30)
             );
+            assert!(
+                usage_json
+                    .pointer("/result/updatedAt")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+            );
+            assert_eq!(
+                usage_json
+                    .pointer("/result/totals/totalTokens")
+                    .and_then(Value::as_u64),
+                Some(1)
+            );
             assert!(usage_json
                 .pointer("/result/sessions/0/contextWeight")
                 .is_some());
