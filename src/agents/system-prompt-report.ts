@@ -131,7 +131,7 @@ export function buildSystemPromptReport(params: {
   const systemPromptTokens = (() => {
     try {
       return estimateTokens({
-        role: "system",
+        role: "user",
         content: systemPrompt,
         timestamp: params.generatedAt,
       });
