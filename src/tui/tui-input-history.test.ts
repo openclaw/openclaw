@@ -1,19 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEditorSubmitHandler } from "./tui.js";
 
+function createSubmitHarness() {
+  const editor = {
+    setText: vi.fn(),
+    addToHistory: vi.fn(),
+  };
+  const handleCommand = vi.fn();
+  const sendMessage = vi.fn();
+  const handleBangLine = vi.fn();
+  const handler = createEditorSubmitHandler({
+    editor,
+    handleCommand,
+    sendMessage,
+    handleBangLine,
+  });
+  return { editor, handleCommand, sendMessage, handleBangLine, handler };
+}
+
 describe("createEditorSubmitHandler", () => {
   it("adds submitted messages to editor history", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand: vi.fn(),
-      sendMessage: vi.fn(),
-      handleBangLine: vi.fn(),
-    });
+    const { editor, handler } = createSubmitHarness();
 
     handler("hello world");
 
@@ -22,17 +29,7 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("trims input before adding to history", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand: vi.fn(),
-      sendMessage: vi.fn(),
-      handleBangLine: vi.fn(),
-    });
+    const { editor, handler } = createSubmitHarness();
 
     handler("   hi   ");
 
@@ -40,17 +37,7 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("does not add empty-string submissions to history", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand: vi.fn(),
-      sendMessage: vi.fn(),
-      handleBangLine: vi.fn(),
-    });
+    const { editor, handler } = createSubmitHarness();
 
     handler("");
 
@@ -58,17 +45,7 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("does not add whitespace-only submissions to history", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand: vi.fn(),
-      sendMessage: vi.fn(),
-      handleBangLine: vi.fn(),
-    });
+    const { editor, handler } = createSubmitHarness();
 
     handler("   ");
 
@@ -76,19 +53,7 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("routes slash commands to handleCommand", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-    const handleCommand = vi.fn();
-    const sendMessage = vi.fn();
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand,
-      sendMessage,
-      handleBangLine: vi.fn(),
-    });
+    const { editor, handleCommand, sendMessage, handler } = createSubmitHarness();
 
     handler("/models");
 
@@ -98,19 +63,7 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("routes normal messages to sendMessage", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-    const handleCommand = vi.fn();
-    const sendMessage = vi.fn();
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand,
-      sendMessage,
-      handleBangLine: vi.fn(),
-    });
+    const { editor, handleCommand, sendMessage, handler } = createSubmitHarness();
 
     handler("hello");
 
@@ -120,18 +73,7 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("routes bang-prefixed lines to handleBangLine", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-    const handleBangLine = vi.fn();
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand: vi.fn(),
-      sendMessage: vi.fn(),
-      handleBangLine,
-    });
+    const { handleBangLine, handler } = createSubmitHarness();
 
     handler("!ls");
 
@@ -139,18 +81,7 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it("treats a lone ! as a normal message", () => {
-    const editor = {
-      setText: vi.fn(),
-      addToHistory: vi.fn(),
-    };
-    const sendMessage = vi.fn();
-
-    const handler = createEditorSubmitHandler({
-      editor,
-      handleCommand: vi.fn(),
-      sendMessage,
-      handleBangLine: vi.fn(),
-    });
+    const { sendMessage, handler } = createSubmitHarness();
 
     handler("!");
 
