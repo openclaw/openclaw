@@ -121,9 +121,10 @@ export async function getAppAccessToken(params: {
     return { ok: true, token: cached.token };
   }
 
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     // app_secret needs to be MD5 hashed (lowercase)
     const md5Secret = createHash("md5").update(appSecret).digest("hex").toLowerCase();
@@ -134,8 +135,6 @@ export async function getAppAccessToken(params: {
       body: JSON.stringify({ app_key: appKey, app_secret: md5Secret }),
       signal: controller.signal,
     });
-
-    clearTimeout(timeout);
 
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status}` };
@@ -166,6 +165,8 @@ export async function getAppAccessToken(params: {
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: errMsg };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -203,9 +204,10 @@ export async function sendInfoflowPrivateMessage(params: {
     return { ok: false, error: tokenResult.error ?? "failed to get token" };
   }
 
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     let payload: Record<string, unknown>;
 
@@ -280,8 +282,6 @@ export async function sendInfoflowPrivateMessage(params: {
       signal: controller.signal,
     });
 
-    clearTimeout(timeout);
-
     const data = JSON.parse(await res.text()) as Record<string, unknown>;
 
     // Check outer code first
@@ -316,6 +316,8 @@ export async function sendInfoflowPrivateMessage(params: {
     const errMsg = err instanceof Error ? err.message : String(err);
     getInfoflowSendLog().error(`[infoflow:sendPrivate] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -389,9 +391,10 @@ export async function sendInfoflowGroupMessage(params: {
     return { ok: false, error: tokenResult.error ?? "failed to get token" };
   }
 
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     const payload = {
       message: {
@@ -420,8 +423,6 @@ export async function sendInfoflowGroupMessage(params: {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-
-    clearTimeout(timeout);
 
     const data = JSON.parse(await res.text()) as Record<string, unknown>;
 
@@ -454,6 +455,8 @@ export async function sendInfoflowGroupMessage(params: {
     const errMsg = err instanceof Error ? err.message : String(err);
     getInfoflowSendLog().error(`[infoflow:sendGroup] exception: ${errMsg}`);
     return { ok: false, error: errMsg };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

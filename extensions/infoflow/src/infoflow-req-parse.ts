@@ -1,4 +1,4 @@
-import { createHash, createDecipheriv } from "node:crypto";
+import { createHash, createDecipheriv, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { createDedupeCache } from "openclaw/plugin-sdk";
@@ -241,7 +241,10 @@ export async function parseAndDispatchInfoflowRequest(
         const expectedSig = createHash("md5")
           .update(`${rn}${timestamp}${checkToken}`)
           .digest("hex");
-        if (signature === expectedSig) {
+        if (
+          signature.length === expectedSig.length &&
+          timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))
+        ) {
           if (verbose) {
             getInfoflowParseLog().debug?.(`[infoflow] echostr verified successfully`);
           }
