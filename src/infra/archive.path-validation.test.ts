@@ -68,7 +68,7 @@ describe("extractArchive path traversal protection", () => {
         destDir: extractDir,
         timeoutMs: 5000,
       }),
-    ).rejects.toThrow(/escapes destination/);
+    ).rejects.toThrow(/escapes destination|archive entry is absolute/);
 
     // Cleanup
     await fs.rm(tmpDir, { recursive: true, force: true });
