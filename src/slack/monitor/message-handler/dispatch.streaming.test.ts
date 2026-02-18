@@ -42,4 +42,14 @@ describe("slack native streaming thread hint", () => {
       }),
     ).toBe("2000.1");
   });
+
+  it("uses messageTs as thread target when replyToMode=all and message is top-level (e.g. DM)", () => {
+    expect(
+      resolveSlackStreamingThreadHint({
+        replyToMode: "all",
+        incomingThreadTs: undefined,
+        messageTs: "1500.5",
+      }),
+    ).toBe("1500.5");
+  });
 });
