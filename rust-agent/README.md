@@ -65,6 +65,7 @@ systemctl --user status openclaw-agent-rs.service
 - Supports `sessions.delete` parity envelope fields (`path`, `archived`) and honors `deleteTranscript` to skip transcript archive hints.
 - Supports `sessions.compact` parity envelope fields (`path`, `archived`) with archive hints when transcript compaction removes lines.
 - Tracks a stable per-session `sessionId` in session metadata, resolves keys by `sessionId` in `sessions.resolve`, and rotates `sessionId` on `sessions.reset`.
+- Normalizes alias and short-form session keys (`main`, `discord:group:*`, etc.) to canonical `agent:*` keys across session RPC handlers.
 - Responds to gateway introspection RPCs (`health`, `status`) with runtime/session metadata.
 - Responds to usage RPCs (`usage.status`, `usage.cost`) with Rust-side aggregate usage/cost placeholder summaries.
 - Tracks session metadata (`label`, `spawnedBy`) via `sessions.patch` and uses it for filtered `sessions.resolve` lookups.

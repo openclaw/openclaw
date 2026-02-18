@@ -389,7 +389,7 @@ impl RpcDispatcher {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|v| {
-                let normalized = v.trim().to_owned();
+                let normalized = canonicalize_session_key(&v);
                 if normalized.is_empty() {
                     None
                 } else {
@@ -418,11 +418,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params
-            .key
-            .or(params.session_key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let session_key = normalize_session_key_input(params.key.or(params.session_key));
         let Some(session_key) = session_key else {
             return RpcDispatchOutcome::bad_request("sessionKey|key is required");
         };
@@ -580,11 +576,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let candidate = params
-            .session_key
-            .or(params.key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let candidate = normalize_session_key_input(params.session_key.or(params.key));
         if let Some(candidate) = candidate {
             if let Some(key) = self.sessions.resolve_key(&candidate).await {
                 return RpcDispatchOutcome::Handled(json!({
@@ -639,11 +631,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params
-            .session_key
-            .or(params.key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let session_key = normalize_session_key_input(params.session_key.or(params.key));
         let Some(session_key) = session_key else {
             return RpcDispatchOutcome::bad_request("sessionKey|key is required");
         };
@@ -671,11 +659,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params
-            .session_key
-            .or(params.key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let session_key = normalize_session_key_input(params.session_key.or(params.key));
         let Some(session_key) = session_key else {
             return RpcDispatchOutcome::bad_request("sessionKey|key is required");
         };
@@ -703,11 +687,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params
-            .session_key
-            .or(params.key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let session_key = normalize_session_key_input(params.session_key.or(params.key));
         let Some(session_key) = session_key else {
             return RpcDispatchOutcome::bad_request("sessionKey|key is required");
         };
@@ -735,11 +715,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params
-            .session_key
-            .or(params.key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let session_key = normalize_session_key_input(params.session_key.or(params.key));
         let window = resolve_usage_window(params.start_date, params.end_date, None);
         let usage = self
             .sessions
@@ -870,11 +846,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params
-            .session_key
-            .or(params.key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let session_key = normalize_session_key_input(params.session_key.or(params.key));
         let Some(session_key) = session_key else {
             return RpcDispatchOutcome::bad_request("sessionKey|key is required");
         };
@@ -898,11 +870,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params
-            .session_key
-            .or(params.key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty());
+        let session_key = normalize_session_key_input(params.session_key.or(params.key));
         let Some(session_key) = session_key else {
             return RpcDispatchOutcome::bad_request("sessionKey|key is required");
         };
@@ -924,10 +892,10 @@ impl RpcDispatcher {
         };
 
         let session_key = match params.session_key {
-            Some(v) if v.trim().is_empty() => {
+            Some(v) if canonicalize_session_key(&v).is_empty() => {
                 return RpcDispatchOutcome::bad_request("sessionKey cannot be empty");
             }
-            Some(v) => Some(v.trim().to_owned()),
+            Some(v) => Some(canonicalize_session_key(&v)),
             None => None,
         };
 
@@ -947,7 +915,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        let session_key = params.session_key.trim().to_owned();
+        let session_key = canonicalize_session_key(&params.session_key);
         if session_key.is_empty() {
             return RpcDispatchOutcome::bad_request("sessionKey is required");
         }
@@ -982,7 +950,7 @@ impl RpcDispatcher {
             Ok(v) => v,
             Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
         };
-        if let Some(session_key) = params.session_key {
+        if let Some(session_key) = normalize_session_key_input(params.session_key) {
             if let Some(session) = self.sessions.get(&session_key).await {
                 return RpcDispatchOutcome::Handled(json!({
                     "session": session
@@ -1071,6 +1039,8 @@ impl SessionRegistry {
         let session_key = request
             .session_id
             .clone()
+            .map(|value| canonicalize_session_key(&value))
+            .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "global".to_owned());
         let now = now_ms();
 
@@ -2806,6 +2776,36 @@ fn normalize(method: &str) -> String {
     method.trim().to_ascii_lowercase()
 }
 
+fn canonicalize_session_key(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered == "global" {
+        return "global".to_owned();
+    }
+    if lowered == "main" {
+        return "agent:main:main".to_owned();
+    }
+    if lowered.starts_with("agent:")
+        || lowered.starts_with("cron:")
+        || lowered.starts_with("hook:")
+        || lowered.starts_with("node-")
+    {
+        return trimmed.to_owned();
+    }
+    if trimmed.contains(':') {
+        return format!("agent:main:{trimmed}");
+    }
+    trimmed.to_owned()
+}
+
+fn normalize_session_key_input(raw: Option<String>) -> Option<String> {
+    raw.map(|value| canonicalize_session_key(&value))
+        .filter(|value| !value.is_empty())
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3303,6 +3303,143 @@ mod tests {
                 );
             }
             _ => panic!("expected resolve handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_normalizes_alias_and_short_session_keys() {
+        let dispatcher = RpcDispatcher::new();
+
+        let patch_main = RpcRequestFrame {
+            id: "req-patch-main".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": "main",
+                "queueMode": "followup"
+            }),
+        };
+        let out = dispatcher.handle_request(&patch_main).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/key").and_then(serde_json::Value::as_str),
+                    Some("agent:main:main")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/session/key")
+                        .and_then(serde_json::Value::as_str),
+                    Some("agent:main:main")
+                );
+            }
+            _ => panic!("expected main patch handled"),
+        }
+
+        let patch_short = RpcRequestFrame {
+            id: "req-patch-short".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "key": "discord:group:g-short",
+                "queueMode": "followup"
+            }),
+        };
+        let out = dispatcher.handle_request(&patch_short).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/key").and_then(serde_json::Value::as_str),
+                    Some("agent:main:discord:group:g-short")
+                );
+            }
+            _ => panic!("expected short patch handled"),
+        }
+
+        let resolve_short = RpcRequestFrame {
+            id: "req-resolve-short".to_owned(),
+            method: "sessions.resolve".to_owned(),
+            params: serde_json::json!({
+                "key": "discord:group:g-short"
+            }),
+        };
+        let out = dispatcher.handle_request(&resolve_short).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/key").and_then(serde_json::Value::as_str),
+                    Some("agent:main:discord:group:g-short")
+                );
+            }
+            _ => panic!("expected short resolve handled"),
+        }
+
+        let status_short = RpcRequestFrame {
+            id: "req-status-short".to_owned(),
+            method: "session.status".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "discord:group:g-short"
+            }),
+        };
+        let out = dispatcher.handle_request(&status_short).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/session/key")
+                        .and_then(serde_json::Value::as_str),
+                    Some("agent:main:discord:group:g-short")
+                );
+            }
+            _ => panic!("expected short status handled"),
+        }
+
+        let delete_short = RpcRequestFrame {
+            id: "req-delete-short".to_owned(),
+            method: "sessions.delete".to_owned(),
+            params: serde_json::json!({
+                "key": "discord:group:g-short"
+            }),
+        };
+        let out = dispatcher.handle_request(&delete_short).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/key").and_then(serde_json::Value::as_str),
+                    Some("agent:main:discord:group:g-short")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/deleted")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected short delete handled"),
+        }
+
+        let list = RpcRequestFrame {
+            id: "req-list-canon".to_owned(),
+            method: "sessions.list".to_owned(),
+            params: serde_json::json!({}),
+        };
+        let out = dispatcher.handle_request(&list).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                let keys = payload
+                    .pointer("/sessions")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|sessions| {
+                        sessions
+                            .iter()
+                            .filter_map(|session| {
+                                session.get("key").and_then(serde_json::Value::as_str)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                assert!(keys.iter().any(|key| *key == "agent:main:main"));
+                assert!(keys.iter().all(|key| *key != "main"));
+            }
+            _ => panic!("expected canonical list handled"),
         }
     }
 

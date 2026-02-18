@@ -86,11 +86,20 @@ fn parse_agent_session_key(key: &str) -> SessionDescriptor {
     }
 
     let agent_id = parts.next().map(ToOwned::to_owned);
-    let channel = parts.next().map(ToOwned::to_owned);
+    let mut channel = parts.next().map(ToOwned::to_owned);
     let rest: Vec<&str> = parts.collect();
 
     let (kind, scope_id, topic_id) = if rest.is_empty() {
-        (SessionKind::Other, None, None)
+        if channel
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("main"))
+            .unwrap_or(false)
+        {
+            channel = None;
+            (SessionKind::Main, Some("main".to_owned()), None)
+        } else {
+            (SessionKind::Other, None, None)
+        }
     } else if rest.len() == 1 {
         if rest[0].eq_ignore_ascii_case("main") {
             (SessionKind::Main, Some(rest[0].to_owned()), None)
@@ -141,6 +150,15 @@ mod tests {
     fn parses_main_session() {
         let parsed = parse_session_key("main");
         assert_eq!(parsed.kind, SessionKind::Main);
+    }
+
+    #[test]
+    fn parses_agent_main_alias() {
+        let parsed = parse_session_key("agent:main:main");
+        assert_eq!(parsed.kind, SessionKind::Main);
+        assert_eq!(parsed.agent_id.as_deref(), Some("main"));
+        assert_eq!(parsed.channel, None);
+        assert_eq!(parsed.scope_id.as_deref(), Some("main"));
     }
 
     #[test]

@@ -45,6 +45,7 @@
 - Extended `sessions.delete` + `sessions.compact` response parity with upstream-style `path` and `archived` envelope fields.
 - Added `sessions.delete` handling for `deleteTranscript` to suppress transcript-archive hints when requested.
 - Added explicit `sessionId` tracking on session entries, `sessions.resolve` lookup by `sessionId`, and `sessions.reset` session-id rotation.
+- Added session-key normalization to canonicalize aliases/short forms (`main`, channel-scoped keys) across session RPC operations.
 - Rust defender policy engine with bounded worker concurrency.
 - Prompt injection scoring + command risk scoring.
 - Host integrity baseline checks.
