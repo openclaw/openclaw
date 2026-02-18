@@ -17,32 +17,14 @@ import {
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  GOOGLE_UNSUPPORTED_SCHEMA_KEYWORDS,
+  resolveProviderCapabilities,
+} from "../provider-capabilities.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
-const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
-  "patternProperties",
-  "additionalProperties",
-  "$schema",
-  "$id",
-  "$ref",
-  "$defs",
-  "definitions",
-  "examples",
-  "minLength",
-  "maxLength",
-  "minimum",
-  "maximum",
-  "multipleOf",
-  "pattern",
-  "format",
-  "minItems",
-  "maxItems",
-  "uniqueItems",
-  "minProperties",
-  "maxProperties",
-]);
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 function isValidAntigravitySignature(value: unknown): value is string {
@@ -143,7 +125,7 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
     if (key === "properties") {
       continue;
     }
-    if (GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS.has(key)) {
+    if (GOOGLE_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
       violations.push(`${path}.${key}`);
     }
     if (value && typeof value === "object") {
@@ -160,7 +142,7 @@ export function sanitizeToolsForGoogle<
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
 }): AgentTool<TSchemaType, TResult>[] {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  if (!resolveProviderCapabilities({ provider: params.provider }).toolSchemaUnsupportedKeywords) {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -177,7 +159,7 @@ export function sanitizeToolsForGoogle<
 }
 
 export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: string }) {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  if (!resolveProviderCapabilities({ provider: params.provider }).toolSchemaUnsupportedKeywords) {
     return;
   }
   const toolNames = params.tools.map((tool, index) => `${index}:${tool.name}`);

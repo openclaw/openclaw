@@ -1,3 +1,5 @@
+import { resolveProviderCapabilities } from "../provider-capabilities.js";
+
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 export const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -9,15 +11,7 @@ export type CacheTtlEntryData = {
 };
 
 export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
-  const normalizedProvider = provider.toLowerCase();
-  const normalizedModelId = modelId.toLowerCase();
-  if (normalizedProvider === "anthropic") {
-    return true;
-  }
-  if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/")) {
-    return true;
-  }
-  return false;
+  return resolveProviderCapabilities({ provider, modelId }).supportsPromptCache;
 }
 
 export function readLastCacheTtlTimestamp(sessionManager: unknown): number | null {

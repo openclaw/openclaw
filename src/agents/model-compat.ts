@@ -1,13 +1,21 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { resolveProviderCapabilities } from "./provider-capabilities.js";
 
 function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
 }
 
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
-  const baseUrl = model.baseUrl ?? "";
-  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) {
+  if (!isOpenAiCompletionsModel(model)) {
+    return model;
+  }
+
+  const caps = resolveProviderCapabilities({
+    provider: model.provider,
+    modelApi: model.api,
+    baseUrl: model.baseUrl,
+  });
+  if (caps.supportsDeveloperRole) {
     return model;
   }
 
