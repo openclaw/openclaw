@@ -25,6 +25,7 @@ export type ResolvedBrowserConfig = {
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
   color: string;
+  language?: string;
   executablePath?: string;
   headless: boolean;
   noSandbox: boolean;
@@ -41,6 +42,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
+  language?: string;
   driver: "openclaw" | "extension";
 };
 
@@ -145,6 +147,7 @@ export function resolveBrowserConfig(
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
   const defaultColor = normalizeHexColor(cfg?.color);
+  const language = cfg?.language?.trim() || undefined;
   const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
   const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(
     cfg?.remoteCdpHandshakeTimeoutMs,
@@ -211,6 +214,7 @@ export function resolveBrowserConfig(
     remoteCdpTimeoutMs,
     remoteCdpHandshakeTimeoutMs,
     color: defaultColor,
+    language,
     executablePath,
     headless,
     noSandbox,
@@ -239,6 +243,8 @@ export function resolveProfile(
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
   const driver = profile.driver === "extension" ? "extension" : "openclaw";
+  // Profile language overrides global browser language
+  const language = profile.language ?? resolved.language;
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
@@ -258,6 +264,7 @@ export function resolveProfile(
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
+    language,
     driver,
   };
 }

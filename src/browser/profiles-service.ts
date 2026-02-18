@@ -21,6 +21,7 @@ export type CreateProfileParams = {
   color?: string;
   cdpUrl?: string;
   driver?: "openclaw" | "extension";
+  language?: string;
 };
 
 export type CreateProfileResult = {
@@ -49,6 +50,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
     const driver = params.driver === "extension" ? "extension" : undefined;
+    const language = params.language?.trim() || undefined;
 
     if (!isValidProfileName(name)) {
       throw new Error("invalid profile name: use lowercase letters, numbers, and hyphens only");
@@ -76,6 +78,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profileConfig = {
         cdpUrl: parsed.normalized,
         ...(driver ? { driver } : {}),
+        ...(language ? { language } : {}),
         color: profileColor,
       };
     } else {
@@ -88,6 +91,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profileConfig = {
         cdpPort,
         ...(driver ? { driver } : {}),
+        ...(language ? { language } : {}),
         color: profileColor,
       };
     }
