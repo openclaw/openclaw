@@ -386,6 +386,28 @@ function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
     : DEFAULT_APNS_TIMEOUT_MS;
 }
 
+function resolveApnsSendContext(params: { auth: ApnsAuthConfig; registration: ApnsRegistration }): {
+  token: string;
+  topic: string;
+  environment: ApnsEnvironment;
+  bearerToken: string;
+} {
+  const token = normalizeApnsToken(params.registration.token);
+  if (!isLikelyApnsToken(token)) {
+    throw new Error("invalid APNs token");
+  }
+  const topic = normalizeTopic(params.registration.topic);
+  if (!topic) {
+    throw new Error("topic required");
+  }
+  return {
+    token,
+    topic,
+    environment: params.registration.environment,
+    bearerToken: getApnsBearerToken(params.auth),
+  };
+}
+
 function toApnsPushResult(params: {
   response: ApnsRequestResponse;
   token: string;
@@ -412,16 +434,10 @@ export async function sendApnsAlert(params: {
   timeoutMs?: number;
   requestSender?: ApnsRequestSender;
 }): Promise<ApnsPushAlertResult> {
-  const token = normalizeApnsToken(params.registration.token);
-  if (!isLikelyApnsToken(token)) {
-    throw new Error("invalid APNs token");
-  }
-  const topic = normalizeTopic(params.registration.topic);
-  if (!topic) {
-    throw new Error("topic required");
-  }
-  const environment = params.registration.environment;
-  const bearerToken = getApnsBearerToken(params.auth);
+  const { token, topic, environment, bearerToken } = resolveApnsSendContext({
+    auth: params.auth,
+    registration: params.registration,
+  });
 
   const payload = {
     aps: {
@@ -466,16 +482,10 @@ export async function sendApnsBackgroundWake(params: {
   timeoutMs?: number;
   requestSender?: ApnsRequestSender;
 }): Promise<ApnsPushWakeResult> {
-  const token = normalizeApnsToken(params.registration.token);
-  if (!isLikelyApnsToken(token)) {
-    throw new Error("invalid APNs token");
-  }
-  const topic = normalizeTopic(params.registration.topic);
-  if (!topic) {
-    throw new Error("topic required");
-  }
-  const environment = params.registration.environment;
-  const bearerToken = getApnsBearerToken(params.auth);
+  const { token, topic, environment, bearerToken } = resolveApnsSendContext({
+    auth: params.auth,
+    registration: params.registration,
+  });
 
   const payload = {
     aps: {
