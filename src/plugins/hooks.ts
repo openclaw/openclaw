@@ -49,6 +49,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookProvideCompactionSummaryEvent,
+  PluginHookProvideCompactionSummaryResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -80,6 +82,8 @@ export type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookProvideCompactionSummaryEvent,
+  PluginHookProvideCompactionSummaryResult,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -369,6 +373,27 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookAgentContext,
   ): Promise<void> {
     return runVoidHook("before_reset", event, ctx);
+  }
+
+  /**
+   * Run provide_compaction_summary hook.
+   * Allows a memory plugin to return a custom compaction summary, bypassing the
+   * default LLM call. Runs sequentially (modifying hook).
+   */
+  async function runProvideCompactionSummary(
+    event: PluginHookProvideCompactionSummaryEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookProvideCompactionSummaryResult | undefined> {
+    return runModifyingHook<"provide_compaction_summary", PluginHookProvideCompactionSummaryResult>(
+      "provide_compaction_summary",
+      event,
+      ctx,
+      (acc, next) => ({
+        summary: next.summary ?? acc?.summary,
+        // OR-logic: any plugin requesting skip wins
+        skipCompaction: next.skipCompaction || acc?.skipCompaction,
+      }),
+    );
   }
 
   // =========================================================================
@@ -724,6 +749,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeCompaction,
     runAfterCompaction,
     runBeforeReset,
+    runProvideCompactionSummary,
     // Message hooks
     runMessageReceived,
     runMessageSending,
