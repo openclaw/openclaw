@@ -670,10 +670,17 @@ impl RpcDispatcher {
         }
 
         let deleted = self.sessions.delete(&session_key).await;
+        let archived = if deleted && params.delete_transcript.unwrap_or(true) {
+            vec![format!("{SESSION_STORE_PATH}/archives/{session_key}.deleted")]
+        } else {
+            Vec::new()
+        };
         RpcDispatchOutcome::Handled(json!({
             "ok": true,
+            "path": SESSION_STORE_PATH,
             "key": session_key,
-            "deleted": deleted
+            "deleted": deleted,
+            "archived": archived
         }))
     }
 
@@ -692,13 +699,20 @@ impl RpcDispatcher {
         };
         let max_lines = params.max_lines.unwrap_or(64).clamp(1, 1_024);
         let compacted = self.sessions.compact(&session_key, max_lines).await;
+        let archived = if compacted.compacted {
+            vec![format!("{SESSION_STORE_PATH}/archives/{session_key}.compact")]
+        } else {
+            Vec::new()
+        };
         RpcDispatchOutcome::Handled(json!({
             "ok": true,
+            "path": SESSION_STORE_PATH,
             "key": session_key,
             "compacted": compacted.compacted,
             "kept": compacted.kept,
             "removed": compacted.removed,
-            "reason": compacted.reason
+            "reason": compacted.reason,
+            "archived": archived
         }))
     }
 
@@ -2177,6 +2191,8 @@ struct SessionsDeleteParams {
     #[serde(rename = "sessionKey", alias = "session_key")]
     session_key: Option<String>,
     key: Option<String>,
+    #[serde(rename = "deleteTranscript", alias = "delete_transcript")]
+    delete_transcript: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -3384,10 +3400,20 @@ mod tests {
         match out {
             RpcDispatchOutcome::Handled(payload) => {
                 assert_eq!(
+                    payload.pointer("/path").and_then(serde_json::Value::as_str),
+                    Some(super::SESSION_STORE_PATH)
+                );
+                assert_eq!(
                     payload
                         .pointer("/deleted")
                         .and_then(serde_json::Value::as_bool),
                     Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/archived/0")
+                        .and_then(serde_json::Value::as_str),
+                    Some("memory://session-registry/archives/agent:main:discord:group:g-delete.deleted")
                 );
             }
             _ => panic!("expected delete handled"),
@@ -3400,6 +3426,47 @@ mod tests {
         };
         let out = dispatcher.handle_request(&deny_main).await;
         assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_delete_honors_delete_transcript_flag() {
+        let dispatcher = RpcDispatcher::new();
+        let patch = RpcRequestFrame {
+            id: "req-patch-delete-flag".to_owned(),
+            method: "sessions.patch".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-delete-flag",
+            }),
+        };
+        let _ = dispatcher.handle_request(&patch).await;
+
+        let delete = RpcRequestFrame {
+            id: "req-delete-flag".to_owned(),
+            method: "sessions.delete".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-delete-flag",
+                "deleteTranscript": false
+            }),
+        };
+        let out = dispatcher.handle_request(&delete).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/deleted")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/archived")
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::len),
+                    Some(0)
+                );
+            }
+            _ => panic!("expected delete handled"),
+        }
     }
 
     #[tokio::test]
@@ -3478,6 +3545,10 @@ mod tests {
         match out {
             RpcDispatchOutcome::Handled(payload) => {
                 assert_eq!(
+                    payload.pointer("/path").and_then(serde_json::Value::as_str),
+                    Some(super::SESSION_STORE_PATH)
+                );
+                assert_eq!(
                     payload
                         .pointer("/compacted")
                         .and_then(serde_json::Value::as_bool),
@@ -3492,6 +3563,12 @@ mod tests {
                         .pointer("/removed")
                         .and_then(serde_json::Value::as_u64),
                     Some(3)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/archived/0")
+                        .and_then(serde_json::Value::as_str),
+                    Some("memory://session-registry/archives/agent:main:discord:group:g-compact.compact")
                 );
             }
             _ => panic!("expected compact handled"),

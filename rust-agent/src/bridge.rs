@@ -1164,6 +1164,18 @@ mod tests {
                     .and_then(Value::as_bool),
                 Some(true)
             );
+            assert_eq!(
+                delete_json
+                    .pointer("/result/path")
+                    .and_then(Value::as_str),
+                Some("memory://session-registry")
+            );
+            assert_eq!(
+                delete_json
+                    .pointer("/result/archived/0")
+                    .and_then(Value::as_str),
+                Some("memory://session-registry/archives/agent:main:discord:group:g10.deleted")
+            );
 
             write.send(Message::Close(None)).await?;
             Ok::<(), anyhow::Error>(())
@@ -1358,6 +1370,18 @@ mod tests {
             assert_eq!(
                 compact_json.pointer("/result/kept").and_then(Value::as_u64),
                 Some(1)
+            );
+            assert_eq!(
+                compact_json
+                    .pointer("/result/path")
+                    .and_then(Value::as_str),
+                Some("memory://session-registry")
+            );
+            assert_eq!(
+                compact_json
+                    .pointer("/result/archived/0")
+                    .and_then(Value::as_str),
+                Some("memory://session-registry/archives/agent:main:discord:group:g11.compact")
             );
 
             write.send(Message::Close(None)).await?;
