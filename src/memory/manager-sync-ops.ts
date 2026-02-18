@@ -344,7 +344,10 @@ export abstract class MemoryManagerSyncOps {
     this.fts.available = result.ftsAvailable;
     if (result.ftsError) {
       this.fts.loadError = result.ftsError;
-      log.warn(`fts unavailable: ${result.ftsError}`);
+      // Only warn when hybrid search is enabled; otherwise this is expected noise.
+      if (this.fts.enabled) {
+        log.warn(`fts unavailable: ${result.ftsError}`);
+      }
     }
   }
 
