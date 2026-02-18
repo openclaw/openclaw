@@ -270,7 +270,7 @@ function normalizeRetention(retentionDays?: number): number {
   if (!Number.isFinite(retentionDays)) {
     return PERFORMANCE_RETENTION_DAYS;
   }
-  return Math.max(0, Math.floor(retentionDays));
+  return Math.max(0, Math.floor(retentionDays!));
 }
 
 export async function cleanupOldPerformanceFiles(

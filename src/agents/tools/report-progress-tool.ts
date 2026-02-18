@@ -48,7 +48,10 @@ function normalizeMetrics(raw: unknown): Record<string, string | number> | undef
       }
       return undefined;
     })
-    .filter((entry): entry is [string, string | number] => entry !== undefined);
+    .filter(
+      (entry): entry is readonly [string, string] | readonly [string, number] =>
+        entry !== undefined,
+    );
 
   return entries.length > 0
     ? (Object.fromEntries(entries) as Record<string, string | number>)

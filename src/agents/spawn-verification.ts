@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -13,7 +14,7 @@ const TIMEOUT_CHECK_TARGET = "<verification>";
 const TIMEOUT_REASON = "verification_timeout";
 
 type VerificationIo = {
-  stat: (target: string) => Promise<fs.Stats>;
+  stat: (target: string) => Promise<Stats>;
   readFile: (target: string, encoding: BufferEncoding) => Promise<string>;
 };
 
@@ -87,7 +88,7 @@ async function checkArtifact(
   const minItems = normalizeMinValue(artifact.minItems);
   const requiredKeys = normalizeRequiredKeys(artifact.requiredKeys);
 
-  let stat: fs.Stats;
+  let stat: Stats;
   try {
     stat = await io.stat(target);
   } catch {
@@ -189,7 +190,7 @@ export async function runSpawnVerificationChecks(params: {
   now?: () => number;
   timeoutMs?: number;
   hooks?: {
-    stat?: (target: string) => Promise<fs.Stats>;
+    stat?: (target: string) => Promise<Stats>;
     readFile?: (target: string, encoding: BufferEncoding) => Promise<string>;
   };
 }): Promise<VerificationResult> {

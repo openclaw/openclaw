@@ -4,6 +4,7 @@ import {
   CONFIDENCE_LEVELS,
   type CompletionArtifact,
   type CompletionReport,
+  type CompletionConfidence,
   type CompletionStatus,
 } from "../completion-report-parser.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -31,7 +32,9 @@ function normalizeOptionalStatus(value: unknown): CompletionStatus | undefined {
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  return COMPLETION_STATUSES.includes(normalized as CompletionStatus) ? normalized : undefined;
+  return COMPLETION_STATUSES.includes(normalized as CompletionStatus)
+    ? (normalized as CompletionStatus)
+    : undefined;
 }
 
 function normalizeOptionalConfidence(value: unknown): CompletionReport["confidence"] | undefined {
@@ -39,8 +42,8 @@ function normalizeOptionalConfidence(value: unknown): CompletionReport["confiden
     return undefined;
   }
   const normalized = value.trim().toLowerCase();
-  return CONFIDENCE_LEVELS.includes(normalized as CompletionReport["confidence"])
-    ? (normalized as CompletionReport["confidence"])
+  return CONFIDENCE_LEVELS.includes(normalized as CompletionConfidence)
+    ? (normalized as CompletionConfidence)
     : undefined;
 }
 

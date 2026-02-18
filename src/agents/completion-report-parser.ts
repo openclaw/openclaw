@@ -82,12 +82,16 @@ function parseHeader(line: string): SectionLine | undefined {
 
 function parseStatus(value: string): CompletionStatus | undefined {
   const normalized = value.trim().toLowerCase();
-  return COMPLETION_STATUSES.includes(normalized as CompletionStatus) ? normalized : undefined;
+  return COMPLETION_STATUSES.includes(normalized as CompletionStatus)
+    ? (normalized as CompletionStatus)
+    : undefined;
 }
 
 function parseConfidence(value: string): CompletionConfidence | undefined {
   const normalized = value.trim().toLowerCase();
-  return CONFIDENCE_LEVELS.includes(normalized as CompletionConfidence) ? normalized : undefined;
+  return CONFIDENCE_LEVELS.includes(normalized as CompletionConfidence)
+    ? (normalized as CompletionConfidence)
+    : undefined;
 }
 
 function normalizeListLine(line: string) {
