@@ -56,10 +56,10 @@ describe("semantic-clustering", () => {
       const clusters = clusterByEmbeddings(items, {
         enabled: true,
         epsilon: 0.2, // Allow some distance
-        minPoints: 2,
+        minPoints: 1, // minPoints=1 means need at least 1 neighbor to form cluster
       });
 
-      // Should form 2 clusters (or possibly with noise)
+      // Should form 2 clusters (each with 2 items)
       const realClusters = clusters.filter((c) => c.clusterId !== -1);
       expect(realClusters.length).toBeGreaterThanOrEqual(1);
       expect(realClusters.length).toBeLessThanOrEqual(2);

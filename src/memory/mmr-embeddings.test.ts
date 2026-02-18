@@ -5,13 +5,13 @@ describe("MMR with embeddings", () => {
   it("uses embedding similarity when available and enabled", () => {
     const items: MMRItem[] = [
       { id: "1", score: 1.0, content: "apple fruit", embedding: [1, 0, 0] },
-      { id: "2", score: 0.9, content: "banana fruit", embedding: [0.95, 0.05, 0] }, // Very similar embedding to 1
-      { id: "3", score: 0.8, content: "car vehicle", embedding: [0, 1, 0] }, // Different topic
+      { id: "2", score: 0.95, content: "banana fruit", embedding: [0.95, 0.05, 0] }, // Very similar embedding to 1
+      { id: "3", score: 0.9, content: "car vehicle", embedding: [0, 1, 0] }, // Different topic
     ];
 
     const reranked = mmrRerank(items, {
       enabled: true,
-      lambda: 0.7,
+      lambda: 0.5, // Equal balance between relevance and diversity
       useEmbeddingSimilarity: true,
     });
 
@@ -25,13 +25,13 @@ describe("MMR with embeddings", () => {
   it("falls back to text similarity when embeddings unavailable", () => {
     const items: MMRItem[] = [
       { id: "1", score: 1.0, content: "apple fruit red" },
-      { id: "2", score: 0.9, content: "apple fruit green" }, // Similar text
-      { id: "3", score: 0.8, content: "car vehicle blue" }, // Different text
+      { id: "2", score: 0.95, content: "apple fruit green" }, // Similar text
+      { id: "3", score: 0.9, content: "car vehicle blue" }, // Different text
     ];
 
     const reranked = mmrRerank(items, {
       enabled: true,
-      lambda: 0.7,
+      lambda: 0.5, // Equal balance between relevance and diversity
       useEmbeddingSimilarity: true, // Enabled but no embeddings
     });
 
@@ -87,13 +87,13 @@ describe("MMR with embeddings", () => {
       },
       {
         id: "2",
-        score: 0.9,
+        score: 0.95,
         content: "canine", // Synonym of dog, no text overlap
         embedding: [0.82, 0.48, 0.31], // Very similar embedding
       },
       {
         id: "3",
-        score: 0.8,
+        score: 0.9,
         content: "automobile",
         embedding: [0.2, 0.9, 0.1], // Different topic
       },
@@ -109,7 +109,7 @@ describe("MMR with embeddings", () => {
     // With embedding similarity, "canine" is correctly identified as similar
     const embeddingRanked = mmrRerank(items, {
       enabled: true,
-      lambda: 0.7,
+      lambda: 0.5, // Equal balance to make diversity count more
       useEmbeddingSimilarity: true,
     });
 

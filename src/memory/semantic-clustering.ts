@@ -227,12 +227,13 @@ export function getClusterStats<T extends ClusterableItem>(
 } {
   const noiseClusters = clusters.filter((c) => c.clusterId === -1).length;
   const realClusters = clusters.filter((c) => c.clusterId !== -1);
-  const totalItems = clusters.reduce((sum, c) => sum + c.items.length, 0);
+  const totalItemsInRealClusters = realClusters.reduce((sum, c) => sum + c.items.length, 0);
 
   return {
     totalClusters: realClusters.length,
     noiseClusters,
-    averageClusterSize: realClusters.length > 0 ? totalItems / realClusters.length : 0,
+    averageClusterSize:
+      realClusters.length > 0 ? totalItemsInRealClusters / realClusters.length : 0,
     largestClusterSize: Math.max(...clusters.map((c) => c.items.length), 0),
   };
 }
