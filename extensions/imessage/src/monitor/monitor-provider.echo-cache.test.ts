@@ -1,14 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createSentMessageCache } from "./echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("matches recent text within the same scope", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
     const cache = createSentMessageCache();
 
     cache.remember("acct:imessage:+1555", { text: "  Reasoning:\r\n_step_  " });
@@ -18,8 +12,6 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("matches by outbound message id and ignores placeholder ids", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
     const cache = createSentMessageCache();
 
     cache.remember("acct:imessage:+1555", { messageId: "abc-123" });
@@ -29,16 +21,20 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1555", { messageId: "ok" })).toBe(false);
   });
 
-  it("keeps message-id lookups longer than text fallback", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+  it("matches both text and messageId when stored together", () => {
     const cache = createSentMessageCache();
 
     cache.remember("acct:imessage:+1555", { text: "hello", messageId: "m-1" });
-    // Text fallback stays short to avoid suppressing legitimate repeated user text.
-    vi.advanceTimersByTime(6_000);
 
-    expect(cache.has("acct:imessage:+1555", { text: "hello" })).toBe(false);
+    expect(cache.has("acct:imessage:+1555", { text: "hello" })).toBe(true);
     expect(cache.has("acct:imessage:+1555", { messageId: "m-1" })).toBe(true);
+  });
+
+  it("one-shot text match so same user text later is not treated as echo", () => {
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "ok user" });
+    expect(cache.has("acct:imessage:+1555", { text: "ok user" })).toBe(true);
+    expect(cache.has("acct:imessage:+1555", { text: "ok user" })).toBe(false);
   });
 });
