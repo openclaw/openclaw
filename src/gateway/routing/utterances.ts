@@ -86,6 +86,9 @@ export const ROUTE_UTTERANCES: Map<TaskType, string[]> = new Map([
       "这个接口返回了错误，帮我定位",
       "production 报错了，紧急排查",
       "帮我找出为什么测试一直失败",
+      "这个报错了怎么回事",
+      "运行不起来",
+      "编译失败了",
     ],
   ],
 
@@ -244,6 +247,9 @@ export const ROUTE_UTTERANCES: Map<TaskType, string[]> = new Map([
       "merge this feature branch",
       "push to the remote repository",
       "帮我打一个 release tag",
+      "帮我提个 PR",
+      "这个分支需要 rebase",
+      "把改动推上去",
     ],
   ],
 
@@ -425,6 +431,9 @@ export const ROUTE_UTTERANCES: Map<TaskType, string[]> = new Map([
       "plan the migration strategy",
       "design the data model for this feature",
       "帮我做一个实现路线图",
+      "我们来规划下一步",
+      "这个功能怎么拆分比较好",
+      "先想想怎么做",
     ],
   ],
 
@@ -467,5 +476,14 @@ export const ROUTE_UTTERANCES: Map<TaskType, string[]> = new Map([
       "analyze the content of this video",
       "read and summarize this document",
     ],
+  ],
+
+  [
+    // FALLBACK utterances — short acknowledgements and greetings that should NOT
+    // trigger any specific task type.  Training the semantic router on these
+    // examples helps it confidently classify casual / confirmatory messages as
+    // FALLBACK rather than incorrectly matching a task-specific route.
+    TaskType.FALLBACK,
+    ["你好", "谢谢", "ok", "嗯", "明白了", "好的", "了解", "没问题", "收到", "知道了"],
   ],
 ]);
