@@ -39,6 +39,15 @@ export type HealthConfig = {
   persist_path?: string;
 };
 
+export type ReviewGateConfig = {
+  enabled: boolean;
+  mode: "auto" | "manual"; // auto=自动触发, manual=需用户确认
+  high_risk_types: TaskType[]; // 默认: [CODE_REFACTOR, SECURITY_AUDIT, GIT_OPS]
+  reviewer_model: string; // 如 "anthropic/claude-opus-4-6"
+  reviewer_system_prompt: string; // reviewer 的 system prompt
+  timeout_ms: number; // 审核超时，默认 60000
+};
+
 export type RoutingConfig = {
   default_task_type: TaskType;
   cooldown_seconds: number;
@@ -47,4 +56,5 @@ export type RoutingConfig = {
   deny_list: string[];
   ha_matrix: Partial<Record<TaskType, Partial<Record<ModelTier, string>>>>;
   health?: HealthConfig;
+  review_gate?: ReviewGateConfig;
 };
