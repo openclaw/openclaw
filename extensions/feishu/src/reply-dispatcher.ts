@@ -144,8 +144,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
-        // Send text portion
-        if (text.trim()) {
+        // When media is present (e.g. TTS audio), skip text to avoid duplicate messages
+        if (text.trim() && mediaList.length === 0) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if ((info?.kind === "block" || info?.kind === "final") && streamingEnabled && useCard) {

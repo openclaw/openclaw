@@ -311,7 +311,7 @@ importers:
         version: 0.34.48
       music-metadata:
         specifier: ^11.11.2
-        version: 11.11.2
+        version: 11.12.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6
