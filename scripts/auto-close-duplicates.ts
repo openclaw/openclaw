@@ -11,6 +11,7 @@ interface GitHubIssue {
   title: string;
   user: { id: number };
   created_at: string;
+  pull_request?: object; // present when item is a PR; excluded from processing
 }
 
 interface GitHubComment {
@@ -23,6 +24,10 @@ interface GitHubComment {
 interface GitHubReaction {
   user: { id: number };
   content: string;
+}
+
+interface GitHubLabel {
+  name: string;
 }
 
 async function githubRequest<T>(
@@ -72,10 +77,19 @@ async function closeIssueAsDuplicate(
   duplicateOfNumber: number,
   token: string,
 ): Promise<void> {
+  const currentLabels = await githubRequest<GitHubLabel[]>(
+    `/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
+    token,
+  );
+  const labelNames = currentLabels.map((l) => l.name);
+  if (!labelNames.includes("duplicate")) {
+    labelNames.push("duplicate");
+  }
+
   await githubRequest(`/repos/${owner}/${repo}/issues/${issueNumber}`, token, "PATCH", {
     state: "closed",
     state_reason: "duplicate",
-    labels: ["duplicate"],
+    labels: labelNames,
   });
 
   await githubRequest(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, token, "POST", {
@@ -87,8 +101,8 @@ If this is incorrect, please re-open this issue or create a new one.
   });
 }
 
-async function autoCloseDuplicates(): Promise<void> {
-  console.log("[DEBUG] Starting auto-close duplicates script");
+async function autoCloseDuplicates(dryRun: boolean): Promise<void> {
+  console.log(`[DEBUG] Starting auto-close duplicates script${dryRun ? " (DRY RUN)" : ""}`);
 
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -96,8 +110,7 @@ async function autoCloseDuplicates(): Promise<void> {
   }
   console.log("[DEBUG] GitHub token found");
 
-  const owner = process.env.GITHUB_REPOSITORY_OWNER || "openclaw";
-  const repo = process.env.GITHUB_REPOSITORY_NAME || "openclaw";
+  const [owner, repo] = (process.env.GITHUB_REPOSITORY || "openclaw/openclaw").split("/");
   console.log(`[DEBUG] Repository: ${owner}/${repo}`);
 
   const threeDaysAgo = new Date();
@@ -121,7 +134,7 @@ async function autoCloseDuplicates(): Promise<void> {
 
     // Filter for issues created more than 3 days ago
     const oldEnoughIssues = pageIssues.filter(
-      (issue) => new Date(issue.created_at) <= threeDaysAgo,
+      (issue) => !("pull_request" in issue) && new Date(issue.created_at) <= threeDaysAgo,
     );
 
     allIssues.push(...oldEnoughIssues);
@@ -215,6 +228,13 @@ async function autoCloseDuplicates(): Promise<void> {
     candidateCount++;
     const issueUrl = `https://github.com/${owner}/${repo}/issues/${issue.number}`;
 
+    if (dryRun) {
+      console.log(
+        `[DRY RUN] Would close issue #${issue.number} as duplicate of #${duplicateIssueNumber}: ${issueUrl}`,
+      );
+      continue;
+    }
+
     try {
       console.log(
         `[INFO] Auto-closing issue #${issue.number} as duplicate of #${duplicateIssueNumber}: ${issueUrl}`,
@@ -235,4 +255,5 @@ async function autoCloseDuplicates(): Promise<void> {
   );
 }
 
-autoCloseDuplicates().catch(console.error);
+const dryRun = process.argv.includes("--dry-run");
+autoCloseDuplicates(dryRun).catch(console.error);
