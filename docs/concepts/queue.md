@@ -62,9 +62,10 @@ Configure globally or per channel via `messages.queue`:
 
 Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` when it falls back to followup):
 
-- `debounceMs`: wait for quiet before starting a followup turn (prevents “continue, continue”).
+- `debounceMs`: wait for quiet before starting a followup turn (prevents "continue, continue").
 - `cap`: max queued messages per session.
 - `drop`: overflow policy (`old`, `new`, `summarize`).
+- `priorityPreemption`: when `true`, heartbeat runs are routed to a dedicated lane so they never block human messages on the main lane. Default: `false`.
 
 Summarize keeps a short bullet list of dropped messages and injects it as a synthetic followup prompt.
 Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
@@ -79,7 +80,7 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
-- Additional lanes may exist (e.g. `cron`, `subagent`) so background jobs can run in parallel without blocking inbound replies.
+- Additional lanes may exist (e.g. `cron`, `subagent`, `heartbeat`) so background jobs can run in parallel without blocking inbound replies. The `heartbeat` lane is active when `messages.queue.priorityPreemption` is enabled.
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
 

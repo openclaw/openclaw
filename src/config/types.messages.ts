@@ -18,6 +18,11 @@ export type QueueConfig = {
   debounceMsByChannel?: InboundDebounceByProvider;
   cap?: number;
   drop?: QueueDropPolicy;
+  /**
+   * When true, heartbeat runs are routed to a dedicated lane so they
+   * never block human messages on the main lane. Default: false.
+   */
+  priorityPreemption?: boolean;
 };
 
 export type InboundDebounceByProvider = Record<string, number>;

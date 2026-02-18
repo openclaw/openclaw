@@ -4,8 +4,8 @@ import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
 
 const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async () => ({ ok: true })),
-  runBrowserResizeWithOutput: vi.fn(async () => {}),
+  callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
+  runBrowserResizeWithOutput: vi.fn(async (_params?: unknown) => {}),
   runtime: {
     log: vi.fn(),
     error: vi.fn(),

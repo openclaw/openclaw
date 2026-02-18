@@ -500,7 +500,22 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
-  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
+  // ── Priority Preemption: Smart queue check ─────────────────────────
+  // Before starting a heartbeat, check if there's already work in the
+  // relevant lane. When `priorityPreemption` is enabled, heartbeats run
+  // on their own dedicated lane — so we check the Heartbeat lane instead
+  // of Main. This way:
+  //
+  //   - With preemption ON:  heartbeat checks its own lane only.
+  //     Human messages on Main don't cause heartbeats to skip — they run
+  //     on separate lanes and don't interfere with each other.
+  //
+  //   - With preemption OFF: heartbeat checks Main (existing behavior).
+  //     If human messages are queued on Main, heartbeat skips itself to
+  //     avoid blocking them — same as before this change.
+  const priorityPreemptionEnabled = cfg.messages?.queue?.priorityPreemption === true;
+  const laneToCheck = priorityPreemptionEnabled ? CommandLane.Heartbeat : CommandLane.Main;
+  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(laneToCheck);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }

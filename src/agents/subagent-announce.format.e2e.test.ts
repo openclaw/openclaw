@@ -68,7 +68,7 @@ vi.mock("../gateway/call.js", () => ({
       return { status: "error", startedAt: 10, endedAt: 20, error: "boom" };
     }
     if (typed.method === "chat.history") {
-      return await chatHistoryMock(typed.params?.sessionKey);
+      return await chatHistoryMock(typed.params?.sessionKey ?? "");
     }
     if (typed.method === "sessions.patch") {
       return {};

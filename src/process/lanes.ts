@@ -3,4 +3,6 @@ export const enum CommandLane {
   Cron = "cron",
   Subagent = "subagent",
   Nested = "nested",
+  /** Dedicated lane for heartbeat runs so they don't block human messages on Main. */
+  Heartbeat = "heartbeat",
 }

@@ -370,6 +370,18 @@ export const QueueSchema = z
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),
+    /**
+     * Route heartbeat runs to a dedicated "heartbeat" lane so they never
+     * occupy a slot on the main lane that human messages use.
+     *
+     * When enabled:
+     * - Heartbeat runs go to CommandLane.Heartbeat instead of CommandLane.Main.
+     * - The heartbeat runner checks its own lane for capacity (not main).
+     * - Human messages on the main lane are never blocked by heartbeats.
+     *
+     * Default: false (heartbeats share the main lane, existing behavior).
+     */
+    priorityPreemption: z.boolean().optional(),
   })
   .strict()
   .optional();

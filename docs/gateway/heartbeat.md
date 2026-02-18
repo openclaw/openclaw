@@ -224,7 +224,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `session` only affects the run context; delivery is controlled by `target` and `to`.
 - To deliver to a specific channel/recipient, set `target` + `to`. With
   `target: "last"`, delivery uses the last external channel for that session.
-- If the main queue is busy, the heartbeat is skipped and retried later.
+- If the queue is busy, the heartbeat is skipped and retried later.
+- When `messages.queue.priorityPreemption` is enabled, heartbeats run on a
+  dedicated lane instead of the main lane, so they never block human messages.
+  See [Command Queue](/concepts/queue) for details.
 - If `target` resolves to no external destination, the run still happens but no
   outbound message is sent.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
