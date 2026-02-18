@@ -12,8 +12,11 @@ import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -243,25 +246,43 @@ export function buildGatewayCronService(params: {
           const timeout = setTimeout(() => {
             abortController.abort();
           }, CRON_WEBHOOK_TIMEOUT_MS);
-          void fetch(webhookTarget.url, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(evt),
-            signal: abortController.signal,
-          })
-            .catch((err) => {
-              cronLogger.warn(
-                {
-                  err: String(err),
-                  jobId: evt.jobId,
-                  webhookUrl: redactWebhookUrl(webhookTarget.url),
+
+          void (async () => {
+            try {
+              const result = await fetchWithSsrFGuard({
+                url: webhookTarget.url,
+                init: {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify(evt),
+                  signal: abortController.signal,
                 },
-                "cron: webhook delivery failed",
-              );
-            })
-            .finally(() => {
+              });
+              await result.release();
+            } catch (err) {
+              if (err instanceof SsrFBlockedError) {
+                cronLogger.warn(
+                  {
+                    reason: formatErrorMessage(err),
+                    jobId: evt.jobId,
+                    webhookUrl: redactWebhookUrl(webhookTarget.url),
+                  },
+                  "cron: webhook delivery blocked by SSRF guard",
+                );
+              } else {
+                cronLogger.warn(
+                  {
+                    err: formatErrorMessage(err),
+                    jobId: evt.jobId,
+                    webhookUrl: redactWebhookUrl(webhookTarget.url),
+                  },
+                  "cron: webhook delivery failed",
+                );
+              }
+            } finally {
               clearTimeout(timeout);
-            });
+            }
+          })();
         }
         const logPath = resolveCronRunLogPath({
           storePath,
