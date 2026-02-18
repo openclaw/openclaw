@@ -1,7 +1,7 @@
+import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
 type LobsterEnvelope =
@@ -103,14 +103,21 @@ async function runLobsterSubprocessOnce(
     cwd: string;
     timeoutMs: number;
     maxStdoutBytes: number;
+    gatewayUrl?: string;
+    gatewayToken?: string;
   },
   useShell: boolean,
 ) {
-  const { execPath, argv, cwd } = params;
+  const { execPath, argv, cwd, gatewayUrl, gatewayToken } = params;
   const timeoutMs = Math.max(200, params.timeoutMs);
   const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
 
-  const env = { ...process.env, LOBSTER_MODE: "tool" } as Record<string, string | undefined>;
+  const env = {
+    ...process.env,
+    LOBSTER_MODE: "tool",
+    CLAWD_URL: gatewayUrl,
+    CLAWD_TOKEN: gatewayToken,
+  } as Record<string, string | undefined>;
   const nodeOptions = env.NODE_OPTIONS ?? "";
   if (nodeOptions.includes("--inspect")) {
     delete env.NODE_OPTIONS;
@@ -180,6 +187,8 @@ async function runLobsterSubprocess(params: {
   cwd: string;
   timeoutMs: number;
   maxStdoutBytes: number;
+  gatewayUrl?: string;
+  gatewayToken?: string;
 }) {
   try {
     return await runLobsterSubprocessOnce(params, false);
@@ -310,12 +319,19 @@ export function createLobsterTool(api: OpenClawPluginApi) {
         api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
       }
 
+      // Resolve gateway URL and token for local tools like clawd.invoke
+      const gatewayPort = api.config.gateway?.port ?? 18789;
+      const gatewayUrl = `ws://127.0.0.1:${gatewayPort}`;
+      const gatewayToken = api.config.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN;
+
       const { stdout } = await runLobsterSubprocess({
         execPath,
         argv,
         cwd,
         timeoutMs,
         maxStdoutBytes,
+        gatewayUrl,
+        gatewayToken,
       });
 
       const envelope = parseEnvelope(stdout);
