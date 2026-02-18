@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { CronJob } from "./types.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
+import type { CronJob } from "./types.js";
 
 function stableOffsetMs(jobId: string, windowMs: number) {
   const digest = crypto.createHash("sha256").update(jobId).digest();

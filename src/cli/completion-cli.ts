@@ -1,7 +1,7 @@
-import { Command, Option } from "commander";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Command, Option } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { pathExists } from "../utils.js";

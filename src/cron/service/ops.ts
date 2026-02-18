@@ -1,5 +1,4 @@
 import type { CronJobCreate, CronJobPatch } from "../types.js";
-import type { CronServiceState } from "./state.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -11,6 +10,7 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
 

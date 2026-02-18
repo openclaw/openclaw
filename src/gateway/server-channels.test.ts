@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
 import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
@@ -9,6 +8,7 @@ import {
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {

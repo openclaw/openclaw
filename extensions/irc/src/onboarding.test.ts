@@ -1,7 +1,7 @@
 import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "./types.js";
 import { ircOnboardingAdapter } from "./onboarding.js";
+import type { CoreConfig } from "./types.js";
 
 const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
   const first = params.options[0];

@@ -1,7 +1,7 @@
-import { messagingApi } from "@line/bot-sdk";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { messagingApi } from "@line/bot-sdk";
 import { logVerbose } from "../globals.js";
 
 interface DownloadResult {

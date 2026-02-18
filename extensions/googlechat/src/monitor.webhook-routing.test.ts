@@ -1,9 +1,9 @@
+import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { createMockServerResponse } from "../../../src/test-utils/mock-http-response.js";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { handleGoogleChatWebhookRequest, registerGoogleChatWebhookTarget } from "./monitor.js";
 

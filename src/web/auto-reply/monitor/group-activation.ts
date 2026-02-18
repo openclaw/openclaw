@@ -1,5 +1,5 @@
-import type { loadConfig } from "../../../config/config.js";
 import { normalizeGroupActivation } from "../../../auto-reply/group-activation.js";
+import type { loadConfig } from "../../../config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,

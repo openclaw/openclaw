@@ -1,5 +1,5 @@
-import { messagingApi } from "@line/bot-sdk";
 import { readFile } from "node:fs/promises";
+import { messagingApi } from "@line/bot-sdk";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveLineAccount } from "./accounts.js";

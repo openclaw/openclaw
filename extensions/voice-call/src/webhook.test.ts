@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { CallRecord } from "./types.js";
-import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 
 const provider: VoiceCallProvider = {

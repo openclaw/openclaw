@@ -1,5 +1,5 @@
-import type { AddressInfo } from "node:net";
 import fs from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";

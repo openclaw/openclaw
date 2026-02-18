@@ -1,7 +1,7 @@
-import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";

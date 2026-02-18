@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ChannelId } from "./types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import type { ChannelId } from "./types.js";
 
 type ChannelConfigWithAccounts = {
   configWrites?: boolean;

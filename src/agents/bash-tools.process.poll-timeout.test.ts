@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
-import type { ProcessSession } from "./bash-process-registry.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,

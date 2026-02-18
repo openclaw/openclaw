@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { createHookRunner } from "./hooks.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
   PluginHookRegistration,
 } from "./types.js";
-import { createHookRunner } from "./hooks.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 
 function addTypedHook(
   registry: PluginRegistry,

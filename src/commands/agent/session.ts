@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
-import type { MsgContext } from "../../auto-reply/templating.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,

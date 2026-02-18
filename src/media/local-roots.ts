@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 
 function buildMediaLocalRoots(stateDir: string): string[] {

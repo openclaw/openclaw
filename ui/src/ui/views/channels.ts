@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { formatRelativeTimestamp } from "../format.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,
@@ -13,8 +14,6 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../types.ts";
-import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
-import { formatRelativeTimestamp } from "../format.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import { renderDiscordCard } from "./channels.discord.ts";
 import { renderGoogleChatCard } from "./channels.googlechat.ts";
@@ -24,6 +23,7 @@ import { channelEnabled, renderChannelAccountCount } from "./channels.shared.ts"
 import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
 import { renderTelegramCard } from "./channels.telegram.ts";
+import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
 import { renderWhatsAppCard } from "./channels.whatsapp.ts";
 
 export function renderChannels(props: ChannelsProps) {

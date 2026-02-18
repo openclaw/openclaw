@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage.js";
 
 /**

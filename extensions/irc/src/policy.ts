@@ -1,6 +1,6 @@
+import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
 import type { IrcInboundMessage } from "./types.js";
-import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 
 export type IrcGroupMatch = {
   allowed: boolean;

@@ -1,5 +1,5 @@
-import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { CliDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
