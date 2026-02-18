@@ -22,7 +22,17 @@ const ConfigApplyLikeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
+export const ConfigApplyParamsSchema = Type.Object(
+  {
+    raw: NonEmptyString,
+    baseHash: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(Type.String()),
+    note: Type.Optional(Type.String()),
+    restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    allowDestructive: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
 export const ConfigPatchParamsSchema = ConfigApplyLikeParamsSchema;
 
 export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: false });

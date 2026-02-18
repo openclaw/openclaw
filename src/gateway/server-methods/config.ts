@@ -393,6 +393,24 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
+    if (snapshot.exists && snapshot.config && typeof snapshot.config === "object") {
+      const existingKeys = Object.keys(snapshot.config);
+      const incomingKeys = new Set(Object.keys(parsed.config));
+      const droppedKeys = existingKeys.filter((k) => !incomingKeys.has(k));
+      const allowDestructive = (params as { allowDestructive?: unknown }).allowDestructive === true;
+      if (!allowDestructive && droppedKeys.length > existingKeys.length / 2) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `config.apply would drop ${droppedKeys.length} of ${existingKeys.length} top-level sections: [${droppedKeys.join(", ")}]. ` +
+              `Pass allowDestructive: true to confirm this is intentional.`,
+          ),
+        );
+        return;
+      }
+    }
     await writeConfigFile(parsed.config, writeOptions);
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
