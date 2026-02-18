@@ -134,11 +134,14 @@ function resolveAnthropicOpus46ForwardCompatModel(
   }
   templateIds.push(...ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS);
 
+  // Opus 4.6 supports 1M context tokens; the 4.5 template only has 200k.
+  // Patch contextWindow so users aren't silently capped.  (#19633)
   return cloneFirstTemplateModel({
     normalizedProvider,
     trimmedModelId,
     templateIds,
     modelRegistry,
+    patch: { contextWindow: 1_000_000 },
   });
 }
 
@@ -172,11 +175,13 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   }
   templateIds.push(...ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS);
 
+  // Sonnet 4.6 supports 1M context tokens; the 4.5 template only has 200k.  (#19633)
   return cloneFirstTemplateModel({
     normalizedProvider,
     trimmedModelId,
     templateIds,
     modelRegistry,
+    patch: { contextWindow: 1_000_000 },
   });
 }
 
@@ -268,11 +273,14 @@ function resolveAntigravityOpus46ForwardCompatModel(
   templateIds.push(...ANTIGRAVITY_OPUS_TEMPLATE_MODEL_IDS);
   templateIds.push(...ANTIGRAVITY_OPUS_THINKING_TEMPLATE_MODEL_IDS);
 
+  // Antigravity Opus 4.6 inherits the 4.5 template's 200k context window;
+  // override to match the native 1M capability.  (#19633)
   return cloneFirstTemplateModel({
     normalizedProvider,
     trimmedModelId,
     templateIds,
     modelRegistry,
+    patch: { contextWindow: 1_000_000 },
   });
 }
 
