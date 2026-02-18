@@ -44,6 +44,10 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/memory": {
+      "types": "./dist/plugin-sdk/memory.d.ts",
+      "default": "./dist/plugin-sdk/memory.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
