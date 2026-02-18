@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export interface ZaiMcpToolsConfig {
-  mcpServers: Record<string, any>;
+  mcpServers: Record<string, unknown>;
 }
 
 /**
