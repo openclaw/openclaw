@@ -129,7 +129,7 @@ describe("callGateway url resolution", () => {
 
     await callGateway({ method: "health" });
 
-    expect(lastClientOptions?.url).toBe("ws://100.64.0.1:18800");
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
   });
 
   it("uses LAN IP when bind is lan and LAN IP is available", async () => {
@@ -140,7 +140,7 @@ describe("callGateway url resolution", () => {
 
     await callGateway({ method: "health" });
 
-    expect(lastClientOptions?.url).toBe("ws://192.168.1.42:18800");
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
   });
 
   it("falls back to loopback when bind is lan but no LAN IP found", async () => {
@@ -224,7 +224,7 @@ describe("buildGatewayConnectionDetails", () => {
 
     const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://10.0.0.5:18800");
+    expect(details.url).toBe("ws://127.0.0.1:18800");
     expect(details.urlSource).toBe("local lan 10.0.0.5");
     expect(details.bindDetail).toBe("Bind: lan");
   });

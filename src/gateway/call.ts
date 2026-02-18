@@ -105,12 +105,7 @@ export function buildGatewayConnectionDetails(
   const preferLan = bindMode === "lan";
   const lanIPv4 = preferLan ? pickPrimaryLanIPv4() : undefined;
   const scheme = tlsEnabled ? "wss" : "ws";
-  const localUrl =
-    preferTailnet && tailnetIPv4
-      ? `${scheme}://${tailnetIPv4}:${localPort}`
-      : preferLan && lanIPv4
-        ? `${scheme}://${lanIPv4}:${localPort}`
-        : `${scheme}://127.0.0.1:${localPort}`;
+  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
