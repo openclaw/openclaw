@@ -95,6 +95,48 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
       ),
     ];
 
+    if (process.platform === "win32") {
+      const npmBinDir = dirname(resolvedPath);
+      searchPaths.push(
+        join(
+          npmBinDir,
+          "node_modules",
+          "@google",
+          "gemini-cli",
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "src",
+          "code_assist",
+          "oauth2.js",
+        ),
+        join(
+          npmBinDir,
+          "node_modules",
+          "@google",
+          "gemini-cli",
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "code_assist",
+          "oauth2.js",
+        ),
+        join(
+          npmBinDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "src",
+          "code_assist",
+          "oauth2.js",
+        ),
+        join(npmBinDir, "node_modules", "@google", "gemini-cli-core", "dist", "code_assist", "oauth2.js"),
+      );
+    }
+
     let content: string | null = null;
     for (const p of searchPaths) {
       if (existsSync(p)) {
