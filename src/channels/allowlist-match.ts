@@ -22,6 +22,15 @@ export function formatAllowlistMatchMeta(
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
+/**
+ * Normalise an allowlist of string-or-number entries to a trimmed, non-empty
+ * string array.  Shared across channel monitors so each one doesn't reinvent
+ * the same one-liner.
+ */
+export function normalizeAllowList(list?: Array<string | number>): string[] {
+  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+}
+
 export function resolveAllowlistMatchSimple(params: {
   allowFrom: Array<string | number>;
   senderId: string;

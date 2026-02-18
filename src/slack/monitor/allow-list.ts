@@ -1,3 +1,4 @@
+import { normalizeAllowList as normalizeAllowListShared } from "../../channels/allowlist-match.js";
 import type { AllowlistMatch } from "../../channels/allowlist-match.js";
 
 export function normalizeSlackSlug(raw?: string) {
@@ -10,9 +11,8 @@ export function normalizeSlackSlug(raw?: string) {
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
-export function normalizeAllowList(list?: Array<string | number>) {
-  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
-}
+// Re-export the shared normalizer so existing callers don't need to change.
+export const normalizeAllowList = normalizeAllowListShared;
 
 export function normalizeAllowListLower(list?: Array<string | number>) {
   return normalizeAllowList(list).map((entry) => entry.toLowerCase());
