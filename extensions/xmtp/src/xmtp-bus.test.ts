@@ -130,6 +130,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage: vi.fn(async () => {}),
     });
 
@@ -148,6 +149,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage: vi.fn(async () => {}),
     });
 
@@ -168,6 +170,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage: vi.fn(async () => {}),
     });
 
@@ -186,6 +189,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage: vi.fn(async () => {}),
     });
 
@@ -206,6 +210,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage: vi.fn(async () => {}),
     });
 
@@ -223,6 +228,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage,
     });
 
@@ -256,6 +262,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage,
     });
 
@@ -299,12 +306,13 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage: vi.fn(async () => {}),
     });
 
     await xmtpMock.emit("conversation", {
       conversation: { id: "conv-1", updateConsentState },
-      isDM: (_conv: unknown) => true,
+      isDm: (_conv: unknown) => true,
     });
 
     expect(updateConsentState).toHaveBeenCalledWith("allowed");
@@ -319,12 +327,13 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage: vi.fn(async () => {}),
     });
 
     await xmtpMock.emit("conversation", {
       conversation: { id: "conv-1", updateConsentState },
-      isDM: (_conv: unknown) => false,
+      isDm: (_conv: unknown) => false,
     });
 
     expect(updateConsentState).not.toHaveBeenCalled();
@@ -339,6 +348,7 @@ describe("startXmtpBus", () => {
       dbEncryptionKey: TEST_DB_KEY,
       env: "dev",
       dbPath: "/tmp/openclaw-xmtp-bus-test",
+      shouldConsentDm: () => true,
       onMessage,
     });
 

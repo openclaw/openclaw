@@ -481,7 +481,7 @@ describe("xmtpPlugin behavior", () => {
 
     await emitInboundMessage("/status");
 
-    expect(runtimeBundle.readAllowFromStore).toHaveBeenCalledWith("xmtp", "default");
+    expect(runtimeBundle.readAllowFromStore).toHaveBeenCalledWith("xmtp", process.env, "default");
     expect(runtimeBundle.finalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         CommandAuthorized: true,

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -5,12 +6,16 @@ export interface XmtpAccountConfig {
   enabled?: boolean;
   name?: string;
   walletKey?: string;
+  walletKeyFile?: string;
   dbEncryptionKey?: string;
+  dbEncryptionKeyFile?: string;
   env?: "local" | "dev" | "production";
   dbPath?: string;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: string[];
 }
+
+export type XmtpSecretSource = "env" | "secretFile" | "config" | "none";
 
 export interface ResolvedXmtpAccount {
   accountId: string;
@@ -18,7 +23,9 @@ export interface ResolvedXmtpAccount {
   enabled: boolean;
   configured: boolean;
   walletKey: string;
+  walletKeySource: XmtpSecretSource;
   dbEncryptionKey: string;
+  dbEncryptionKeySource: XmtpSecretSource;
   address: string;
   env: "local" | "dev" | "production";
   config: XmtpAccountConfig;
@@ -41,7 +48,16 @@ export function listXmtpAccountIds(cfg: OpenClawConfig): string[] {
     | XmtpAccountConfig
     | undefined;
 
-  if (xmtpCfg?.walletKey) {
+  const hasConfig =
+    Boolean(xmtpCfg?.walletKey?.trim()) ||
+    Boolean(xmtpCfg?.walletKeyFile?.trim()) ||
+    Boolean(xmtpCfg?.dbEncryptionKey?.trim()) ||
+    Boolean(xmtpCfg?.dbEncryptionKeyFile?.trim());
+  const hasEnv =
+    Boolean(process.env.XMTP_WALLET_KEY?.trim()) ||
+    Boolean(process.env.XMTP_DB_ENCRYPTION_KEY?.trim());
+
+  if (hasConfig || hasEnv) {
     return [DEFAULT_ACCOUNT_ID];
   }
 
@@ -66,13 +82,13 @@ export function resolveXmtpAccount(opts: {
     | undefined;
 
   const baseEnabled = xmtpCfg?.enabled !== false;
-  const walletKey = xmtpCfg?.walletKey ?? "";
-  const dbEncryptionKey = xmtpCfg?.dbEncryptionKey ?? "";
-  const configured = Boolean(walletKey.trim() && dbEncryptionKey.trim());
+  const walletKeyResolution = resolveWalletKey(accountId, xmtpCfg);
+  const dbEncryptionKeyResolution = resolveDbEncryptionKey(accountId, xmtpCfg);
+  const configured = Boolean(walletKeyResolution.secret && dbEncryptionKeyResolution.secret);
 
   let address = "";
   if (configured) {
-    address = deriveAddressFromKey(walletKey);
+    address = deriveAddressFromKey(walletKeyResolution.secret);
   }
 
   return {
@@ -80,19 +96,85 @@ export function resolveXmtpAccount(opts: {
     name: xmtpCfg?.name?.trim() || undefined,
     enabled: baseEnabled,
     configured,
-    walletKey,
-    dbEncryptionKey,
+    walletKey: walletKeyResolution.secret,
+    walletKeySource: walletKeyResolution.source,
+    dbEncryptionKey: dbEncryptionKeyResolution.secret,
+    dbEncryptionKeySource: dbEncryptionKeyResolution.source,
     address,
     env: xmtpCfg?.env ?? DEFAULT_ENV,
     config: {
       enabled: xmtpCfg?.enabled,
       name: xmtpCfg?.name,
       walletKey: xmtpCfg?.walletKey,
+      walletKeyFile: xmtpCfg?.walletKeyFile,
       dbEncryptionKey: xmtpCfg?.dbEncryptionKey,
+      dbEncryptionKeyFile: xmtpCfg?.dbEncryptionKeyFile,
       env: xmtpCfg?.env,
       dbPath: xmtpCfg?.dbPath,
       dmPolicy: xmtpCfg?.dmPolicy,
       allowFrom: xmtpCfg?.allowFrom,
     },
   };
+}
+
+function resolveWalletKey(
+  accountId: string,
+  cfg?: XmtpAccountConfig,
+): { secret: string; source: XmtpSecretSource } {
+  const walletKeyFile = cfg?.walletKeyFile?.trim();
+  if (walletKeyFile) {
+    try {
+      const secret = readFileSync(walletKeyFile, "utf-8").trim();
+      if (secret) {
+        return { secret, source: "secretFile" };
+      }
+    } catch {
+      return { secret: "", source: "none" };
+    }
+  }
+
+  const configKey = cfg?.walletKey?.trim();
+  if (configKey) {
+    return { secret: configKey, source: "config" };
+  }
+
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    const envKey = process.env.XMTP_WALLET_KEY?.trim();
+    if (envKey) {
+      return { secret: envKey, source: "env" };
+    }
+  }
+
+  return { secret: "", source: "none" };
+}
+
+function resolveDbEncryptionKey(
+  accountId: string,
+  cfg?: XmtpAccountConfig,
+): { secret: string; source: XmtpSecretSource } {
+  const secretFile = cfg?.dbEncryptionKeyFile?.trim();
+  if (secretFile) {
+    try {
+      const secret = readFileSync(secretFile, "utf-8").trim();
+      if (secret) {
+        return { secret, source: "secretFile" };
+      }
+    } catch {
+      return { secret: "", source: "none" };
+    }
+  }
+
+  const configKey = cfg?.dbEncryptionKey?.trim();
+  if (configKey) {
+    return { secret: configKey, source: "config" };
+  }
+
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    const envKey = process.env.XMTP_DB_ENCRYPTION_KEY?.trim();
+    if (envKey) {
+      return { secret: envKey, source: "env" };
+    }
+  }
+
+  return { secret: "", source: "none" };
 }

@@ -16,7 +16,7 @@ export interface XmtpBusOptions {
   env: "local" | "dev" | "production";
   dbPath?: string;
   // Default to auto-consenting DMs so pairing flows can proceed.
-  shouldConsentDm?: (senderAddress: string) => boolean;
+  shouldConsentDm: (senderAddress: string) => boolean;
   onMessage: (params: {
     senderAddress: string;
     senderInboxId: string;
@@ -39,7 +39,7 @@ export interface XmtpBusHandle {
 
 type XmtpConversationHandle = {
   sendText: (text: string) => Promise<unknown>;
-  sendReply?: (reply: { content: string; referenceId: string }) => Promise<unknown>;
+  sendReply?: (reply: unknown) => Promise<unknown>;
 };
 
 type XmtpAgentHandle = Awaited<ReturnType<typeof Agent.create>>;
@@ -181,16 +181,20 @@ export async function startXmtpBus(options: XmtpBusOptions): Promise<XmtpBusHand
 
   agent.on("conversation", async (ctx) => {
     try {
-      if (ctx.isDM(ctx.conversation)) {
+      if (ctx.isDm()) {
         const senderAddress = await (
           ctx as { getSenderAddress?: () => Promise<string | null> }
         ).getSenderAddress?.();
+        type ConsentState = Parameters<NonNullable<typeof ctx.conversation.updateConsentState>>[0];
+        const conversation = ctx.conversation as unknown as {
+          updateConsentState: (state: ConsentState) => void;
+        };
         if (!senderAddress) {
-          ctx.conversation.updateConsentState("allowed");
+          conversation.updateConsentState("allowed" as unknown as ConsentState);
           return;
         }
         if (shouldConsentDm(senderAddress.toLowerCase())) {
-          ctx.conversation.updateConsentState("allowed");
+          conversation.updateConsentState("allowed" as unknown as ConsentState);
         }
       }
     } catch (err) {

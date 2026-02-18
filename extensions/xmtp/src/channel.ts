@@ -79,8 +79,11 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      address: account.address,
-      env: account.env,
+      credentialSource: account.walletKeySource,
+      secretSource: account.dbEncryptionKeySource,
+      dmPolicy: account.config.dmPolicy,
+      allowFrom: account.config.allowFrom,
+      dbPath: account.config.dbPath ?? null,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       resolveXmtpAccount({ cfg, accountId }).config.allowFrom ?? [],
@@ -108,8 +111,8 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
         return entry;
       }
     },
-    notifyApproval: async ({ id, accountId }) => {
-      const effectiveAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    notifyApproval: async ({ id, cfg }) => {
+      const effectiveAccountId = resolveDefaultXmtpAccountId(cfg);
       const bus = activeBuses.get(effectiveAccountId);
       if (!bus) {
         throw new Error(`XMTP bus not running for account ${effectiveAccountId}`);
@@ -203,8 +206,8 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("xmtp", accounts),
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
-      address: snapshot.address ?? null,
-      env: snapshot.env ?? null,
+      credentialSource: snapshot.credentialSource ?? "none",
+      secretSource: snapshot.secretSource ?? "none",
       running: snapshot.running ?? false,
       lastStartAt: snapshot.lastStartAt ?? null,
       lastStopAt: snapshot.lastStopAt ?? null,
@@ -215,8 +218,11 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      address: account.address,
-      env: account.env,
+      credentialSource: account.walletKeySource,
+      secretSource: account.dbEncryptionKeySource,
+      dmPolicy: account.config.dmPolicy,
+      allowFrom: account.config.allowFrom,
+      dbPath: account.config.dbPath ?? null,
       running: runtime?.running ?? false,
       lastStartAt: runtime?.lastStartAt ?? null,
       lastStopAt: runtime?.lastStopAt ?? null,
@@ -231,8 +237,11 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
       const account = ctx.account;
       ctx.setStatus({
         accountId: account.accountId,
-        address: account.address,
-        env: account.env,
+        credentialSource: account.walletKeySource,
+        secretSource: account.dbEncryptionKeySource,
+        dmPolicy: account.config.dmPolicy,
+        allowFrom: account.config.allowFrom,
+        dbPath: account.config.dbPath ?? null,
       });
       ctx.log?.info(
         `[${account.accountId}] starting XMTP provider (address: ${account.address}, env: ${account.env})`,
@@ -292,11 +301,11 @@ export const xmtpPlugin: ChannelPlugin<ResolvedXmtpAccount> = {
           const configuredAllowFrom = normalizeAllowEntries(freshAccount.config.allowFrom ?? []);
           const storeAllowFrom = normalizeAllowEntries(
             await runtime.channel.pairing
-              .readAllowFromStore("xmtp", account.accountId)
+              .readAllowFromStore("xmtp", process.env, account.accountId)
               .catch((error) => {
-                ctx.log?.warn?.(`[${account.accountId}] Failed to read pairing store`, {
-                  error: String(error),
-                });
+                ctx.log?.warn?.(
+                  `[${account.accountId}] Failed to read pairing store: ${String(error)}`,
+                );
                 return [];
               }),
           );

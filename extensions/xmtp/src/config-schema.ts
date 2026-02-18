@@ -7,7 +7,9 @@ export const XmtpConfigSchema = z.object({
   markdown: MarkdownConfigSchema,
 
   walletKey: z.string().optional(),
+  walletKeyFile: z.string().optional(),
   dbEncryptionKey: z.string().optional(),
+  dbEncryptionKeyFile: z.string().optional(),
 
   env: z.enum(["local", "dev", "production"]).optional(),
   dbPath: z.string().optional(),

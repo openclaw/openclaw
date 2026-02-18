@@ -64,14 +64,18 @@ describe("resolveXmtpAccount", () => {
     expect(account.enabled).toBe(true);
     expect(account.configured).toBe(true);
     expect(account.walletKey).toBe(TEST_WALLET_KEY);
+    expect(account.walletKeySource).toBe("config");
     expect(account.dbEncryptionKey).toBe(TEST_DB_KEY);
+    expect(account.dbEncryptionKeySource).toBe("config");
     expect(account.address).toMatch(/^0x[0-9a-f]{40}$/);
     expect(account.env).toBe("dev");
     expect(account.config).toEqual({
       name: "XMTP Bot",
       enabled: true,
       walletKey: TEST_WALLET_KEY,
+      walletKeyFile: undefined,
       dbEncryptionKey: TEST_DB_KEY,
+      dbEncryptionKeyFile: undefined,
       env: "dev",
       dbPath: "/tmp/xmtp",
       dmPolicy: "pairing",
@@ -87,7 +91,9 @@ describe("resolveXmtpAccount", () => {
     expect(account.enabled).toBe(true);
     expect(account.configured).toBe(false);
     expect(account.walletKey).toBe("");
+    expect(account.walletKeySource).toBe("none");
     expect(account.dbEncryptionKey).toBe("");
+    expect(account.dbEncryptionKeySource).toBe("none");
     expect(account.address).toBe("");
     expect(account.env).toBe("production");
   });
@@ -106,6 +112,8 @@ describe("resolveXmtpAccount", () => {
     const account = resolveXmtpAccount({ cfg });
     expect(account.enabled).toBe(false);
     expect(account.configured).toBe(true);
+    expect(account.walletKeySource).toBe("config");
+    expect(account.dbEncryptionKeySource).toBe("config");
   });
 
   it("uses provided accountId", () => {
@@ -135,5 +143,7 @@ describe("resolveXmtpAccount", () => {
     const account = resolveXmtpAccount({ cfg });
     expect(account.configured).toBe(true);
     expect(account.address).toBe("");
+    expect(account.walletKeySource).toBe("config");
+    expect(account.dbEncryptionKeySource).toBe("config");
   });
 });
