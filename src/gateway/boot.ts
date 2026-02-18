@@ -1,17 +1,17 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 

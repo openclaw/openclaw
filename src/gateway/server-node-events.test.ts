@@ -50,12 +50,12 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 import type { CliDeps } from "../cli/deps.js";
-import type { HealthSummary } from "../commands/health.js";
-import type { NodeEventContext } from "./server-node-events-types.js";
 import { agentCommand } from "../commands/agent.js";
+import type { HealthSummary } from "../commands/health.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 import { loadSessionEntry } from "./session-utils.js";
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
-import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./service/jobs.js";
 
 /**
  * Regression test for issue #17852: daily cron jobs skip a day (48h jump).

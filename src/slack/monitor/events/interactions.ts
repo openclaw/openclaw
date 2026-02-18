@@ -1,8 +1,8 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import type { SlackMonitorContext } from "../context.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
+import type { SlackMonitorContext } from "../context.js";
 
 // Prefix for OpenClaw-generated action IDs to scope our handler
 const OPENCLAW_ACTION_PREFIX = "openclaw:";

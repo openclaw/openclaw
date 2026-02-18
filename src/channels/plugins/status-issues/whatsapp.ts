@@ -1,5 +1,5 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
 import { asString, isRecord } from "./shared.js";
 
 type WhatsAppAccountStatus = {
