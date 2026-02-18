@@ -11,6 +11,7 @@ This document outlines the design for integrating "Kilo Gateway" as a first-clas
 **Recommendation: `kilocode`**
 
 Rationale:
+
 - Matches the user config example provided (`kilocode` provider key)
 - Consistent with existing provider naming patterns (e.g., `openrouter`, `opencode`, `moonshot`)
 - Short and memorable
@@ -23,6 +24,7 @@ Alternative considered: `kilo-gateway` - rejected because hyphenated names are l
 **Recommendation: `kilocode/anthropic/claude-opus-4.5`**
 
 Rationale:
+
 - Based on user config example
 - Claude Opus 4.5 is a capable default model
 - Explicit model selection avoids reliance on auto-routing
@@ -41,6 +43,7 @@ This matches the pattern used by other providers like Moonshot, Venice, and Synt
 **Recommendation: No dedicated model scanning endpoint initially**
 
 Rationale:
+
 - Kilo Gateway proxies to OpenRouter, so models are dynamic
 - Users can manually configure models in their config
 - If Kilo Gateway exposes a `/models` endpoint in the future, scanning can be added
@@ -50,6 +53,7 @@ Rationale:
 **Recommendation: Inherit OpenRouter behavior for Anthropic models**
 
 Since Kilo Gateway proxies to OpenRouter, the same special handling should apply:
+
 - Cache TTL eligibility for `anthropic/*` models
 - Extra params (cacheControlTtl) for `anthropic/*` models
 - Transcript policy follows OpenRouter patterns
@@ -61,6 +65,7 @@ Since Kilo Gateway proxies to OpenRouter, the same special handling should apply
 #### 1. `src/commands/onboard-auth.credentials.ts`
 
 Add:
+
 ```typescript
 export const KILOCODE_DEFAULT_MODEL_REF = "kilocode/anthropic/claude-opus-4.5";
 
@@ -80,6 +85,7 @@ export async function setKilocodeApiKey(key: string, agentDir?: string) {
 #### 2. `src/agents/model-auth.ts`
 
 Add to `envMap` in `resolveEnvApiKey()`:
+
 ```typescript
 const envMap: Record<string, string> = {
   // ... existing entries
@@ -90,6 +96,7 @@ const envMap: Record<string, string> = {
 #### 3. `src/config/io.ts`
 
 Add to `SHELL_ENV_EXPECTED_KEYS`:
+
 ```typescript
 const SHELL_ENV_EXPECTED_KEYS = [
   // ... existing entries
@@ -102,6 +109,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
 #### 4. `src/commands/onboard-auth.config-core.ts`
 
 Add new functions:
+
 ```typescript
 export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 
@@ -120,7 +128,7 @@ export function applyKilocodeProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
   > as { apiKey?: string };
   const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
   const normalizedApiKey = resolvedApiKey?.trim();
-  
+
   providers.kilocode = {
     ...existingProviderRest,
     baseUrl: KILOCODE_BASE_URL,
@@ -172,14 +180,16 @@ export function applyKilocodeConfig(cfg: MoltbotConfig): MoltbotConfig {
 #### 5. `src/commands/onboard-types.ts`
 
 Add to `AuthChoice` type:
+
 ```typescript
 export type AuthChoice =
   // ... existing choices
-  | "kilocode-api-key"
-  // ...
+  "kilocode-api-key";
+// ...
 ```
 
 Add to `OnboardOptions`:
+
 ```typescript
 export type OnboardOptions = {
   // ... existing options
@@ -191,14 +201,16 @@ export type OnboardOptions = {
 #### 6. `src/commands/auth-choice-options.ts`
 
 Add to `AuthChoiceGroupId`:
+
 ```typescript
 export type AuthChoiceGroupId =
   // ... existing groups
-  | "kilocode"
-  // ...
+  "kilocode";
+// ...
 ```
 
 Add to `AUTH_CHOICE_GROUP_DEFS`:
+
 ```typescript
 {
   value: "kilocode",
@@ -209,6 +221,7 @@ Add to `AUTH_CHOICE_GROUP_DEFS`:
 ```
 
 Add to `buildAuthChoiceOptions()`:
+
 ```typescript
 options.push({
   value: "kilocode-api-key",
@@ -220,6 +233,7 @@ options.push({
 #### 7. `src/commands/auth-choice.preferred-provider.ts`
 
 Add mapping:
+
 ```typescript
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   // ... existing mappings
@@ -232,6 +246,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
 #### 8. `src/commands/auth-choice.apply.api-providers.ts`
 
 Add import:
+
 ```typescript
 import {
   // ... existing imports
@@ -243,6 +258,7 @@ import {
 ```
 
 Add handling for `kilocode-api-key`:
+
 ```typescript
 if (authChoice === "kilocode-api-key") {
   const store = ensureAuthProfileStore(params.agentDir, {
@@ -261,7 +277,8 @@ if (authChoice === "kilocode-api-key") {
 
   if (existingProfileId && existingCred?.type) {
     profileId = existingProfileId;
-    mode = existingCred.type === "oauth" ? "oauth" : existingCred.type === "token" ? "token" : "api_key";
+    mode =
+      existingCred.type === "oauth" ? "oauth" : existingCred.type === "token" ? "token" : "api_key";
     hasCredential = true;
   }
 
@@ -319,6 +336,7 @@ if (authChoice === "kilocode-api-key") {
 ```
 
 Also add tokenProvider mapping at the top of the function:
+
 ```typescript
 if (params.opts.tokenProvider === "kilocode") {
   authChoice = "kilocode-api-key";
@@ -330,16 +348,19 @@ if (params.opts.tokenProvider === "kilocode") {
 #### 9. `src/cli/program/register.onboard.ts`
 
 Add CLI option:
+
 ```typescript
 .option("--kilocode-api-key <key>", "Kilo Gateway API key")
 ```
 
 Add to action handler:
+
 ```typescript
 kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
 ```
 
 Update auth-choice help text:
+
 ```typescript
 .option(
   "--auth-choice <choice>",
@@ -352,6 +373,7 @@ Update auth-choice help text:
 #### 10. `src/commands/onboard-non-interactive/local/auth-choice.ts`
 
 Add handling for `kilocode-api-key`:
+
 ```typescript
 if (authChoice === "kilocode-api-key") {
   const resolved = await resolveNonInteractiveApiKey({
@@ -376,6 +398,7 @@ if (authChoice === "kilocode-api-key") {
 #### 11. `src/commands/onboard-auth.ts`
 
 Add exports:
+
 ```typescript
 export {
   // ... existing exports
@@ -396,12 +419,14 @@ export {
 #### 12. `src/agents/pi-embedded-runner/cache-ttl.ts`
 
 Add Kilo Gateway support for Anthropic models:
+
 ```typescript
 export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
   const normalizedProvider = provider.toLowerCase();
   const normalizedModelId = modelId.toLowerCase();
   if (normalizedProvider === "anthropic") return true;
-  if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/")) return true;
+  if (normalizedProvider === "openrouter" && normalizedModelId.startsWith("anthropic/"))
+    return true;
   if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) return true;
   return false;
 }
@@ -410,6 +435,7 @@ export function isCacheTtlEligibleProvider(provider: string, modelId: string): b
 #### 13. `src/agents/pi-embedded-runner/extra-params.ts`
 
 Add Kilo Gateway support:
+
 ```typescript
 function resolveCacheControlTtl(
   extraParams: Record<string, unknown> | undefined,
@@ -428,12 +454,13 @@ function resolveCacheControlTtl(
 #### 14. `src/agents/transcript-policy.ts`
 
 Add Kilo Gateway handling (similar to OpenRouter):
+
 ```typescript
-const isKilocodeGemini =
-  provider === "kilocode" && modelId.toLowerCase().includes("gemini");
+const isKilocodeGemini = provider === "kilocode" && modelId.toLowerCase().includes("gemini");
 
 // Include in needsNonImageSanitize check
-const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini || isKilocodeGemini;
+const needsNonImageSanitize =
+  isGoogle || isAnthropic || isMistral || isOpenRouterGemini || isKilocodeGemini;
 ```
 
 ## Configuration Structure
@@ -506,19 +533,19 @@ const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRout
 
 ## Summary of Changes
 
-| File | Change Type | Description |
-|------|-------------|-------------|
-| `src/commands/onboard-auth.credentials.ts` | Add | `KILOCODE_DEFAULT_MODEL_REF`, `setKilocodeApiKey()` |
-| `src/agents/model-auth.ts` | Modify | Add `kilocode` to `envMap` |
-| `src/config/io.ts` | Modify | Add `KILOCODE_API_KEY` to shell env keys |
-| `src/commands/onboard-auth.config-core.ts` | Add | `applyKilocodeProviderConfig()`, `applyKilocodeConfig()` |
-| `src/commands/onboard-types.ts` | Modify | Add `kilocode-api-key` to `AuthChoice`, add `kilocodeApiKey` to options |
-| `src/commands/auth-choice-options.ts` | Modify | Add `kilocode` group and option |
-| `src/commands/auth-choice.preferred-provider.ts` | Modify | Add `kilocode-api-key` mapping |
-| `src/commands/auth-choice.apply.api-providers.ts` | Modify | Add `kilocode-api-key` handling |
-| `src/cli/program/register.onboard.ts` | Modify | Add `--kilocode-api-key` option |
-| `src/commands/onboard-non-interactive/local/auth-choice.ts` | Modify | Add non-interactive handling |
-| `src/commands/onboard-auth.ts` | Modify | Export new functions |
-| `src/agents/pi-embedded-runner/cache-ttl.ts` | Modify | Add kilocode support |
-| `src/agents/pi-embedded-runner/extra-params.ts` | Modify | Add kilocode support |
-| `src/agents/transcript-policy.ts` | Modify | Add kilocode Gemini handling |
+| File                                                        | Change Type | Description                                                             |
+| ----------------------------------------------------------- | ----------- | ----------------------------------------------------------------------- |
+| `src/commands/onboard-auth.credentials.ts`                  | Add         | `KILOCODE_DEFAULT_MODEL_REF`, `setKilocodeApiKey()`                     |
+| `src/agents/model-auth.ts`                                  | Modify      | Add `kilocode` to `envMap`                                              |
+| `src/config/io.ts`                                          | Modify      | Add `KILOCODE_API_KEY` to shell env keys                                |
+| `src/commands/onboard-auth.config-core.ts`                  | Add         | `applyKilocodeProviderConfig()`, `applyKilocodeConfig()`                |
+| `src/commands/onboard-types.ts`                             | Modify      | Add `kilocode-api-key` to `AuthChoice`, add `kilocodeApiKey` to options |
+| `src/commands/auth-choice-options.ts`                       | Modify      | Add `kilocode` group and option                                         |
+| `src/commands/auth-choice.preferred-provider.ts`            | Modify      | Add `kilocode-api-key` mapping                                          |
+| `src/commands/auth-choice.apply.api-providers.ts`           | Modify      | Add `kilocode-api-key` handling                                         |
+| `src/cli/program/register.onboard.ts`                       | Modify      | Add `--kilocode-api-key` option                                         |
+| `src/commands/onboard-non-interactive/local/auth-choice.ts` | Modify      | Add non-interactive handling                                            |
+| `src/commands/onboard-auth.ts`                              | Modify      | Export new functions                                                    |
+| `src/agents/pi-embedded-runner/cache-ttl.ts`                | Modify      | Add kilocode support                                                    |
+| `src/agents/pi-embedded-runner/extra-params.ts`             | Modify      | Add kilocode support                                                    |
+| `src/agents/transcript-policy.ts`                           | Modify      | Add kilocode Gemini handling                                            |

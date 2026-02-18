@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via Kilo Gateway in Moltbot
 ---
+
 # Kilo Gateway
 
 Kilo Gateway provides a **unified API** that routes requests to many models behind a single
@@ -34,9 +35,9 @@ export KILOCODE_API_KEY="your-api-key"
   env: { KILOCODE_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kilocode/anthropic/claude-opus-4.5" }
-    }
-  }
+      model: { primary: "kilocode/anthropic/claude-opus-4.5" },
+    },
+  },
 }
 ```
 
