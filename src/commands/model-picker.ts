@@ -219,6 +219,10 @@ export async function promptDefaultModel(
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
+
+  // Create auth checker once and reuse throughout the function
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+
   let models = catalog;
   if (!ignoreAllowlist) {
     const { allowedCatalog, allowAny } = buildAllowedModelSet({
@@ -232,18 +236,23 @@ export async function promptDefaultModel(
     // filter to only show models from providers with auth configured
     // to avoid showing all 600+ models when user only has specific providers set up
     if (allowAny) {
-      const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
       const authedProviders = new Set(
         Array.from(new Set(models.map((entry) => entry.provider))).filter((provider) =>
           hasAuth(provider),
         ),
       );
-      // Keep models from authed providers, but always include the default model
+      // Always include the default model in the filtered results
       if (defaultKey) {
         const defaultProvider = defaultRef?.provider ?? DEFAULT_PROVIDER;
+        const defaultModelId = defaultRef?.model ?? DEFAULT_MODEL;
         authedProviders.add(defaultProvider);
-      }
-      if (authedProviders.size > 0) {
+        // Filter: keep authed providers OR the specific default model
+        models = models.filter(
+          (entry) =>
+            authedProviders.has(entry.provider) ||
+            (entry.provider === defaultProvider && entry.id === defaultModelId),
+        );
+      } else if (authedProviders.size > 0) {
         models = models.filter((entry) => authedProviders.has(entry.provider));
       }
     }
@@ -292,7 +301,6 @@ export async function promptDefaultModel(
   }
 
   const agentDir = params.agentDir;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir });
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
