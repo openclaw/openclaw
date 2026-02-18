@@ -205,9 +205,18 @@ function resolveFallbackCandidates(params: {
 
   addCandidate(normalizedPrimary, false);
 
+  // When the model being run is a user-selected override (different from the
+  // configured primary), skip the config fallback chain entirely and fall back
+  // directly to the default. The fallback chain is designed for when the
+  // primary model itself is unavailable — not for arbitrary overrides.
+  const isRunningDefault = providerRaw === defaultProvider && modelRaw === defaultModel;
+
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
       return params.fallbacksOverride;
+    }
+    if (!isRunningDefault) {
+      return []; // Override model failed → go straight to configured default
     }
     const model = params.cfg?.agents?.defaults?.model as
       | { fallbacks?: string[] }
