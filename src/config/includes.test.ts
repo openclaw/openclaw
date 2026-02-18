@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -287,6 +289,17 @@ describe("resolveConfigIncludes", () => {
       /escapes config directory/,
     );
   });
+
+  it("allows nested parent traversal when path stays under top-level config directory", () => {
+    const files = {
+      [configPath("sub", "child.json")]: { $include: "../shared/common.json" },
+      [configPath("shared", "common.json")]: { shared: true },
+    };
+    const obj = { $include: "./sub/child.json" };
+    expect(resolve(obj, files)).toEqual({
+      shared: true,
+    });
+  });
 });
 
 describe("real-world config patterns", () => {
@@ -520,12 +533,35 @@ describe("security: path traversal protection (CWE-22)", () => {
       expect(() => resolve(obj, {})).toThrow(ConfigIncludeError);
     });
 
-    it("handles config at filesystem root edge case", () => {
+    it("allows child include when config is at filesystem root", () => {
       const rootConfigPath = path.join(path.parse(process.cwd()).root, "test.json");
-      const files = { [rootConfigPath]: { root: true } };
-      // Even at root, absolute paths to other locations should be rejected
-      const obj = { $include: "/etc/passwd" };
-      expect(() => resolve(obj, files, rootConfigPath)).toThrow(ConfigIncludeError);
+      const childPath = path.join(path.parse(process.cwd()).root, "child.json");
+      const files = { [childPath]: { root: true } };
+      const obj = { $include: childPath };
+      expect(resolve(obj, files, rootConfigPath)).toEqual({ root: true });
+    });
+
+    it("allows include files when the config root path is a symlink", async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
+      try {
+        const realRoot = path.join(tempRoot, "real");
+        const linkRoot = path.join(tempRoot, "link");
+        await fs.mkdir(path.join(realRoot, "includes"), { recursive: true });
+        await fs.writeFile(
+          path.join(realRoot, "includes", "extra.json5"),
+          "{ logging: { redactSensitive: 'tools' } }\n",
+          "utf-8",
+        );
+        await fs.symlink(realRoot, linkRoot);
+
+        const result = resolveConfigIncludes(
+          { $include: "./includes/extra.json5" },
+          path.join(linkRoot, "openclaw.json"),
+        );
+        expect(result).toEqual({ logging: { redactSensitive: "tools" } });
+      } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 
 export const INCLUDE_KEY = "$include";
@@ -75,12 +76,17 @@ export function deepMerge(target: unknown, source: unknown): unknown {
 class IncludeProcessor {
   private visited = new Set<string>();
   private depth = 0;
+  private readonly rootDir: string;
+  private readonly rootRealDir: string;
 
   constructor(
     private basePath: string,
     private resolver: IncludeResolver,
+    rootDir?: string,
   ) {
     this.visited.add(path.normalize(basePath));
+    this.rootDir = path.normalize(rootDir ?? path.dirname(basePath));
+    this.rootRealDir = path.normalize(safeRealpath(this.rootDir));
   }
 
   process(obj: unknown): unknown {
@@ -173,10 +179,10 @@ class IncludeProcessor {
       : path.resolve(configDir, includePath);
     const normalized = path.normalize(resolved);
 
-    // SECURITY: Reject paths outside config directory (CWE-22: Path Traversal)
-    if (!normalized.startsWith(configDir + path.sep) && normalized !== configDir) {
+    // SECURITY: Reject paths outside top-level config directory (CWE-22: Path Traversal)
+    if (!isPathInside(this.rootDir, normalized)) {
       throw new ConfigIncludeError(
-        `Include path escapes config directory: ${includePath}`,
+        `Include path escapes config directory: ${includePath} (root: ${this.rootDir})`,
         includePath,
       );
     }
@@ -184,9 +190,9 @@ class IncludeProcessor {
     // SECURITY: Resolve symlinks and re-validate to prevent symlink bypass
     try {
       const real = fs.realpathSync(normalized);
-      if (!real.startsWith(configDir + path.sep) && real !== configDir) {
+      if (!isPathInside(this.rootRealDir, real)) {
         throw new ConfigIncludeError(
-          `Include path resolves outside config directory (symlink): ${includePath}`,
+          `Include path resolves outside config directory (symlink): ${includePath} (root: ${this.rootDir})`,
           includePath,
         );
       }
@@ -240,10 +246,18 @@ class IncludeProcessor {
   }
 
   private processNested(resolvedPath: string, parsed: unknown): unknown {
-    const nested = new IncludeProcessor(resolvedPath, this.resolver);
+    const nested = new IncludeProcessor(resolvedPath, this.resolver, this.rootDir);
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
     return nested.process(parsed);
+  }
+}
+
+function safeRealpath(target: string): string {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return target;
   }
 }
 
