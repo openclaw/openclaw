@@ -113,6 +113,42 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "tts.status",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "tts.enable",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "tts.disable",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "tts.convert",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "tts.setprovider",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "tts.providers",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "models.list",
                     family: MethodFamily::Gateway,
                     requires_auth: true,
@@ -642,6 +678,7 @@ pub struct RpcDispatcher {
     sessions: SessionRegistry,
     system: SystemRegistry,
     talk: TalkRegistry,
+    tts: TtsRegistry,
     models: ModelRegistry,
     agents: AgentRegistry,
     agent_runs: AgentRunRegistry,
@@ -701,6 +738,17 @@ const MAX_CHAT_RUNS: usize = 4_096;
 const CHAT_RUN_COMPLETE_DELAY_MS: u64 = 25;
 const MAX_SEND_CACHE_ENTRIES: usize = 4_096;
 const DEFAULT_SEND_CHANNEL: &str = "whatsapp";
+const TTS_PREFS_PATH: &str = "memory://tts/prefs.json";
+const TTS_OPENAI_MODELS: &[&str] = &["gpt-4o-mini-tts", "tts-1", "tts-1-hd"];
+const TTS_OPENAI_VOICES: &[&str] = &[
+    "alloy", "ash", "ballad", "cedar", "coral", "echo", "fable", "juniper", "marin", "onyx",
+    "nova", "sage", "shimmer", "verse",
+];
+const TTS_ELEVENLABS_MODELS: &[&str] = &[
+    "eleven_multilingual_v2",
+    "eleven_turbo_v2_5",
+    "eleven_monolingual_v1",
+];
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static WEB_LOGIN_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -714,6 +762,7 @@ static EXEC_APPROVAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CHAT_INJECT_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static SEND_MESSAGE_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static POLL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static TTS_AUDIO_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "connect",
     "health",
@@ -727,6 +776,12 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "wake",
     "talk.config",
     "talk.mode",
+    "tts.status",
+    "tts.enable",
+    "tts.disable",
+    "tts.convert",
+    "tts.setProvider",
+    "tts.providers",
     "models.list",
     "agents.list",
     "agents.create",
@@ -821,6 +876,7 @@ impl RpcDispatcher {
             sessions: SessionRegistry::new(),
             system: SystemRegistry::new(),
             talk: TalkRegistry::new(),
+            tts: TtsRegistry::new(),
             models: ModelRegistry::new(),
             agents: AgentRegistry::new(),
             agent_runs: AgentRunRegistry::new(),
@@ -855,6 +911,12 @@ impl RpcDispatcher {
             "wake" => self.handle_wake(req).await,
             "talk.config" => self.handle_talk_config(req).await,
             "talk.mode" => self.handle_talk_mode(req).await,
+            "tts.status" => self.handle_tts_status(req).await,
+            "tts.enable" => self.handle_tts_enable(req).await,
+            "tts.disable" => self.handle_tts_disable(req).await,
+            "tts.convert" => self.handle_tts_convert(req).await,
+            "tts.setprovider" => self.handle_tts_set_provider(req).await,
+            "tts.providers" => self.handle_tts_providers(req).await,
             "models.list" => self.handle_models_list(req).await,
             "agents.list" => self.handle_agents_list(req).await,
             "agents.create" => self.handle_agents_create(req).await,
@@ -1196,6 +1258,137 @@ impl RpcDispatcher {
             "enabled": state.enabled,
             "phase": state.phase,
             "ts": state.updated_at_ms
+        }))
+    }
+
+    async fn handle_tts_status(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<TtsStatusParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid tts.status params: {err}"));
+        }
+        let state = self.tts.snapshot().await;
+        let fallback_providers = tts_fallback_providers(&state.provider);
+        let fallback_provider = fallback_providers.first().cloned();
+        RpcDispatchOutcome::Handled(json!({
+            "enabled": state.enabled,
+            "auto": state.auto_mode,
+            "provider": state.provider,
+            "fallbackProvider": fallback_provider,
+            "fallbackProviders": fallback_providers,
+            "prefsPath": TTS_PREFS_PATH,
+            "hasOpenAIKey": false,
+            "hasElevenLabsKey": false,
+            "edgeEnabled": true
+        }))
+    }
+
+    async fn handle_tts_enable(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<TtsToggleParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid tts.enable params: {err}"));
+        }
+        let state = self.tts.set_enabled(true).await;
+        RpcDispatchOutcome::Handled(json!({
+            "enabled": state.enabled
+        }))
+    }
+
+    async fn handle_tts_disable(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<TtsToggleParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid tts.disable params: {err}"));
+        }
+        let state = self.tts.set_enabled(false).await;
+        RpcDispatchOutcome::Handled(json!({
+            "enabled": state.enabled
+        }))
+    }
+
+    async fn handle_tts_convert(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<TtsConvertParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid tts.convert params: {err}"
+                ));
+            }
+        };
+        let Some(text) = normalize_optional_text(params.text, 16_000) else {
+            return RpcDispatchOutcome::bad_request("tts.convert requires text");
+        };
+        let channel = normalize_optional_text(params.channel, 64).map(|value| normalize(&value));
+        let state = self.tts.snapshot().await;
+        let (output_format, extension, voice_compatible) = if channel.as_deref() == Some("telegram")
+        {
+            ("opus", ".opus", true)
+        } else {
+            ("mp3", ".mp3", false)
+        };
+        let audio_path = next_tts_audio_path(extension);
+        self.system
+            .log_line(format!(
+                "tts.convert provider={} channel={} chars={}",
+                state.provider,
+                channel.unwrap_or_else(|| "default".to_owned()),
+                text.chars().count()
+            ))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "audioPath": audio_path,
+            "provider": state.provider,
+            "outputFormat": output_format,
+            "voiceCompatible": voice_compatible
+        }))
+    }
+
+    async fn handle_tts_set_provider(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<TtsSetProviderParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid tts.setProvider params: {err}"
+                ));
+            }
+        };
+        let provider = normalize_optional_text(params.provider, 32)
+            .map(|value| normalize(&value))
+            .unwrap_or_default();
+        if !is_supported_tts_provider(&provider) {
+            return RpcDispatchOutcome::bad_request(
+                "Invalid provider. Use openai, elevenlabs, or edge.",
+            );
+        }
+        let state = self.tts.set_provider(provider.clone()).await;
+        RpcDispatchOutcome::Handled(json!({
+            "provider": state.provider
+        }))
+    }
+
+    async fn handle_tts_providers(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<TtsProvidersParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid tts.providers params: {err}"));
+        }
+        let active = self.tts.snapshot().await.provider;
+        RpcDispatchOutcome::Handled(json!({
+            "providers": [
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "configured": false,
+                    "models": TTS_OPENAI_MODELS,
+                    "voices": TTS_OPENAI_VOICES
+                },
+                {
+                    "id": "elevenlabs",
+                    "name": "ElevenLabs",
+                    "configured": false,
+                    "models": TTS_ELEVENLABS_MODELS
+                },
+                {
+                    "id": "edge",
+                    "name": "Edge TTS",
+                    "configured": true,
+                    "models": []
+                }
+            ],
+            "active": active
         }))
     }
 
@@ -4493,6 +4686,50 @@ impl TalkRegistry {
     }
 }
 
+struct TtsRegistry {
+    state: Mutex<TtsState>,
+}
+
+#[derive(Debug, Clone)]
+struct TtsState {
+    enabled: bool,
+    auto_mode: String,
+    provider: String,
+    updated_at_ms: u64,
+}
+
+impl TtsRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(TtsState {
+                enabled: false,
+                auto_mode: "off".to_owned(),
+                provider: "edge".to_owned(),
+                updated_at_ms: now_ms(),
+            }),
+        }
+    }
+
+    async fn snapshot(&self) -> TtsState {
+        let guard = self.state.lock().await;
+        guard.clone()
+    }
+
+    async fn set_enabled(&self, enabled: bool) -> TtsState {
+        let mut guard = self.state.lock().await;
+        guard.enabled = enabled;
+        guard.updated_at_ms = now_ms();
+        guard.clone()
+    }
+
+    async fn set_provider(&self, provider: String) -> TtsState {
+        let mut guard = self.state.lock().await;
+        guard.provider = provider;
+        guard.updated_at_ms = now_ms();
+        guard.clone()
+    }
+}
+
 struct ModelRegistry {
     models: Vec<ModelChoice>,
 }
@@ -7098,6 +7335,32 @@ fn next_send_message_id() -> String {
 fn next_poll_id() -> String {
     let sequence = POLL_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("poll-{}-{sequence}", now_ms())
+}
+
+fn next_tts_audio_path(extension: &str) -> String {
+    let sequence = TTS_AUDIO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("memory://tts/audio-{}-{sequence}{extension}", now_ms())
+}
+
+fn is_supported_tts_provider(provider: &str) -> bool {
+    matches!(provider, "openai" | "elevenlabs" | "edge")
+}
+
+fn tts_provider_order(primary: &str) -> Vec<&'static str> {
+    let normalized = normalize(primary);
+    let mut order = vec!["openai", "elevenlabs", "edge"];
+    if let Some(index) = order.iter().position(|candidate| *candidate == normalized) {
+        order.swap(0, index);
+    }
+    order
+}
+
+fn tts_fallback_providers(primary: &str) -> Vec<String> {
+    tts_provider_order(primary)
+        .into_iter()
+        .skip(1)
+        .map(str::to_owned)
+        .collect()
 }
 
 fn derive_outbound_session_key(channel: &str, to: &str) -> String {
@@ -10081,6 +10344,31 @@ struct TalkModeParams {
     enabled: Option<bool>,
     phase: Option<String>,
 }
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TtsStatusParams {}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TtsToggleParams {}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TtsConvertParams {
+    text: Option<String>,
+    channel: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TtsSetProviderParams {
+    provider: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TtsProvidersParams {}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -14512,6 +14800,196 @@ mod tests {
                     .is_some());
             }
             _ => panic!("expected talk.mode handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_tts_methods_follow_parity_contract() {
+        let dispatcher = RpcDispatcher::new();
+
+        let status = RpcRequestFrame {
+            id: "req-tts-status".to_owned(),
+            method: "tts.status".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&status).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/enabled")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/provider")
+                        .and_then(serde_json::Value::as_str),
+                    Some("edge")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/prefsPath")
+                        .and_then(serde_json::Value::as_str),
+                    Some(super::TTS_PREFS_PATH)
+                );
+            }
+            _ => panic!("expected tts.status handled"),
+        }
+
+        let invalid_provider = RpcRequestFrame {
+            id: "req-tts-set-provider-invalid".to_owned(),
+            method: "tts.setProvider".to_owned(),
+            params: serde_json::json!({
+                "provider": "invalid-provider"
+            }),
+        };
+        match dispatcher.handle_request(&invalid_provider).await {
+            RpcDispatchOutcome::Error { code, message, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(
+                    message,
+                    "Invalid provider. Use openai, elevenlabs, or edge."
+                );
+            }
+            _ => panic!("expected invalid provider rejection"),
+        }
+
+        let set_provider = RpcRequestFrame {
+            id: "req-tts-set-provider".to_owned(),
+            method: "tts.setProvider".to_owned(),
+            params: serde_json::json!({
+                "provider": "openai"
+            }),
+        };
+        match dispatcher.handle_request(&set_provider).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/provider")
+                        .and_then(serde_json::Value::as_str),
+                    Some("openai")
+                );
+            }
+            _ => panic!("expected tts.setProvider handled"),
+        }
+
+        let enable = RpcRequestFrame {
+            id: "req-tts-enable".to_owned(),
+            method: "tts.enable".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&enable).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/enabled")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected tts.enable handled"),
+        }
+
+        let convert_missing = RpcRequestFrame {
+            id: "req-tts-convert-missing".to_owned(),
+            method: "tts.convert".to_owned(),
+            params: serde_json::json!({
+                "text": "   "
+            }),
+        };
+        match dispatcher.handle_request(&convert_missing).await {
+            RpcDispatchOutcome::Error { code, message, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(message, "tts.convert requires text");
+            }
+            _ => panic!("expected missing text rejection"),
+        }
+
+        let convert = RpcRequestFrame {
+            id: "req-tts-convert".to_owned(),
+            method: "tts.convert".to_owned(),
+            params: serde_json::json!({
+                "text": "hello voice",
+                "channel": "telegram"
+            }),
+        };
+        match dispatcher.handle_request(&convert).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let audio_path = payload
+                    .pointer("/audioPath")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert!(audio_path.starts_with("memory://tts/audio-"));
+                assert!(audio_path.ends_with(".opus"));
+                assert_eq!(
+                    payload
+                        .pointer("/provider")
+                        .and_then(serde_json::Value::as_str),
+                    Some("openai")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/outputFormat")
+                        .and_then(serde_json::Value::as_str),
+                    Some("opus")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/voiceCompatible")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected tts.convert handled"),
+        }
+
+        let providers = RpcRequestFrame {
+            id: "req-tts-providers".to_owned(),
+            method: "tts.providers".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&providers).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/active")
+                        .and_then(serde_json::Value::as_str),
+                    Some("openai")
+                );
+                let providers = payload
+                    .pointer("/providers")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(providers.iter().any(|entry| {
+                    entry.pointer("/id").and_then(serde_json::Value::as_str) == Some("openai")
+                }));
+                assert!(providers.iter().any(|entry| {
+                    entry.pointer("/id").and_then(serde_json::Value::as_str) == Some("edge")
+                        && entry
+                            .pointer("/configured")
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true)
+                }));
+            }
+            _ => panic!("expected tts.providers handled"),
+        }
+
+        let disable = RpcRequestFrame {
+            id: "req-tts-disable".to_owned(),
+            method: "tts.disable".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&disable).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/enabled")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+            }
+            _ => panic!("expected tts.disable handled"),
         }
     }
 
