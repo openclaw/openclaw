@@ -386,6 +386,38 @@ describe("security audit", () => {
     ).toBe(true);
   });
 
+  it("uses symlink target permissions for config checks", async () => {
+    if (isWindows) {
+      return;
+    }
+
+    const tmp = await makeTmpDir("config-symlink");
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+
+    const targetConfigPath = path.join(tmp, "managed-openclaw.json");
+    await fs.writeFile(targetConfigPath, "{}\n", "utf-8");
+    await fs.chmod(targetConfigPath, 0o444);
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.symlink(targetConfigPath, configPath);
+
+    const res = await runSecurityAudit({
+      config: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkId: "fs.config.symlink" })]),
+    );
+    expect(res.findings.some((f) => f.checkId === "fs.config.perms_writable")).toBe(false);
+    expect(res.findings.some((f) => f.checkId === "fs.config.perms_world_readable")).toBe(false);
+    expect(res.findings.some((f) => f.checkId === "fs.config.perms_group_readable")).toBe(false);
+  });
+
   it("warns when small models are paired with web/browser tools", async () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
