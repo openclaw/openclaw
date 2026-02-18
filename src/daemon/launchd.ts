@@ -1,3 +1,4 @@
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -43,8 +44,28 @@ export function resolveGatewayLogPaths(env: Record<string, string | undefined>):
   stderrPath: string;
 } {
   const stateDir = resolveGatewayStateDir(env);
-  const logDir = path.join(stateDir, "logs");
   const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
+
+  // macOS launchd refuses to redirect stdout/stderr to removable volumes.
+  // If OPENCLAW_STATE_DIR resolves to /Volumes/... (common for external drives),
+  // the LaunchAgent will fail to spawn with EPERM. Fall back to /tmp in that case.
+  if (process.platform === "darwin") {
+    try {
+      const realStateDir = fsSync.realpathSync(stateDir);
+      if (realStateDir.startsWith("/Volumes/")) {
+        const tmpLogDir = path.posix.join("/tmp", "openclaw");
+        return {
+          logDir: tmpLogDir,
+          stdoutPath: path.posix.join(tmpLogDir, `${prefix}.log`),
+          stderrPath: path.posix.join(tmpLogDir, `${prefix}.err.log`),
+        };
+      }
+    } catch {
+      // Ignore and fall back to the default stateDir-based location.
+    }
+  }
+
+  const logDir = path.join(stateDir, "logs");
   return {
     logDir,
     stdoutPath: path.join(logDir, `${prefix}.log`),

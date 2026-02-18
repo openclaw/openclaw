@@ -5,6 +5,7 @@ import {
   isLaunchAgentListed,
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
+  resolveGatewayLogPaths,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
 
@@ -13,6 +14,7 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
+  realpathOverride: undefined as string | undefined,
 }));
 
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
@@ -36,6 +38,28 @@ vi.mock("./exec-file.js", () => ({
     return { stdout: "", stderr: "", code: 0 };
   }),
 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      realpathSync: vi.fn((p: string) => {
+        if (state.realpathOverride !== undefined) {
+          return state.realpathOverride;
+        }
+        return String(p);
+      }),
+    },
+    realpathSync: vi.fn((p: string) => {
+      if (state.realpathOverride !== undefined) {
+        return state.realpathOverride;
+      }
+      return String(p);
+    }),
+  };
+});
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -68,6 +92,7 @@ beforeEach(() => {
   state.listOutput = "";
   state.dirs.clear();
   state.files.clear();
+  state.realpathOverride = undefined;
   vi.clearAllMocks();
 });
 
@@ -198,5 +223,45 @@ describe("resolveLaunchAgentPlistPath", () => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(
       "/Users/test/Library/LaunchAgents/ai.openclaw.myprofile.plist",
     );
+  });
+});
+
+describe("resolveGatewayLogPaths", () => {
+  it("returns default log paths under state dir for local installs", () => {
+    const env = { HOME: "/Users/test" };
+    const paths = resolveGatewayLogPaths(env);
+    expect(paths.logDir).toBe("/Users/test/.openclaw/logs");
+    expect(paths.stdoutPath).toBe("/Users/test/.openclaw/logs/gateway.log");
+    expect(paths.stderrPath).toBe("/Users/test/.openclaw/logs/gateway.err.log");
+  });
+
+  it("falls back to /tmp/openclaw when state dir resolves to /Volumes on macOS", () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    state.realpathOverride = "/Volumes/ExternalDrive/openclaw-state";
+    const env = { HOME: "/Users/test" };
+    const paths = resolveGatewayLogPaths(env);
+    expect(paths.logDir).toBe("/tmp/openclaw");
+    expect(paths.stdoutPath).toBe("/tmp/openclaw/gateway.log");
+    expect(paths.stderrPath).toBe("/tmp/openclaw/gateway.err.log");
+  });
+
+  it("respects OPENCLAW_LOG_PREFIX when falling back to /tmp", () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    state.realpathOverride = "/Volumes/SSD/state";
+    const env = { HOME: "/Users/test", OPENCLAW_LOG_PREFIX: "custom" };
+    const paths = resolveGatewayLogPaths(env);
+    expect(paths.stdoutPath).toBe("/tmp/openclaw/custom.log");
+    expect(paths.stderrPath).toBe("/tmp/openclaw/custom.err.log");
+  });
+
+  it("uses default paths when state dir is not on /Volumes", () => {
+    state.realpathOverride = "/Users/test/.openclaw";
+    const env = { HOME: "/Users/test" };
+    const paths = resolveGatewayLogPaths(env);
+    expect(paths.logDir).toBe("/Users/test/.openclaw/logs");
   });
 });
