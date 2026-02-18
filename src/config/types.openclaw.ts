@@ -25,6 +25,55 @@ import type { PluginsConfig } from "./types.plugins.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
+export type SecurityContentPolicy = {
+  action?: "log" | "quarantine" | "block";
+  threshold?: "info" | "warn" | "critical";
+};
+
+export type SecuritySecretScanningConfig = {
+  enabled?: boolean;
+  action?: "redact" | "block";
+};
+
+export type SecuritySecretStoreConfig = {
+  backend?: "plaintext" | "keychain" | "encrypted-file";
+};
+
+export type SecurityAlignmentPrinciple = {
+  id: string;
+  category: string;
+  label: string;
+  principle: string;
+};
+
+export type SecurityAlignmentConfig = {
+  enabled?: boolean;
+  constitutionPath?: string;
+  selfCritique?: boolean;
+  selfCritiqueModel?: string;
+  customPrinciples?: SecurityAlignmentPrinciple[];
+  disabledPrinciples?: string[];
+};
+
+export type SecurityRateLimitBucket = {
+  category: string;
+  windowMs?: number;
+  maxCount?: number;
+};
+
+export type SecurityRateLimitingConfig = {
+  enabled?: boolean;
+  buckets?: SecurityRateLimitBucket[];
+};
+
+export type SecurityConfig = {
+  contentPolicy?: SecurityContentPolicy;
+  secretScanning?: SecuritySecretScanningConfig;
+  secretStore?: SecuritySecretStoreConfig;
+  alignment?: SecurityAlignmentConfig;
+  rateLimiting?: SecurityRateLimitingConfig;
+};
+
 export type OpenClawConfig = {
   meta?: {
     /** Last OpenClaw version that wrote this config. */
@@ -97,6 +146,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  security?: SecurityConfig;
 };
 
 export type ConfigValidationIssue = {
