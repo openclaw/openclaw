@@ -14,6 +14,7 @@ export type CronState = {
   cronRunsJobId: string | null;
   cronRuns: CronRunLogEntry[];
   cronBusy: boolean;
+  cronEditingId: string | null;
 };
 
 export function supportsAnnounceDelivery(
@@ -157,7 +158,14 @@ export async function addCronJob(state: CronState) {
     if (!job.name) {
       throw new Error("Name required.");
     }
-    await state.client.request("cron.add", job);
+    if (state.cronEditingId) {
+      // Update existing job
+      await state.client.request("cron.update", { id: state.cronEditingId, patch: job });
+      // clear editing state
+      state.cronEditingId = null;
+    } else {
+      await state.client.request("cron.add", job);
+    }
     state.cronForm = {
       ...state.cronForm,
       name: "",
@@ -171,6 +179,62 @@ export async function addCronJob(state: CronState) {
   } finally {
     state.cronBusy = false;
   }
+}
+
+export function openEditCron(state: CronState, job: CronJob) {
+  // Map job fields into the form state
+  const form: CronFormState = {
+    name: job.name || "",
+    description: job.description || "",
+    agentId: job.agentId || "",
+    enabled: typeof job.enabled === "boolean" ? job.enabled : true,
+    scheduleKind:
+      job.schedule.kind === "at" ? "at" : job.schedule.kind === "every" ? "every" : "cron",
+    scheduleAt:
+      job.schedule.kind === "at" &&
+      typeof (job.schedule as unknown as { at?: string }).at === "string"
+        ? (job.schedule as unknown as { at: string }).at
+        : "",
+    everyAmount:
+      job.schedule.kind === "every" &&
+      typeof (job.schedule as unknown as { everyMs?: number }).everyMs === "number"
+        ? String(Math.floor((job.schedule as unknown as { everyMs: number }).everyMs / 60000))
+        : "",
+    everyUnit: job.schedule.kind === "every" ? "minutes" : "minutes",
+    cronExpr:
+      job.schedule.kind === "cron" &&
+      typeof (job.schedule as unknown as { expr?: string }).expr === "string"
+        ? (job.schedule as unknown as { expr: string }).expr
+        : "",
+    cronTz:
+      job.schedule.kind === "cron" &&
+      typeof (job.schedule as unknown as { tz?: string }).tz === "string"
+        ? (job.schedule as unknown as { tz: string }).tz
+        : "",
+    sessionTarget: job.sessionTarget || "main",
+    wakeMode: job.wakeMode || "now",
+    payloadKind: job.payload.kind === "systemEvent" ? "systemEvent" : "agentTurn",
+    payloadText: job.payload.kind === "systemEvent" ? job.payload.text : job.payload.message,
+    deliveryMode: job.delivery ? job.delivery.mode : "none",
+    deliveryChannel: job.delivery?.channel || "",
+    deliveryTo: job.delivery?.to || "",
+    timeoutSeconds:
+      job.payload.kind === "agentTurn" && job.payload.timeoutSeconds
+        ? String(job.payload.timeoutSeconds)
+        : "",
+  };
+  state.cronForm = form;
+  state.cronEditingId = job.id;
+}
+
+export function cancelEditCron(state: CronState) {
+  state.cronEditingId = null;
+  state.cronForm = {
+    ...state.cronForm,
+    name: "",
+    description: "",
+    payloadText: "",
+  };
 }
 
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {

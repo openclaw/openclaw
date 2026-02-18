@@ -25,6 +25,8 @@ import {
   runCronJob,
   removeCronJob,
   addCronJob,
+  openEditCron,
+  cancelEditCron,
   normalizeCronFormState,
 } from "./controllers/cron.ts";
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
@@ -333,6 +335,9 @@ export function renderApp(state: AppViewState) {
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+                editingJobId: state.cronEditingId,
+                onEdit: (job) => openEditCron(state, job),
+                onCancelEdit: () => cancelEditCron(state),
               })
             : nothing
         }
