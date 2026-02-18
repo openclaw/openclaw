@@ -4,6 +4,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 vi.mock("../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionTranscriptPath: vi.fn(
+    (sessionId: string) => `agents/main/sessions/${sessionId}.jsonl`,
+  ),
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
