@@ -73,8 +73,10 @@ describe("sanitizeSessionKey / desanitizeSessionKey", () => {
 
 describe("resolveSessionStoreDir", () => {
   it("returns sessions.d in the same directory as storePath", () => {
-    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
-    expect(resolveSessionStoreDir(storePath)).toBe("/tmp/openclaw/agents/main/sessions/sessions.d");
+    const storePath = path.join("/tmp", "openclaw", "agents", "main", "sessions", "sessions.json");
+    expect(resolveSessionStoreDir(storePath)).toBe(
+      path.join("/tmp", "openclaw", "agents", "main", "sessions", "sessions.d"),
+    );
   });
 });
 
