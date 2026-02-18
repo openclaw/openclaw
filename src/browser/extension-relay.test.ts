@@ -140,7 +140,9 @@ describe("chrome extension relay server", () => {
     };
     expect(v1.webSocketDebuggerUrl).toBeUndefined();
 
-    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`);
+    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
     await waitForOpen(ext);
 
     const v2 = (await fetch(`${cdpUrl}/json/version`, {
@@ -183,12 +185,27 @@ describe("chrome extension relay server", () => {
     expect(err.message).toContain("401");
   });
 
+  it("rejects extension access without relay auth token", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const statusRes = await fetch(`${cdpUrl}/extension/status`);
+    expect(statusRes.status).toBe(401);
+
+    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`);
+    const err = await waitForError(ext);
+    expect(err.message).toContain("401");
+  });
+
   it("tracks attached page targets and exposes them via CDP + /json/list", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
-    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`);
+    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
     await waitForOpen(ext);
 
     // Simulate a tab attach coming from the extension.
@@ -304,7 +321,9 @@ describe("chrome extension relay server", () => {
     cdpUrl = `http://127.0.0.1:${port}`;
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
-    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`);
+    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
     await waitForOpen(ext);
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {

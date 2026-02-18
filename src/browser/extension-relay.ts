@@ -415,6 +415,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }
 
     if (path === "/extension/status") {
+      const token = getHeader(req, RELAY_AUTH_HEADER);
+      if (!token || token !== relayAuthToken) {
+        res.writeHead(401);
+        res.end("Unauthorized");
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ connected: Boolean(extensionWs) }));
       return;
@@ -529,6 +535,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }
 
     if (pathname === "/extension") {
+      const token = getHeader(req, RELAY_AUTH_HEADER);
+      if (!token || token !== relayAuthToken) {
+        rejectUpgrade(socket, 401, "Unauthorized");
+        return;
+      }
       if (extensionWs) {
         rejectUpgrade(socket, 409, "Extension already connected");
         return;
