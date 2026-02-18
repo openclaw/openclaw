@@ -38,8 +38,13 @@ export function stripInlineStatus(body: string): {
   if (!trimmed) {
     return { cleaned: "", didStrip: false };
   }
-  // Use [^\S\n]+ instead of \s+ to only collapse horizontal whitespace,
-  // preserving newlines so multi-line messages keep their paragraph structure.
+  if (!INLINE_STATUS_RE.test(trimmed)) {
+    return { cleaned: trimmed, didStrip: false };
+  }
+  // Reset lastIndex since the regex has the `g` flag.
+  INLINE_STATUS_RE.lastIndex = 0;
+  // Use collapseInlineHorizontalWhitespace instead of \s+ to preserve newlines
+  // so multi-line messages keep their paragraph structure.
   const cleaned = collapseInlineHorizontalWhitespace(trimmed.replace(INLINE_STATUS_RE, " ")).trim();
-  return { cleaned, didStrip: cleaned !== trimmed };
+  return { cleaned, didStrip: true };
 }
