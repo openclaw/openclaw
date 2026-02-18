@@ -1,20 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { agentCommand } from "../../commands/agent.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { defaultRuntime } from "../../runtime.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
-  validateMeshPlanAutoParams,
   validateMeshPlanParams,
   validateMeshRetryParams,
   validateMeshRunParams,
   validateMeshStatusParams,
+  type MeshRunParams,
   type MeshWorkflowPlan,
 } from "../protocol/index.js";
 import { agentHandlers } from "./agent.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type MeshStepStatus = "pending" | "running" | "succeeded" | "failed" | "skipped";
 type MeshRunStatus = "pending" | "running" | "completed" | "failed";
@@ -51,48 +48,17 @@ type MeshRunRecord = {
   history: Array<{ ts: number; type: string; stepId?: string; data?: Record<string, unknown> }>;
 };
 
-type MeshAutoStep = {
-  id?: string;
-  name?: string;
-  prompt: string;
-  dependsOn?: string[];
-  agentId?: string;
-  sessionKey?: string;
-  thinking?: string;
-  timeoutMs?: number;
-};
-
-type MeshAutoPlanShape = {
-  steps?: MeshAutoStep[];
-};
-
 const meshRuns = new Map<string, MeshRunRecord>();
 const MAX_KEEP_RUNS = 200;
-const AUTO_PLAN_TIMEOUT_MS = 90_000;
-const PLANNER_MAIN_KEY = "mesh-planner";
 
 function trimMap() {
   if (meshRuns.size <= MAX_KEEP_RUNS) {
     return;
   }
-  const sorted = [...meshRuns.values()].toSorted((a, b) => a.startedAt - b.startedAt);
+  const sorted = [...meshRuns.values()].sort((a, b) => a.startedAt - b.startedAt);
   const overflow = meshRuns.size - MAX_KEEP_RUNS;
   for (const stale of sorted.slice(0, overflow)) {
     meshRuns.delete(stale.runId);
-  }
-}
-
-function stringifyUnknown(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value instanceof Error) {
-    return value.message;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
   }
 }
 
@@ -135,7 +101,19 @@ function normalizePlan(plan: MeshWorkflowPlan): MeshWorkflowPlan {
   };
 }
 
-function createPlanFromParams(params: { goal: string; steps?: MeshAutoStep[] }): MeshWorkflowPlan {
+function createPlanFromParams(params: {
+  goal: string;
+  steps?: Array<{
+    id?: string;
+    name?: string;
+    prompt: string;
+    dependsOn?: string[];
+    agentId?: string;
+    sessionKey?: string;
+    thinking?: string;
+    timeoutMs?: number;
+  }>;
+}): MeshWorkflowPlan {
   const now = Date.now();
   const goal = params.goal.trim();
   const sourceSteps = params.steps?.length
@@ -173,9 +151,7 @@ function createPlanFromParams(params: { goal: string; steps?: MeshAutoStep[] }):
   };
 }
 
-function validatePlanGraph(
-  plan: MeshWorkflowPlan,
-): { ok: true; order: string[] } | { ok: false; error: string } {
+function validatePlanGraph(plan: MeshWorkflowPlan): { ok: true; order: string[] } | { ok: false; error: string } {
   const ids = new Set<string>();
   for (const step of plan.steps) {
     if (ids.has(step.id)) {
@@ -242,12 +218,7 @@ async function callGatewayHandler(
 ): Promise<{ ok: boolean; payload?: unknown; error?: unknown; meta?: Record<string, unknown> }> {
   return await new Promise((resolve) => {
     let settled = false;
-    const settle = (result: {
-      ok: boolean;
-      payload?: unknown;
-      error?: unknown;
-      meta?: Record<string, unknown>;
-    }) => {
+    const settle = (result: { ok: boolean; payload?: unknown; error?: unknown; meta?: Record<string, unknown> }) => {
       if (settled) {
         return;
       }
@@ -328,7 +299,7 @@ async function executeStep(params: {
   if (!accepted.ok) {
     step.status = "failed";
     step.endedAt = Date.now();
-    step.error = stringifyUnknown(accepted.error ?? "agent request failed");
+    step.error = String(accepted.error ?? "agent request failed");
     run.history.push({
       ts: Date.now(),
       type: "step.error",
@@ -385,7 +356,7 @@ async function executeStep(params: {
   step.error =
     typeof waitPayload?.error === "string"
       ? waitPayload.error
-      : stringifyUnknown(waited.error ?? `agent.wait returned status ${waitStatus}`);
+      : String(waited.error ?? `agent.wait returned status ${waitStatus}`);
   run.history.push({
     ts: Date.now(),
     type: "step.error",
@@ -460,7 +431,6 @@ async function runWorkflow(run: MeshRunRecord, opts: GatewayRequestHandlerOption
 
   const inFlight = new Set<Promise<void>>();
   let stopScheduling = false;
-
   while (true) {
     const failed = Object.values(run.steps).some((step) => step.status === "failed");
     if (failed && !run.continueOnError) {
@@ -489,7 +459,6 @@ async function runWorkflow(run: MeshRunRecord, opts: GatewayRequestHandlerOption
     if (pending.length === 0) {
       break;
     }
-
     for (const step of pending) {
       step.status = "skipped";
       step.endedAt = Date.now();
@@ -578,130 +547,6 @@ function summarizeRun(run: MeshRunRecord) {
   };
 }
 
-function extractTextFromAgentResult(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: unknown }> } | undefined)?.payloads;
-  if (!Array.isArray(payloads)) {
-    return "";
-  }
-  const texts: string[] = [];
-  for (const payload of payloads) {
-    if (typeof payload?.text === "string" && payload.text.trim()) {
-      texts.push(payload.text.trim());
-    }
-  }
-  return texts.join("\n\n");
-}
-
-function parseJsonObjectFromText(text: string): Record<string, unknown> | null {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(trimmed);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    // keep trying
-  }
-
-  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fenceMatch?.[1]) {
-    try {
-      const parsed = JSON.parse(fenceMatch[1]);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : null;
-    } catch {
-      // keep trying
-    }
-  }
-
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    const candidate = trimmed.slice(start, end + 1);
-    try {
-      const parsed = JSON.parse(candidate);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
-function buildAutoPlannerPrompt(params: { goal: string; maxSteps: number }) {
-  return [
-    "You are a workflow planner. Convert the user's goal into executable workflow steps.",
-    "Return STRICT JSON only, no markdown, no prose.",
-    'JSON schema: {"steps": [{"id": string, "name"?: string, "prompt": string, "dependsOn"?: string[]}]}',
-    "Rules:",
-    `- Use 2 to ${params.maxSteps} steps.`,
-    "- Keep ids short, lowercase, kebab-case.",
-    "- dependsOn must reference earlier step ids when needed.",
-    "- prompts must be concrete and executable by an AI coding assistant.",
-    "- Do not include extra fields.",
-    `Goal: ${params.goal}`,
-  ].join("\n");
-}
-
-async function generateAutoPlan(params: {
-  goal: string;
-  maxSteps: number;
-  agentId?: string;
-  sessionKey?: string;
-  thinking?: string;
-  timeoutMs?: number;
-  lane?: string;
-  opts: GatewayRequestHandlerOptions;
-}): Promise<{ plan: MeshWorkflowPlan; source: "llm" | "fallback"; plannerText?: string }> {
-  const prompt = buildAutoPlannerPrompt({ goal: params.goal, maxSteps: params.maxSteps });
-  const timeoutSeconds = Math.ceil((params.timeoutMs ?? AUTO_PLAN_TIMEOUT_MS) / 1000);
-  const resolvedAgentId = normalizeAgentId(params.agentId ?? "main");
-  const plannerSessionKey =
-    params.sessionKey?.trim() || `agent:${resolvedAgentId}:${PLANNER_MAIN_KEY}`;
-
-  try {
-    const runResult = await agentCommand(
-      {
-        message: prompt,
-        deliver: false,
-        timeout: String(timeoutSeconds),
-        agentId: resolvedAgentId,
-        sessionKey: plannerSessionKey,
-        ...(params.thinking ? { thinking: params.thinking } : {}),
-        ...(params.lane ? { lane: params.lane } : {}),
-      },
-      defaultRuntime,
-      params.opts.context.deps,
-    );
-
-    const text = extractTextFromAgentResult(runResult);
-    const parsed = parseJsonObjectFromText(text) as MeshAutoPlanShape | null;
-    const rawSteps = Array.isArray(parsed?.steps) ? parsed.steps : [];
-    if (rawSteps.length > 0) {
-      const plan = normalizePlan(
-        createPlanFromParams({
-          goal: params.goal,
-          steps: rawSteps.slice(0, params.maxSteps),
-        }),
-      );
-      return { plan, source: "llm", plannerText: text };
-    }
-
-    const fallbackPlan = normalizePlan(createPlanFromParams({ goal: params.goal }));
-    return { plan: fallbackPlan, source: "fallback", plannerText: text };
-  } catch {
-    const fallbackPlan = normalizePlan(createPlanFromParams({ goal: params.goal }));
-    return { plan: fallbackPlan, source: "fallback" };
-  }
-}
-
 export const meshHandlers: GatewayRequestHandlers = {
   "mesh.plan": ({ params, respond }) => {
     if (!validateMeshPlanParams(params)) {
@@ -736,56 +581,6 @@ export const meshHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "mesh.plan.auto": async ({ params, respond, ...rest }) => {
-    if (!validateMeshPlanAutoParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid mesh.plan.auto params: ${formatValidationErrors(validateMeshPlanAutoParams.errors)}`,
-        ),
-      );
-      return;
-    }
-
-    const p = params;
-    const maxSteps =
-      typeof p.maxSteps === "number" && Number.isFinite(p.maxSteps)
-        ? Math.max(1, Math.min(16, Math.floor(p.maxSteps)))
-        : 6;
-    const auto = await generateAutoPlan({
-      goal: p.goal,
-      maxSteps,
-      agentId: p.agentId,
-      sessionKey: p.sessionKey,
-      thinking: p.thinking,
-      timeoutMs: p.timeoutMs,
-      lane: p.lane,
-      opts: {
-        ...rest,
-        params,
-        respond,
-      },
-    });
-
-    const graph = validatePlanGraph(auto.plan);
-    if (!graph.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, graph.error));
-      return;
-    }
-
-    respond(
-      true,
-      {
-        plan: auto.plan,
-        order: graph.order,
-        source: auto.source,
-        plannerText: auto.plannerText,
-      },
-      undefined,
-    );
-  },
   "mesh.run": async (opts) => {
     const { params, respond } = opts;
     if (!validateMeshRunParams(params)) {
@@ -799,7 +594,7 @@ export const meshHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params;
+    const p = params as MeshRunParams;
     const plan = normalizePlan(p.plan);
     const graph = validatePlanGraph(plan);
     if (!graph.ok) {
@@ -845,7 +640,7 @@ export const meshHandlers: GatewayRequestHandlers = {
     }
     const run = meshRuns.get(params.runId.trim());
     if (!run) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "mesh run not found"));
+      respond(false, undefined, errorShape(ErrorCodes.NOT_FOUND, "mesh run not found"));
       return;
     }
     respond(true, summarizeRun(run), undefined);
@@ -866,15 +661,11 @@ export const meshHandlers: GatewayRequestHandlers = {
     const runId = params.runId.trim();
     const run = meshRuns.get(runId);
     if (!run) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "mesh run not found"));
+      respond(false, undefined, errorShape(ErrorCodes.NOT_FOUND, "mesh run not found"));
       return;
     }
     if (run.status === "running") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "mesh run is currently running"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "mesh run is currently running"));
       return;
     }
     const stepIds = resolveStepIdsForRetry(run, params.stepIds);
