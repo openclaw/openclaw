@@ -17,6 +17,13 @@ const ENVELOPE_CHANNELS = [
 
 const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
 
+// Pattern to match untrusted metadata blocks like:
+// "Conversation info (untrusted metadata):\n```json\n...\n```"
+// "Sender (untrusted metadata):\n```json\n...\n```"
+// etc.
+const UNTRUSTED_METADATA_BLOCK =
+  /^\s*(Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history since last reply)[^:]*:\s*\n```json\n[\s\S]*?\n```\s*/gm;
+
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) {
     return true;
@@ -46,4 +53,18 @@ export function stripMessageIdHints(text: string): string {
   const lines = text.split(/\r?\n/);
   const filtered = lines.filter((line) => !MESSAGE_ID_LINE.test(line));
   return filtered.length === lines.length ? text : filtered.join("\n");
+}
+
+export function stripUntrustedMetadataBlocks(text: string): string {
+  if (!text.includes("untrusted")) {
+    return text;
+  }
+  // Remove untrusted metadata blocks that start at the beginning of the text
+  // or after a newline, followed by the block pattern
+  const result = text.replace(UNTRUSTED_METADATA_BLOCK, "");
+  // Clean up any leading/trailing whitespace and extra newlines
+  return result
+    .replace(/^\s*\n/, "")
+    .replace(/\n\s*$/, "")
+    .trim();
 }
