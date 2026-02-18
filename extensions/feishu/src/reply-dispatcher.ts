@@ -6,13 +6,13 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
+import type { MentionTarget } from "./mention.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
-import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
+import { sendCaptionCardFeishu, sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -182,27 +182,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return false;
   };
 
-  const sendMediaPayload = async (mediaList: string[]) => {
-    for (const mediaUrl of mediaList) {
-      if (!mediaUrl) {
-        continue;
-      }
-      try {
-        await sendMediaFeishu({
-          cfg,
-          to: chatId,
-          mediaUrl,
-          replyToMessageId,
-          accountId,
-        });
-      } catch (err) {
-        params.runtime.error?.(
-          `feishu[${account.accountId}] sendMedia failed for ${mediaUrl}: ${String(err)}`,
-        );
-      }
-    }
-  };
-
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
@@ -221,14 +200,55 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
-        if (text.trim()) {
-          const handledByStreaming = await sendTextPayload(text, info);
-          if (handledByStreaming && mediaList.length === 0) {
-            return;
+        // When media is present: send media first, then text as a note-style caption
+        // replying to the media message (mirrors Telegram's caption-on-media pattern).
+        // If all media sends fail, fall back to normal text delivery.
+        if (mediaList.length > 0) {
+          let lastMediaMessageId: string | undefined;
+          let mediaDelivered = false;
+          for (const mediaUrl of mediaList) {
+            if (!mediaUrl) continue;
+            try {
+              const result = await sendMediaFeishu({
+                cfg,
+                to: chatId,
+                mediaUrl,
+                replyToMessageId,
+                accountId,
+              });
+              lastMediaMessageId = result.messageId;
+              mediaDelivered = true;
+            } catch (err) {
+              params.runtime.error?.(
+                `feishu[${account.accountId}] sendMedia failed for ${mediaUrl}: ${String(err)}`,
+              );
+            }
           }
+          if (!mediaDelivered && text.trim()) {
+            // Fallback: send text normally if all media failed
+            await sendTextPayload(text, info);
+          } else if (mediaDelivered && text.trim()) {
+            // Send text as a note-style caption replying to the media message
+            try {
+              await sendCaptionCardFeishu({
+                cfg,
+                to: chatId,
+                text: text.trim(),
+                replyToMessageId: lastMediaMessageId,
+                accountId,
+              });
+            } catch (err) {
+              params.runtime.error?.(
+                `feishu[${account.accountId}] sendCaptionCard failed: ${String(err)}`,
+              );
+            }
+          }
+          return;
         }
 
-        await sendMediaPayload(mediaList);
+        if (text.trim()) {
+          await sendTextPayload(text, info);
+        }
       },
       onError: async (error, info) => {
         params.runtime.error?.(
