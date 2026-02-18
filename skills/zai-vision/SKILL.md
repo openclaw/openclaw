@@ -42,27 +42,32 @@ metadata:
 ## Important Rules
 
 ### ⚠️ File Path Requirement
+
 - **MUST use local file path**: `/path/to/image.png`
 - **NEVER use URLs**: Will cause 400 error
 - If user provides URL, download to `/tmp/` first
 
 ### File Format Support
+
 - **Images**: JPG, PNG, WebP
 - **Videos**: MP4, MOV, M4V (max 8MB)
 
 ## Automatic Tool Selection
 
 ### 1. UI to Code (前端还原神器)
+
 **工具**: `zai-vision.ui_to_artifact`
 **能力**: 直接将 UI 截图转换为可运行的代码、提示词或技术规格
 
 **输出类型**:
+
 - `code`: 生成可运行的前端代码
 - `prompt`: 生成 AI 提示词（用于重新创建 UI）
 - `spec`: 生成技术规格说明
 - `description`: 自然语言描述
 
 **示例**:
+
 ```
 User: "把这个设计稿转成 React 代码 /tmp/design.png"
 → Call: mcporter call zai-vision.ui_to_artifact
@@ -73,13 +78,16 @@ User: "把这个设计稿转成 React 代码 /tmp/design.png"
 ```
 
 ### 2. Optimized OCR (代码/终端/文档专用)
+
 **工具**: `zai-vision.extract_text_from_screenshot`
 **能力**: 专门优化针对以下场景的 OCR 识别
+
 - 💻 代码截图
 - 🖥️ 终端输出
 - 📄 技术文档
 
 **示例**:
+
 ```
 User: "提取这个终端输出的文字 /tmp/terminal.png"
 → Call: mcporter call zai-vision.extract_text_from_screenshot
@@ -90,10 +98,12 @@ User: "提取这个终端输出的文字 /tmp/terminal.png"
 ```
 
 ### 3. Error Diagnosis (开发者利器)
+
 **工具**: `zai-vision.diagnose_error_screenshot`
 **能力**: 分析报错截图并给出**具体的修复建议**
 
 **示例**:
+
 ```
 User: "看看这个错误怎么解决 /tmp/error.png"
 → Call: mcporter call zai-vision.diagnose_error_screenshot
@@ -104,14 +114,17 @@ User: "看看这个错误怎么解决 /tmp/error.png"
 ```
 
 ### 4. Technical Diagram Understanding (架构图理解)
+
 **工具**: `zai-vision.understand_technical_diagram`
 **能力**: 理解复杂的技术图表
+
 - 🏗️ 系统架构图
 - 🔄 流程图
 - 📐 UML 图
 - 🗃️ ER 图
 
 **示例**:
+
 ```
 User: "解释这个系统架构 /tmp/architecture.png"
 → Call: mcporter call zai-vision.understand_technical_diagram
@@ -122,16 +135,19 @@ User: "解释这个系统架构 /tmp/architecture.png"
 ```
 
 ### 5. Data Visualization Analysis (图表洞察)
+
 **工具**: `zai-vision.analyze_data_visualization`
 **能力**: 从图表和仪表盘中提取数据趋势和洞察
 
 **分析重点**:
+
 - 📈 趋势识别
 - ⚠️ 异常检测
 - 🔍 对比分析
 - 📊 性能指标
 
 **示例**:
+
 ```
 User: "分析这个仪表盘 /tmp/dashboard.png"
 → Call: mcporter call zai-vision.analyze_data_visualization
@@ -152,14 +168,17 @@ User: "分析这个仪表盘 /tmp/dashboard.png"
 ## Error Handling
 
 ### If user provides URL:
+
 1. Download to `/tmp/`: `curl -o /tmp/image.png "URL"`
 2. Then analyze local file
 
 ### If file not found:
+
 1. Ask user to verify path
 2. Suggest checking file exists: `ls -la /path/to/file`
 
 ### If 400 error:
+
 1. Confirm using local path (not URL)
 2. Check file format (JPG/PNG)
 3. For video: check size ≤ 8MB
