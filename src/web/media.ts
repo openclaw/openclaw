@@ -197,6 +197,21 @@ async function loadWebMediaInternal(
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
   mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+
+  // Reject unsupported URL schemes early with a clear error message.
+  // Supported: file://, http://, https://, local paths (absolute or ~-prefixed).
+  // This prevents confusing errors when AI hallucinates protocols like "vector://".
+  const unsupportedSchemeMatch = mediaUrl.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+  if (unsupportedSchemeMatch) {
+    const scheme = unsupportedSchemeMatch[1].toLowerCase();
+    if (scheme !== "file" && scheme !== "http" && scheme !== "https") {
+      throw new Error(
+        `Unsupported media URL scheme "${scheme}://". ` +
+          `Use file:// for local files, http(s):// for remote URLs, or a direct file path.`,
+      );
+    }
+  }
+
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {

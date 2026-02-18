@@ -196,6 +196,21 @@ describe("web media loading", () => {
     fetchMock.mockRestore();
   });
 
+  it("rejects unsupported URL schemes with clear error message", async () => {
+    // AI agents sometimes hallucinate invalid URL schemes (e.g., "vector://")
+    await expect(loadWebMedia("vector://localhost/path/to/file.png")).rejects.toThrow(
+      /Unsupported media URL scheme "vector:\/\/"/,
+    );
+
+    await expect(loadWebMedia("ftp://example.com/file.pdf")).rejects.toThrow(
+      /Unsupported media URL scheme "ftp:\/\/"/,
+    );
+
+    await expect(loadWebMedia("magnet://xt=abc")).rejects.toThrow(
+      /Unsupported media URL scheme "magnet:\/\/"/,
+    );
+  });
+
   it("blocks private network URL fetches (SSRF guard)", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
