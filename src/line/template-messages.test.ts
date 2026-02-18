@@ -69,17 +69,6 @@ describe("createButtonTemplate", () => {
   });
 });
 
-describe("createTemplateCarousel", () => {
-  it("limits columns to 10", () => {
-    const columns = Array.from({ length: 15 }, () =>
-      createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
-    );
-    const template = createTemplateCarousel(columns);
-
-    expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
-  });
-});
-
 describe("createCarouselColumn", () => {
   it("limits actions to 3", () => {
     const column = createCarouselColumn({
@@ -104,13 +93,26 @@ describe("createCarouselColumn", () => {
   });
 });
 
-describe("createImageCarousel", () => {
-  it("limits columns to 10", () => {
-    const columns = Array.from({ length: 15 }, (_, i) =>
-      createImageCarouselColumn(`https://example.com/${i}.jpg`, messageAction("View")),
-    );
-    const template = createImageCarousel(columns);
-
+describe("carousel column limits", () => {
+  it.each([
+    {
+      createTemplate: () =>
+        createTemplateCarousel(
+          Array.from({ length: 15 }, () =>
+            createCarouselColumn({ text: "Text", actions: [messageAction("OK")] }),
+          ),
+        ),
+    },
+    {
+      createTemplate: () =>
+        createImageCarousel(
+          Array.from({ length: 15 }, (_, i) =>
+            createImageCarouselColumn(`https://example.com/${i}.jpg`, messageAction("View")),
+          ),
+        ),
+    },
+  ])("limits columns to 10", ({ createTemplate }) => {
+    const template = createTemplate();
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
   });
 });
