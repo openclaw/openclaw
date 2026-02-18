@@ -672,6 +672,49 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    routing: z
+      .object({
+        default_task_type: z.string(),
+        cooldown_seconds: z.number(),
+        antiflap_enabled: z.boolean(),
+        triggers: z.record(z.string(), z.string()),
+        deny_list: z.array(z.string()),
+        ha_matrix: z.record(z.string(), z.record(z.string(), z.string()).optional()),
+        health: z
+          .object({
+            enabled: z.boolean(),
+            window_size: z.number(),
+            threshold: z.number(),
+            cooldown_ms: z.number(),
+            persist_path: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        review_gate: z
+          .object({
+            enabled: z.boolean(),
+            mode: z.union([z.literal("auto"), z.literal("manual")]),
+            high_risk_types: z.array(z.string()),
+            reviewer_model: z.string(),
+            reviewer_system_prompt: z.string(),
+            timeout_ms: z.number(),
+          })
+          .strict()
+          .optional(),
+        budget: z
+          .object({
+            enabled: z.boolean(),
+            daily_budget_usd: z.number(),
+            daily_token_limit: z.number(),
+            warning_threshold: z.number(),
+            critical_action: z.union([z.literal("degrade"), z.literal("block")]),
+            fallback_model: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
