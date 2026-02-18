@@ -201,14 +201,12 @@ Anything installed at runtime will be lost on restart.
 
 All external binaries required by skills must be installed at image build time.
 
-The examples below show three common binaries only:
+The examples below show two common binaries:
 
-- `gog` for Gmail access
+- `gog` for Gmail access (from the `gogcli` repository)
 - `goplaces` for Google Places
-- `wacli` for WhatsApp
 
-These are examples, not a complete list.
-You may install as many binaries as needed using the same pattern.
+**Note:** `wacli` (WhatsApp CLI) was removed from this example because it only provides macOS binaries and does not support Linux. If you need WhatsApp integration on Linux, consider alternative tools or building from source.
 
 If you add new skills later that depend on additional binaries, you must:
 
@@ -224,16 +222,15 @@ FROM node:22-bookworm
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
 # Example binary 1: Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
+# Repository is gogcli, binary is named 'gog'
+# Note: latest/download URL pattern doesn't work for this repo, use versioned URL
+RUN curl -fsSL https://github.com/steipete/gogcli/releases/download/v0.11.0/gogcli_0.11.0_linux_amd64.tar.gz \
   | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
 
 # Example binary 2: Google Places CLI
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
+# Note: latest/download URL pattern doesn't work for this repo, use versioned URL
+RUN curl -fsSL https://github.com/steipete/goplaces/releases/download/v0.3.0/goplaces_0.3.0_linux_amd64.tar.gz \
   | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
-
-# Example binary 3: WhatsApp CLI
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
 
 # Add more binaries below using the same pattern
 
@@ -269,7 +266,6 @@ Verify binaries:
 ```bash
 docker compose exec openclaw-gateway which gog
 docker compose exec openclaw-gateway which goplaces
-docker compose exec openclaw-gateway which wacli
 ```
 
 Expected output:
@@ -277,7 +273,6 @@ Expected output:
 ```
 /usr/local/bin/gog
 /usr/local/bin/goplaces
-/usr/local/bin/wacli
 ```
 
 ---
