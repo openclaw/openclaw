@@ -544,6 +544,12 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "chat.inject",
+                    family: MethodFamily::Message,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "browser.request",
                     family: MethodFamily::Browser,
                     requires_auth: true,
@@ -694,6 +700,7 @@ static NODE_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_INVOKE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static EXEC_APPROVAL_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static EXEC_APPROVAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static CHAT_INJECT_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
@@ -764,6 +771,7 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "chat.history",
     "chat.send",
     "chat.abort",
+    "chat.inject",
     "config.get",
     "config.set",
     "config.patch",
@@ -886,6 +894,7 @@ impl RpcDispatcher {
             "chat.history" => self.handle_chat_history(req).await,
             "chat.send" => self.handle_chat_send(req).await,
             "chat.abort" => self.handle_chat_abort(req).await,
+            "chat.inject" => self.handle_chat_inject(req).await,
             "config.get" => self.handle_config_get(req).await,
             "config.set" => self.handle_config_set(req).await,
             "config.patch" => self.handle_config_patch(req).await,
@@ -2767,8 +2776,18 @@ impl RpcDispatcher {
             .filter_map(|record| match record.kind {
                 SessionHistoryKind::Send => {
                     let text = normalize_optional_text(record.text.or(record.command), 12_000)?;
+                    let role = if record
+                        .source
+                        .as_deref()
+                        .map(|value| value.eq_ignore_ascii_case("chat.inject"))
+                        .unwrap_or(false)
+                    {
+                        "assistant"
+                    } else {
+                        "user"
+                    };
                     Some(json!({
-                        "role": "user",
+                        "role": role,
                         "timestamp": record.at_ms,
                         "content": text
                     }))
@@ -2893,6 +2912,51 @@ impl RpcDispatcher {
             "ok": true,
             "aborted": !run_ids.is_empty(),
             "runIds": run_ids
+        }))
+    }
+
+    async fn handle_chat_inject(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ChatInjectParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid chat.inject params: {err}"
+                ));
+            }
+        };
+        let requested_session_key = canonicalize_session_key(&params.session_key);
+        if requested_session_key.is_empty() {
+            return RpcDispatchOutcome::bad_request("sessionKey is required");
+        }
+        let Some(session_key) = self.sessions.resolve_key(&requested_session_key).await else {
+            return RpcDispatchOutcome::bad_request("session not found");
+        };
+        let Some(message) = normalize_optional_text(Some(params.message), 12_000) else {
+            return RpcDispatchOutcome::bad_request("message is required");
+        };
+        let label = normalize_optional_text(params.label, 64);
+        let message_id = next_chat_inject_message_id();
+        let rendered_message = if let Some(label) = label {
+            format!("[{label}] {message}")
+        } else {
+            message
+        };
+        let _ = self
+            .sessions
+            .record_send(SessionSend {
+                session_key,
+                request_id: Some(format!("inject-{message_id}")),
+                message: Some(rendered_message),
+                command: None,
+                source: "chat.inject".to_owned(),
+                channel: Some("webchat".to_owned()),
+                to: None,
+                account_id: None,
+            })
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "messageId": message_id
         }))
     }
 
@@ -6585,6 +6649,11 @@ fn next_exec_approval_id() -> String {
     format!("approval-{}-{sequence}", now_ms())
 }
 
+fn next_chat_inject_message_id() -> String {
+    let sequence = CHAT_INJECT_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("msg-{}-{sequence}", now_ms())
+}
+
 struct ChatRegistry {
     state: Arc<Mutex<ChatState>>,
 }
@@ -9788,6 +9857,15 @@ struct ChatAbortParams {
     session_key: String,
     #[serde(rename = "runId", alias = "run_id")]
     run_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatInjectParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: String,
+    message: String,
+    label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -15931,12 +16009,43 @@ mod tests {
             _ => panic!("expected chat.abort session response"),
         }
 
+        let inject_missing_session = RpcRequestFrame {
+            id: "req-chat-inject-missing-session".to_owned(),
+            method: "chat.inject".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "missing",
+                "message": "note"
+            }),
+        };
+        let out = dispatcher.handle_request(&inject_missing_session).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let inject = RpcRequestFrame {
+            id: "req-chat-inject".to_owned(),
+            method: "chat.inject".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "main",
+                "message": "operator note",
+                "label": "ops"
+            }),
+        };
+        match dispatcher.handle_request(&inject).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert!(payload.pointer("/messageId").is_some());
+            }
+            _ => panic!("expected chat.inject handled response"),
+        }
+
         let history = RpcRequestFrame {
             id: "req-chat-history".to_owned(),
             method: "chat.history".to_owned(),
             params: serde_json::json!({
                 "sessionKey": "main",
-                "limit": 2
+                "limit": 3
             }),
         };
         match dispatcher.handle_request(&history).await {
@@ -15964,7 +16073,7 @@ mod tests {
                     .pointer("/messages")
                     .and_then(serde_json::Value::as_array)
                     .expect("messages array");
-                assert_eq!(messages.len(), 2);
+                assert_eq!(messages.len(), 3);
                 assert_eq!(
                     messages
                         .first()
@@ -15972,12 +16081,19 @@ mod tests {
                         .and_then(serde_json::Value::as_str),
                     Some("user")
                 );
+                assert_eq!(
+                    messages
+                        .last()
+                        .and_then(|msg| msg.pointer("/role"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("assistant")
+                );
                 let texts = messages
                     .iter()
                     .filter_map(|msg| msg.pointer("/content"))
                     .filter_map(serde_json::Value::as_str)
                     .collect::<Vec<_>>();
-                assert_eq!(texts, vec!["batch-a", "batch-b"]);
+                assert_eq!(texts, vec!["batch-a", "batch-b", "[ops] operator note"]);
             }
             _ => panic!("expected chat.history handled response"),
         }
