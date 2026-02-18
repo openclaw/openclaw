@@ -26,10 +26,18 @@ const BOOTSTRAP_FILENAMES = [
  */
 export async function detectBootstrapFiles(workspaceDir: string): Promise<string[]> {
   const found: string[] = [];
+  const seenInodes = new Set<string>();
   for (const name of BOOTSTRAP_FILENAMES) {
     const filePath = path.join(workspaceDir, name);
     try {
-      await fs.promises.access(filePath);
+      const stat = await fs.promises.stat(filePath);
+      // Deduplicate on inode to handle case-insensitive filesystems
+      // where e.g. MEMORY.md and memory.md resolve to the same file.
+      const inodeKey = `${stat.dev}:${stat.ino}`;
+      if (seenInodes.has(inodeKey)) {
+        continue;
+      }
+      seenInodes.add(inodeKey);
       found.push(name);
     } catch {
       // File doesn't exist — skip

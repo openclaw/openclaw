@@ -61,6 +61,31 @@ describe("detectBootstrapFiles", () => {
     expect(result).not.toContain("memory/2026-02-16.md");
   });
 
+  it("deduplicates files that share the same inode (case-insensitive FS)", async () => {
+    // On case-insensitive filesystems (macOS HFS+/APFS), MEMORY.md and memory.md
+    // resolve to the same file/inode. We detect this via stat() inode comparison.
+    // On case-sensitive FS this test creates two distinct files and both appear.
+    fs.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Memory");
+    const upperStat = fs.statSync(path.join(tmpDir, "MEMORY.md"));
+    let lowerStat: fs.Stats | null = null;
+    try {
+      lowerStat = fs.statSync(path.join(tmpDir, "memory.md"));
+    } catch {
+      // Case-sensitive FS — memory.md doesn't exist
+    }
+    const result = await detectBootstrapFiles(tmpDir);
+    const memoryEntries = result.filter((f) => f.toLowerCase() === "memory.md");
+    if (lowerStat && lowerStat.ino === upperStat.ino) {
+      // Case-insensitive: only one should appear
+      expect(memoryEntries).toHaveLength(1);
+      expect(memoryEntries[0]).toBe("MEMORY.md");
+    } else {
+      // Case-sensitive: only MEMORY.md exists
+      expect(memoryEntries).toHaveLength(1);
+      expect(memoryEntries[0]).toBe("MEMORY.md");
+    }
+  });
+
   it("ignores non-date files in memory directory", async () => {
     const memDir = path.join(tmpDir, "memory");
     fs.mkdirSync(memDir, { recursive: true });
