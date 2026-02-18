@@ -51,6 +51,61 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts routing.semantic_router with all fields", () => {
+    const res = validateConfigObject({
+      routing: {
+        default_task_type: "FALLBACK",
+        cooldown_seconds: 0,
+        antiflap_enabled: false,
+        triggers: {},
+        deny_list: [],
+        semantic_router: {
+          enabled: true,
+          threshold: 0.75,
+          min_gap: 0.1,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts routing.semantic_router with only required field (enabled)", () => {
+    const res = validateConfigObject({
+      routing: {
+        default_task_type: "FALLBACK",
+        cooldown_seconds: 0,
+        antiflap_enabled: false,
+        triggers: {},
+        deny_list: [],
+        semantic_router: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects routing.semantic_router with unknown field (strict mode)", () => {
+    const res = validateConfigObject({
+      routing: {
+        default_task_type: "FALLBACK",
+        cooldown_seconds: 0,
+        antiflap_enabled: false,
+        triggers: {},
+        deny_list: [],
+        semantic_router: {
+          enabled: true,
+          unknown_field: "oops",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

@@ -1,4 +1,5 @@
 import type { AcpConfig } from "./types.acp.js";
+import type { RoutingConfig } from "../gateway/routing/types.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
@@ -120,6 +121,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  routing?: RoutingConfig;
 };
 
 export type ConfigValidationIssue = {

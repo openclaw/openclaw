@@ -8,7 +8,6 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import { getRoutingInstance } from "../../gateway/routing/routing-instance.js";
 import { checkSafety } from "../../gateway/routing/safety-gate.js";
 import { resolveTaskType } from "../../gateway/routing/task-resolver.js";
-import type { RoutingConfig } from "../../gateway/routing/types.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -171,7 +170,7 @@ export async function resolveReplyDirectives(params: {
   const promptSource = sessionCtx.BodyForAgent ?? sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const commandText = commandSource || promptSource;
 
-  const routingConfig = (cfg as { routing?: RoutingConfig }).routing;
+  const routingConfig = cfg.routing;
   if (routingConfig) {
     const safety = checkSafety(ctx.Body ?? "", routingConfig);
     if (!safety.ok) {
@@ -179,13 +178,14 @@ export async function resolveReplyDirectives(params: {
       return {
         kind: "reply",
         reply: {
-          text: `🚫 Blocked: ${safety.error}`,
+          text: "Message blocked by safety filter.",
         },
       };
     }
   }
 
-  if (provider === defaultProvider && model === defaultModel && routingConfig) {
+  const isSubagent = sessionKey.includes(":subagent:");
+  if (provider === defaultProvider && model === defaultModel && routingConfig && isSubagent) {
     const now = Date.now();
     const cooldownMs = Math.max(0, routingConfig.cooldown_seconds) * 1000;
     const lastRoutedModel = sessionEntry?.lastRoutedModel;
@@ -204,14 +204,30 @@ export async function resolveReplyDirectives(params: {
       }
       model = resolved.model;
     } else {
-      const taskType = resolveTaskType(commandText);
       const routingInstance = getRoutingInstance(routingConfig);
+      // Build a short-window context string from the last 2 inbound messages so that
+      // short context-dependent inputs ("好", "继续", "做") can be correctly classified
+      // by the semantic router. L1 keyword matching still uses bare commandText only.
+      const recentContext =
+        ctx.InboundHistory?.slice(-2)
+          .map((m) => m.body)
+          .filter(Boolean)
+          .join("\n") || undefined;
+      const taskType = await resolveTaskType(
+        commandText,
+        routingInstance.semanticRouter,
+        recentContext,
+      );
       const { selector, reviewGate } = routingInstance;
       // ReviewGate hook — flag high-risk tasks in auto mode (non-blocking for now)
       if (reviewGate.shouldReview(taskType) && reviewGate.isAutoMode()) {
         console.info(`[routing] review-gate: task ${taskType} flagged for review`);
       }
-      const models = selector.resolveModels(taskType, routingConfig);
+      const agentList = cfg.agents?.list ?? [];
+      const models = selector.resolveModels(taskType, routingConfig, agentList);
+      console.debug(
+        `[routing] "${commandText?.slice(0, 40)}" → task=${taskType} model=${models[0] ?? "none"} fallbacks=${models.slice(1).join(",") || "none"}`,
+      );
       if (models.length > 0) {
         const resolved = resolveRoutedModelLabel(models[0]);
         if (resolved.provider) {
