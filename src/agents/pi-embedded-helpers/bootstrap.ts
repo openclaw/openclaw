@@ -213,8 +213,7 @@ export function buildBootstrapContextFiles(
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       // If we can't fit even a char of missing text, we stop trying to add it
       if (!cappedMissingText) {
-        // But we continue to process truncations logic? No, missing file doesn't warn about truncation usually.
-        // If budget is exhaust, we skip.
+        continue;
       }
       remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
       if (cappedMissingText) {

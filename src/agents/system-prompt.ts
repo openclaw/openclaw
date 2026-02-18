@@ -536,8 +536,10 @@ export function buildAgentSystemPrompt(params: {
       ? [
           "",
           "Bootstrap files truncated (context budget limits):",
-          ...params.bootstrapTruncations.map(
-            (t) => `- ${t.name}: truncated from ${t.originalChars} to ${t.budgetChars} chars`,
+          ...params.bootstrapTruncations.map((t) =>
+            t.budgetChars === 0
+              ? `- ${t.name}: SKIPPED (${t.originalChars} chars, budget exhausted)`
+              : `- ${t.name}: truncated from ${t.originalChars} to ${t.budgetChars} chars`,
           ),
           "Consider moving content to docs/reference/ files or increasing agents.defaults.bootstrapMaxChars.",
         ]
