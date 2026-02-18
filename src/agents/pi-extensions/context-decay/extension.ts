@@ -45,7 +45,7 @@ export default function contextDecayExtension(api: ExtensionAPI): void {
       stats,
     });
 
-    if (next !== event.messages && emitter && stats) {
+    if (emitter && stats) {
       const beforeTokens = sumEstimateTokens(event.messages);
       const afterTokens = sumEstimateTokens(next);
       emitter.emit({
