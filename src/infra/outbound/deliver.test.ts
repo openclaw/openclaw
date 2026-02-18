@@ -9,6 +9,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
+import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -20,16 +21,7 @@ const hookMocks = vi.hoisted(() => ({
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
-  createInternalHookEvent: vi.fn(
-    (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
-      type,
-      action,
-      sessionKey,
-      context,
-      timestamp: new Date(),
-      messages: [],
-    }),
-  ),
+  createInternalHookEvent: vi.fn(),
   triggerInternalHook: vi.fn(async () => {}),
 }));
 const queueMocks = vi.hoisted(() => ({
@@ -93,7 +85,8 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSent.mockReset();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
-    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.createInternalHookEvent.mockReset();
+    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockClear();
     queueMocks.enqueueDelivery.mockReset();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
