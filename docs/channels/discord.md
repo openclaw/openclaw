@@ -98,9 +98,9 @@ You will need to create a new application with a bot, add the bot to your server
       <Tab title="Ask your agent">
         Chat with your OpenClaw agent on any existing channel (e.g. Telegram) and tell it:
 
-        > "I want to set up Discord as a channel in OpenClaw. Here is my Bot Token: `<token>`, User ID: `<user_id>`, and Server ID: `<server_id>`"
+        > "I set my Discord bot token in config. Please finish Discord setup with User ID `<user_id>` and Server ID `<server_id>`."
 
-        Your agent will update the config and restart the gateway.
+        Keep secrets out of chat history: set the Bot Token in config/CLI, then ask your agent to complete the non-secret setup.
       </Tab>
       <Tab title="CLI / config">
         Add the token to your config:
@@ -122,10 +122,10 @@ You will need to create a new application with a bot, add the bot to your server
 DISCORD_BOT_TOKEN=...
 ```
 
-        Then restart the gateway:
+        Then start the gateway:
 
 ```bash
-openclaw gateway restart
+openclaw gateway
 ```
 
       </Tab>
