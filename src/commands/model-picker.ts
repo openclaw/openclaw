@@ -33,6 +33,7 @@ type PromptDefaultModelParams = {
   includeManual?: boolean;
   includeVllm?: boolean;
   ignoreAllowlist?: boolean;
+  includeUnauthenticated?: boolean; // If true, show all models even without auth
   preferredProvider?: string;
   agentDir?: string;
   message?: string;
@@ -186,6 +187,7 @@ export async function promptDefaultModel(
   const includeManual = params.includeManual ?? true;
   const includeVllm = params.includeVllm ?? false;
   const ignoreAllowlist = params.ignoreAllowlist ?? false;
+  const includeUnauthenticated = params.includeUnauthenticated ?? false;
   const preferredProviderRaw = params.preferredProvider?.trim();
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
@@ -235,24 +237,29 @@ export async function promptDefaultModel(
     // When allowAny is true (no explicit allowlist configured),
     // filter to only show models from providers with auth configured
     // to avoid showing all 600+ models when user only has specific providers set up
-    if (allowAny) {
-      const authedProviders = new Set(
-        Array.from(new Set(models.map((entry) => entry.provider))).filter((provider) =>
-          hasAuth(provider),
-        ),
-      );
-      // Always include the default model in the filtered results
+    if (allowAny && !includeUnauthenticated) {
+      let authedProviders: Set<string>;
+      try {
+        authedProviders = new Set(
+          Array.from(new Set(models.map((entry) => entry.provider))).filter((provider) =>
+            hasAuth(provider),
+          ),
+        );
+      } catch {
+        // If auth check fails, fall back to showing all models with a warning
+        console.warn("Failed to check provider authentication, showing full model catalog");
+        authedProviders = new Set();
+      }
+
+      // Always include the default model's provider in the filtered results
       if (defaultKey) {
         const defaultProvider = defaultRef?.provider ?? DEFAULT_PROVIDER;
-        const defaultModelId = defaultRef?.model ?? DEFAULT_MODEL;
         authedProviders.add(defaultProvider);
-        // Filter: keep authed providers OR the specific default model
-        models = models.filter(
-          (entry) =>
-            authedProviders.has(entry.provider) ||
-            (entry.provider === defaultProvider && entry.id === defaultModelId),
-        );
-      } else if (authedProviders.size > 0) {
+      }
+
+      // If no authed providers and no defaultKey, fall back to full catalog
+      // (this is intentional - better to show something than nothing)
+      if (authedProviders.size > 0) {
         models = models.filter((entry) => authedProviders.has(entry.provider));
       }
     }
