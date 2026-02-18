@@ -531,6 +531,30 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "exec.approvals.get",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "owner",
+                },
+                MethodSpec {
+                    name: "exec.approvals.set",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "owner",
+                },
+                MethodSpec {
+                    name: "exec.approvals.node.get",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "owner",
+                },
+                MethodSpec {
+                    name: "exec.approvals.node.set",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "owner",
+                },
+                MethodSpec {
                     name: "browser.open",
                     family: MethodFamily::Browser,
                     requires_auth: true,
@@ -573,6 +597,7 @@ pub struct RpcDispatcher {
     agent_runs: AgentRunRegistry,
     nodes: NodePairRegistry,
     node_runtime: NodeRuntimeRegistry,
+    exec_approvals: ExecApprovalsRegistry,
     skills: SkillsRegistry,
     cron: CronRegistry,
     config: ConfigRegistry,
@@ -612,6 +637,9 @@ const AGENT_PRIMARY_MEMORY_FILE_NAME: &str = "MEMORY.md";
 const AGENT_ALT_MEMORY_FILE_NAME: &str = "memory.md";
 const CRON_STORE_PATH: &str = "memory://cron/jobs.json";
 const MAX_CRON_RUN_LOGS_PER_JOB: usize = 500;
+const EXEC_APPROVALS_GLOBAL_PATH: &str = "memory://exec-approvals.json";
+const EXEC_APPROVALS_SOCKET_PATH: &str = "memory://exec-approvals.sock";
+const MAX_EXEC_APPROVALS_NODE_SNAPSHOTS: usize = 512;
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static WEB_LOGIN_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -620,6 +648,7 @@ static DEVICE_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_PAIR_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_INVOKE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static EXEC_APPROVAL_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
@@ -680,6 +709,10 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "node.invoke.result",
     "node.event",
     "browser.request",
+    "exec.approvals.get",
+    "exec.approvals.set",
+    "exec.approvals.node.get",
+    "exec.approvals.node.set",
     "config.get",
     "config.set",
     "config.patch",
@@ -717,6 +750,7 @@ impl RpcDispatcher {
             agent_runs: AgentRunRegistry::new(),
             nodes: NodePairRegistry::new(),
             node_runtime: NodeRuntimeRegistry::new(),
+            exec_approvals: ExecApprovalsRegistry::new(),
             skills: SkillsRegistry::new(),
             cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
@@ -789,6 +823,10 @@ impl RpcDispatcher {
             "node.invoke.result" => self.handle_node_invoke_result(req).await,
             "node.event" => self.handle_node_event(req).await,
             "browser.request" => self.handle_browser_request(req).await,
+            "exec.approvals.get" => self.handle_exec_approvals_get(req).await,
+            "exec.approvals.set" => self.handle_exec_approvals_set(req).await,
+            "exec.approvals.node.get" => self.handle_exec_approvals_node_get(req).await,
+            "exec.approvals.node.set" => self.handle_exec_approvals_node_set(req).await,
             "config.get" => self.handle_config_get(req).await,
             "config.set" => self.handle_config_set(req).await,
             "config.patch" => self.handle_config_patch(req).await,
@@ -2427,6 +2465,101 @@ impl RpcDispatcher {
                 "query": query
             })),
         }
+    }
+
+    async fn handle_exec_approvals_get(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<ExecApprovalsGetParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!(
+                "invalid exec.approvals.get params: {err}"
+            ));
+        }
+        let snapshot = self.exec_approvals.get_global().await;
+        RpcDispatchOutcome::Handled(json!(snapshot))
+    }
+
+    async fn handle_exec_approvals_set(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ExecApprovalsSetParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid exec.approvals.set params: {err}"
+                ));
+            }
+        };
+        let Some(file) = params.file else {
+            return RpcDispatchOutcome::bad_request("exec approvals file is required");
+        };
+        if !file.is_object() {
+            return RpcDispatchOutcome::bad_request("exec approvals file is required");
+        }
+        let snapshot = match self.exec_approvals.set_global(file, params.base_hash).await {
+            Ok(value) => value,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        RpcDispatchOutcome::Handled(json!(snapshot))
+    }
+
+    async fn handle_exec_approvals_node_get(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ExecApprovalsNodeGetParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid exec.approvals.node.get params: {err}"
+                ));
+            }
+        };
+        let Some(node_id) = normalize_optional_text(Some(params.node_id), 128) else {
+            return RpcDispatchOutcome::bad_request("nodeId required");
+        };
+        if self.nodes.paired_node(&node_id).await.is_none() {
+            return RpcDispatchOutcome::Error {
+                code: 503,
+                message: "node not connected".to_owned(),
+                details: Some(json!({
+                    "code": "NOT_CONNECTED"
+                })),
+            };
+        }
+        let snapshot = self.exec_approvals.get_node(&node_id).await;
+        RpcDispatchOutcome::Handled(json!(snapshot))
+    }
+
+    async fn handle_exec_approvals_node_set(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ExecApprovalsNodeSetParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid exec.approvals.node.set params: {err}"
+                ));
+            }
+        };
+        let Some(node_id) = normalize_optional_text(Some(params.node_id), 128) else {
+            return RpcDispatchOutcome::bad_request("nodeId required");
+        };
+        let Some(file) = params.file else {
+            return RpcDispatchOutcome::bad_request("exec approvals file is required");
+        };
+        if !file.is_object() {
+            return RpcDispatchOutcome::bad_request("exec approvals file is required");
+        }
+        if self.nodes.paired_node(&node_id).await.is_none() {
+            return RpcDispatchOutcome::Error {
+                code: 503,
+                message: "node not connected".to_owned(),
+                details: Some(json!({
+                    "code": "NOT_CONNECTED"
+                })),
+            };
+        }
+        let snapshot = match self
+            .exec_approvals
+            .set_node(&node_id, file, params.base_hash)
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        RpcDispatchOutcome::Handled(json!(snapshot))
     }
 
     async fn handle_config_get(&self, _req: &RpcRequestFrame) -> RpcDispatchOutcome {
@@ -5673,6 +5806,256 @@ fn next_node_invoke_id() -> String {
     format!("node-invoke-{}-{sequence}", now_ms())
 }
 
+struct ExecApprovalsRegistry {
+    state: Mutex<ExecApprovalsState>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecApprovalsState {
+    global: ExecApprovalsSnapshotState,
+    node_by_id: HashMap<String, ExecApprovalsSnapshotState>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecApprovalsSnapshotState {
+    path: String,
+    exists: bool,
+    file: Value,
+    hash: String,
+    updated_at_ms: u64,
+}
+
+impl ExecApprovalsSnapshotState {
+    fn default_global() -> Self {
+        Self::new(
+            EXEC_APPROVALS_GLOBAL_PATH.to_owned(),
+            default_exec_approvals_file(),
+            true,
+        )
+    }
+
+    fn default_for_node(node_id: &str) -> Self {
+        Self::new(
+            format!("memory://nodes/{node_id}/exec-approvals.json"),
+            default_exec_approvals_file(),
+            true,
+        )
+    }
+
+    fn new(path: String, file: Value, exists: bool) -> Self {
+        Self {
+            path,
+            exists,
+            hash: hash_json_value(&file),
+            file,
+            updated_at_ms: now_ms(),
+        }
+    }
+}
+
+impl ExecApprovalsRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ExecApprovalsState {
+                global: ExecApprovalsSnapshotState::default_global(),
+                node_by_id: HashMap::new(),
+            }),
+        }
+    }
+
+    async fn get_global(&self) -> Value {
+        let guard = self.state.lock().await;
+        exec_approvals_snapshot_payload(&guard.global)
+    }
+
+    async fn set_global(&self, file: Value, base_hash: Option<String>) -> Result<Value, String> {
+        let mut guard = self.state.lock().await;
+        require_exec_approvals_base_hash(base_hash, &guard.global)?;
+        let next_file = normalize_exec_approvals_file(file, Some(&guard.global.file));
+        guard.global.file = next_file;
+        guard.global.hash = hash_json_value(&guard.global.file);
+        guard.global.exists = true;
+        guard.global.updated_at_ms = now_ms();
+        Ok(exec_approvals_snapshot_payload(&guard.global))
+    }
+
+    async fn get_node(&self, node_id: &str) -> Value {
+        let mut guard = self.state.lock().await;
+        let snapshot = guard
+            .node_by_id
+            .entry(node_id.to_owned())
+            .or_insert_with(|| ExecApprovalsSnapshotState::default_for_node(node_id));
+        snapshot.updated_at_ms = now_ms();
+        let payload = exec_approvals_snapshot_payload(snapshot);
+        prune_oldest_exec_approvals_nodes(&mut guard.node_by_id, MAX_EXEC_APPROVALS_NODE_SNAPSHOTS);
+        payload
+    }
+
+    async fn set_node(
+        &self,
+        node_id: &str,
+        file: Value,
+        base_hash: Option<String>,
+    ) -> Result<Value, String> {
+        let mut guard = self.state.lock().await;
+        let payload = {
+            let snapshot = guard
+                .node_by_id
+                .entry(node_id.to_owned())
+                .or_insert_with(|| ExecApprovalsSnapshotState::default_for_node(node_id));
+            require_exec_approvals_base_hash(base_hash, snapshot)?;
+            let next_file = normalize_exec_approvals_file(file, Some(&snapshot.file));
+            snapshot.file = next_file;
+            snapshot.hash = hash_json_value(&snapshot.file);
+            snapshot.exists = true;
+            snapshot.updated_at_ms = now_ms();
+            exec_approvals_snapshot_payload(snapshot)
+        };
+        prune_oldest_exec_approvals_nodes(&mut guard.node_by_id, MAX_EXEC_APPROVALS_NODE_SNAPSHOTS);
+        Ok(payload)
+    }
+}
+
+fn exec_approvals_snapshot_payload(snapshot: &ExecApprovalsSnapshotState) -> Value {
+    let mut file = snapshot.file.clone();
+    if let Some(map) = file.as_object_mut() {
+        let socket_path = map
+            .get("socket")
+            .and_then(Value::as_object)
+            .and_then(|socket| socket.get("path"))
+            .and_then(Value::as_str)
+            .and_then(|value| normalize_optional_text(Some(value.to_owned()), 1_024));
+        match socket_path {
+            Some(path) => {
+                map.insert("socket".to_owned(), json!({ "path": path }));
+            }
+            None => {
+                map.remove("socket");
+            }
+        }
+    }
+    json!({
+        "path": snapshot.path,
+        "exists": snapshot.exists,
+        "hash": snapshot.hash,
+        "file": file
+    })
+}
+
+fn require_exec_approvals_base_hash(
+    base_hash: Option<String>,
+    snapshot: &ExecApprovalsSnapshotState,
+) -> Result<(), String> {
+    if !snapshot.exists {
+        return Ok(());
+    }
+    let Some(snapshot_hash) = normalize_optional_text(Some(snapshot.hash.clone()), 128) else {
+        return Err(
+            "exec approvals base hash unavailable; re-run exec.approvals.get and retry".to_owned(),
+        );
+    };
+    let Some(base_hash) = normalize_optional_text(base_hash, 128) else {
+        return Err(
+            "exec approvals base hash required; re-run exec.approvals.get and retry".to_owned(),
+        );
+    };
+    if !base_hash.eq_ignore_ascii_case(&snapshot_hash) {
+        return Err(
+            "exec approvals changed since last load; re-run exec.approvals.get and retry"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn normalize_exec_approvals_file(incoming: Value, current: Option<&Value>) -> Value {
+    let mut normalized = if incoming.is_object() {
+        incoming
+    } else {
+        json!({})
+    };
+
+    let current_socket = current
+        .and_then(|value| value.get("socket"))
+        .and_then(Value::as_object);
+    let current_socket_path = current_socket
+        .and_then(|socket| socket.get("path"))
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_optional_text(Some(value.to_owned()), 1_024));
+    let current_token = current_socket
+        .and_then(|socket| socket.get("token"))
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_optional_text(Some(value.to_owned()), 512));
+
+    let Some(map) = normalized.as_object_mut() else {
+        return default_exec_approvals_file();
+    };
+    map.insert("version".to_owned(), json!(1));
+    if !matches!(map.get("agents"), Some(Value::Object(_))) {
+        map.insert("agents".to_owned(), json!({}));
+    }
+
+    let incoming_socket = map.get("socket").and_then(Value::as_object);
+    let socket_path = incoming_socket
+        .and_then(|socket| socket.get("path"))
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_optional_text(Some(value.to_owned()), 1_024))
+        .or(current_socket_path)
+        .unwrap_or_else(|| EXEC_APPROVALS_SOCKET_PATH.to_owned());
+    let token = incoming_socket
+        .and_then(|socket| socket.get("token"))
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_optional_text(Some(value.to_owned()), 512))
+        .or(current_token)
+        .unwrap_or_else(next_exec_approvals_token);
+    map.insert(
+        "socket".to_owned(),
+        json!({
+            "path": socket_path,
+            "token": token
+        }),
+    );
+
+    normalized
+}
+
+fn default_exec_approvals_file() -> Value {
+    json!({
+        "version": 1,
+        "socket": {
+            "path": EXEC_APPROVALS_SOCKET_PATH,
+            "token": next_exec_approvals_token()
+        },
+        "agents": {}
+    })
+}
+
+fn next_exec_approvals_token() -> String {
+    use sha2::{Digest, Sha256};
+    let sequence = EXEC_APPROVAL_TOKEN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let mut hasher = Sha256::new();
+    hasher.update(now_ms().to_le_bytes());
+    hasher.update(sequence.to_le_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    format!("eat_{}", &digest[..48])
+}
+
+fn prune_oldest_exec_approvals_nodes(
+    node_by_id: &mut HashMap<String, ExecApprovalsSnapshotState>,
+    max_snapshots: usize,
+) {
+    while node_by_id.len() > max_snapshots {
+        let Some(oldest_key) = node_by_id
+            .iter()
+            .min_by_key(|(_, snapshot)| snapshot.updated_at_ms)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        let _ = node_by_id.remove(&oldest_key);
+    }
+}
+
 struct DeviceRegistry {
     state: Mutex<DevicePairState>,
 }
@@ -8800,6 +9183,35 @@ struct NodeEventParams {
     payload: Option<Value>,
     #[serde(rename = "payloadJSON", alias = "payload_json")]
     payload_json: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ExecApprovalsGetParams {}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecApprovalsSetParams {
+    file: Option<Value>,
+    #[serde(rename = "baseHash", alias = "base_hash")]
+    base_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecApprovalsNodeGetParams {
+    #[serde(rename = "nodeId", alias = "node_id")]
+    node_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecApprovalsNodeSetParams {
+    #[serde(rename = "nodeId", alias = "node_id")]
+    node_id: String,
+    file: Option<Value>,
+    #[serde(rename = "baseHash", alias = "base_hash")]
+    base_hash: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -14050,6 +14462,280 @@ mod tests {
             }
             _ => panic!("expected node.event handled"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_exec_approvals_methods_follow_parity_contract() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid_get = RpcRequestFrame {
+            id: "req-exec-approvals-get-invalid".to_owned(),
+            method: "exec.approvals.get".to_owned(),
+            params: serde_json::json!({
+                "extra": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_get).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let get = RpcRequestFrame {
+            id: "req-exec-approvals-get".to_owned(),
+            method: "exec.approvals.get".to_owned(),
+            params: serde_json::json!({}),
+        };
+        let global_hash = match dispatcher.handle_request(&get).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/path").and_then(serde_json::Value::as_str),
+                    Some(super::EXEC_APPROVALS_GLOBAL_PATH)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/exists")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/file/version")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                assert!(payload.pointer("/file/socket/token").is_none());
+                payload
+                    .pointer("/hash")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("exec approvals hash")
+            }
+            _ => panic!("expected exec.approvals.get handled"),
+        };
+
+        let set_missing_base_hash = RpcRequestFrame {
+            id: "req-exec-approvals-set-no-base".to_owned(),
+            method: "exec.approvals.set".to_owned(),
+            params: serde_json::json!({
+                "file": {
+                    "version": 1,
+                    "agents": {}
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&set_missing_base_hash).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let set_stale_hash = RpcRequestFrame {
+            id: "req-exec-approvals-set-stale".to_owned(),
+            method: "exec.approvals.set".to_owned(),
+            params: serde_json::json!({
+                "baseHash": "stale",
+                "file": {
+                    "version": 1,
+                    "agents": {}
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&set_stale_hash).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let set = RpcRequestFrame {
+            id: "req-exec-approvals-set".to_owned(),
+            method: "exec.approvals.set".to_owned(),
+            params: serde_json::json!({
+                "baseHash": global_hash,
+                "file": {
+                    "version": 1,
+                    "defaults": {
+                        "security": "allowlist",
+                        "ask": "on-miss"
+                    },
+                    "agents": {
+                        "main": {
+                            "allowlist": [
+                                { "pattern": "git status" }
+                            ]
+                        }
+                    }
+                }
+            }),
+        };
+        let updated_global_hash = match dispatcher.handle_request(&set).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/file/defaults/security")
+                        .and_then(serde_json::Value::as_str),
+                    Some("allowlist")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/file/agents/main/allowlist/0/pattern")
+                        .and_then(serde_json::Value::as_str),
+                    Some("git status")
+                );
+                assert!(payload.pointer("/file/socket/token").is_none());
+                payload
+                    .pointer("/hash")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("updated exec approvals hash")
+            }
+            _ => panic!("expected exec.approvals.set handled"),
+        };
+
+        let disconnected_node_get = RpcRequestFrame {
+            id: "req-exec-approvals-node-get-disconnected".to_owned(),
+            method: "exec.approvals.node.get".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-exec-missing"
+            }),
+        };
+        match dispatcher.handle_request(&disconnected_node_get).await {
+            RpcDispatchOutcome::Error { code, details, .. } => {
+                assert_eq!(code, 503);
+                assert_eq!(
+                    details
+                        .as_ref()
+                        .and_then(|value| value.pointer("/code"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("NOT_CONNECTED")
+                );
+            }
+            _ => panic!("expected exec.approvals.node.get unavailable"),
+        }
+
+        let pair_request = RpcRequestFrame {
+            id: "req-exec-approvals-node-pair-request".to_owned(),
+            method: "node.pair.request".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-exec-1"
+            }),
+        };
+        let request_id = match dispatcher.handle_request(&pair_request).await {
+            RpcDispatchOutcome::Handled(payload) => payload
+                .pointer("/request/requestId")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .expect("node pair request id"),
+            _ => panic!("expected node.pair.request handled"),
+        };
+        let pair_approve = RpcRequestFrame {
+            id: "req-exec-approvals-node-pair-approve".to_owned(),
+            method: "node.pair.approve".to_owned(),
+            params: serde_json::json!({
+                "requestId": request_id
+            }),
+        };
+        let out = dispatcher.handle_request(&pair_approve).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let node_get = RpcRequestFrame {
+            id: "req-exec-approvals-node-get".to_owned(),
+            method: "exec.approvals.node.get".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-exec-1"
+            }),
+        };
+        let node_hash = match dispatcher.handle_request(&node_get).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/path").and_then(serde_json::Value::as_str),
+                    Some("memory://nodes/node-exec-1/exec-approvals.json")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/file/version")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                assert!(payload.pointer("/file/socket/token").is_none());
+                payload
+                    .pointer("/hash")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("node exec approvals hash")
+            }
+            _ => panic!("expected exec.approvals.node.get handled"),
+        };
+
+        let node_set_missing_base_hash = RpcRequestFrame {
+            id: "req-exec-approvals-node-set-no-base".to_owned(),
+            method: "exec.approvals.node.set".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-exec-1",
+                "file": {
+                    "version": 1,
+                    "agents": {}
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&node_set_missing_base_hash).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let node_set = RpcRequestFrame {
+            id: "req-exec-approvals-node-set".to_owned(),
+            method: "exec.approvals.node.set".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-exec-1",
+                "baseHash": node_hash,
+                "file": {
+                    "version": 1,
+                    "agents": {
+                        "main": {
+                            "allowlist": [
+                                { "pattern": "cargo test" }
+                            ]
+                        }
+                    }
+                }
+            }),
+        };
+        let updated_node_hash = match dispatcher.handle_request(&node_set).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/file/agents/main/allowlist/0/pattern")
+                        .and_then(serde_json::Value::as_str),
+                    Some("cargo test")
+                );
+                assert!(payload.pointer("/file/socket/token").is_none());
+                payload
+                    .pointer("/hash")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("updated node exec approvals hash")
+            }
+            _ => panic!("expected exec.approvals.node.set handled"),
+        };
+
+        assert_ne!(updated_global_hash, updated_node_hash);
+
+        let node_set_stale_hash = RpcRequestFrame {
+            id: "req-exec-approvals-node-set-stale".to_owned(),
+            method: "exec.approvals.node.set".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-exec-1",
+                "baseHash": "stale",
+                "file": {
+                    "version": 1,
+                    "agents": {}
+                }
+            }),
+        };
+        let out = dispatcher.handle_request(&node_set_stale_hash).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let node_set_non_object = RpcRequestFrame {
+            id: "req-exec-approvals-node-set-non-object".to_owned(),
+            method: "exec.approvals.node.set".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-exec-1",
+                "baseHash": updated_node_hash,
+                "file": "invalid"
+            }),
+        };
+        let out = dispatcher.handle_request(&node_set_non_object).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
     }
 
     #[tokio::test]
