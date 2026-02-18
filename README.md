@@ -475,6 +475,10 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 
 - [docs.openclaw.ai/gmail-pubsub](https://docs.openclaw.ai/automation/gmail-pubsub)
 
+## Built with OpenClaw
+
+- **[AgentFlow](https://agentflow.frexida.com)** — Visual AI agent organization designer. Drag-and-drop org chart editor → OpenClaw config export. Design multi-agent teams visually, then deploy in one click. ([GitHub](https://github.com/Frexida/agentflow))
+
 ## Molty
 
 OpenClaw was built for **Molty**, a space lobster AI assistant. 🦞
