@@ -23,7 +23,6 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-
 function makeFallbacksOnlyCfg(): OpenClawConfig {
   return {
     agents: {
