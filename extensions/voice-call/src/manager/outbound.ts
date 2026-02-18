@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { CallMode } from "../config.js";
+import type { CallManagerContext } from "./context.js";
 import {
   TerminalStates,
   type CallId,
@@ -7,7 +8,6 @@ import {
   type OutboundCallOptions,
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
-import type { CallManagerContext } from "./context.js";
 import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
