@@ -62,7 +62,7 @@ import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../workspace.js";
 import { buildSdkHooks } from "./hook-bridge.js";
 import { buildOpenClawMcpServer } from "./mcp-tool-adapter.js";
-import { loadSdkSessionId, storeSdkSessionId } from "./session-bridge.js";
+import { clearSdkSessionId, loadSdkSessionId, storeSdkSessionId } from "./session-bridge.js";
 import { consumeSdkStream } from "./stream-adapter.js";
 import { isSdkBuiltinTool } from "./types.js";
 
@@ -402,6 +402,7 @@ export async function runSdkAttempt(
     }
 
     // ── Call SDK query() ─────────────────────────────────────────────
+    const stderrChunks: string[] = [];
     try {
       // Emit lifecycle start so the gateway's agent event handler can
       // track this run and deliver streaming chat events to WebChat clients.
@@ -413,6 +414,17 @@ export async function runSdkAttempt(
           startedAt: Date.now(),
         },
       });
+      // Build a clean env for the SDK child process.  The SDK copies
+      // `process.env` by default, but if OpenClaw was launched from inside a
+      // Claude Code session the `CLAUDECODE` variable will be inherited,
+      // causing the child Claude Code process to refuse to start ("nested
+      // session" guard).  Strip it so the SDK-spawned process runs cleanly.
+      const sdkEnv: Record<string, string> = {};
+      for (const [k, v] of Object.entries(process.env)) {
+        if (k !== "CLAUDECODE" && v !== undefined) {
+          sdkEnv[k] = v;
+        }
+      }
 
       const q = query({
         prompt: params.prompt,
@@ -431,6 +443,10 @@ export async function runSdkAttempt(
           abortController: runAbortController,
           persistSession: true,
           settingSources: [],
+          env: sdkEnv,
+          stderr: (data: string) => {
+            stderrChunks.push(data);
+          },
         },
       });
 
@@ -452,9 +468,13 @@ export async function runSdkAttempt(
         abortSignal: runAbortController.signal,
       });
 
-      // Store SDK session ID for future resume
-      if (result.sessionId) {
+      // Store SDK session ID for future resume — but only on success.
+      // If the run errored, the session may be in a bad state and resuming
+      // it on the next attempt would immediately fail again.
+      if (result.sessionId && !result.error) {
         storeSdkSessionId(params.sessionFile, result.sessionId);
+      } else if (result.error) {
+        clearSdkSessionId(params.sessionFile);
       }
 
       clearTimeout(timeoutTimer);
@@ -473,17 +493,22 @@ export async function runSdkAttempt(
 
       // Emit lifecycle end/error so the gateway finalizes the webchat response.
       if (result.error) {
+        const sdkErrMsg =
+          result.error instanceof Error
+            ? result.error.message
+            : typeof result.error === "string"
+              ? result.error
+              : "SDK run failed";
+        const stderrText = stderrChunks.join("").trim();
+        log.error(
+          `sdk run failed: runId=${params.runId} error=${sdkErrMsg}${stderrText ? ` stderr=${stderrText.slice(0, 500)}` : " (no stderr captured)"}`,
+        );
         emitAgentEvent({
           runId: params.runId,
           stream: "lifecycle",
           data: {
             phase: "error",
-            error:
-              result.error instanceof Error
-                ? result.error.message
-                : typeof result.error === "string"
-                  ? result.error
-                  : "SDK run failed",
+            error: sdkErrMsg,
             endedAt: Date.now(),
           },
         });
@@ -522,13 +547,27 @@ export async function runSdkAttempt(
     } catch (err) {
       clearTimeout(timeoutTimer);
 
+      // Clear stale session so the next attempt starts fresh.
+      clearSdkSessionId(params.sessionFile);
+
+      const stderrText = stderrChunks.join("").trim();
+      const errMsg = err instanceof Error ? err.message : String(err);
+
+      // Always log to stderr for diagnostics so operators can see why Claude Code crashed.
+      if (stderrText) {
+        log.warn(`sdk stderr output:\n${stderrText}`);
+      }
+      log.error(
+        `sdk run error: runId=${params.runId} error=${errMsg}${stderrText ? ` stderr=${stderrText.slice(0, 500)}` : ""}`,
+      );
+
       // Emit lifecycle error so the gateway finalizes the webchat response.
       emitAgentEvent({
         runId: params.runId,
         stream: "lifecycle",
         data: {
           phase: "error",
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg,
           endedAt: Date.now(),
         },
       });
