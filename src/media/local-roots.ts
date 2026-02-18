@@ -6,13 +6,20 @@ import { resolveStateDir } from "../config/paths.js";
 
 function buildMediaLocalRoots(stateDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
-  return [
+  const roots = [
     os.tmpdir(),
     path.join(resolvedStateDir, "media"),
     path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
     path.join(resolvedStateDir, "sandboxes"),
   ];
+  // On macOS, $TMPDIR is the per-user temp dir (e.g. /var/folders/.../T/) which
+  // differs from os.tmpdir() (/tmp). TTS and other modules may write to either.
+  const envTmpdir = process.env.TMPDIR;
+  if (envTmpdir && envTmpdir !== os.tmpdir()) {
+    roots.push(envTmpdir);
+  }
+  return roots;
 }
 
 export function getDefaultMediaLocalRoots(): readonly string[] {

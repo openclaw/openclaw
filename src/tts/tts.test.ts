@@ -222,6 +222,7 @@ describe("tts", () => {
       const result = parseTtsDirectives(input, policy);
 
       expect(result.cleanedText).not.toContain("[[tts:");
+      expect(result.cleanedText).not.toContain("[[/tts:");
       expect(result.ttsText).toBe("(laughs) Read the song once more.");
       expect(result.overrides.provider).toBe("elevenlabs");
       expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
@@ -235,6 +236,25 @@ describe("tts", () => {
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("strips orphan [[/tts:text]] closing tags", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "[[tts:stability=0.5 style=0.5]] Hello world [[/tts:text]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.cleanedText.trim()).toBe("Hello world");
+      expect(result.cleanedText).not.toContain("[[/tts:text]]");
+    });
+
+    it("strips orphan closing tags mid-text", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input =
+        "First part [[/tts:text]] second part [[tts:speed=1.2]] third part [[/tts:text]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.cleanedText.trim()).toBe("First part  second part  third part");
+      expect(result.cleanedText).not.toContain("[[/tts:");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -545,6 +565,71 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+
+    it("strips TTS directive tags from visible text even when auto mode is off", async () => {
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+
+      const cfg = {
+        ...baseCfg,
+        messages: {
+          ...baseCfg.messages,
+          tts: { ...baseCfg.messages.tts, auto: "off" },
+        },
+      };
+
+      const payload = {
+        text: "Hello [[tts:stability=0.4 style=0.7]] world",
+      };
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        kind: "final",
+      });
+
+      expect(result.text).not.toContain("[[tts:");
+      expect(result.text).toBe("Hello  world");
+
+      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+    });
+
+    it("strips inline directive tags before TTS synthesis", async () => {
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      let capturedBody: string | undefined;
+      const fetchMock = vi.fn(async (_url: string, init?: { body?: string }) => {
+        if (init?.body) {
+          capturedBody = init.body;
+        }
+        return {
+          ok: true,
+          arrayBuffer: async () => new ArrayBuffer(1),
+        };
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await maybeApplyTtsToPayload({
+        payload: {
+          text: "[[reply_to_current]] [[audio_as_voice]] The weather today is sunny and warm.",
+        },
+        cfg: baseCfg,
+        kind: "final",
+        inboundAudio: true,
+      });
+
+      // The fetch should have been called (TTS attempted)
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // The directive tags should NOT appear in the TTS request body
+      if (capturedBody) {
+        expect(capturedBody).not.toContain("reply_to_current");
+        expect(capturedBody).not.toContain("audio_as_voice");
+        expect(capturedBody).toContain("weather today is sunny");
+      }
+
+      globalThis.fetch = originalFetch;
+      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
     });
   });
 });

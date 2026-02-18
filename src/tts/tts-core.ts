@@ -118,6 +118,9 @@ export function parseTtsDirectives(
     return "";
   });
 
+  // Strip orphan closing tags that weren't matched by the block regex
+  cleanedText = cleanedText.replace(/\[\[\/tts:\w+\]\]/gi, "");
+
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;

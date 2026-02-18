@@ -413,4 +413,24 @@ describe("local media root guard", () => {
       }),
     );
   });
+
+  it("allows files under $TMPDIR when it differs from os.tmpdir()", async () => {
+    // Simulate macOS where $TMPDIR is /var/folders/.../T/ but os.tmpdir() is /tmp
+    const realTmpdir = process.env.TMPDIR;
+    const customTmpdir = os.tmpdir(); // use the same dir for a writable path
+    process.env.TMPDIR = customTmpdir;
+
+    const pngBuffer = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: "#0000ff" },
+    })
+      .png()
+      .toBuffer();
+    const file = await writeTempFile(pngBuffer, ".png");
+
+    // Default roots (no explicit localRoots) should allow the file
+    const result = await loadWebMedia(file, 1024 * 1024);
+    expect(result.kind).toBe("image");
+
+    process.env.TMPDIR = realTmpdir;
+  });
 });
