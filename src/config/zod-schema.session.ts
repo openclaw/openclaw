@@ -2,6 +2,7 @@ import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
+import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
   InboundDebounceSchema,
@@ -18,36 +19,7 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
-export const SessionSendPolicySchema = z
-  .object({
-    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
-    rules: z
-      .array(
-        z
-          .object({
-            action: z.union([z.literal("allow"), z.literal("deny")]),
-            match: z
-              .object({
-                channel: z.string().optional(),
-                chatType: z
-                  .union([
-                    z.literal("direct"),
-                    z.literal("group"),
-                    z.literal("channel"),
-                    /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-                    z.literal("dm"),
-                  ])
-                  .optional(),
-                keyPrefix: z.string().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict(),
-      )
-      .optional(),
-  })
-  .strict();
+export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
   .object({
@@ -142,6 +114,7 @@ export const MessagesSchema = z
     ackReaction: z.string().optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
+    suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })
   .strict()

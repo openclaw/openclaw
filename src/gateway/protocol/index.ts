@@ -44,6 +44,10 @@ import {
   AgentWaitParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
+  type TalkConfigParams,
+  TalkConfigParamsSchema,
+  type TalkConfigResult,
+  TalkConfigResultSchema,
   type ChannelsStatusParams,
   ChannelsStatusParamsSchema,
   type ChannelsStatusResult,
@@ -91,6 +95,8 @@ import {
   DevicePairApproveParamsSchema,
   type DevicePairListParams,
   DevicePairListParamsSchema,
+  type DevicePairRemoveParams,
+  DevicePairRemoveParamsSchema,
   type DevicePairRejectParams,
   DevicePairRejectParamsSchema,
   type DeviceTokenRevokeParams,
@@ -300,6 +306,7 @@ export const validateWizardNextParams = ajv.compile<WizardNextParams>(WizardNext
 export const validateWizardCancelParams = ajv.compile<WizardCancelParams>(WizardCancelParamsSchema);
 export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(WizardStatusParamsSchema);
 export const validateTalkModeParams = ajv.compile<TalkModeParams>(TalkModeParamsSchema);
+export const validateTalkConfigParams = ajv.compile<TalkConfigParams>(TalkConfigParamsSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
@@ -327,6 +334,9 @@ export const validateDevicePairApproveParams = ajv.compile<DevicePairApprovePara
 );
 export const validateDevicePairRejectParams = ajv.compile<DevicePairRejectParams>(
   DevicePairRejectParamsSchema,
+);
+export const validateDevicePairRemoveParams = ajv.compile<DevicePairRemoveParams>(
+  DevicePairRemoveParamsSchema,
 );
 export const validateDeviceTokenRotateParams = ajv.compile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
@@ -446,6 +456,8 @@ export {
   WizardNextResultSchema,
   WizardStartResultSchema,
   WizardStatusResultSchema,
+  TalkConfigParamsSchema,
+  TalkConfigResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsLogoutParamsSchema,
@@ -532,6 +544,8 @@ export type {
   WizardNextResult,
   WizardStartResult,
   WizardStatusResult,
+  TalkConfigParams,
+  TalkConfigResult,
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,

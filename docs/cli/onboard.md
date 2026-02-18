@@ -26,6 +26,36 @@ openclaw onboard --flow manual
 openclaw onboard --mode remote --remote-url ws://gateway-host:18789
 ```
 
+Non-interactive custom provider:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice custom-api-key \
+  --custom-base-url "https://llm.example.com/v1" \
+  --custom-model-id "foo-large" \
+  --custom-api-key "$CUSTOM_API_KEY" \
+  --custom-compatibility openai
+```
+
+`--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
+
+Non-interactive Z.AI endpoint choices:
+
+Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5`).
+If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
+
+```bash
+# Promptless endpoint selection
+openclaw onboard --non-interactive \
+  --auth-choice zai-coding-global \
+  --zai-api-key "$ZAI_API_KEY"
+
+# Other Z.AI endpoint choices:
+# --auth-choice zai-coding-cn
+# --auth-choice zai-global
+# --auth-choice zai-cn
+```
+
 Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.

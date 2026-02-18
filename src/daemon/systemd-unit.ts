@@ -1,3 +1,5 @@
+import { splitArgsPreservingQuotes } from "./arg-split.js";
+
 function systemdEscapeArg(value: string): string {
   if (!/[\\s"\\\\]/.test(value)) {
     return value;
@@ -63,38 +65,7 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let inQuotes = false;
-  let escapeNext = false;
-
-  for (const char of value) {
-    if (escapeNext) {
-      current += char;
-      escapeNext = false;
-      continue;
-    }
-    if (char === "\\\\") {
-      escapeNext = true;
-      continue;
-    }
-    if (char === '"') {
-      inQuotes = !inQuotes;
-      continue;
-    }
-    if (!inQuotes && /\s/.test(char)) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (current) {
-    args.push(current);
-  }
-  return args;
+  return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
 export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {

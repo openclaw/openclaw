@@ -8,8 +8,11 @@ import {
   type SelectListTheme,
   truncateToWidth,
 } from "@mariozechner/pi-tui";
-import { visibleWidth } from "../../terminal/ansi.js";
-import { findWordBoundaryIndex, fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";
+import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
+import { findWordBoundaryIndex, fuzzyFilterLower } from "./fuzzy-filter.js";
+
+const ANSI_ESCAPE = String.fromCharCode(27);
+const ANSI_SGR_REGEX = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, "g");
 
 export interface SearchableSelectListTheme extends SelectListTheme {
   searchPrompt: (text: string) => string;
@@ -32,6 +35,12 @@ export class SearchableSelectList implements Component {
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
   onSelectionChange?: (item: SelectItem) => void;
+
+  private static readonly DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
+  private static readonly DESCRIPTION_MIN_WIDTH = 12;
+  private static readonly DESCRIPTION_SPACING_WIDTH = 2;
+  // Keep a small right margin so we don't risk wrapping due to styling/terminal quirks.
+  private static readonly RIGHT_MARGIN_WIDTH = 2;
 
   constructor(items: SelectItem[], maxVisible: number, theme: SearchableSelectListTheme) {
     this.items = items;
@@ -74,12 +83,15 @@ export class SearchableSelectList implements Component {
   private smartFilter(query: string): SelectItem[] {
     const q = query.toLowerCase();
     type ScoredItem = { item: SelectItem; tier: number; score: number };
+    type FuzzyCandidate = { item: SelectItem; searchTextLower: string };
     const scoredItems: ScoredItem[] = [];
-    const fuzzyCandidates: SelectItem[] = [];
+    const fuzzyCandidates: FuzzyCandidate[] = [];
 
     for (const item of this.items) {
-      const label = item.label.toLowerCase();
-      const desc = (item.description ?? "").toLowerCase();
+      const rawLabel = this.getItemLabel(item);
+      const rawDesc = item.description ?? "";
+      const label = stripAnsi(rawLabel).toLowerCase();
+      const desc = stripAnsi(rawDesc).toLowerCase();
 
       // Tier 1: Exact substring in label
       const labelIndex = label.indexOf(q);
@@ -100,15 +112,20 @@ export class SearchableSelectList implements Component {
         continue;
       }
       // Tier 4: Fuzzy match (score 300+)
-      fuzzyCandidates.push(item);
+      const searchText = (item as { searchText?: string }).searchText ?? "";
+      fuzzyCandidates.push({
+        item,
+        searchTextLower: [rawLabel, rawDesc, searchText]
+          .map((value) => stripAnsi(value))
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase(),
+      });
     }
 
     scoredItems.sort(this.compareByScore);
-
-    const preparedCandidates = prepareSearchItems(fuzzyCandidates);
-    const fuzzyMatches = fuzzyFilterLower(preparedCandidates, q);
-
-    return [...scoredItems.map((s) => s.item), ...fuzzyMatches];
+    const fuzzyMatches = fuzzyFilterLower(fuzzyCandidates, q);
+    return [...scoredItems.map((s) => s.item), ...fuzzyMatches.map((entry) => entry.item)];
   }
 
   private escapeRegex(str: string): string {
@@ -132,6 +149,25 @@ export class SearchableSelectList implements Component {
     return item.label || item.value;
   }
 
+  private splitAnsiParts(text: string): Array<{ text: string; isAnsi: boolean }> {
+    const parts: Array<{ text: string; isAnsi: boolean }> = [];
+    ANSI_SGR_REGEX.lastIndex = 0;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = ANSI_SGR_REGEX.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ text: text.slice(lastIndex, match.index), isAnsi: false });
+      }
+      parts.push({ text: match[0], isAnsi: true });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < text.length) {
+      parts.push({ text: text.slice(lastIndex), isAnsi: false });
+    }
+    return parts;
+  }
+
   private highlightMatch(text: string, query: string): string {
     const tokens = query
       .trim()
@@ -143,12 +179,26 @@ export class SearchableSelectList implements Component {
     }
 
     const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
-    let result = text;
+    let parts = this.splitAnsiParts(text);
     for (const token of uniqueTokens) {
       const regex = this.getCachedRegex(token);
-      result = result.replace(regex, (match) => this.theme.matchHighlight(match));
+      const nextParts: Array<{ text: string; isAnsi: boolean }> = [];
+      for (const part of parts) {
+        if (part.isAnsi) {
+          nextParts.push(part);
+          continue;
+        }
+        regex.lastIndex = 0;
+        const replaced = part.text.replace(regex, (match) => this.theme.matchHighlight(match));
+        if (replaced === part.text) {
+          nextParts.push(part);
+          continue;
+        }
+        nextParts.push(...this.splitAnsiParts(replaced));
+      }
+      parts = nextParts;
     }
-    return result;
+    return parts.map((part) => part.text).join("");
   }
 
   setSelectedIndex(index: number) {
@@ -218,21 +268,26 @@ export class SearchableSelectList implements Component {
     const prefixWidth = prefix.length;
     const displayValue = this.getItemLabel(item);
 
-    if (item.description && width > 40) {
-      const maxValueWidth = Math.min(30, width - prefixWidth - 4);
-      const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
-      const valueText = this.highlightMatch(truncatedValue, query);
-      const spacingWidth = Math.max(1, 32 - visibleWidth(valueText));
-      const spacing = " ".repeat(spacingWidth);
-      const descriptionStart = prefixWidth + visibleWidth(valueText) + spacing.length;
-      const remainingWidth = width - descriptionStart - 2;
-      if (remainingWidth > 10) {
-        const truncatedDesc = truncateToWidth(item.description, remainingWidth, "");
-        // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
-        const highlightedDesc = this.highlightMatch(truncatedDesc, query);
-        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
-        const line = `${prefix}${valueText}${spacing}${descText}`;
-        return isSelected ? this.theme.selectedText(line) : line;
+    const description = item.description;
+    if (description) {
+      const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
+      if (descriptionLayout) {
+        const truncatedValue = truncateToWidth(displayValue, descriptionLayout.maxValueWidth, "");
+        const valueText = this.highlightMatch(truncatedValue, query);
+
+        const usedByValue = visibleWidth(valueText);
+        const remainingWidth = descriptionLayout.availableWidth - usedByValue;
+        const descriptionWidth = remainingWidth - descriptionLayout.spacingWidth;
+
+        if (descriptionWidth >= SearchableSelectList.DESCRIPTION_MIN_WIDTH) {
+          const spacing = " ".repeat(descriptionLayout.spacingWidth);
+          const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
+          // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
+          const highlightedDesc = this.highlightMatch(truncatedDesc, query);
+          const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
+          const line = `${prefix}${valueText}${spacing}${descText}`;
+          return isSelected ? this.theme.selectedText(line) : line;
+        }
       }
     }
 
@@ -241,6 +296,34 @@ export class SearchableSelectList implements Component {
     const valueText = this.highlightMatch(truncatedValue, query);
     const line = `${prefix}${valueText}`;
     return isSelected ? this.theme.selectedText(line) : line;
+  }
+
+  private getDescriptionLayout(
+    width: number,
+    prefixWidth: number,
+  ): { availableWidth: number; maxValueWidth: number; spacingWidth: number } | null {
+    if (width <= SearchableSelectList.DESCRIPTION_LAYOUT_MIN_WIDTH) {
+      return null;
+    }
+
+    const availableWidth = Math.max(
+      1,
+      width - prefixWidth - SearchableSelectList.RIGHT_MARGIN_WIDTH,
+    );
+    const maxValueWidth =
+      availableWidth -
+      SearchableSelectList.DESCRIPTION_MIN_WIDTH -
+      SearchableSelectList.DESCRIPTION_SPACING_WIDTH;
+
+    if (maxValueWidth < 1) {
+      return null;
+    }
+
+    return {
+      availableWidth,
+      maxValueWidth,
+      spacingWidth: SearchableSelectList.DESCRIPTION_SPACING_WIDTH,
+    };
   }
 
   handleInput(keyData: string): void {

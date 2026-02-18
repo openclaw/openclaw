@@ -5,13 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
-import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
 import { detectMime, getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fetchWithTimeout } from "./providers/shared.js";
+import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 
 type MediaBufferResult = {
   buffer: Buffer;
@@ -182,6 +182,10 @@ export function selectAttachments(params: {
 }): MediaAttachment[] {
   const { capability, attachments, policy } = params;
   const matches = attachments.filter((item) => {
+    // Skip already-transcribed audio attachments from preflight
+    if (capability === "audio" && item.alreadyTranscribed) {
+      return false;
+    }
     if (capability === "image") {
       return isImageAttachment(item);
     }
