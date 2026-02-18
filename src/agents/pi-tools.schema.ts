@@ -122,6 +122,19 @@ export function normalizeToolParameters(
       ? "oneOf"
       : null;
   if (!variantKey) {
+    // Tools with `type: "object"` but no `properties` field are rejected by strict
+    // OpenAI-compatible providers (e.g. "properties field not found or is not a dictionary").
+    // Inject an empty properties object to satisfy the JSON Schema spec for object types.
+    if (schema.type === "object" && !("properties" in schema)) {
+      const schemaWithProps = { ...schema, properties: {} };
+      return {
+        ...tool,
+        parameters:
+          isGeminiProvider && !isAnthropicProvider
+            ? cleanSchemaForGemini(schemaWithProps)
+            : schemaWithProps,
+      };
+    }
     return tool;
   }
   const variants = schema[variantKey] as unknown[];
