@@ -1,4 +1,11 @@
-import { metrics, trace, SpanStatusCode } from "@opentelemetry/api";
+import {
+  context,
+  metrics,
+  trace,
+  SpanContext,
+  SpanStatusCode,
+  TraceFlags,
+} from "@opentelemetry/api";
 import type { SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
@@ -326,13 +333,28 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         name: string,
         attributes: Record<string, string | number>,
         durationMs?: number,
+        parentTraceContext?: { traceId: string; parentSpanId?: string },
       ) => {
         const startTime =
           typeof durationMs === "number" ? Date.now() - Math.max(0, durationMs) : undefined;
-        const span = tracer.startSpan(name, {
-          attributes,
-          ...(startTime ? { startTime } : {}),
-        });
+        let ctx = context.active();
+        if (parentTraceContext?.traceId && parentTraceContext.parentSpanId) {
+          const parentSpanContext: SpanContext = {
+            traceId: parentTraceContext.traceId,
+            spanId: parentTraceContext.parentSpanId,
+            traceFlags: TraceFlags.SAMPLED,
+            isRemote: true,
+          };
+          ctx = trace.setSpanContext(context.active(), parentSpanContext);
+        }
+        const span = tracer.startSpan(
+          name,
+          {
+            attributes,
+            ...(startTime ? { startTime } : {}),
+          },
+          ctx,
+        );
         return span;
       };
 
@@ -394,9 +416,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
+          // GenAI semantic convention attributes
+          "gen_ai.operation.name": "chat",
+          "gen_ai.system": evt.provider ?? "unknown",
+          "gen_ai.request.model": evt.model ?? "unknown",
+          "gen_ai.usage.input_tokens": usage.input ?? 0,
+          "gen_ai.usage.output_tokens": usage.output ?? 0,
         };
 
-        const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
+        const spanName = evt.model ? `chat ${evt.model}` : "chat unknown";
+        const parentTraceContext = evt.traceId
+          ? { traceId: evt.traceId, parentSpanId: evt.parentSpanId }
+          : undefined;
+        const span = spanWithDuration(spanName, spanAttrs, evt.durationMs, parentTraceContext);
         span.end();
       };
 
@@ -499,7 +531,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.reason) {
           spanAttrs["openclaw.reason"] = evt.reason;
         }
-        const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
+        const parentTraceContext = evt.traceId
+          ? { traceId: evt.traceId, parentSpanId: evt.parentSpanId }
+          : undefined;
+        const span = spanWithDuration(
+          "openclaw.message.processed",
+          spanAttrs,
+          evt.durationMs,
+          parentTraceContext,
+        );
         if (evt.outcome === "error") {
           span.setStatus({ code: SpanStatusCode.ERROR, message: evt.error });
         }

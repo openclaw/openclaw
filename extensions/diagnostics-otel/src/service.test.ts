@@ -37,9 +37,18 @@ vi.mock("@opentelemetry/api", () => ({
   },
   trace: {
     getTracer: () => telemetryState.tracer,
+    setSpanContext: (_ctx: unknown, _spanContext: unknown) => ({
+      __parentSpanContext: _spanContext,
+    }),
+  },
+  context: {
+    active: () => ({}),
   },
   SpanStatusCode: {
     ERROR: 2,
+  },
+  TraceFlags: {
+    SAMPLED: 1,
   },
 }));
 
@@ -224,6 +233,181 @@ describe("diagnostics-otel service", () => {
       _meta: { logLevelName: "INFO", date: new Date() },
     });
     expect(logEmit).toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+  });
+
+  test("model.usage spans include GenAI semantic convention attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4318",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: true,
+            logs: false,
+          },
+        },
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    };
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      channel: "telegram",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usage: { input: 500, output: 200, total: 700 },
+      durationMs: 3000,
+    });
+
+    const spanCalls = telemetryState.tracer.startSpan.mock.calls;
+    const modelCall = spanCalls.find((call) => String(call[0]).startsWith("chat "));
+    expect(modelCall).toBeDefined();
+    expect(modelCall![0]).toBe("chat claude-opus-4-6");
+
+    const spanAttrs = (modelCall![1] as { attributes?: Record<string, string | number> })
+      ?.attributes;
+    expect(spanAttrs).toBeDefined();
+    // GenAI convention attributes
+    expect(spanAttrs!["gen_ai.operation.name"]).toBe("chat");
+    expect(spanAttrs!["gen_ai.system"]).toBe("anthropic");
+    expect(spanAttrs!["gen_ai.request.model"]).toBe("claude-opus-4-6");
+    expect(spanAttrs!["gen_ai.usage.input_tokens"]).toBe(500);
+    expect(spanAttrs!["gen_ai.usage.output_tokens"]).toBe(200);
+    // Backwards-compatible openclaw.* attributes still present
+    expect(spanAttrs!["openclaw.provider"]).toBe("anthropic");
+    expect(spanAttrs!["openclaw.model"]).toBe("claude-opus-4-6");
+    expect(spanAttrs!["openclaw.tokens.input"]).toBe(500);
+    expect(spanAttrs!["openclaw.tokens.output"]).toBe(200);
+
+    await service.stop?.(ctx);
+  });
+
+  test("spans receive parent trace context when traceId is present", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4318",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: true,
+            logs: false,
+          },
+        },
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    };
+    await service.start(ctx);
+
+    const traceId = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
+    const parentSpanId = "abcdef0123456789";
+
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 1200,
+      traceId,
+    });
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      channel: "telegram",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usage: { input: 100, output: 50 },
+      durationMs: 800,
+      traceId,
+      parentSpanId,
+    });
+
+    const spanCalls = telemetryState.tracer.startSpan.mock.calls as unknown as [
+      string,
+      unknown,
+      { __parentSpanContext?: { traceId: string } | undefined } | undefined,
+    ][];
+
+    // message.processed span should NOT have parent context (it should be a root span)
+    const msgCall = spanCalls.find((call) => call[0] === "openclaw.message.processed");
+    expect(msgCall).toBeDefined();
+    // message.processed is a root span — 3rd arg is context.active() with no parent span context
+    expect(msgCall![2]?.__parentSpanContext).toBeUndefined();
+
+    // model.usage span should have parent context
+    const modelCall = spanCalls.find((call) => String(call[0]).startsWith("chat "));
+    expect(modelCall).toBeDefined();
+    expect(modelCall![2]).toBeDefined();
+    expect(modelCall![2]!.__parentSpanContext?.traceId).toBe(traceId);
+
+    await service.stop?.(ctx);
+  });
+
+  test("spans without traceId are created without parent context", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4318",
+            protocol: "http/protobuf",
+            traces: true,
+            metrics: true,
+            logs: false,
+          },
+        },
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    };
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      channel: "telegram",
+      provider: "openai",
+      model: "gpt-4o",
+      usage: { input: 100, output: 50 },
+      durationMs: 500,
+    });
+
+    const spanCalls = telemetryState.tracer.startSpan.mock.calls as unknown as [
+      string,
+      unknown,
+      { __parentSpanContext?: { traceId: string } | undefined } | undefined,
+    ][];
+    const modelCall = spanCalls.find((call) => String(call[0]).startsWith("chat "));
+    expect(modelCall).toBeDefined();
+    // 3rd arg should be the default context.active() (empty object), not a linked context
+    expect(modelCall![2]?.__parentSpanContext).toBeUndefined();
 
     await service.stop?.(ctx);
   });

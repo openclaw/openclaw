@@ -5,6 +5,8 @@ export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 type DiagnosticBaseEvent = {
   ts: number;
   seq: number;
+  traceId?: string;
+  parentSpanId?: string;
 };
 
 export type DiagnosticUsageEvent = DiagnosticBaseEvent & {

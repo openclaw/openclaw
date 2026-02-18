@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
@@ -11,6 +12,14 @@ import {
 import { createSubsystemLogger } from "./subsystem.js";
 
 const diag = createSubsystemLogger("diagnostic");
+
+function generateTraceId(): string {
+  return randomUUID().replace(/-/g, "");
+}
+
+function generateSpanId(): string {
+  return randomUUID().replace(/-/g, "").slice(0, 16);
+}
 
 const webhookStats = {
   received: 0,
@@ -39,11 +48,15 @@ export function logWebhookReceived(params: {
       } total=${webhookStats.received}`,
     );
   }
+
+  const traceId = generateTraceId();
+
   emitDiagnosticEvent({
     type: "webhook.received",
     channel: params.channel,
     updateType: params.updateType,
     chatId: params.chatId,
+    traceId,
   });
   markActivity();
 }
@@ -101,10 +114,14 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
+  traceId?: string;
 }) {
   const state = getDiagnosticSessionState(params);
   state.queueDepth += 1;
   state.lastActivity = Date.now();
+  if (params.traceId) {
+    state.traceId = params.traceId;
+  }
   if (diag.isEnabled("debug")) {
     diag.debug(
       `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
@@ -119,6 +136,7 @@ export function logMessageQueued(params: {
     channel: params.channel,
     source: params.source,
     queueDepth: state.queueDepth,
+    traceId: state.traceId,
   });
   markActivity();
 }
@@ -151,6 +169,11 @@ export function logMessageProcessed(params: {
       diag.debug(payload);
     }
   }
+
+  const state = getDiagnosticSessionState(params);
+  const spanId = generateSpanId();
+  state.currentSpanId = spanId;
+
   emitDiagnosticEvent({
     type: "message.processed",
     channel: params.channel,
@@ -162,6 +185,7 @@ export function logMessageProcessed(params: {
     outcome: params.outcome,
     reason: params.reason,
     error: params.error,
+    traceId: state.traceId,
   });
   markActivity();
 }
