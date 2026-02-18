@@ -19,6 +19,7 @@ export async function deliverDiscordReply(params: {
   replyToId?: string;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  mediaLocalRoots?: readonly string[];
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
   for (const payload of params.replies) {
@@ -84,6 +85,7 @@ export async function deliverDiscordReply(params: {
           token: params.token,
           rest: params.rest,
           mediaUrl: extra,
+          mediaLocalRoots: params.mediaLocalRoots,
           accountId: params.accountId,
           replyTo,
         });
@@ -95,6 +97,7 @@ export async function deliverDiscordReply(params: {
       token: params.token,
       rest: params.rest,
       mediaUrl: firstMedia,
+      mediaLocalRoots: params.mediaLocalRoots,
       accountId: params.accountId,
       replyTo,
     });
@@ -103,6 +106,7 @@ export async function deliverDiscordReply(params: {
         token: params.token,
         rest: params.rest,
         mediaUrl: extra,
+        mediaLocalRoots: params.mediaLocalRoots,
         accountId: params.accountId,
         replyTo,
       });

@@ -18,6 +18,7 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
@@ -624,6 +625,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
         tableMode,
         chunkMode: resolveChunkMode(cfg, "discord", accountId),
+        mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, route.agentId),
       });
       replyReference.markSent();
     },
