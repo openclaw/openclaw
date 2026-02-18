@@ -43,15 +43,21 @@ describe("buildTelegramThreadParams", () => {
     });
   });
 
-  it("skips thread id for dm threads (DMs don't have threads)", () => {
-    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toBeUndefined();
-    expect(buildTelegramThreadParams({ id: 2, scope: "dm" })).toBeUndefined();
+  it("includes thread id for dm topics", () => {
+    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
+      message_thread_id: 1,
+    });
+    expect(buildTelegramThreadParams({ id: 2, scope: "dm" })).toEqual({
+      message_thread_id: 2,
+    });
   });
 
-  it("normalizes and skips thread id for dm threads even with edge values", () => {
+  it("normalizes dm thread ids and skips non-positive values", () => {
     expect(buildTelegramThreadParams({ id: 0, scope: "dm" })).toBeUndefined();
     expect(buildTelegramThreadParams({ id: -1, scope: "dm" })).toBeUndefined();
-    expect(buildTelegramThreadParams({ id: 1.9, scope: "dm" })).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: 1.9, scope: "dm" })).toEqual({
+      message_thread_id: 1,
+    });
   });
 
   it("handles thread id 0 for non-dm scopes", () => {

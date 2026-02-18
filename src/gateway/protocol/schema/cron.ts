@@ -8,7 +8,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       message: params.message,
       model: Type.Optional(Type.String()),
       thinking: Type.Optional(Type.String()),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       deliver: Type.Optional(Type.Boolean()),
       channel: Type.Optional(Type.String()),
@@ -40,6 +40,7 @@ export const CronScheduleSchema = Type.Union([
       kind: Type.Literal("cron"),
       expr: NonEmptyString,
       tz: Type.Optional(Type.String()),
+      staggerMs: Type.Optional(Type.Integer({ minimum: 0 })),
     },
     { additionalProperties: false },
   ),
@@ -67,24 +68,51 @@ export const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
 ]);
 
-const CronDeliveryBaseProperties = {
+const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-  to: Type.Optional(Type.String()),
   bestEffort: Type.Optional(Type.Boolean()),
 };
 
-export const CronDeliverySchema = Type.Object(
+const CronDeliveryNoopSchema = Type.Object(
   {
-    mode: Type.Union([Type.Literal("none"), Type.Literal("announce")]),
-    ...CronDeliveryBaseProperties,
+    mode: Type.Literal("none"),
+    ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
 
+const CronDeliveryAnnounceSchema = Type.Object(
+  {
+    mode: Type.Literal("announce"),
+    ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const CronDeliveryWebhookSchema = Type.Object(
+  {
+    mode: Type.Literal("webhook"),
+    ...CronDeliverySharedProperties,
+    to: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const CronDeliverySchema = Type.Union([
+  CronDeliveryNoopSchema,
+  CronDeliveryAnnounceSchema,
+  CronDeliveryWebhookSchema,
+]);
+
 export const CronDeliveryPatchSchema = Type.Object(
   {
-    mode: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("announce")])),
-    ...CronDeliveryBaseProperties,
+    mode: Type.Optional(
+      Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
+    ),
+    ...CronDeliverySharedProperties,
+    to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -108,10 +136,10 @@ export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
-    notify: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
@@ -138,9 +166,9 @@ export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     description: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
-    notify: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
     schedule: CronScheduleSchema,
     sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
@@ -155,9 +183,9 @@ export const CronJobPatchSchema = Type.Object(
   {
     name: Type.Optional(NonEmptyString),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     description: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
-    notify: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
     schedule: Type.Optional(CronScheduleSchema),
     sessionTarget: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("isolated")])),

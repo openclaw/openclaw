@@ -1,4 +1,3 @@
-import type { DaemonLifecycleOptions } from "./types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   runServiceRestart,
@@ -7,6 +6,7 @@ import {
   runServiceUninstall,
 } from "./lifecycle-core.js";
 import { renderGatewayServiceStartHints } from "./shared.js";
+import type { DaemonLifecycleOptions } from "./types.js";
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
@@ -46,5 +46,6 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     service: resolveGatewayService(),
     renderStartHints: renderGatewayServiceStartHints,
     opts,
+    checkTokenDrift: true,
   });
 }

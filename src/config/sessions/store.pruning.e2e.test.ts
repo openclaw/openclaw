@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "./types.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
 vi.mock("../config.js", () => ({
@@ -12,6 +12,8 @@ vi.mock("../config.js", () => ({
 }));
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -86,104 +88,87 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.fresh).toBeDefined();
   });
 
-  it("saveSessionStore caps entries over limit", async () => {
+  it("archives transcript files for stale sessions pruned on write", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
           mode: "enforce",
-          pruneAfter: "30d",
-          maxEntries: 5,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
-
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {};
-    for (let i = 0; i < 10; i++) {
-      store[`key-${i}`] = makeEntry(now - i * 1000);
-    }
-
-    await saveSessionStore(storePath, store);
-
-    const loaded = loadSessionStore(storePath);
-    expect(Object.keys(loaded)).toHaveLength(5);
-    for (let i = 0; i < 5; i++) {
-      expect(loaded[`key-${i}`]).toBeDefined();
-    }
-    for (let i = 5; i < 10; i++) {
-      expect(loaded[`key-${i}`]).toBeUndefined();
-    }
-  });
-
-  it("saveSessionStore rotates file when over size limit and creates .bak", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "30d",
+          pruneAfter: "7d",
           maxEntries: 500,
-          rotateBytes: "100b",
-        },
-      },
-    });
-
-    const now = Date.now();
-    const largeStore: Record<string, SessionEntry> = {};
-    for (let i = 0; i < 50; i++) {
-      largeStore[`agent:main:session-${crypto.randomUUID()}`] = makeEntry(now - i * 1000);
-    }
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify(largeStore, null, 2), "utf-8");
-
-    const statBefore = await fs.stat(storePath);
-    expect(statBefore.size).toBeGreaterThan(100);
-
-    const smallStore: Record<string, SessionEntry> = {
-      only: makeEntry(now),
-    };
-    await saveSessionStore(storePath, smallStore);
-
-    const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
-    expect(bakFiles.length).toBeGreaterThanOrEqual(1);
-
-    const loaded = loadSessionStore(storePath);
-    expect(loaded.only).toBeDefined();
-  });
-
-  it("saveSessionStore applies both pruning and capping together", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "10d",
-          maxEntries: 3,
           rotateBytes: 10_485_760,
         },
       },
     });
 
     const now = Date.now();
+    const staleSessionId = "stale-session";
+    const freshSessionId = "fresh-session";
     const store: Record<string, SessionEntry> = {
-      stale1: makeEntry(now - 15 * DAY_MS),
-      stale2: makeEntry(now - 20 * DAY_MS),
-      fresh1: makeEntry(now),
-      fresh2: makeEntry(now - 1 * DAY_MS),
-      fresh3: makeEntry(now - 2 * DAY_MS),
-      fresh4: makeEntry(now - 5 * DAY_MS),
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: freshSessionId, updatedAt: now },
     };
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    const freshTranscript = path.join(testDir, `${freshSessionId}.jsonl`);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(freshTranscript, '{"type":"session"}\n', "utf-8");
 
     await saveSessionStore(storePath, store);
 
     const loaded = loadSessionStore(storePath);
-    expect(loaded.stale1).toBeUndefined();
-    expect(loaded.stale2).toBeUndefined();
-    expect(Object.keys(loaded).length).toBeLessThanOrEqual(3);
-    expect(loaded.fresh1).toBeDefined();
-    expect(loaded.fresh2).toBeDefined();
-    expect(loaded.fresh3).toBeDefined();
-    expect(loaded.fresh4).toBeUndefined();
+    expect(loaded.stale).toBeUndefined();
+    expect(loaded.fresh).toBeDefined();
+    await expect(fs.stat(staleTranscript)).rejects.toThrow();
+    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+    const dirEntries = await fs.readdir(testDir);
+    const archived = dirEntries.filter((entry) =>
+      entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
+    );
+    expect(archived).toHaveLength(1);
+  });
+
+  it("cleans up archived transcripts older than the prune window", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          maxEntries: 500,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const staleSessionId = "stale-session";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+
+    const oldArchived = path.join(
+      testDir,
+      `old-session.jsonl.deleted.${archiveTimestamp(now - 9 * DAY_MS)}`,
+    );
+    const recentArchived = path.join(
+      testDir,
+      `recent-session.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
+    );
+    const bakArchived = path.join(
+      testDir,
+      `bak-session.jsonl.bak.${archiveTimestamp(now - 20 * DAY_MS)}`,
+    );
+    await fs.writeFile(oldArchived, "old", "utf-8");
+    await fs.writeFile(recentArchived, "recent", "utf-8");
+    await fs.writeFile(bakArchived, "bak", "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    await expect(fs.stat(oldArchived)).rejects.toThrow();
+    await expect(fs.stat(recentArchived)).resolves.toBeDefined();
+    await expect(fs.stat(bakArchived)).resolves.toBeDefined();
   });
 
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
@@ -210,51 +195,5 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.stale).toBeDefined();
     expect(loaded.fresh).toBeDefined();
     expect(Object.keys(loaded)).toHaveLength(2);
-  });
-
-  it("resolveMaintenanceConfig reads from loadConfig().session.maintenance", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: { pruneAfter: "7d", maxEntries: 100, rotateBytes: "5mb" },
-      },
-    });
-
-    const { resolveMaintenanceConfig } = await import("./store.js");
-    const config = resolveMaintenanceConfig();
-
-    expect(config).toEqual({
-      mode: "warn",
-      pruneAfterMs: 7 * DAY_MS,
-      maxEntries: 100,
-      rotateBytes: 5 * 1024 * 1024,
-    });
-  });
-
-  it("resolveMaintenanceConfig uses defaults for missing fields", async () => {
-    mockLoadConfig.mockReturnValue({ session: { maintenance: { pruneAfter: "14d" } } });
-
-    const { resolveMaintenanceConfig } = await import("./store.js");
-    const config = resolveMaintenanceConfig();
-
-    expect(config).toEqual({
-      mode: "warn",
-      pruneAfterMs: 14 * DAY_MS,
-      maxEntries: 500,
-      rotateBytes: 10_485_760,
-    });
-  });
-
-  it("resolveMaintenanceConfig falls back to deprecated pruneDays", async () => {
-    mockLoadConfig.mockReturnValue({ session: { maintenance: { pruneDays: 2 } } });
-
-    const { resolveMaintenanceConfig } = await import("./store.js");
-    const config = resolveMaintenanceConfig();
-
-    expect(config).toEqual({
-      mode: "warn",
-      pruneAfterMs: 2 * DAY_MS,
-      maxEntries: 500,
-      rotateBytes: 10_485_760,
-    });
   });
 });

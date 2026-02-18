@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
-import type { CommandHandler } from "./commands-types.js";
 import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   clearSubagentRunSteerRestart,
   listSubagentRunsForRequester,
@@ -10,6 +9,7 @@ import {
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
 } from "../../agents/subagent-registry.js";
+import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import {
   extractAssistantText,
   resolveInternalSessionKey,
@@ -35,6 +35,7 @@ import {
 } from "../../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { stopSubagentsForRequester } from "./abort.js";
+import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 import { formatRunLabel, formatRunStatus, sortSubagentRuns } from "./subagents-utils.js";
 
@@ -47,7 +48,7 @@ const COMMAND = "/subagents";
 const COMMAND_KILL = "/kill";
 const COMMAND_STEER = "/steer";
 const COMMAND_TELL = "/tell";
-const ACTIONS = new Set(["list", "kill", "log", "send", "steer", "info", "help"]);
+const ACTIONS = new Set(["list", "kill", "log", "send", "steer", "info", "spawn", "help"]);
 const RECENT_WINDOW_MINUTES = 30;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
@@ -117,8 +118,15 @@ function formatTimestampWithAge(valueMs?: number) {
   return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
-function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): string | undefined {
-  const raw = params.sessionKey?.trim() || params.ctx.CommandTargetSessionKey?.trim();
+function resolveRequesterSessionKey(
+  params: Parameters<CommandHandler>[0],
+  opts?: { preferCommandTarget?: boolean },
+): string | undefined {
+  const commandTarget = params.ctx.CommandTargetSessionKey?.trim();
+  const commandSession = params.sessionKey?.trim();
+  const raw = opts?.preferCommandTarget
+    ? commandTarget || commandSession
+    : commandSession || commandTarget;
   if (!raw) {
     return undefined;
   }
@@ -192,6 +200,7 @@ function buildSubagentsHelp() {
     "- /subagents info <id|#>",
     "- /subagents send <id|#> <message>",
     "- /subagents steer <id|#> <message>",
+    "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
     "- /kill <id|#|all>",
     "- /steer <id|#> <message>",
     "- /tell <id|#> <message>",
@@ -284,7 +293,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     action = "steer";
   }
 
-  const requesterKey = resolveRequesterSessionKey(params);
+  const requesterKey = resolveRequesterSessionKey(params, {
+    preferCommandTarget: action === "spawn",
+  });
   if (!requesterKey) {
     return { shouldContinue: false, reply: { text: "⚠️ Missing session key." } };
   }
@@ -641,6 +652,66 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         text:
           replyText ?? `✅ Sent to ${formatRunLabel(resolved.entry)} (run ${runId.slice(0, 8)}).`,
       },
+    };
+  }
+
+  if (action === "spawn") {
+    const agentId = restTokens[0];
+    // Parse remaining tokens: task text with optional --model and --thinking flags.
+    const taskParts: string[] = [];
+    let model: string | undefined;
+    let thinking: string | undefined;
+    for (let i = 1; i < restTokens.length; i++) {
+      if (restTokens[i] === "--model" && i + 1 < restTokens.length) {
+        i += 1;
+        model = restTokens[i];
+      } else if (restTokens[i] === "--thinking" && i + 1 < restTokens.length) {
+        i += 1;
+        thinking = restTokens[i];
+      } else {
+        taskParts.push(restTokens[i]);
+      }
+    }
+    const task = taskParts.join(" ").trim();
+    if (!agentId || !task) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "Usage: /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
+        },
+      };
+    }
+
+    const commandTo = typeof params.command.to === "string" ? params.command.to.trim() : "";
+    const originatingTo =
+      typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "";
+    const fallbackTo = typeof params.ctx.To === "string" ? params.ctx.To.trim() : "";
+    const normalizedTo = commandTo || originatingTo || fallbackTo || undefined;
+
+    const result = await spawnSubagentDirect(
+      { task, agentId, model, thinking, cleanup: "keep", expectsCompletionMessage: true },
+      {
+        agentSessionKey: requesterKey,
+        agentChannel: params.ctx.OriginatingChannel ?? params.command.channel,
+        agentAccountId: params.ctx.AccountId,
+        agentTo: normalizedTo,
+        agentThreadId: params.ctx.MessageThreadId,
+        agentGroupId: params.sessionEntry?.groupId ?? null,
+        agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
+        agentGroupSpace: params.sessionEntry?.space ?? null,
+      },
+    );
+    if (result.status === "accepted") {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).${result.warning ? ` Warning: ${result.warning}` : ""}`,
+        },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: `Spawn failed: ${result.error ?? result.status}` },
     };
   }
 

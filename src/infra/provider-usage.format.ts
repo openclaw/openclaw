@@ -1,5 +1,5 @@
-import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
 import { clampPercent } from "./provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
 
 function formatResetRemaining(targetMs?: number, now?: number): string | null {
   if (!targetMs) {

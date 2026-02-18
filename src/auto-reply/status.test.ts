@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -12,7 +13,9 @@ import {
 } from "./status.js";
 
 const { listPluginCommands } = vi.hoisted(() => ({
-  listPluginCommands: vi.fn(() => []),
+  listPluginCommands: vi.fn(
+    (): Array<{ name: string; description: string; pluginId: string }> => [],
+  ),
 }));
 
 vi.mock("../plugins/commands.js", () => ({
@@ -45,7 +48,7 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       agent: {
         model: "anthropic/pi:opus",
         contextTokens: 32_000,
@@ -96,7 +99,7 @@ describe("buildStatusMessage", () => {
             { id: "discord", sandbox: { mode: "all" } },
           ],
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       agent: {},
       sessionKey: "agent:discord:discord:channel:1456350065223270435",
       sessionScope: "per-sender",
@@ -129,29 +132,9 @@ describe("buildStatusMessage", () => {
       sessionKey: "agent:main:main",
       queue: { mode: "none" },
       mediaDecisions: [
-        {
-          capability: "image",
-          outcome: "success",
-          attachments: [
-            {
-              attachmentIndex: 0,
-              attempts: [
-                {
-                  type: "provider",
-                  outcome: "success",
-                  provider: "openai",
-                  model: "gpt-5.2",
-                },
-              ],
-              chosen: {
-                type: "provider",
-                outcome: "success",
-                provider: "openai",
-                model: "gpt-5.2",
-              },
-            },
-          ],
-        },
+        createSuccessfulImageMediaDecision() as unknown as NonNullable<
+          Parameters<typeof buildStatusMessage>[0]["mediaDecisions"]
+        >[number],
         {
           capability: "audio",
           outcome: "skipped",
@@ -333,7 +316,7 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       agent: { model: "anthropic/claude-opus-4-5" },
       sessionEntry: { sessionId: "c1", updatedAt: 0, inputTokens: 10 },
       sessionKey: "agent:main:main",
@@ -382,39 +365,58 @@ describe("buildStatusMessage", () => {
     );
   }
 
+  const baselineTranscriptUsage = {
+    input: 1,
+    output: 2,
+    cacheRead: 1000,
+    cacheWrite: 0,
+    totalTokens: 1003,
+  } as const;
+
+  function writeBaselineTranscriptUsageLog(params: {
+    dir: string;
+    agentId: string;
+    sessionId: string;
+  }) {
+    writeTranscriptUsageLog({
+      ...params,
+      usage: baselineTranscriptUsage,
+    });
+  }
+
+  function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
+    return buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: params.sessionId,
+        updatedAt: 0,
+        totalTokens: 3,
+        contextTokens: 32_000,
+      },
+      sessionKey: params.sessionKey,
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      includeTranscriptUsage: true,
+      modelAuth: "api-key",
+    });
+  }
+
   it("prefers cached prompt tokens from the session log", async () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-1";
-        writeTranscriptUsageLog({
+        writeBaselineTranscriptUsageLog({
           dir,
           agentId: "main",
           sessionId,
-          usage: {
-            input: 1,
-            output: 2,
-            cacheRead: 1000,
-            cacheWrite: 0,
-            totalTokens: 1003,
-          },
         });
 
-        const text = buildStatusMessage({
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            contextTokens: 32_000,
-          },
-          sessionEntry: {
-            sessionId,
-            updatedAt: 0,
-            totalTokens: 3, // would be wrong if cached prompt tokens exist
-            contextTokens: 32_000,
-          },
+        const text = buildTranscriptStatusText({
+          sessionId,
           sessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          queue: { mode: "collect", depth: 0 },
-          includeTranscriptUsage: true,
-          modelAuth: "api-key",
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
@@ -427,35 +429,15 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         const sessionId = "sess-worker1";
-        writeTranscriptUsageLog({
+        writeBaselineTranscriptUsageLog({
           dir,
           agentId: "worker1",
           sessionId,
-          usage: {
-            input: 1,
-            output: 2,
-            cacheRead: 1000,
-            cacheWrite: 0,
-            totalTokens: 1003,
-          },
         });
 
-        const text = buildStatusMessage({
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            contextTokens: 32_000,
-          },
-          sessionEntry: {
-            sessionId,
-            updatedAt: 0,
-            totalTokens: 3,
-            contextTokens: 32_000,
-          },
+        const text = buildTranscriptStatusText({
+          sessionId,
           sessionKey: "agent:worker1:telegram:12345",
-          sessionScope: "per-sender",
-          queue: { mode: "collect", depth: 0 },
-          includeTranscriptUsage: true,
-          modelAuth: "api-key",
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
@@ -511,7 +493,7 @@ describe("buildCommandsMessage", () => {
   it("lists commands with aliases and hints", () => {
     const text = buildCommandsMessage({
       commands: { config: false, debug: false },
-    } as OpenClawConfig);
+    } as unknown as OpenClawConfig);
     expect(text).toContain("ℹ️ Slash commands");
     expect(text).toContain("Status");
     expect(text).toContain("/commands - List all slash commands.");
@@ -526,7 +508,7 @@ describe("buildCommandsMessage", () => {
     const text = buildCommandsMessage(
       {
         commands: { config: false, debug: false },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       [
         {
           name: "demo_skill",
@@ -543,7 +525,7 @@ describe("buildHelpMessage", () => {
   it("hides config/debug when disabled", () => {
     const text = buildHelpMessage({
       commands: { config: false, debug: false },
-    } as OpenClawConfig);
+    } as unknown as OpenClawConfig);
     expect(text).toContain("Skills");
     expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
@@ -556,7 +538,7 @@ describe("buildCommandsMessagePaginated", () => {
     const result = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       undefined,
       { surface: "telegram", page: 1 },
     );
@@ -572,7 +554,7 @@ describe("buildCommandsMessagePaginated", () => {
     const result = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       undefined,
       { surface: "telegram", page: 99 },
     );
