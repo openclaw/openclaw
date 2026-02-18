@@ -251,6 +251,12 @@ jobs:
         with:
           submodules: false
 
+      - name: Normalize line endings in working tree
+        run: |
+          git config core.autocrlf false
+          git config core.eol lf
+          git checkout -f src/plugins/discovery.ts src/plugins/install.e2e.test.ts
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
