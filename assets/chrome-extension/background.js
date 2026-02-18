@@ -70,45 +70,29 @@ async function ensureRelayConnection() {
     }
 
     const ws = new WebSocket(wsUrl)
-
-    // Install permanent handlers BEFORE awaiting open to avoid a race window
-    // where the socket could close between onopen and handler installation.
-    let connected = false
-    ws.onmessage = (event) => void onRelayMessage(String(event.data || ''))
-    ws.onclose = (ev) => {
-      if (connected) {
-        onRelayClosed('closed')
-      }
-    }
-    ws.onerror = () => {
-      if (connected) {
-        onRelayClosed('error')
-      }
-    }
+    relayWs = ws
 
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('WebSocket connect timeout')), 5000)
-      const origOnclose = ws.onclose
-      const origOnerror = ws.onerror
+      let connected = false
       ws.onopen = () => {
         clearTimeout(t)
         connected = true
-        relayWs = ws
+        // Install permanent handlers immediately on connect (before resolve)
+        // to close the race window where WS could drop between resolve and handler install
+        ws.onmessage = (event) => void onRelayMessage(String(event.data || ''))
+        ws.onclose = () => onRelayClosed('closed')
+        ws.onerror = () => onRelayClosed('error')
         resolve()
       }
       ws.onerror = () => {
         clearTimeout(t)
-        reject(new Error('WebSocket connect failed'))
+        if (!connected) reject(new Error('WebSocket connect failed'))
       }
       ws.onclose = (ev) => {
         clearTimeout(t)
-        reject(new Error(`WebSocket closed (${ev.code} ${ev.reason || 'no reason'})`))
+        if (!connected) reject(new Error(`WebSocket closed (${ev.code} ${ev.reason || 'no reason'})`))
       }
-      // After open, restore permanent handlers
-      ws.addEventListener('open', () => {
-        ws.onclose = origOnclose
-        ws.onerror = origOnerror
-      }, { once: true })
     })
 
     if (!debuggerListenersInstalled) {
@@ -312,25 +296,20 @@ async function restoreState() {
         await ensureRelayConnection()
         for (const [tabId, tab] of tabs.entries()) {
           if (tab.state === 'connected' && tab.sessionId && tab.targetId) {
-            try {
-              const info = /** @type {any} */ (
-                await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo')
-              )
-              sendToRelay({
-                method: 'forwardCDPEvent',
+            const info = /** @type {any} */ (
+              await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo')
+            )
+            sendToRelay({
+              method: 'forwardCDPEvent',
+              params: {
+                method: 'Target.attachedToTarget',
                 params: {
-                  method: 'Target.attachedToTarget',
-                  params: {
-                    sessionId: tab.sessionId,
-                    targetInfo: { ...(info?.targetInfo || {}), attached: true },
-                    waitingForDebugger: false,
-                  },
+                  sessionId: tab.sessionId,
+                  targetInfo: { ...(info?.targetInfo || {}), attached: true },
+                  waitingForDebugger: false,
                 },
-              })
-            } catch (err) {
-              console.warn(`[OpenClaw Relay] restoreState: failed to re-announce tab ${tabId}:`, err)
-              cleanupTab(tabId)
-            }
+              },
+            })
           }
         }
       } catch {
