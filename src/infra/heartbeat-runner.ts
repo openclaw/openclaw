@@ -510,22 +510,28 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
   if (!heartbeatsEnabled) {
+    log.warn("runHeartbeatOnce skipped: heartbeatsEnabled=false");
     return { status: "skipped", reason: "disabled" };
   }
   if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+    log.warn("runHeartbeatOnce skipped: agent not enabled", { agentId });
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+    log.warn("runHeartbeatOnce skipped: no interval configured");
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+    log.warn("runHeartbeatOnce skipped: quiet-hours");
     return { status: "skipped", reason: "quiet-hours" };
   }
 
+  const isWatchdogStall = opts.reason === "watchdog-stall";
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
-  if (queueSize > 0) {
+  if (queueSize > 0 && !isWatchdogStall) {
+    log.warn("runHeartbeatOnce skipped: requests-in-flight", { queueSize });
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
