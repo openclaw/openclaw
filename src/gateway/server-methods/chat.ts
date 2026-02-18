@@ -316,6 +316,29 @@ function broadcastChatError(params: {
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
 }
 
+// ---------------------------------------------------------------------------
+// Input sanitization
+// ---------------------------------------------------------------------------
+
+type SanitizeResult = { ok: true; message: string } | { ok: false; error: string };
+
+/**
+ * Sanitize a chat.send message string.
+ * - Rejects null bytes (U+0000)
+ * - Strips unsafe C0/C1 control characters while preserving tab (\t), newline (\n), carriage return (\r)
+ * - Normalizes Unicode to NFC form
+ */
+export function sanitizeChatSendMessageInput(message: string): SanitizeResult {
+  if (message.includes("\u0000")) {
+    return { ok: false, error: "message must not contain null bytes" };
+  }
+  // Strip unsafe control characters: C0 (U+0001–U+001F except \t \n \r) and DEL (U+007F)
+  // eslint-disable-next-line no-control-regex
+  const stripped = message.replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "");
+  const normalized = stripped.normalize("NFC");
+  return { ok: true, message: normalized };
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {

@@ -297,7 +297,7 @@ async function sendDiscordText(
         rest.post(Routes.channelMessages(channelId), {
           body: {
             content: chunk,
-            message_reference: isFirst ? messageReference : undefined,
+            message_reference: messageReference,
             ...(isFirst && embeds?.length ? { embeds } : {}),
             ...(flags ? { flags } : {}),
           },
@@ -359,7 +359,7 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      undefined,
+      replyTo,
       request,
       maxLinesPerMessage,
       undefined,

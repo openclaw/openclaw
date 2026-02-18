@@ -15,6 +15,8 @@ import {
 } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
+const EXEC_OUTPUT_MAX_LEN = 200;
+
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -40,11 +42,22 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const cfg = loadConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
+
+      // Deduplicate: if no eventId, use sessionKey+text as dedupe key.
+      // If eventId is present, use it as the key (unique per distinct event).
+      const eventId =
+        typeof obj.eventId === "string" && obj.eventId.trim() ? obj.eventId.trim() : null;
+      const dedupeKey = eventId ?? `${sessionKey}|${text}`;
+      if (ctx.dedupe.has(dedupeKey)) {
+        return;
+      }
+      ctx.dedupe.set(dedupeKey, { ts: Date.now(), ok: true });
+
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       if (storePath) {
-        await updateSessionStore(storePath, (store) => {
+        updateSessionStore(storePath, (store) => {
           const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
           pruneLegacyStoreKeys({
             store,
@@ -62,6 +75,8 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             lastChannel: entry?.lastChannel,
             lastTo: entry?.lastTo,
           };
+        }).catch((err: unknown) => {
+          ctx.logGateway.warn(`voice session-store update failed: ${formatForLog(err)}`);
         });
       }
 
@@ -80,6 +95,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           thinking: "low",
           deliver: false,
           messageChannel: "node",
+          inputProvenance: {
+            kind: "external_user",
+            sourceChannel: "voice",
+            sourceTool: "gateway.voice.transcript",
+          },
         },
         defaultRuntime,
         ctx.deps,
@@ -116,17 +136,52 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
 
-      const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
-      const channel = normalizeChannelId(channelRaw) ?? undefined;
-      const to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
-      const deliver = Boolean(link?.deliver) && Boolean(channel);
-
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = loadConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
+
+      // Resolve delivery: prefer explicit channel from event, fall back to session route.
+      const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
+      const explicitChannel = normalizeChannelId(channelRaw) ?? undefined;
+      const explicitTo =
+        typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
+      const wantsDeliver = Boolean(link?.deliver);
+
+      let channel: string | undefined;
+      let to: string | undefined;
+      let deliver: boolean;
+
+      if (wantsDeliver) {
+        if (explicitChannel) {
+          channel = explicitChannel;
+          to = explicitTo;
+          deliver = true;
+        } else {
+          // Try to reuse the current session's delivery route.
+          const sessionChannel = entry?.lastChannel;
+          const sessionTo = entry?.lastTo;
+          if (sessionChannel) {
+            channel = sessionChannel;
+            to = sessionTo ?? undefined;
+            deliver = true;
+          } else {
+            channel = undefined;
+            to = undefined;
+            deliver = false;
+            ctx.logGateway.warn(
+              `agent delivery disabled node=${nodeId}: no delivery route for session ${canonicalKey}`,
+            );
+          }
+        }
+      } else {
+        channel = explicitChannel;
+        to = explicitTo;
+        deliver = false;
+      }
+
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
           const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey, store });
@@ -243,10 +298,19 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           text += `: ${command}`;
         }
       } else if (evt.event === "exec.finished") {
+        // Suppress noisy success events with no output (exit code 0, empty output).
+        if (exitCode === 0 && !timedOut && !output) {
+          return;
+        }
         const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
         if (output) {
-          text += `\n${output}`;
+          // Truncate long output to avoid overwhelming system event log.
+          const truncated =
+            output.length > EXEC_OUTPUT_MAX_LEN
+              ? `${output.slice(0, EXEC_OUTPUT_MAX_LEN)}…`
+              : output;
+          text += `\n${truncated}`;
         }
       } else {
         text = `Exec denied (node=${nodeId}${runId ? ` id=${runId}` : ""}${reason ? `, ${reason}` : ""})`;

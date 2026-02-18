@@ -25,8 +25,10 @@ export const healthHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  status: async ({ respond }) => {
-    const status = await getStatusSummary();
+  status: async ({ respond, client }) => {
+    const scopes: string[] = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const isAdmin = scopes.includes("operator.admin");
+    const status = await getStatusSummary({ includeSensitive: isAdmin });
     respond(true, status, undefined);
   },
 };

@@ -67,7 +67,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   return flags;
 };
 
-export async function getStatusSummary(): Promise<StatusSummary> {
+export async function getStatusSummary(_opts?: {
+  includeSensitive?: boolean;
+}): Promise<StatusSummary> {
   const cfg = loadConfig();
   const linkContext = await resolveLinkChannelContext(cfg);
   const agentList = listAgentsForGateway(cfg);
