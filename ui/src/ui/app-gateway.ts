@@ -1,5 +1,12 @@
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import type { OpenClawApp } from "./app.ts";
+import type { PendingDevice } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import {
   applySettings,
   loadCron,
@@ -7,13 +14,11 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
-import type { OpenClawApp } from "./app.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
 import { loadDevices } from "./controllers/devices.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   addExecApproval,
   parseExecApprovalRequested,
@@ -22,11 +27,7 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
-import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
-import type { Tab } from "./navigation.ts";
-import type { UiSettings } from "./storage.ts";
-import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -54,6 +55,8 @@ type GatewayHost = {
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
+  devicePairingQueue: PendingDevice[];
+  devicePairError: string | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -121,6 +124,8 @@ export function connectGateway(host: GatewayHost) {
   host.connected = false;
   host.execApprovalQueue = [];
   host.execApprovalError = null;
+  host.devicePairingQueue = [];
+  host.devicePairError = null;
 
   const previousClient = host.client;
   const client = new GatewayBrowserClient({
@@ -247,8 +252,47 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     void loadCron(host as unknown as Parameters<typeof loadCron>[0]);
   }
 
-  if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
+  if (evt.event === "device.pair.requested") {
+    const req = evt.payload as
+      | {
+          requestId?: string;
+          deviceId?: string;
+          displayName?: string;
+          role?: string;
+          remoteIp?: string;
+          isRepair?: boolean;
+          ts?: number;
+        }
+      | undefined;
+    if (req?.requestId && req?.deviceId) {
+      const entry: import("./controllers/devices.ts").PendingDevice = {
+        requestId: req.requestId,
+        deviceId: req.deviceId,
+        displayName: req.displayName,
+        role: req.role,
+        remoteIp: req.remoteIp,
+        isRepair: req.isRepair,
+        ts: req.ts,
+      };
+      const alreadyQueued = host.devicePairingQueue.some((d) => d.requestId === entry.requestId);
+      if (!alreadyQueued) {
+        host.devicePairingQueue = [...host.devicePairingQueue, entry];
+        host.devicePairError = null;
+      }
+    }
     void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+    return;
+  }
+
+  if (evt.event === "device.pair.resolved") {
+    const req = evt.payload as { requestId?: string } | undefined;
+    if (req?.requestId) {
+      host.devicePairingQueue = host.devicePairingQueue.filter(
+        (d) => d.requestId !== req.requestId,
+      );
+    }
+    void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+    return;
   }
 
   if (evt.event === "exec.approval.requested") {
