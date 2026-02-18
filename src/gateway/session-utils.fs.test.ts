@@ -833,6 +833,24 @@ describe("searchSessionTranscript", () => {
     expect(matches[0].index).toBe(2);
   });
 
+  test("message index accounts for compaction entries", () => {
+    const sessionId = "search-compact";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "user", content: "First message" } }),
+      JSON.stringify({ message: { role: "assistant", content: "Second message" } }),
+      JSON.stringify({ type: "compaction", id: "c1", timestamp: new Date().toISOString() }),
+      JSON.stringify({ message: { role: "user", content: "Target keyword here" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const matches = searchSessionTranscript(sessionId, storePath, "Target keyword");
+    expect(matches).toHaveLength(1);
+    // Index should be 3 (0=first, 1=second, 2=compaction, 3=target) to align with readSessionMessages
+    expect(matches[0].index).toBe(3);
+  });
+
   test("handles array content format", () => {
     const sessionId = "search-7";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

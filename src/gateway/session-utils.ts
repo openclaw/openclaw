@@ -841,7 +841,11 @@ export function listSessionsFromStore(params: {
         return true;
       }
       if (searchContent && s.sessionId) {
-        const matches = searchSessionTranscriptFs(s.sessionId, storePath, search, { limit: 1 });
+        const matches = searchSessionTranscriptFs(s.sessionId, storePath, search, {
+          limit: 1,
+          sessionFile: s.entry?.sessionFile,
+          agentId: parseAgentSessionKey(s.key)?.agentId,
+        });
         return matches.length > 0;
       }
       return false;
