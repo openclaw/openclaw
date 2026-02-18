@@ -56,7 +56,7 @@ function createMentionHandler(params: {
   requireMention: boolean;
   mentionPattern?: string;
   historyLimit?: number;
-  groupHistories?: Map<unknown, unknown>;
+  groupHistories?: ReturnType<typeof createBaseSignalEventHandlerDeps>["groupHistories"];
 }) {
   return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
