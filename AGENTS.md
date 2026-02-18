@@ -70,6 +70,10 @@
 
 - 语言：TypeScript（ESM）。优先使用严格类型；避免 `any`。
 - 格式化/代码检查通过 Oxlint 和 Oxfmt；提交前运行 `pnpm check`。
+- 禁止添加 `@ts-nocheck`，禁止禁用 `no-explicit-any`；应修复根本原因，仅在必要时更新 Oxlint/Oxfmt 配置。
+- 禁止通过原型变异共享类行为（`applyPrototypeMixins`、在 `.prototype` 上使用 `Object.defineProperty`、或导出 `Class.prototype` 进行合并）。使用显式继承/组合（`A extends B extends C`）或辅助函数组合，以便 TypeScript 能进行类型检查。
+- 如需使用此模式，须在发布前获得明确批准；默认做法是拆分/重构为显式类继承结构并保持成员强类型。
+- 在测试中，优先使用实例级 stub 而非原型变异（`SomeClass.prototype.method = ...`），除非测试明确说明了为什么需要原型级 patch。
 - 为复杂或不易理解的逻辑添加简要代码注释。
 - 保持文件简洁；提取辅助函数而不是创建"V2"副本。使用现有模式处理 CLI 选项和通过 `createDefaultDeps` 进行依赖注入。
 - 目标将文件保持在约 700 行以内；仅为指导方针（非硬性规则）。当有助于提高清晰度或可测试性时进行拆分/重构。
@@ -102,7 +106,6 @@
 - Group related changes; avoid bundling unrelated refactors.
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
-- **MUST READ BEFORE SUBMITTING PR OR ISSUE:** [Agent Submission Control Policy](.agents/AGENT_SUBMISSION_CONTROL_POLICY.md)
 
 ## 简写命令
 
@@ -111,6 +114,7 @@
 ### PR Workflow (Review vs Land)
 
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
+- Bulk PR close/reopen safety: if a close action would affect more than 5 PRs, first ask for explicit user confirmation with the exact PR count and target scope/query.
 
 ## 安全与配置提示
 
@@ -119,6 +123,19 @@
 - 环境变量：参见 `~/.profile`。
 - 永远不要提交或发布真实电话号码、视频或实际配置值。在文档、测试和示例中使用明显的假占位符。
 - 发布流程：在进行任何发布工作前，始终阅读 `docs/reference/RELEASING.md` 和 `docs/platforms/mac/release.md`；这些文档已回答的例行问题不要再问。
+
+## GHSA（仓库安全公告）补丁/发布
+
+- 获取：`gh api /repos/openclaw/openclaw/security-advisories/<GHSA>`
+- 最新 npm 版本：`npm view openclaw version --userconfig "$(mktemp)"`
+- 私有 fork 的 PR 必须已关闭：
+  `fork=$(gh api /repos/openclaw/openclaw/security-advisories/<GHSA> | jq -r .private_fork.full_name)`
+  `gh pr list -R "$fork" --state open`（必须为空）
+- 描述中的换行陷阱：通过 heredoc 写 Markdown 到 `/tmp/ghsa.desc.md`（不要嵌入 `"\\n"` 字符串）
+- 通过 jq 构建补丁 JSON：`jq -n --rawfile desc /tmp/ghsa.desc.md '{summary,severity,description:$desc,vulnerabilities:[...]}' > /tmp/ghsa.patch.json`
+- 补丁 + 发布：`gh api -X PATCH /repos/openclaw/openclaw/security-advisories/<GHSA> --input /tmp/ghsa.patch.json`（发布 = 包含 `"state":"published"`；无 `/publish` 端点）
+- 发布失败（HTTP 422）：缺少 `severity`/`description`/`vulnerabilities[]`，或私有 fork 仍有未关闭的 PR
+- 验证：重新获取；确保 `state=published`、`published_at` 已设置；`jq -r .description | rg '\\\\n'` 无输出
 
 ## 故障排查
 
@@ -183,3 +200,39 @@
 - 发布：`npm publish --access public --otp="<otp>"`（从包目录运行）。
 - 验证（无本地 npmrc 副作用）：`npm view <pkg> version --userconfig "$(mktemp)"`。
 - 发布后终止 tmux 会话。
+
+## 插件快速发布（不发布核心 `openclaw`）
+
+- 仅发布已在 npm 上的插件。源列表见 `docs/reference/RELEASING.md` 中的"Current npm plugin list"。
+- 所有 CLI `op` 调用和 `npm publish` 必须在 tmux 中运行，以避免挂起/中断：
+  - `tmux new -d -s release-plugins-$(date +%Y%m%d-%H%M%S)`
+  - `eval "$(op signin --account my.1password.com)"`
+- 1Password 辅助命令：
+  - `npm login` 使用的密码：
+    `op item get Npmjs --format=json | jq -r '.fields[] | select(.id=="password").value'`
+  - OTP：
+    `op read 'op://Private/Npmjs/one-time password?attribute=otp'`
+- 快速发布循环（本地辅助脚本放 `/tmp` 即可；保持仓库干净）：
+  - 比较本地插件 `version` 与 `npm view <name> version`
+  - 仅在版本不同时执行 `npm publish --access public --otp="<otp>"`
+  - 如果包在 npm 上不存在或版本已匹配则跳过。
+- 保持 `openclaw` 不变：除非明确要求，否则不要从仓库根目录运行 publish。
+- 每次发布后的检查：
+  - 每个插件：`npm view @openclaw/<name> version --userconfig "$(mktemp)"` 应为 `2026.2.17`
+  - 核心守护：`npm view openclaw version --userconfig "$(mktemp)"` 应保持为之前的版本，除非明确要求更新。
+
+## 变更日志发布说明
+
+- 发布 mac beta GitHub 预发布版时：
+  - 从发布提交打标签 `vYYYY.M.D-beta.N`（例如：`v2026.2.15-beta.1`）。
+  - 创建预发布版，标题为 `openclaw YYYY.M.D-beta.N`。
+  - 使用 `CHANGELOG.md` 版本段落中的发布说明（`Changes` + `Fixes`，不重复标题）。
+  - 至少附上 `OpenClaw-YYYY.M.D.zip` 和 `OpenClaw-YYYY.M.D.dSYM.zip`；如有 `.dmg` 也一并附上。
+
+- 保持 `CHANGELOG.md` 顶部版本条目按影响度排序：
+  - `### Changes` 在前。
+  - `### Fixes` 去重并排序，用户可见的修复优先。
+- 打标签/发布前，运行：
+  - `node --import tsx scripts/release-check.ts`
+  - `pnpm release:check`
+  - `pnpm test:install:smoke` 或 `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke`（非 root 冒烟测试路径）。
