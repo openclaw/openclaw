@@ -1,9 +1,9 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const updateCommand = vi.fn(async (_opts?: unknown) => {});
-const updateStatusCommand = vi.fn(async (_opts?: unknown) => {});
-const updateWizardCommand = vi.fn(async (_opts?: unknown) => {});
+const updateCommand = vi.fn(async (_opts: unknown) => {});
+const updateStatusCommand = vi.fn(async (_opts: unknown) => {});
+const updateWizardCommand = vi.fn(async (_opts: unknown) => {});
 
 const defaultRuntime = {
   log: vi.fn(),
