@@ -23,6 +23,31 @@ const isOAuthProvider = (provider: string): provider is OAuthProvider =>
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
   isOAuthProvider(provider) ? provider : null;
 
+function isProfileConfigCompatible(params: {
+  cfg?: OpenClawConfig;
+  profileId: string;
+  provider: string;
+  mode: "api_key" | "token" | "oauth";
+  allowOAuthTokenCompatibility?: boolean;
+}): boolean {
+  const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
+  if (profileConfig && profileConfig.provider !== params.provider) {
+    return false;
+  }
+  if (profileConfig && profileConfig.mode !== params.mode) {
+    if (
+      !(
+        params.allowOAuthTokenCompatibility &&
+        profileConfig.mode === "oauth" &&
+        params.mode === "token"
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): string {
   const needsProjectId = provider === "google-gemini-cli" || provider === "google-antigravity";
   return needsProjectId
@@ -31,6 +56,14 @@ function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): stri
         projectId: credentials.projectId,
       })
     : credentials.access;
+}
+
+function buildApiKeyProfileResult(params: { apiKey: string; provider: string; email?: string }) {
+  return {
+    apiKey: params.apiKey,
+    provider: params.provider,
+    email: params.email,
+  };
 }
 
 async function refreshOAuthTokenWithLock(params: {
@@ -103,20 +136,23 @@ async function tryResolveOAuthProfile(params: {
   if (!cred || cred.type !== "oauth") {
     return null;
   }
-  const profileConfig = cfg?.auth?.profiles?.[profileId];
-  if (profileConfig && profileConfig.provider !== cred.provider) {
-    return null;
-  }
-  if (profileConfig && profileConfig.mode !== cred.type) {
+  if (
+    !isProfileConfigCompatible({
+      cfg,
+      profileId,
+      provider: cred.provider,
+      mode: cred.type,
+    })
+  ) {
     return null;
   }
 
   if (Date.now() < cred.expires) {
-    return {
+    return buildApiKeyProfileResult({
       apiKey: buildOAuthApiKey(cred.provider, cred),
       provider: cred.provider,
       email: cred.email,
-    };
+    });
   }
 
   const refreshed = await refreshOAuthTokenWithLock({
@@ -126,11 +162,11 @@ async function tryResolveOAuthProfile(params: {
   if (!refreshed) {
     return null;
   }
-  return {
+  return buildApiKeyProfileResult({
     apiKey: refreshed.apiKey,
     provider: cred.provider,
     email: cred.email,
-  };
+  });
 }
 
 export async function resolveApiKeyForProfile(params: {
@@ -144,15 +180,17 @@ export async function resolveApiKeyForProfile(params: {
   if (!cred) {
     return null;
   }
-  const profileConfig = cfg?.auth?.profiles?.[profileId];
-  if (profileConfig && profileConfig.provider !== cred.provider) {
+  if (
+    !isProfileConfigCompatible({
+      cfg,
+      profileId,
+      provider: cred.provider,
+      mode: cred.type,
+      // Compatibility: treat "oauth" config as compatible with stored token profiles.
+      allowOAuthTokenCompatibility: true,
+    })
+  ) {
     return null;
-  }
-  if (profileConfig && profileConfig.mode !== cred.type) {
-    // Compatibility: treat "oauth" config as compatible with stored token profiles.
-    if (!(profileConfig.mode === "oauth" && cred.type === "token")) {
-      return null;
-    }
   }
 
   if (cred.type === "api_key") {
@@ -160,7 +198,7 @@ export async function resolveApiKeyForProfile(params: {
     if (!key) {
       return null;
     }
-    return { apiKey: key, provider: cred.provider, email: cred.email };
+    return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
   }
   if (cred.type === "token") {
     const token = cred.token?.trim();
@@ -175,14 +213,14 @@ export async function resolveApiKeyForProfile(params: {
     ) {
       return null;
     }
-    return { apiKey: token, provider: cred.provider, email: cred.email };
+    return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
   }
   if (Date.now() < cred.expires) {
-    return {
+    return buildApiKeyProfileResult({
       apiKey: buildOAuthApiKey(cred.provider, cred),
       provider: cred.provider,
       email: cred.email,
-    };
+    });
   }
 
   try {
@@ -193,20 +231,20 @@ export async function resolveApiKeyForProfile(params: {
     if (!result) {
       return null;
     }
-    return {
+    return buildApiKeyProfileResult({
       apiKey: result.apiKey,
       provider: cred.provider,
       email: cred.email,
-    };
+    });
   } catch (error) {
     const refreshedStore = ensureAuthProfileStore(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
     if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
-      return {
+      return buildApiKeyProfileResult({
         apiKey: buildOAuthApiKey(refreshed.provider, refreshed),
         provider: refreshed.provider,
         email: refreshed.email ?? cred.email,
-      };
+      });
     }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
@@ -244,11 +282,11 @@ export async function resolveApiKeyForProfile(params: {
             agentDir: params.agentDir,
             expires: new Date(mainCred.expires).toISOString(),
           });
-          return {
+          return buildApiKeyProfileResult({
             apiKey: buildOAuthApiKey(mainCred.provider, mainCred),
             provider: mainCred.provider,
             email: mainCred.email,
-          };
+          });
         }
       } catch {
         // keep original error if main agent fallback also fails
