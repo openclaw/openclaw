@@ -260,6 +260,7 @@ export function renderChat(props: ChatProps) {
           return nothing;
         },
       )}
+      <div class="chat-scroll-anchor" aria-hidden="true"></div>
     </div>
   `;
 
