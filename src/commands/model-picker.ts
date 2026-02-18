@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
@@ -7,10 +9,9 @@ import {
   buildModelAliasIndex,
   modelKey,
   normalizeProviderId,
+  parseModelRef,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
@@ -199,6 +200,12 @@ export async function promptDefaultModel(
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
 
+  // Compute default model key for ensuring it's always included in filtered results
+  const defaultModel = DEFAULT_MODEL?.trim();
+  const defaultRef =
+    defaultModel && DEFAULT_PROVIDER ? parseModelRef(defaultModel, DEFAULT_PROVIDER) : null;
+  const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
+
   const catalog = await loadModelCatalog({ config: cfg, useCache: false });
   if (catalog.length === 0) {
     return promptManualModel({
@@ -214,12 +221,32 @@ export async function promptDefaultModel(
   });
   let models = catalog;
   if (!ignoreAllowlist) {
-    const { allowedCatalog } = buildAllowedModelSet({
+    const { allowedCatalog, allowAny } = buildAllowedModelSet({
       cfg,
       catalog,
       defaultProvider: DEFAULT_PROVIDER,
     });
     models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+
+    // When allowAny is true (no explicit allowlist configured),
+    // filter to only show models from providers with auth configured
+    // to avoid showing all 600+ models when user only has specific providers set up
+    if (allowAny) {
+      const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+      const authedProviders = new Set(
+        Array.from(new Set(models.map((entry) => entry.provider))).filter((provider) =>
+          hasAuth(provider),
+        ),
+      );
+      // Keep models from authed providers, but always include the default model
+      if (defaultKey) {
+        const defaultProvider = defaultRef?.provider ?? DEFAULT_PROVIDER;
+        authedProviders.add(defaultProvider);
+      }
+      if (authedProviders.size > 0) {
+        models = models.filter((entry) => authedProviders.has(entry.provider));
+      }
+    }
   }
 
   if (models.length === 0) {
