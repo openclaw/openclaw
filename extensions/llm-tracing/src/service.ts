@@ -1,11 +1,13 @@
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
+import type { Span } from "@opentelemetry/api";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
 import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
-import { normalizeEndpoint, resolveOtelTracesUrl, type LlmTracingConfig } from "./config.js";
+import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
+import { normalizeEndpoint, resolveOtelTracesUrl } from "./config.js";
+import type { LlmTracingConfig } from "./config.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 
@@ -15,7 +17,6 @@ const GEN_AI_SYSTEM = "gen_ai.system";
 const GEN_AI_REQUEST_MODEL = "gen_ai.request.model";
 const GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens";
 const GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens";
-// Using standard attributes for prompt/completion (even if evolving, these are the standard targets)
 const GEN_AI_PROMPT = "gen_ai.prompt";
 const GEN_AI_COMPLETION = "gen_ai.completion";
 
@@ -27,77 +28,6 @@ function resolveSampleRate(value: number | undefined): number | undefined {
     return undefined;
   }
   return value;
-}
-
-type AgentToolCall = {
-  type: "function";
-  id: string;
-  function: {
-    name: string;
-    arguments: string;
-  };
-};
-
-type AgentMessage = {
-  role?: string;
-  content?: unknown;
-  name?: string;
-  tool_call_id?: string;
-  tool_calls?: AgentToolCall[];
-  model?: string;
-  usage?: {
-    input?: number;
-    output?: number;
-    total?: number;
-  };
-};
-
-function parseToolCalls(value: unknown): AgentToolCall[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const parsed = value
-    .map((toolCall) => {
-      if (!toolCall || typeof toolCall !== "object") {
-        return null;
-      }
-      const record = toolCall as Record<string, unknown>;
-      if (record.type && record.type !== "function") {
-        return null;
-      }
-      const functionRecord =
-        typeof record.function === "object" && record.function !== null
-          ? (record.function as Record<string, unknown>)
-          : {};
-      const name = typeof functionRecord.name === "string" ? functionRecord.name.trim() : "";
-      if (!name) {
-        return null;
-      }
-      const id = typeof record.id === "string" ? record.id : "unknown";
-      const argsValue = functionRecord.arguments;
-      let args = "{}";
-      if (typeof argsValue === "string") {
-        args = argsValue;
-      } else {
-        try {
-          args = JSON.stringify(argsValue ?? {});
-        } catch {
-          args = "{}";
-        }
-      }
-
-      return {
-        type: "function",
-        id,
-        function: {
-          name,
-          arguments: args,
-        },
-      };
-    })
-    .filter((toolCall): toolCall is AgentToolCall => toolCall !== null);
-
-  return parsed.length > 0 ? parsed : undefined;
 }
 
 function extractTextContent(content: unknown): string {
@@ -119,93 +49,32 @@ function extractTextContent(content: unknown): string {
       .filter(Boolean)
       .join("\n");
   }
-  if (content && typeof content === "object") {
-    try {
-      return JSON.stringify(content);
-    } catch {
-      return "";
-    }
-  }
   return "";
 }
 
-function parseMessages(messages: unknown[]): AgentMessage[] {
-  return messages
-    .filter((msg): msg is Record<string, unknown> => msg != null && typeof msg === "object")
-    .map((msg) => {
-      const role = typeof msg.role === "string" ? msg.role : "unknown";
-
-      // Extract tool calls
-      const tool_calls = parseToolCalls(msg.tool_calls);
-
-      return {
-        role,
-        content: msg.content,
-        name: typeof msg.name === "string" ? msg.name : undefined,
-        tool_call_id: typeof msg.tool_call_id === "string" ? msg.tool_call_id : undefined,
-        tool_calls,
-        model: typeof msg.model === "string" ? msg.model : undefined,
-        usage:
-          msg.usage && typeof msg.usage === "object"
-            ? (msg.usage as AgentMessage["usage"])
-            : undefined,
-      };
-    });
-}
-
-function findLastAssistant(messages: AgentMessage[]): AgentMessage | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") {
-      return messages[i];
-    }
-  }
-  return undefined;
-}
-
-// Convert messages to a generic chat format for tracing
-// This maps to the gen_ai.prompt attribute
-function formatLlmInput(messages: AgentMessage[], systemPrompt?: string): string {
-  const lastAssistantIndex = messages.findLastIndex((m) => m.role === "assistant");
-  const inputMessages = lastAssistantIndex >= 0 ? messages.slice(0, lastAssistantIndex) : messages;
-
-  const formattedMessages = inputMessages.map((msg) => {
-    const base: Record<string, unknown> = {
-      role: msg.role,
-      content: extractTextContent(msg.content),
-    };
-
-    if (msg.name) {
-      base.name = msg.name;
-    }
-    if (msg.tool_call_id) {
-      base.tool_call_id = msg.tool_call_id;
-    }
-    if (msg.tool_calls) {
-      base.tool_calls = msg.tool_calls;
-    }
-
-    return base;
-  });
+function formatInputMessages(
+  systemPrompt: string | undefined,
+  historyMessages: unknown[],
+  prompt: string,
+): string {
+  const messages: Array<{ role: string; content: string }> = [];
 
   if (systemPrompt) {
-    formattedMessages.unshift({
-      role: "system",
-      content: systemPrompt,
-    });
-  }
-  return JSON.stringify(formattedMessages);
-}
-function formatLlmOutput(message: AgentMessage): string {
-  const base: Record<string, unknown> = {
-    role: message.role,
-    content: extractTextContent(message.content),
-  };
-
-  if (message.tool_calls) {
-    base.tool_calls = message.tool_calls;
+    messages.push({ role: "system", content: systemPrompt });
   }
 
-  return JSON.stringify(base);
+  for (const msg of historyMessages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const m = msg as { role?: unknown; content?: unknown };
+    const role = typeof m.role === "string" ? m.role : "unknown";
+    messages.push({ role, content: extractTextContent(m.content) });
+  }
+
+  messages.push({ role: "user", content: prompt });
+
+  return JSON.stringify(messages);
 }
 
 export function createLlmTracingService(api: OpenClawPluginApi): OpenClawPluginService {
@@ -234,7 +103,6 @@ export function createLlmTracingService(api: OpenClawPluginApi): OpenClawPluginS
       const headers = cfg.headers;
       const sampleRate = resolveSampleRate(cfg.sampleRate);
 
-      // Initialize OpenTelemetry SDK using factory function
       const resource = resourceFromAttributes({
         [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
       });
@@ -256,117 +124,100 @@ export function createLlmTracingService(api: OpenClawPluginApi): OpenClawPluginS
           : {}),
       });
 
-      // Normalize sync/async SDK start across OpenTelemetry versions.
       await Promise.resolve(sdk.start());
 
-      // Get tracer after SDK is started
       const tracer = trace.getTracer("llm-tracing", "1.0.0");
-
       ctx.logger.info(`llm-tracing: initialized, endpoint=${tracesUrl}`);
-      ctx.logger.info("llm-tracing: registering agent_end hook in service.start()");
 
-      api.on("agent_end", async (event, hookCtx) => {
-        ctx.logger.info(
-          `llm-tracing: agent_end hook triggered, messages count: ${event.messages?.length ?? 0}`,
-        );
-        ctx.logger.info(
-          `llm-tracing: hook context: sessionKey=${hookCtx?.sessionKey}, agentId=${hookCtx?.agentId}`,
-        );
+      // runId → active span: correlates llm_input with llm_output for the same LLM call
+      const pendingSpans = new Map<string, Span>();
 
-        if (!event.messages || event.messages.length === 0) {
-          ctx.logger.warn("llm-tracing: no messages in event");
-          return;
-        }
-
+      // llm_input fires before each LLM API call with full input context including systemPrompt.
+      // Create one OTel span per LLM call.
+      api.on("llm_input", async (event, hookCtx) => {
         try {
-          const messages = parseMessages(event.messages);
-
-          // Log the last few messages roles to verify structure
-          const lastRoles = messages
-            .slice(-3)
-            .map((m) => m.role)
-            .join(", ");
-          ctx.logger.info(`llm-tracing: parsed messages last roles: [${lastRoles}]`);
-
-          // The 'assistant' message is usually the very last message in the conversation for a completion event
-          // OR it's the specific generation we just did.
-          // However, 'event.messages' usually contains the FULL history including the new assistant response.
-          const lastAssistant = findLastAssistant(messages);
-
-          if (!lastAssistant) {
-            ctx.logger.warn(
-              "llm-tracing: no assistant message found in history, skipping trace generation",
-            );
-            return;
-          }
-
-          const systemPrompt = event.systemPrompt;
-          const input = formatLlmInput(messages, systemPrompt);
-          const output = formatLlmOutput(lastAssistant);
-          const model = lastAssistant.model ?? "unknown";
-          const usage = lastAssistant.usage;
-
-          ctx.logger.info(
-            `llm-tracing: preparing span for model=${model}, input_len=${input.length}, output_len=${output.length}`,
+          const input = formatInputMessages(
+            event.systemPrompt,
+            event.historyMessages,
+            event.prompt,
           );
+          const span = tracer.startSpan(`${event.provider}/${event.model}`);
 
-          const startTime = event.durationMs
-            ? Date.now() - Math.max(0, event.durationMs)
-            : undefined;
-
-          const span = tracer.startSpan("chat_completion", { startTime });
-
-          // GenAI attributes
-          span.setAttribute(GEN_AI_SYSTEM, "openai"); // Assuming OpenAI-compatible structure for now
-          span.setAttribute(GEN_AI_REQUEST_MODEL, model);
-
-          // Content attributes
+          span.setAttribute(GEN_AI_SYSTEM, event.provider);
+          span.setAttribute(GEN_AI_REQUEST_MODEL, event.model);
           span.setAttribute(GEN_AI_PROMPT, input);
-          span.setAttribute(GEN_AI_COMPLETION, output);
+          span.setAttribute("openclaw.run_id", event.runId);
+          span.setAttribute("openclaw.session_id", event.sessionId);
 
-          if (usage?.input) {
-            span.setAttribute(GEN_AI_USAGE_INPUT_TOKENS, usage.input);
-          }
-          if (usage?.output) {
-            span.setAttribute(GEN_AI_USAGE_OUTPUT_TOKENS, usage.output);
-          }
-
-          // Session context - keep as custom attributes
-          if (hookCtx?.hostId) {
-            span.setAttribute("openclaw.host_id", hookCtx.hostId);
-          }
-          if (hookCtx?.gatewayInstanceId) {
-            span.setAttribute("openclaw.gateway_instance_id", hookCtx.gatewayInstanceId);
-          }
-          if (event.runId) {
-            span.setAttribute("openclaw.run_id", event.runId);
-          }
-          if (hookCtx?.sessionId) {
-            span.setAttribute("openclaw.session_id", hookCtx.sessionId);
-          }
           if (hookCtx?.sessionKey) {
             span.setAttribute("openclaw.session_key", hookCtx.sessionKey);
           }
           if (hookCtx?.agentId) {
             span.setAttribute("openclaw.agent_id", hookCtx.agentId);
           }
-
-          if (!event.success) {
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: event.error ?? "Agent execution failed",
-            });
-          } else {
-            span.setStatus({ code: SpanStatusCode.OK });
+          if (hookCtx?.hostId) {
+            span.setAttribute("openclaw.host_id", hookCtx.hostId);
+          }
+          if (hookCtx?.gatewayInstanceId) {
+            span.setAttribute("openclaw.gateway_instance_id", hookCtx.gatewayInstanceId);
           }
 
-          span.end();
-
+          pendingSpans.set(event.runId, span);
           ctx.logger.info(
-            `llm-tracing: traced generation for model=${model}, spanId=${span.spanContext().spanId}`,
+            `llm-tracing: started span for runId=${event.runId} model=${event.provider}/${event.model}`,
           );
         } catch (err) {
-          ctx.logger.error(`llm-tracing: failed to trace: ${String(err)}`);
+          ctx.logger.error(`llm-tracing: failed to start span: ${String(err)}`);
+        }
+      });
+
+      // llm_output fires after the LLM responds. Complete the matching span with output + usage.
+      api.on("llm_output", async (event) => {
+        const span = pendingSpans.get(event.runId);
+        if (!span) {
+          return;
+        }
+
+        try {
+          const output = JSON.stringify({
+            role: "assistant",
+            content: event.assistantTexts.join("\n"),
+          });
+
+          span.setAttribute(GEN_AI_COMPLETION, output);
+
+          if (event.usage?.input) {
+            span.setAttribute(GEN_AI_USAGE_INPUT_TOKENS, event.usage.input);
+          }
+          if (event.usage?.output) {
+            span.setAttribute(GEN_AI_USAGE_OUTPUT_TOKENS, event.usage.output);
+          }
+
+          span.setStatus({ code: SpanStatusCode.OK });
+          span.end();
+          ctx.logger.info(`llm-tracing: completed span for runId=${event.runId}`);
+        } catch (err) {
+          ctx.logger.error(`llm-tracing: failed to complete span: ${String(err)}`);
+        } finally {
+          pendingSpans.delete(event.runId);
+        }
+      });
+
+      // agent_end: clean up any spans that didn't receive an llm_output (e.g., aborted calls).
+      api.on("agent_end", async (event) => {
+        if (!event.success && pendingSpans.size > 0) {
+          for (const [runId, span] of pendingSpans) {
+            try {
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: event.error ?? "Agent execution failed",
+              });
+              span.end();
+            } catch {
+              // best-effort cleanup
+            }
+            pendingSpans.delete(runId);
+          }
         }
       });
     },
