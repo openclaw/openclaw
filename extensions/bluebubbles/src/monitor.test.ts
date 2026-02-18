@@ -244,6 +244,7 @@ function createMockRuntime(): PluginRuntime {
       slack: {} as PluginRuntime["channel"]["slack"],
       telegram: {} as PluginRuntime["channel"]["telegram"],
       signal: {} as PluginRuntime["channel"]["signal"],
+      keybase: {} as PluginRuntime["channel"]["keybase"],
       imessage: {} as PluginRuntime["channel"]["imessage"],
       whatsapp: {} as PluginRuntime["channel"]["whatsapp"],
     },

@@ -1,0 +1,9 @@
+{
+  "id": "keybase",
+  "channels": ["keybase"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

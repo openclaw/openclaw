@@ -72,6 +72,9 @@ import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { monitorKeybaseProvider } from "../../keybase/index.js";
+import { probeKeybase } from "../../keybase/probe.js";
+import { sendMessageKeybase } from "../../keybase/send.js";
 import {
   listLineAccountIds,
   normalizeAccountId as normalizeLineAccountId,
@@ -387,6 +390,11 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       sendPollTelegram,
       monitorTelegramProvider,
       messageActions: telegramMessageActions,
+    },
+    keybase: {
+      probeKeybase,
+      sendMessageKeybase,
+      monitorKeybaseProvider,
     },
     signal: {
       probeSignal,

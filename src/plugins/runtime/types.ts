@@ -124,6 +124,9 @@ type SendPollTelegram = typeof import("../../telegram/send.js").sendPollTelegram
 type MonitorTelegramProvider = typeof import("../../telegram/monitor.js").monitorTelegramProvider;
 type TelegramMessageActions =
   typeof import("../../channels/plugins/actions/telegram.js").telegramMessageActions;
+type ProbeKeybase = typeof import("../../keybase/probe.js").probeKeybase;
+type SendMessageKeybase = typeof import("../../keybase/send.js").sendMessageKeybase;
+type MonitorKeybaseProvider = typeof import("../../keybase/index.js").monitorKeybaseProvider;
 type ProbeSignal = typeof import("../../signal/probe.js").probeSignal;
 type SendMessageSignal = typeof import("../../signal/send.js").sendMessageSignal;
 type MonitorSignalProvider = typeof import("../../signal/index.js").monitorSignalProvider;
@@ -305,6 +308,11 @@ export type PluginRuntime = {
       sendPollTelegram: SendPollTelegram;
       monitorTelegramProvider: MonitorTelegramProvider;
       messageActions: TelegramMessageActions;
+    };
+    keybase: {
+      probeKeybase: ProbeKeybase;
+      sendMessageKeybase: SendMessageKeybase;
+      monitorKeybaseProvider: MonitorKeybaseProvider;
     };
     signal: {
       probeSignal: ProbeSignal;

@@ -12,6 +12,7 @@ export const CHAT_CHANNEL_ORDER = [
   "googlechat",
   "slack",
   "signal",
+  "keybase",
   "imessage",
 ] as const;
 
@@ -98,6 +99,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "signal",
     blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
     systemImage: "antenna.radiowaves.left.and.right",
+  },
+  keybase: {
+    id: "keybase",
+    label: "Keybase",
+    selectionLabel: "Keybase (CLI)",
+    detailLabel: "Keybase Chat",
+    docsPath: "/channels/keybase",
+    docsLabel: "keybase",
+    blurb: "end-to-end encrypted messaging via the Keybase CLI.",
+    systemImage: "lock.shield",
   },
   imessage: {
     id: "imessage",

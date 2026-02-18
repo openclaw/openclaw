@@ -5,6 +5,7 @@ import {
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
+import { resolveKeybaseAccount } from "../keybase/accounts.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
@@ -457,6 +458,25 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildSignalThreadToolContext({ context, hasRepliedRef }),
+    },
+  },
+  keybase: {
+    id: "keybase",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+    },
+    outbound: { textChunkLimit: 4000 },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        (resolveKeybaseAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+          String(entry),
+        ),
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) => (entry === "*" ? "*" : entry.replace(/^keybase:/i, "").toLowerCase()))
+          .filter(Boolean),
     },
   },
   imessage: {

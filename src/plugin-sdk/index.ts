@@ -398,6 +398,20 @@ export {
 } from "../telegram/outbound-params.js";
 export { type TelegramProbe } from "../telegram/probe.js";
 
+// Channel: Keybase
+export {
+  listKeybaseAccountIds,
+  resolveDefaultKeybaseAccountId,
+  resolveKeybaseAccount,
+  type ResolvedKeybaseAccount,
+} from "../keybase/accounts.js";
+export { keybaseOnboardingAdapter } from "../channels/plugins/onboarding/keybase.js";
+export {
+  looksLikeKeybaseTargetId,
+  normalizeKeybaseMessagingTarget,
+} from "../channels/plugins/normalize/keybase.js";
+export { KeybaseConfigSchema } from "../config/zod-schema.providers-core.js";
+
 // Channel: Signal
 export {
   listSignalAccountIds,
