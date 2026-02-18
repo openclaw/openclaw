@@ -94,6 +94,7 @@ export function createChatRunRegistry(): ChatRunRegistry {
 export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
+  finalTexts: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
@@ -102,12 +103,14 @@ export type ChatRunState = {
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
+  const finalTexts = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
+    finalTexts.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
   };
@@ -115,6 +118,7 @@ export function createChatRunState(): ChatRunState {
   return {
     registry,
     buffers,
+    finalTexts,
     deltaSentAt,
     abortedRuns,
     clear,
@@ -268,6 +272,11 @@ export function createAgentEventHandler({
   ) => {
     const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
     const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
+
+    // Store final text for watchdog before buffer is deleted.
+    // The lifecycle event handler reads this since the buffer may be incomplete
+    // when lifecycle:end fires (last text chunk race condition).
+    chatRunState.finalTexts.set(clientRunId, text);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
