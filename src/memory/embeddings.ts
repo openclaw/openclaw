@@ -228,7 +228,9 @@ export async function createEmbeddingProvider(
           };
         }
         // Non-auth errors are still fatal
-        throw new Error(combinedReason, { cause: fallbackErr });
+        const wrapped = new Error(combinedReason) as Error & { cause?: unknown };
+        wrapped.cause = fallbackErr;
+        throw wrapped;
       }
     }
     // No fallback configured - check if we should degrade to FTS-only
