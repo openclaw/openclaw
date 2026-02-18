@@ -26,8 +26,8 @@ describe("probeTelegram retry logic", () => {
 
   async function expectSuccessfulProbe(expectedCalls: number, retryCount = 0) {
     const probePromise = probeTelegram(token, timeoutMs);
-    for (let i = 0; i < retryCount; i += 1) {
-      await vi.advanceTimersByTimeAsync(1000);
+    if (retryCount > 0) {
+      await vi.advanceTimersByTimeAsync(retryCount * 1000);
     }
 
     const result = await probePromise;
@@ -80,8 +80,7 @@ describe("probeTelegram retry logic", () => {
     const probePromise = probeTelegram(token, timeoutMs);
 
     // Fast-forward for all retries
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
 
     const result = await probePromise;
 
