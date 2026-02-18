@@ -157,4 +157,125 @@ describe("gateway sessions patch", () => {
     }
     expect(res.error.message).toContain("spawnDepth is only supported");
   });
+
+  test("allows target agent own model for subagent session even when missing from global allowlist", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "default" },
+          },
+        },
+        list: [
+          {
+            id: "kimi",
+            model: { primary: "synthetic/hf:moonshotai/Kimi-K2.5" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:kimi:subagent:child",
+      patch: {
+        key: "agent:kimi:subagent:child",
+        model: "synthetic/hf:moonshotai/Kimi-K2.5",
+      },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    // Selected model matches the target agent default, so no override is stored.
+    expect(res.entry.providerOverride).toBeUndefined();
+    expect(res.entry.modelOverride).toBeUndefined();
+  });
+
+  test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "default" },
+          },
+        },
+        list: [
+          {
+            id: "kimi",
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            subagents: { model: "synthetic/hf:moonshotai/Kimi-K2.5" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:kimi:subagent:child",
+      patch: {
+        key: "agent:kimi:subagent:child",
+        model: "synthetic/hf:moonshotai/Kimi-K2.5",
+      },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("synthetic");
+    expect(res.entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
+  });
+
+  test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          subagents: { model: "synthetic/hf:moonshotai/Kimi-K2.5" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "default" },
+          },
+        },
+        list: [{ id: "kimi", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:kimi:subagent:child",
+      patch: {
+        key: "agent:kimi:subagent:child",
+        model: "synthetic/hf:moonshotai/Kimi-K2.5",
+      },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("synthetic");
+    expect(res.entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
+  });
 });
