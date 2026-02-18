@@ -420,41 +420,46 @@ describe("runGatewayUpdate", () => {
     expect(await pathExists(staleDir)).toBe(false);
   });
 
-  it("returns error with no-write-permission when global install path is not writable", async () => {
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await fs.mkdir(pkgRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf-8",
-    );
+  // fs.chmod is a no-op for write bits on Windows (NTFS ACLs work differently),
+  // so the W_OK pre-check cannot be exercised there.
+  it.skipIf(process.platform === "win32")(
+    "returns error with no-write-permission when global install path is not writable",
+    async () => {
+      const nodeModules = path.join(tempDir, "node_modules");
+      const pkgRoot = path.join(nodeModules, "openclaw");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(pkgRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+        "utf-8",
+      );
 
-    // Remove write permission to simulate EACCES (keep r-x so files are still readable)
-    await fs.chmod(pkgRoot, 0o555);
+      // Remove write permission to simulate EACCES (keep r-x so files are still readable)
+      await fs.chmod(pkgRoot, 0o555);
 
-    const { calls, runCommand } = createGlobalInstallHarness({
-      pkgRoot,
-      npmRootOutput: nodeModules,
-      installCommand: "npm i -g openclaw@latest",
-    });
+      const { calls, runCommand } = createGlobalInstallHarness({
+        pkgRoot,
+        npmRootOutput: nodeModules,
+        installCommand: "npm i -g openclaw@latest",
+      });
 
-    try {
-      const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+      try {
+        const result = await runWithCommand(runCommand, { cwd: pkgRoot });
 
-      expect(result.status).toBe("error");
-      expect(result.reason).toBe("no-write-permission");
-      expect(result.mode).toBe("npm");
-      expect(result.root).toBe(pkgRoot);
-      expect(result.before?.version).toBe("1.0.0");
-      expect(result.steps).toHaveLength(0);
-      // Verify the destructive install command was never called
-      expect(calls.some((call) => call.includes("npm i -g"))).toBe(false);
-    } finally {
-      // Restore permissions for cleanup
-      await fs.chmod(pkgRoot, 0o755);
-    }
-  });
+        expect(result.status).toBe("error");
+        expect(result.reason).toBe("no-write-permission");
+        expect(result.mode).toBe("npm");
+        expect(result.root).toBe(pkgRoot);
+        expect(result.before?.version).toBe("1.0.0");
+        expect(result.steps).toHaveLength(0);
+        // Verify the destructive install command was never called
+        expect(calls.some((call) => call.includes("npm i -g"))).toBe(false);
+      } finally {
+        // Restore permissions for cleanup
+        await fs.chmod(pkgRoot, 0o755);
+      }
+    },
+  );
 
   it("updates global bun installs when detected", async () => {
     const oldBunInstall = process.env.BUN_INSTALL;
