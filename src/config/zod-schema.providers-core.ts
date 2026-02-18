@@ -584,6 +584,7 @@ export const SlackAccountSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    typingReaction: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
