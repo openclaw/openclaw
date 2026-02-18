@@ -85,10 +85,6 @@ const BASE_METHODS = [
   "agent",
   "agent.identity.get",
   "agent.wait",
-  "mesh.plan",
-  "mesh.run",
-  "mesh.status",
-  "mesh.retry",
   "browser.request",
   // WebChat WebSocket-native chat methods
   "chat.history",
