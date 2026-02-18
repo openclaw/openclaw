@@ -1,12 +1,18 @@
-import { mkdtempSync } from "node:fs";
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const TEST_STATE_DIR = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
-const SANDBOX_REGISTRY_PATH = path.join(TEST_STATE_DIR, "containers.json");
-const SANDBOX_BROWSER_REGISTRY_PATH = path.join(TEST_STATE_DIR, "browsers.json");
+const { TEST_STATE_DIR, SANDBOX_REGISTRY_PATH, SANDBOX_BROWSER_REGISTRY_PATH } = vi.hoisted(() => {
+  const path = require("node:path");
+  const { mkdtempSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
+
+  return {
+    TEST_STATE_DIR: baseDir,
+    SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
+    SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
+  };
+});
 
 vi.mock("./constants.js", () => ({
   SANDBOX_STATE_DIR: TEST_STATE_DIR,
@@ -183,8 +189,8 @@ describe("registry race safety", () => {
     };
 
     await Promise.all([
-      removeRegistryEntry("container-x"),
       updateRegistry(containerEntry({ containerName: "container-x", configHash: "updated" })),
+      removeRegistryEntry("container-x"),
     ]);
 
     const registry = await readRegistry();
@@ -224,8 +230,8 @@ describe("registry race safety", () => {
     };
 
     await Promise.all([
-      removeBrowserRegistryEntry("browser-x"),
       updateBrowserRegistry(browserEntry({ containerName: "browser-x", configHash: "updated" })),
+      removeBrowserRegistryEntry("browser-x"),
     ]);
 
     const registry = await readBrowserRegistry();
