@@ -1,11 +1,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use url::Url;
 
 use crate::channels::{ChannelCapabilities, DriverRegistry};
@@ -555,6 +556,24 @@ impl MethodRegistry {
                     min_role: "owner",
                 },
                 MethodSpec {
+                    name: "exec.approval.request",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "exec.approval.waitdecision",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "exec.approval.resolve",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "browser.open",
                     family: MethodFamily::Browser,
                     requires_auth: true,
@@ -598,6 +617,7 @@ pub struct RpcDispatcher {
     nodes: NodePairRegistry,
     node_runtime: NodeRuntimeRegistry,
     exec_approvals: ExecApprovalsRegistry,
+    exec_approval: ExecApprovalRegistry,
     skills: SkillsRegistry,
     cron: CronRegistry,
     config: ConfigRegistry,
@@ -640,6 +660,9 @@ const MAX_CRON_RUN_LOGS_PER_JOB: usize = 500;
 const EXEC_APPROVALS_GLOBAL_PATH: &str = "memory://exec-approvals.json";
 const EXEC_APPROVALS_SOCKET_PATH: &str = "memory://exec-approvals.sock";
 const MAX_EXEC_APPROVALS_NODE_SNAPSHOTS: usize = 512;
+const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS: u64 = 120_000;
+const MAX_EXEC_APPROVAL_PENDING: usize = 4_096;
+const EXEC_APPROVAL_RESOLVED_GRACE_MS: u64 = 15_000;
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static WEB_LOGIN_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -649,6 +672,7 @@ static NODE_PAIR_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_INVOKE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static EXEC_APPROVAL_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static EXEC_APPROVAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
@@ -713,6 +737,9 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "exec.approvals.set",
     "exec.approvals.node.get",
     "exec.approvals.node.set",
+    "exec.approval.request",
+    "exec.approval.waitDecision",
+    "exec.approval.resolve",
     "config.get",
     "config.set",
     "config.patch",
@@ -751,6 +778,7 @@ impl RpcDispatcher {
             nodes: NodePairRegistry::new(),
             node_runtime: NodeRuntimeRegistry::new(),
             exec_approvals: ExecApprovalsRegistry::new(),
+            exec_approval: ExecApprovalRegistry::new(),
             skills: SkillsRegistry::new(),
             cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
@@ -827,6 +855,9 @@ impl RpcDispatcher {
             "exec.approvals.set" => self.handle_exec_approvals_set(req).await,
             "exec.approvals.node.get" => self.handle_exec_approvals_node_get(req).await,
             "exec.approvals.node.set" => self.handle_exec_approvals_node_set(req).await,
+            "exec.approval.request" => self.handle_exec_approval_request(req).await,
+            "exec.approval.waitdecision" => self.handle_exec_approval_wait_decision(req).await,
+            "exec.approval.resolve" => self.handle_exec_approval_resolve(req).await,
             "config.get" => self.handle_config_get(req).await,
             "config.set" => self.handle_config_set(req).await,
             "config.patch" => self.handle_config_patch(req).await,
@@ -2560,6 +2591,130 @@ impl RpcDispatcher {
             Err(err) => return RpcDispatchOutcome::bad_request(err),
         };
         RpcDispatchOutcome::Handled(json!(snapshot))
+    }
+
+    async fn handle_exec_approval_request(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ExecApprovalRequestParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid exec.approval.request params: {err}"
+                ));
+            }
+        };
+        let Some(command) = normalize_optional_text(Some(params.command), 2_048) else {
+            return RpcDispatchOutcome::bad_request("command required");
+        };
+        let timeout_ms = params
+            .timeout_ms
+            .unwrap_or(DEFAULT_EXEC_APPROVAL_TIMEOUT_MS)
+            .max(1);
+        let _request_payload = json!({
+            "command": command,
+            "cwd": normalize_optional_text(params.cwd, 1_024),
+            "host": normalize_optional_text(params.host, 128),
+            "security": normalize_optional_text(params.security, 64),
+            "ask": normalize_optional_text(params.ask, 64),
+            "agentId": normalize_optional_text(params.agent_id, 128),
+            "resolvedPath": normalize_optional_text(params.resolved_path, 2_048),
+            "sessionKey": normalize_optional_text(params.session_key, 512)
+        });
+        let create = match self
+            .exec_approval
+            .create(timeout_ms, normalize_optional_text(params.id, 128))
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        if params.two_phase.unwrap_or(false) {
+            return RpcDispatchOutcome::Handled(json!({
+                "status": "accepted",
+                "id": create.id,
+                "createdAtMs": create.created_at_ms,
+                "expiresAtMs": create.expires_at_ms
+            }));
+        }
+        let decision = create.receiver.await.ok().flatten();
+        RpcDispatchOutcome::Handled(json!({
+            "id": create.id,
+            "decision": decision,
+            "createdAtMs": create.created_at_ms,
+            "expiresAtMs": create.expires_at_ms
+        }))
+    }
+
+    async fn handle_exec_approval_wait_decision(
+        &self,
+        req: &RpcRequestFrame,
+    ) -> RpcDispatchOutcome {
+        let params = match decode_params::<ExecApprovalWaitDecisionParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid exec.approval.waitDecision params: {err}"
+                ));
+            }
+        };
+        let Some(id) = normalize_optional_text(params.id, 128) else {
+            return RpcDispatchOutcome::bad_request("id is required");
+        };
+        match self.exec_approval.wait_decision(&id).await {
+            ExecApprovalWaitOutcome::Missing => {
+                RpcDispatchOutcome::bad_request("approval expired or not found")
+            }
+            ExecApprovalWaitOutcome::Ready {
+                decision,
+                created_at_ms,
+                expires_at_ms,
+            } => RpcDispatchOutcome::Handled(json!({
+                "id": id,
+                "decision": decision,
+                "createdAtMs": created_at_ms,
+                "expiresAtMs": expires_at_ms
+            })),
+            ExecApprovalWaitOutcome::Pending {
+                receiver,
+                created_at_ms,
+                expires_at_ms,
+            } => {
+                let decision = receiver.await.ok().flatten();
+                RpcDispatchOutcome::Handled(json!({
+                    "id": id,
+                    "decision": decision,
+                    "createdAtMs": created_at_ms,
+                    "expiresAtMs": expires_at_ms
+                }))
+            }
+        }
+    }
+
+    async fn handle_exec_approval_resolve(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<ExecApprovalResolveParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid exec.approval.resolve params: {err}"
+                ));
+            }
+        };
+        let Some(id) = normalize_optional_text(Some(params.id), 128) else {
+            return RpcDispatchOutcome::bad_request("id is required");
+        };
+        let Some(decision_raw) = normalize_optional_text(Some(params.decision), 32) else {
+            return RpcDispatchOutcome::bad_request("invalid decision");
+        };
+        let decision = normalize(&decision_raw);
+        if !matches!(decision.as_str(), "allow-once" | "allow-always" | "deny") {
+            return RpcDispatchOutcome::bad_request("invalid decision");
+        }
+        let ok = self.exec_approval.resolve(&id, decision).await;
+        if !ok {
+            return RpcDispatchOutcome::bad_request("unknown approval id");
+        }
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true
+        }))
     }
 
     async fn handle_config_get(&self, _req: &RpcRequestFrame) -> RpcDispatchOutcome {
@@ -6056,6 +6211,201 @@ fn prune_oldest_exec_approvals_nodes(
     }
 }
 
+struct ExecApprovalRegistry {
+    state: Arc<Mutex<ExecApprovalState>>,
+}
+
+#[derive(Default)]
+struct ExecApprovalState {
+    pending_by_id: HashMap<String, ExecApprovalPendingEntry>,
+}
+
+struct ExecApprovalPendingEntry {
+    created_at_ms: u64,
+    expires_at_ms: u64,
+    decision: Option<String>,
+    resolved_at_ms: Option<u64>,
+    waiters: Vec<oneshot::Sender<Option<String>>>,
+}
+
+struct ExecApprovalCreateResult {
+    id: String,
+    created_at_ms: u64,
+    expires_at_ms: u64,
+    receiver: oneshot::Receiver<Option<String>>,
+}
+
+enum ExecApprovalWaitOutcome {
+    Missing,
+    Ready {
+        decision: Option<String>,
+        created_at_ms: u64,
+        expires_at_ms: u64,
+    },
+    Pending {
+        receiver: oneshot::Receiver<Option<String>>,
+        created_at_ms: u64,
+        expires_at_ms: u64,
+    },
+}
+
+impl ExecApprovalRegistry {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ExecApprovalState::default())),
+        }
+    }
+
+    async fn create(
+        &self,
+        timeout_ms: u64,
+        explicit_id: Option<String>,
+    ) -> Result<ExecApprovalCreateResult, String> {
+        let timeout_ms = timeout_ms.max(1);
+        let id = explicit_id.unwrap_or_else(next_exec_approval_id);
+        let now = now_ms();
+        let expires_at_ms = now.saturating_add(timeout_ms);
+        let (sender, receiver) = oneshot::channel();
+
+        {
+            let mut guard = self.state.lock().await;
+            if guard.pending_by_id.contains_key(&id) {
+                return Err("approval id already pending".to_owned());
+            }
+            guard.pending_by_id.insert(
+                id.clone(),
+                ExecApprovalPendingEntry {
+                    created_at_ms: now,
+                    expires_at_ms,
+                    decision: None,
+                    resolved_at_ms: None,
+                    waiters: vec![sender],
+                },
+            );
+            prune_oldest_exec_approval_pending(&mut guard.pending_by_id, MAX_EXEC_APPROVAL_PENDING);
+        }
+
+        let state = Arc::clone(&self.state);
+        let timeout_id = id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+            let (waiters, resolved_at_ms) = {
+                let mut guard = state.lock().await;
+                let Some(entry) = guard.pending_by_id.get_mut(&timeout_id) else {
+                    return;
+                };
+                if entry.resolved_at_ms.is_some() {
+                    return;
+                }
+                let resolved_at_ms = now_ms();
+                entry.resolved_at_ms = Some(resolved_at_ms);
+                entry.decision = None;
+                (std::mem::take(&mut entry.waiters), resolved_at_ms)
+            };
+            for waiter in waiters {
+                let _ = waiter.send(None);
+            }
+            spawn_exec_approval_grace_cleanup(state, timeout_id, resolved_at_ms);
+        });
+
+        Ok(ExecApprovalCreateResult {
+            id,
+            created_at_ms: now,
+            expires_at_ms,
+            receiver,
+        })
+    }
+
+    async fn wait_decision(&self, id: &str) -> ExecApprovalWaitOutcome {
+        let mut guard = self.state.lock().await;
+        let Some(entry) = guard.pending_by_id.get_mut(id) else {
+            return ExecApprovalWaitOutcome::Missing;
+        };
+        if entry.resolved_at_ms.is_some() {
+            return ExecApprovalWaitOutcome::Ready {
+                decision: entry.decision.clone(),
+                created_at_ms: entry.created_at_ms,
+                expires_at_ms: entry.expires_at_ms,
+            };
+        }
+        let (sender, receiver) = oneshot::channel();
+        entry.waiters.push(sender);
+        ExecApprovalWaitOutcome::Pending {
+            receiver,
+            created_at_ms: entry.created_at_ms,
+            expires_at_ms: entry.expires_at_ms,
+        }
+    }
+
+    async fn resolve(&self, id: &str, decision: String) -> bool {
+        let (waiters, resolved_at_ms) = {
+            let mut guard = self.state.lock().await;
+            let Some(entry) = guard.pending_by_id.get_mut(id) else {
+                return false;
+            };
+            if entry.resolved_at_ms.is_some() {
+                return false;
+            }
+            let resolved_at_ms = now_ms();
+            entry.decision = Some(decision.clone());
+            entry.resolved_at_ms = Some(resolved_at_ms);
+            (std::mem::take(&mut entry.waiters), resolved_at_ms)
+        };
+
+        for waiter in waiters {
+            let _ = waiter.send(Some(decision.clone()));
+        }
+        spawn_exec_approval_grace_cleanup(Arc::clone(&self.state), id.to_owned(), resolved_at_ms);
+        true
+    }
+}
+
+fn spawn_exec_approval_grace_cleanup(
+    state: Arc<Mutex<ExecApprovalState>>,
+    id: String,
+    resolved_at_ms: u64,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(EXEC_APPROVAL_RESOLVED_GRACE_MS)).await;
+        let mut guard = state.lock().await;
+        let should_remove = guard
+            .pending_by_id
+            .get(&id)
+            .and_then(|entry| entry.resolved_at_ms)
+            .map(|entry_resolved_at_ms| entry_resolved_at_ms == resolved_at_ms)
+            .unwrap_or(false);
+        if should_remove {
+            let _ = guard.pending_by_id.remove(&id);
+        }
+    });
+}
+
+fn prune_oldest_exec_approval_pending(
+    pending_by_id: &mut HashMap<String, ExecApprovalPendingEntry>,
+    max_pending: usize,
+) {
+    while pending_by_id.len() > max_pending {
+        let Some(oldest_key) = pending_by_id
+            .iter()
+            .min_by_key(|(_, entry)| (entry.resolved_at_ms.is_none(), entry.created_at_ms))
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        let Some(removed) = pending_by_id.remove(&oldest_key) else {
+            continue;
+        };
+        for waiter in removed.waiters {
+            let _ = waiter.send(None);
+        }
+    }
+}
+
+fn next_exec_approval_id() -> String {
+    let sequence = EXEC_APPROVAL_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("approval-{}-{sequence}", now_ms())
+}
+
 struct DeviceRegistry {
     state: Mutex<DevicePairState>,
 }
@@ -9212,6 +9562,40 @@ struct ExecApprovalsNodeSetParams {
     file: Option<Value>,
     #[serde(rename = "baseHash", alias = "base_hash")]
     base_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecApprovalRequestParams {
+    id: Option<String>,
+    command: String,
+    cwd: Option<String>,
+    host: Option<String>,
+    security: Option<String>,
+    ask: Option<String>,
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: Option<String>,
+    #[serde(rename = "resolvedPath", alias = "resolved_path")]
+    resolved_path: Option<String>,
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    timeout_ms: Option<u64>,
+    #[serde(rename = "twoPhase", alias = "two_phase")]
+    two_phase: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ExecApprovalWaitDecisionParams {
+    id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecApprovalResolveParams {
+    id: String,
+    decision: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -14736,6 +15120,189 @@ mod tests {
         };
         let out = dispatcher.handle_request(&node_set_non_object).await;
         assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_exec_approval_methods_follow_parity_contract() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid_request = RpcRequestFrame {
+            id: "req-exec-approval-request-invalid".to_owned(),
+            method: "exec.approval.request".to_owned(),
+            params: serde_json::json!({}),
+        };
+        let out = dispatcher.handle_request(&invalid_request).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let request_two_phase = RpcRequestFrame {
+            id: "req-exec-approval-request-two-phase".to_owned(),
+            method: "exec.approval.request".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-1",
+                "command": "git status",
+                "twoPhase": true,
+                "timeoutMs": 1_000
+            }),
+        };
+        match dispatcher.handle_request(&request_two_phase).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("accepted")
+                );
+                assert_eq!(
+                    payload.pointer("/id").and_then(serde_json::Value::as_str),
+                    Some("approval-1")
+                );
+            }
+            _ => panic!("expected exec.approval.request accepted response"),
+        }
+
+        let duplicate_id = RpcRequestFrame {
+            id: "req-exec-approval-request-duplicate".to_owned(),
+            method: "exec.approval.request".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-1",
+                "command": "ls",
+                "twoPhase": true
+            }),
+        };
+        let out = dispatcher.handle_request(&duplicate_id).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let wait_missing_id = RpcRequestFrame {
+            id: "req-exec-approval-wait-missing-id".to_owned(),
+            method: "exec.approval.waitDecision".to_owned(),
+            params: serde_json::json!({}),
+        };
+        let out = dispatcher.handle_request(&wait_missing_id).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let wait_unknown = RpcRequestFrame {
+            id: "req-exec-approval-wait-unknown".to_owned(),
+            method: "exec.approval.waitDecision".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-missing"
+            }),
+        };
+        let out = dispatcher.handle_request(&wait_unknown).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let resolve_invalid_decision = RpcRequestFrame {
+            id: "req-exec-approval-resolve-invalid".to_owned(),
+            method: "exec.approval.resolve".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-1",
+                "decision": "approve"
+            }),
+        };
+        let out = dispatcher.handle_request(&resolve_invalid_decision).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let resolve_unknown = RpcRequestFrame {
+            id: "req-exec-approval-resolve-unknown".to_owned(),
+            method: "exec.approval.resolve".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-missing",
+                "decision": "deny"
+            }),
+        };
+        let out = dispatcher.handle_request(&resolve_unknown).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let wait_pending = RpcRequestFrame {
+            id: "req-exec-approval-wait-pending".to_owned(),
+            method: "exec.approval.waitDecision".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-1"
+            }),
+        };
+        let resolve_allow_once = RpcRequestFrame {
+            id: "req-exec-approval-resolve".to_owned(),
+            method: "exec.approval.resolve".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-1",
+                "decision": "allow-once"
+            }),
+        };
+        let wait_future = dispatcher.handle_request(&wait_pending);
+        let resolve_future = async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            dispatcher.handle_request(&resolve_allow_once).await
+        };
+        let (wait_out, resolve_out) = tokio::join!(wait_future, resolve_future);
+
+        match resolve_out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected exec.approval.resolve handled"),
+        }
+
+        match wait_out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/decision")
+                        .and_then(serde_json::Value::as_str),
+                    Some("allow-once")
+                );
+                assert_eq!(
+                    payload.pointer("/id").and_then(serde_json::Value::as_str),
+                    Some("approval-1")
+                );
+            }
+            _ => panic!("expected exec.approval.waitDecision handled"),
+        }
+
+        let wait_resolved = RpcRequestFrame {
+            id: "req-exec-approval-wait-resolved".to_owned(),
+            method: "exec.approval.waitDecision".to_owned(),
+            params: serde_json::json!({
+                "id": "approval-1"
+            }),
+        };
+        match dispatcher.handle_request(&wait_resolved).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/decision")
+                        .and_then(serde_json::Value::as_str),
+                    Some("allow-once")
+                );
+            }
+            _ => panic!("expected resolved waitDecision handled"),
+        }
+
+        let request_single_phase_timeout = RpcRequestFrame {
+            id: "req-exec-approval-request-single-phase".to_owned(),
+            method: "exec.approval.request".to_owned(),
+            params: serde_json::json!({
+                "command": "echo hi",
+                "timeoutMs": 1
+            }),
+        };
+        match dispatcher
+            .handle_request(&request_single_phase_timeout)
+            .await
+        {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert!(payload.pointer("/id").is_some());
+                assert!(payload.pointer("/decision").is_some());
+                assert_eq!(
+                    payload
+                        .pointer("/decision")
+                        .and_then(serde_json::Value::as_str),
+                    None
+                );
+            }
+            _ => panic!("expected single-phase timeout response"),
+        }
     }
 
     #[tokio::test]
