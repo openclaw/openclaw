@@ -51,6 +51,26 @@ vi.mock("./daemon-install-helpers.js", () => ({
 
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 
+function makeDoctorIo() {
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+}
+
+function makeDoctorPrompts() {
+  return {
+    confirm: vi.fn().mockResolvedValue(true),
+    confirmRepair: vi.fn().mockResolvedValue(true),
+    confirmAggressive: vi.fn().mockResolvedValue(true),
+    confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
+    select: vi.fn().mockResolvedValue("node"),
+    shouldRepair: false,
+    shouldForce: false,
+  };
+}
+
+async function runRepair(cfg: OpenClawConfig) {
+  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts());
+}
+
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -91,20 +111,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       },
     };
 
-    await maybeRepairGatewayServiceConfig(
-      cfg,
-      "local",
-      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      {
-        confirm: vi.fn().mockResolvedValue(true),
-        confirmRepair: vi.fn().mockResolvedValue(true),
-        confirmAggressive: vi.fn().mockResolvedValue(true),
-        confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
-        select: vi.fn().mockResolvedValue("node"),
-        shouldRepair: false,
-        shouldForce: false,
-      },
-    );
+    await runRepair(cfg);
 
     expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -164,20 +171,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         gateway: {},
       };
 
-      await maybeRepairGatewayServiceConfig(
-        cfg,
-        "local",
-        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        {
-          confirm: vi.fn().mockResolvedValue(true),
-          confirmRepair: vi.fn().mockResolvedValue(true),
-          confirmAggressive: vi.fn().mockResolvedValue(true),
-          confirmSkipInNonInteractive: vi.fn().mockResolvedValue(true),
-          select: vi.fn().mockResolvedValue("node"),
-          shouldRepair: false,
-          shouldForce: false,
-        },
-      );
+      await runRepair(cfg);
 
       expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
         expect.objectContaining({
