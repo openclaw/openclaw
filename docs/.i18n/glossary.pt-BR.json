@@ -1,0 +1,1058 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "configuração de Skills"
+  },
+  {
+    "source": "Skills Config",
+    "target": "configuração de Skills"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Começando"
+  },
+  {
+    "source": "Getting started",
+    "target": "começando"
+  },
+  {
+    "source": "Quick start",
+    "target": "início rápido"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Início Rápido"
+  },
+  {
+    "source": "Docs directory",
+    "target": "diretório de documentação"
+  },
+  {
+    "source": "Credits",
+    "target": "Créditos"
+  },
+  {
+    "source": "Features",
+    "target": "Recursos"
+  },
+  {
+    "source": "DMs",
+    "target": "mensagens diretas"
+  },
+  {
+    "source": "DM",
+    "target": "mensagem direta"
+  },
+  {
+    "source": "sandbox",
+    "target": "área isolada"
+  },
+  {
+    "source": "Sandbox",
+    "target": "Área Isolada"
+  },
+  {
+    "source": "sandboxing",
+    "target": "isolamento em área restrita"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Isolamento em Área Restrita"
+  },
+  {
+    "source": "sandboxed",
+    "target": "isolado em área restrita"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "Isolado em Área Restrita"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "nota sobre isolamento em área restrita"
+  },
+  {
+    "source": "Companion apps",
+    "target": "aplicativos complementares"
+  },
+  {
+    "source": "expected keys",
+    "target": "chaves esperadas"
+  },
+  {
+    "source": "block streaming",
+    "target": "transmissão em blocos"
+  },
+  {
+    "source": "Block streaming",
+    "target": "Transmissão em Blocos"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "Descoberta + transportes"
+  },
+  {
+    "source": "Discovery",
+    "target": "Descoberta"
+  },
+  {
+    "source": "Network model",
+    "target": "Modelo de Rede"
+  },
+  {
+    "source": "for full details",
+    "target": "para mais detalhes"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "Primeiros 60 segundos"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "Autenticação: onde fica (importante)"
+  },
+  {
+    "source": "agent",
+    "target": "agente"
+  },
+  {
+    "source": "channel",
+    "target": "canal"
+  },
+  {
+    "source": "session",
+    "target": "sessão"
+  },
+  {
+    "source": "provider",
+    "target": "provedor"
+  },
+  {
+    "source": "model",
+    "target": "modelo"
+  },
+  {
+    "source": "tool",
+    "target": "ferramenta"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "install sanity",
+    "target": "verificação de integridade da instalação"
+  },
+  {
+    "source": "get unstuck",
+    "target": "resolver problemas"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "resolução de problemas"
+  },
+  {
+    "source": "FAQ",
+    "target": "Perguntas Frequentes"
+  },
+  {
+    "source": "onboarding",
+    "target": "integração"
+  },
+  {
+    "source": "Onboarding",
+    "target": "Integração"
+  },
+  {
+    "source": "wizard",
+    "target": "assistente"
+  },
+  {
+    "source": "environment variables",
+    "target": "variáveis de ambiente"
+  },
+  {
+    "source": "environment variable",
+    "target": "variável de ambiente"
+  },
+  {
+    "source": "API key",
+    "target": "chave de API"
+  },
+  {
+    "source": "token",
+    "target": "token"
+  },
+  {
+    "source": "webhook",
+    "target": "webhook"
+  },
+  {
+    "source": "webhook trigger",
+    "target": "gatilho de webhook"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "node host",
+    "target": "host de nó"
+  },
+  {
+    "source": "device pair",
+    "target": "emparelhar dispositivo"
+  },
+  {
+    "source": "device pairing",
+    "target": "emparelhamento de dispositivo"
+  },
+  {
+    "source": "web provider",
+    "target": "provedor web"
+  },
+  {
+    "source": "LLM",
+    "target": "LLM"
+  },
+  {
+    "source": "model provider",
+    "target": "provedor de modelo"
+  },
+  {
+    "source": "ACP",
+    "target": "ACP"
+  },
+  {
+    "source": "Anthropic",
+    "target": "Anthropic"
+  },
+  {
+    "source": "Claude",
+    "target": "Claude"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "plugin",
+    "target": "plugin"
+  },
+  {
+    "source": "browser automation",
+    "target": "automação de navegador"
+  },
+  {
+    "source": "browser tool",
+    "target": "ferramenta de navegador"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "HTTP request",
+    "target": "solicitação HTTP"
+  },
+  {
+    "source": "SSH",
+    "target": "SSH"
+  },
+  {
+    "source": "Bonjour",
+    "target": "Bonjour"
+  },
+  {
+    "source": "mDNS",
+    "target": "mDNS"
+  },
+  {
+    "source": "DNS",
+    "target": "DNS"
+  },
+  {
+    "source": "TLS",
+    "target": "TLS"
+  },
+  {
+    "source": "WebSocket",
+    "target": "WebSocket"
+  },
+  {
+    "source": "HTTP",
+    "target": "HTTP"
+  },
+  {
+    "source": "HTTPS",
+    "target": "HTTPS"
+  },
+  {
+    "source": "JSON",
+    "target": "JSON"
+  },
+  {
+    "source": "API",
+    "target": "API"
+  },
+  {
+    "source": "REST",
+    "target": "REST"
+  },
+  {
+    "source": "OAuth",
+    "target": "OAuth"
+  },
+  {
+    "source": "installation",
+    "target": "instalação"
+  },
+  {
+    "source": "activation",
+    "target": "ativação"
+  },
+  {
+    "source": "configuration",
+    "target": "configuração"
+  },
+  {
+    "source": "approvals",
+    "target": "aprovações"
+  },
+  {
+    "source": "allowlist",
+    "target": "lista de permissão"
+  },
+  {
+    "source": "allowlists",
+    "target": "listas de permissão"
+  },
+  {
+    "source": "remote access",
+    "target": "acesso remoto"
+  },
+  {
+    "source": "local access",
+    "target": "acesso local"
+  },
+  {
+    "source": "security",
+    "target": "segurança"
+  },
+  {
+    "source": "authentication",
+    "target": "autenticação"
+  },
+  {
+    "source": "authorization",
+    "target": "autorização"
+  },
+  {
+    "source": "credentials",
+    "target": "credenciais"
+  },
+  {
+    "source": "password",
+    "target": "senha"
+  },
+  {
+    "source": "username",
+    "target": "nome de usuário"
+  },
+  {
+    "source": "service account",
+    "target": "conta de serviço"
+  },
+  {
+    "source": "device token",
+    "target": "token de dispositivo"
+  },
+  {
+    "source": "session key",
+    "target": "chave de sessão"
+  },
+  {
+    "source": "workspace",
+    "target": "espaço de trabalho"
+  },
+  {
+    "source": "configuration file",
+    "target": "arquivo de configuração"
+  },
+  {
+    "source": "config file",
+    "target": "arquivo de configuração"
+  },
+  {
+    "source": "cron job",
+    "target": "tarefa cron"
+  },
+  {
+    "source": "scheduled task",
+    "target": "tarefa agendada"
+  },
+  {
+    "source": "heartbeat",
+    "target": "batida cardíaca"
+  },
+  {
+    "source": "memory",
+    "target": "memória"
+  },
+  {
+    "source": "vector database",
+    "target": "banco de dados vetorial"
+  },
+  {
+    "source": "semantic search",
+    "target": "busca semântica"
+  },
+  {
+    "source": "embedding",
+    "target": "incorporação"
+  },
+  {
+    "source": "prompt",
+    "target": "prompt"
+  },
+  {
+    "source": "system prompt",
+    "target": "prompt de sistema"
+  },
+  {
+    "source": "response",
+    "target": "resposta"
+  },
+  {
+    "source": "output",
+    "target": "saída"
+  },
+  {
+    "source": "input",
+    "target": "entrada"
+  },
+  {
+    "source": "message",
+    "target": "mensagem"
+  },
+  {
+    "source": "conversation",
+    "target": "conversa"
+  },
+  {
+    "source": "thread",
+    "target": "thread"
+  },
+  {
+    "source": "command",
+    "target": "comando"
+  },
+  {
+    "source": "subcommand",
+    "target": "subcomando"
+  },
+  {
+    "source": "flag",
+    "target": "sinalizador"
+  },
+  {
+    "source": "option",
+    "target": "opção"
+  },
+  {
+    "source": "argument",
+    "target": "argumento"
+  },
+  {
+    "source": "parameter",
+    "target": "parâmetro"
+  },
+  {
+    "source": "usage",
+    "target": "uso"
+  },
+  {
+    "source": "example",
+    "target": "exemplo"
+  },
+  {
+    "source": "syntax",
+    "target": "sintaxe"
+  },
+  {
+    "source": "output format",
+    "target": "formato de saída"
+  },
+  {
+    "source": "JSON output",
+    "target": "saída JSON"
+  },
+  {
+    "source": "plain text",
+    "target": "texto simples"
+  },
+  {
+    "source": "log",
+    "target": "registro"
+  },
+  {
+    "source": "logging",
+    "target": "registro de logs"
+  },
+  {
+    "source": "debug",
+    "target": "depuração"
+  },
+  {
+    "source": "debugging",
+    "target": "depuração"
+  },
+  {
+    "source": "error",
+    "target": "erro"
+  },
+  {
+    "source": "error handling",
+    "target": "tratamento de erros"
+  },
+  {
+    "source": "exception",
+    "target": "exceção"
+  },
+  {
+    "source": "timeout",
+    "target": "tempo limite"
+  },
+  {
+    "source": "retry",
+    "target": "tentar novamente"
+  },
+  {
+    "source": "fallback",
+    "target": "alternativa de fallback"
+  },
+  {
+    "source": "status",
+    "target": "status"
+  },
+  {
+    "source": "health check",
+    "target": "verificação de saúde"
+  },
+  {
+    "source": "diagnostic",
+    "target": "diagnóstico"
+  },
+  {
+    "source": "monitoring",
+    "target": "monitoramento"
+  },
+  {
+    "source": "metrics",
+    "target": "métricas"
+  },
+  {
+    "source": "performance",
+    "target": "desempenho"
+  },
+  {
+    "source": "optimization",
+    "target": "otimização"
+  },
+  {
+    "source": "scaling",
+    "target": "dimensionamento"
+  },
+  {
+    "source": "deployment",
+    "target": "implantação"
+  },
+  {
+    "source": "update",
+    "target": "atualização"
+  },
+  {
+    "source": "upgrade",
+    "target": "atualização"
+  },
+  {
+    "source": "migration",
+    "target": "migração"
+  },
+  {
+    "source": "backup",
+    "target": "backup"
+  },
+  {
+    "source": "restore",
+    "target": "restaurar"
+  },
+  {
+    "source": "file system",
+    "target": "sistema de arquivos"
+  },
+  {
+    "source": "directory",
+    "target": "diretório"
+  },
+  {
+    "source": "path",
+    "target": "caminho"
+  },
+  {
+    "source": "permission",
+    "target": "permissão"
+  },
+  {
+    "source": "access control",
+    "target": "controle de acesso"
+  },
+  {
+    "source": "user",
+    "target": "usuário"
+  },
+  {
+    "source": "group",
+    "target": "grupo"
+  },
+  {
+    "source": "role",
+    "target": "função"
+  },
+  {
+    "source": "scope",
+    "target": "escopo"
+  },
+  {
+    "source": "permission scope",
+    "target": "escopo de permissão"
+  },
+  {
+    "source": "rate limit",
+    "target": "limite de taxa"
+  },
+  {
+    "source": "quota",
+    "target": "cota"
+  },
+  {
+    "source": "billing",
+    "target": "faturamento"
+  },
+  {
+    "source": "pricing",
+    "target": "preços"
+  },
+  {
+    "source": "usage",
+    "target": "uso"
+  },
+  {
+    "source": "feedback",
+    "target": "feedback"
+  },
+  {
+    "source": "support",
+    "target": "suporte"
+  },
+  {
+    "source": "community",
+    "target": "comunidade"
+  },
+  {
+    "source": "documentation",
+    "target": "documentação"
+  },
+  {
+    "source": "release notes",
+    "target": "notas de versão"
+  },
+  {
+    "source": "changelog",
+    "target": "registro de alterações"
+  },
+  {
+    "source": "roadmap",
+    "target": "roteiro"
+  },
+  {
+    "source": "feature request",
+    "target": "solicitação de recurso"
+  },
+  {
+    "source": "bug report",
+    "target": "relatório de bug"
+  },
+  {
+    "source": "issue",
+    "target": "problema"
+  },
+  {
+    "source": "pull request",
+    "target": "solicitação de pull"
+  },
+  {
+    "source": "code review",
+    "target": "revisão de código"
+  },
+  {
+    "source": "testing",
+    "target": "testes"
+  },
+  {
+    "source": "test",
+    "target": "teste"
+  },
+  {
+    "source": "unit test",
+    "target": "teste unitário"
+  },
+  {
+    "source": "integration test",
+    "target": "teste de integração"
+  },
+  {
+    "source": "end-to-end test",
+    "target": "teste end-to-end"
+  },
+  {
+    "source": "e2e",
+    "target": "e2e"
+  },
+  {
+    "source": "CI/CD",
+    "target": "CI/CD"
+  },
+  {
+    "source": "continuous integration",
+    "target": "integração contínua"
+  },
+  {
+    "source": "continuous deployment",
+    "target": "implantação contínua"
+  },
+  {
+    "source": "Git",
+    "target": "Git"
+  },
+  {
+    "source": "GitHub",
+    "target": "GitHub"
+  },
+  {
+    "source": "branch",
+    "target": "branch"
+  },
+  {
+    "source": "commit",
+    "target": "commit"
+  },
+  {
+    "source": "merge",
+    "target": "mesclar"
+  },
+  {
+    "source": "rebase",
+    "target": "rebase"
+  },
+  {
+    "source": "stash",
+    "target": "stash"
+  },
+  {
+    "source": "version",
+    "target": "versão"
+  },
+  {
+    "source": "release",
+    "target": "versão"
+  },
+  {
+    "source": "stable",
+    "target": "estável"
+  },
+  {
+    "source": "beta",
+    "target": "beta"
+  },
+  {
+    "source": "alpha",
+    "target": "alfa"
+  },
+  {
+    "source": "dev",
+    "target": "dev"
+  },
+  {
+    "source": "development",
+    "target": "desenvolvimento"
+  },
+  {
+    "source": "production",
+    "target": "produção"
+  },
+  {
+    "source": "staging",
+    "target": "preprodução"
+  },
+  {
+    "source": "environment",
+    "target": "ambiente"
+  },
+  {
+    "source": "dependencies",
+    "target": "dependências"
+  },
+  {
+    "source": "package manager",
+    "target": "gerenciador de pacotes"
+  },
+  {
+    "source": "npm",
+    "target": "npm"
+  },
+  {
+    "source": "pnpm",
+    "target": "pnpm"
+  },
+  {
+    "source": "TypeScript",
+    "target": "TypeScript"
+  },
+  {
+    "source": "JavaScript",
+    "target": "JavaScript"
+  },
+  {
+    "source": "Node.js",
+    "target": "Node.js"
+  },
+  {
+    "source": "server",
+    "target": "servidor"
+  },
+  {
+    "source": "client",
+    "target": "cliente"
+  },
+  {
+    "source": "backend",
+    "target": "backend"
+  },
+  {
+    "source": "frontend",
+    "target": "frontend"
+  },
+  {
+    "source": "database",
+    "target": "banco de dados"
+  },
+  {
+    "source": "cache",
+    "target": "cache"
+  },
+  {
+    "source": "queue",
+    "target": "fila"
+  },
+  {
+    "source": "worker",
+    "target": "worker"
+  },
+  {
+    "source": "background job",
+    "target": "tarefa em segundo plano"
+  },
+  {
+    "source": "async",
+    "target": "assíncrono"
+  },
+  {
+    "source": "asynchronous",
+    "target": "assíncrono"
+  },
+  {
+    "source": "sync",
+    "target": "síncrono"
+  },
+  {
+    "source": "synchronous",
+    "target": "síncrono"
+  },
+  {
+    "source": "callback",
+    "target": "callback"
+  },
+  {
+    "source": "promise",
+    "target": "promise"
+  },
+  {
+    "source": "async/await",
+    "target": "async/await"
+  },
+  {
+    "source": "middleware",
+    "target": "middleware"
+  },
+  {
+    "source": "routing",
+    "target": "roteamento"
+  },
+  {
+    "source": "module",
+    "target": "módulo"
+  },
+  {
+    "source": "package",
+    "target": "pacote"
+  },
+  {
+    "source": "library",
+    "target": "biblioteca"
+  },
+  {
+    "source": "framework",
+    "target": "framework"
+  },
+  {
+    "source": "utility",
+    "target": "utilitário"
+  },
+  {
+    "source": "helper",
+    "target": "auxiliar"
+  },
+  {
+    "source": "interface",
+    "target": "interface"
+  },
+  {
+    "source": "type",
+    "target": "tipo"
+  },
+  {
+    "source": "class",
+    "target": "classe"
+  },
+  {
+    "source": "function",
+    "target": "função"
+  },
+  {
+    "source": "method",
+    "target": "método"
+  },
+  {
+    "source": "property",
+    "target": "propriedade"
+  },
+  {
+    "source": "variable",
+    "target": "variável"
+  },
+  {
+    "source": "constant",
+    "target": "constante"
+  },
+  {
+    "source": "enum",
+    "target": "enumeração"
+  },
+  {
+    "source": "object",
+    "target": "objeto"
+  },
+  {
+    "source": "array",
+    "target": "array"
+  },
+  {
+    "source": "string",
+    "target": "string"
+  },
+  {
+    "source": "number",
+    "target": "número"
+  },
+  {
+    "source": "boolean",
+    "target": "booleano"
+  },
+  {
+    "source": "null",
+    "target": "nulo"
+  },
+  {
+    "source": "undefined",
+    "target": "indefinido"
+  },
+  {
+    "source": "error message",
+    "target": "mensagem de erro"
+  },
+  {
+    "source": "warning message",
+    "target": "mensagem de aviso"
+  },
+  {
+    "source": "info message",
+    "target": "mensagem de informação"
+  },
+  {
+    "source": "success message",
+    "target": "mensagem de sucesso"
+  },
+  {
+    "source": "confirmation",
+    "target": "confirmação"
+  }
+]
