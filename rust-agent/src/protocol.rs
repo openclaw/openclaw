@@ -284,7 +284,11 @@ pub fn classify_method(method: &str) -> MethodFamily {
     if normalized == "health" || normalized == "status" {
         return MethodFamily::Gateway;
     }
-    if normalized.starts_with("agent.") || normalized == "agent" {
+    if normalized.starts_with("agent.")
+        || normalized == "agent"
+        || normalized.starts_with("agents.")
+        || normalized == "agents"
+    {
         return MethodFamily::Agent;
     }
     if normalized.starts_with("sessions.") || normalized == "sessions" {
@@ -303,6 +307,9 @@ pub fn classify_method(method: &str) -> MethodFamily {
         return MethodFamily::Gateway;
     }
     if normalized.starts_with("usage.") || normalized == "usage" {
+        return MethodFamily::Gateway;
+    }
+    if normalized.starts_with("models.") || normalized == "models" {
         return MethodFamily::Gateway;
     }
     if normalized.starts_with("message.") || normalized == "message" {
@@ -571,6 +578,8 @@ mod tests {
         assert_eq!(classify_method("status"), MethodFamily::Gateway);
         assert_eq!(classify_method("usage.cost"), MethodFamily::Gateway);
         assert_eq!(classify_method("agent.exec"), MethodFamily::Agent);
+        assert_eq!(classify_method("agents.list"), MethodFamily::Agent);
+        assert_eq!(classify_method("models.list"), MethodFamily::Gateway);
         assert_eq!(classify_method("sessions.patch"), MethodFamily::Sessions);
         assert_eq!(classify_method("node.invoke"), MethodFamily::Node);
         assert_eq!(classify_method("browser.open"), MethodFamily::Browser);

@@ -109,6 +109,54 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "models.list",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "agents.list",
+                    family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "agents.create",
+                    family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "agents.update",
+                    family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "agents.delete",
+                    family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "agents.files.list",
+                    family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "agents.files.get",
+                    family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "agents.files.set",
+                    family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "channels.status",
                     family: MethodFamily::Gateway,
                     requires_auth: true,
@@ -302,6 +350,8 @@ pub struct RpcDispatcher {
     sessions: SessionRegistry,
     system: SystemRegistry,
     talk: TalkRegistry,
+    models: ModelRegistry,
+    agents: AgentRegistry,
     config: ConfigRegistry,
     channel_capabilities: Vec<ChannelCapabilities>,
     started_at_ms: u64,
@@ -313,6 +363,27 @@ const RUNTIME_NAME: &str = "openclaw-agent-rs";
 const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SESSION_STORE_PATH: &str = "memory://session-registry";
 const SYSTEM_LOG_PATH: &str = "memory://gateway.log";
+const DEFAULT_AGENT_ID: &str = "main";
+const DEFAULT_AGENT_SCOPE: &str = "per-sender";
+const DEFAULT_AGENT_WORKSPACE: &str = "memory://agents/main";
+const DEFAULT_MAIN_KEY: &str = "main";
+const DEFAULT_AGENT_NAME: &str = "Main";
+const DEFAULT_AGENT_IDENTITY_NAME: &str = "OpenClaw";
+const DEFAULT_AGENT_IDENTITY_THEME: &str = "default";
+const DEFAULT_AGENT_IDENTITY_EMOJI: &str = "claw";
+const DEFAULT_AGENT_IDENTITY_AVATAR: &str = "openclaw";
+const DEFAULT_AGENT_IDENTITY_AVATAR_URL: &str = "memory://agents/main/avatar";
+const AGENT_BOOTSTRAP_FILE_NAMES: &[&str] = &[
+    "AGENTS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "USER.md",
+    "HEARTBEAT.md",
+    "BOOTSTRAP.md",
+];
+const AGENT_PRIMARY_MEMORY_FILE_NAME: &str = "MEMORY.md";
+const AGENT_ALT_MEMORY_FILE_NAME: &str = "memory.md";
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
@@ -326,6 +397,14 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "wake",
     "talk.config",
     "talk.mode",
+    "models.list",
+    "agents.list",
+    "agents.create",
+    "agents.update",
+    "agents.delete",
+    "agents.files.list",
+    "agents.files.get",
+    "agents.files.set",
     "channels.status",
     "channels.logout",
     "config.get",
@@ -360,6 +439,8 @@ impl RpcDispatcher {
             sessions: SessionRegistry::new(),
             system: SystemRegistry::new(),
             talk: TalkRegistry::new(),
+            models: ModelRegistry::new(),
+            agents: AgentRegistry::new(),
             config: ConfigRegistry::new(),
             channel_capabilities,
             started_at_ms: now_ms(),
@@ -379,6 +460,14 @@ impl RpcDispatcher {
             "wake" => self.handle_wake(req).await,
             "talk.config" => self.handle_talk_config(req).await,
             "talk.mode" => self.handle_talk_mode(req).await,
+            "models.list" => self.handle_models_list(req).await,
+            "agents.list" => self.handle_agents_list(req).await,
+            "agents.create" => self.handle_agents_create(req).await,
+            "agents.update" => self.handle_agents_update(req).await,
+            "agents.delete" => self.handle_agents_delete(req).await,
+            "agents.files.list" => self.handle_agents_files_list(req).await,
+            "agents.files.get" => self.handle_agents_files_get(req).await,
+            "agents.files.set" => self.handle_agents_files_set(req).await,
             "channels.status" => self.handle_channels_status(req).await,
             "channels.logout" => self.handle_channels_logout(req).await,
             "config.get" => self.handle_config_get(req).await,
@@ -644,6 +733,161 @@ impl RpcDispatcher {
             "enabled": state.enabled,
             "phase": state.phase,
             "ts": state.updated_at_ms
+        }))
+    }
+
+    async fn handle_models_list(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<ModelsListParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid models.list params: {err}"));
+        }
+        RpcDispatchOutcome::Handled(json!({
+            "models": self.models.list()
+        }))
+    }
+
+    async fn handle_agents_list(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<AgentsListParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid agents.list params: {err}"));
+        }
+        let snapshot = self.agents.list().await;
+        RpcDispatchOutcome::Handled(json!({
+            "defaultId": snapshot.default_id,
+            "mainKey": snapshot.main_key,
+            "scope": snapshot.scope,
+            "agents": snapshot.agents
+        }))
+    }
+
+    async fn handle_agents_create(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<AgentsCreateParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid agents.create params: {err}"
+                ));
+            }
+        };
+        let created = match self.agents.create(params).await {
+            Ok(created) => created,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        self.system
+            .log_line(format!("agents.create id={}", created.agent_id))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "agentId": created.agent_id,
+            "name": created.name,
+            "workspace": created.workspace
+        }))
+    }
+
+    async fn handle_agents_update(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<AgentsUpdateParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid agents.update params: {err}"
+                ));
+            }
+        };
+        let agent_id = match self.agents.update(params).await {
+            Ok(agent_id) => agent_id,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        self.system
+            .log_line(format!("agents.update id={agent_id}"))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "agentId": agent_id
+        }))
+    }
+
+    async fn handle_agents_delete(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<AgentsDeleteParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid agents.delete params: {err}"
+                ));
+            }
+        };
+        let removed = match self.agents.delete(params).await {
+            Ok(removed) => removed,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        self.system
+            .log_line(format!("agents.delete id={}", removed.agent_id))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "agentId": removed.agent_id,
+            "removedBindings": removed.removed_bindings
+        }))
+    }
+
+    async fn handle_agents_files_list(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<AgentsFilesListParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid agents.files.list params: {err}"
+                ));
+            }
+        };
+        let (agent_id, workspace, files) = match self.agents.list_files(params).await {
+            Ok(result) => result,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        RpcDispatchOutcome::Handled(json!({
+            "agentId": agent_id,
+            "workspace": workspace,
+            "files": files
+        }))
+    }
+
+    async fn handle_agents_files_get(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<AgentsFilesGetParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid agents.files.get params: {err}"
+                ));
+            }
+        };
+        let (agent_id, workspace, file) = match self.agents.get_file(params).await {
+            Ok(result) => result,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        RpcDispatchOutcome::Handled(json!({
+            "agentId": agent_id,
+            "workspace": workspace,
+            "file": file
+        }))
+    }
+
+    async fn handle_agents_files_set(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<AgentsFilesSetParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid agents.files.set params: {err}"
+                ));
+            }
+        };
+        let (agent_id, workspace, file) = match self.agents.set_file(params).await {
+            Ok(result) => result,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        self.system
+            .log_line(format!("agents.files.set id={agent_id} name={}", file.name))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "agentId": agent_id,
+            "workspace": workspace,
+            "file": file
         }))
     }
 
@@ -1888,6 +2132,514 @@ impl TalkRegistry {
         guard.updated_at_ms = now_ms();
         guard.clone()
     }
+}
+
+struct ModelRegistry {
+    models: Vec<ModelChoice>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ModelChoice {
+    id: String,
+    name: String,
+    provider: String,
+    #[serde(rename = "contextWindow", skip_serializing_if = "Option::is_none")]
+    context_window: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<bool>,
+}
+
+impl ModelRegistry {
+    fn new() -> Self {
+        let mut models = vec![
+            ModelChoice {
+                id: "claude-sonnet-4-5".to_owned(),
+                name: "Claude Sonnet 4.5".to_owned(),
+                provider: "anthropic".to_owned(),
+                context_window: Some(200_000),
+                reasoning: Some(true),
+            },
+            ModelChoice {
+                id: "claude-haiku-4-5".to_owned(),
+                name: "Claude Haiku 4.5".to_owned(),
+                provider: "anthropic".to_owned(),
+                context_window: Some(200_000),
+                reasoning: None,
+            },
+            ModelChoice {
+                id: "gpt-5.3".to_owned(),
+                name: "gpt-5.3".to_owned(),
+                provider: "openai".to_owned(),
+                context_window: Some(200_000),
+                reasoning: Some(true),
+            },
+            ModelChoice {
+                id: "gpt-5.3-codex".to_owned(),
+                name: "gpt-5.3-codex".to_owned(),
+                provider: "openai-codex".to_owned(),
+                context_window: Some(200_000),
+                reasoning: Some(true),
+            },
+        ];
+        models.sort_by(|a, b| {
+            let provider = a.provider.cmp(&b.provider);
+            if provider != std::cmp::Ordering::Equal {
+                return provider;
+            }
+            let name = a.name.cmp(&b.name);
+            if name != std::cmp::Ordering::Equal {
+                return name;
+            }
+            a.id.cmp(&b.id)
+        });
+        Self { models }
+    }
+
+    fn list(&self) -> Vec<ModelChoice> {
+        self.models.clone()
+    }
+}
+
+struct AgentRegistry {
+    state: Mutex<AgentState>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentState {
+    default_id: String,
+    main_key: String,
+    scope: String,
+    entries: HashMap<String, AgentEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentEntry {
+    id: String,
+    name: Option<String>,
+    workspace: String,
+    model: Option<String>,
+    identity: Option<AgentIdentityState>,
+    files: HashMap<String, AgentFileState>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentIdentityState {
+    name: Option<String>,
+    theme: Option<String>,
+    emoji: Option<String>,
+    avatar: Option<String>,
+    avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentFileState {
+    content: String,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AgentListSnapshot {
+    #[serde(rename = "defaultId")]
+    default_id: String,
+    #[serde(rename = "mainKey")]
+    main_key: String,
+    scope: String,
+    agents: Vec<AgentSummaryView>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AgentSummaryView {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<AgentIdentityView>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AgentIdentityView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    theme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emoji: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<String>,
+    #[serde(rename = "avatarUrl", skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentCreatedResult {
+    agent_id: String,
+    name: String,
+    workspace: String,
+}
+
+#[derive(Debug, Clone)]
+struct AgentDeleteResult {
+    agent_id: String,
+    removed_bindings: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AgentFileView {
+    name: String,
+    path: String,
+    missing: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+    #[serde(rename = "updatedAtMs", skip_serializing_if = "Option::is_none")]
+    updated_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+}
+
+impl AgentRegistry {
+    fn new() -> Self {
+        let mut entries = HashMap::new();
+        entries.insert(
+            DEFAULT_AGENT_ID.to_owned(),
+            AgentEntry {
+                id: DEFAULT_AGENT_ID.to_owned(),
+                name: Some(DEFAULT_AGENT_NAME.to_owned()),
+                workspace: DEFAULT_AGENT_WORKSPACE.to_owned(),
+                model: None,
+                identity: Some(AgentIdentityState {
+                    name: Some(DEFAULT_AGENT_IDENTITY_NAME.to_owned()),
+                    theme: Some(DEFAULT_AGENT_IDENTITY_THEME.to_owned()),
+                    emoji: Some(DEFAULT_AGENT_IDENTITY_EMOJI.to_owned()),
+                    avatar: Some(DEFAULT_AGENT_IDENTITY_AVATAR.to_owned()),
+                    avatar_url: Some(DEFAULT_AGENT_IDENTITY_AVATAR_URL.to_owned()),
+                }),
+                files: HashMap::new(),
+            },
+        );
+        Self {
+            state: Mutex::new(AgentState {
+                default_id: DEFAULT_AGENT_ID.to_owned(),
+                main_key: DEFAULT_MAIN_KEY.to_owned(),
+                scope: DEFAULT_AGENT_SCOPE.to_owned(),
+                entries,
+            }),
+        }
+    }
+
+    async fn list(&self) -> AgentListSnapshot {
+        let guard = self.state.lock().await;
+        let mut ids = guard.entries.keys().cloned().collect::<Vec<_>>();
+        ids.sort_by(|a, b| {
+            if a.eq_ignore_ascii_case(&guard.default_id) {
+                return std::cmp::Ordering::Less;
+            }
+            if b.eq_ignore_ascii_case(&guard.default_id) {
+                return std::cmp::Ordering::Greater;
+            }
+            a.cmp(b)
+        });
+        let agents = ids
+            .into_iter()
+            .filter_map(|id| guard.entries.get(&id))
+            .map(agent_summary_from_entry)
+            .collect::<Vec<_>>();
+        AgentListSnapshot {
+            default_id: guard.default_id.clone(),
+            main_key: guard.main_key.clone(),
+            scope: guard.scope.clone(),
+            agents,
+        }
+    }
+
+    async fn create(&self, params: AgentsCreateParams) -> Result<AgentCreatedResult, String> {
+        let name = normalize_optional_text(Some(params.name), 128)
+            .ok_or_else(|| "name is required".to_owned())?;
+        let workspace = normalize_optional_text(Some(params.workspace), 512)
+            .ok_or_else(|| "workspace is required".to_owned())?;
+        let agent_id = normalize_agent_id(&name);
+        if agent_id.eq_ignore_ascii_case(DEFAULT_AGENT_ID) {
+            return Err(format!("\"{DEFAULT_AGENT_ID}\" is reserved"));
+        }
+
+        let mut guard = self.state.lock().await;
+        if guard.entries.contains_key(&agent_id) {
+            return Err(format!("agent \"{agent_id}\" already exists"));
+        }
+        let identity = AgentIdentityState {
+            name: Some(name.clone()),
+            theme: None,
+            emoji: normalize_optional_text(params.emoji, 32),
+            avatar: normalize_optional_text(params.avatar, 128),
+            avatar_url: None,
+        };
+        guard.entries.insert(
+            agent_id.clone(),
+            AgentEntry {
+                id: agent_id.clone(),
+                name: Some(name.clone()),
+                workspace: workspace.clone(),
+                model: None,
+                identity: Some(identity),
+                files: HashMap::new(),
+            },
+        );
+        Ok(AgentCreatedResult {
+            agent_id,
+            name,
+            workspace,
+        })
+    }
+
+    async fn update(&self, params: AgentsUpdateParams) -> Result<String, String> {
+        let agent_id = normalize_agent_id(&params.agent_id);
+        let mut guard = self.state.lock().await;
+        let Some(entry) = guard.entries.get_mut(&agent_id) else {
+            return Err(format!("agent \"{agent_id}\" not found"));
+        };
+
+        if let Some(name) = normalize_optional_text(params.name, 128) {
+            entry.name = Some(name.clone());
+            upsert_agent_identity(entry, |identity| {
+                identity.name = Some(name.clone());
+            });
+        }
+        if let Some(workspace) = params.workspace {
+            let normalized = normalize_optional_text(Some(workspace), 512)
+                .ok_or_else(|| "workspace must be a non-empty string".to_owned())?;
+            entry.workspace = normalized;
+        }
+        if let Some(model) = normalize_optional_text(params.model, 256) {
+            entry.model = Some(model);
+        }
+        if let Some(avatar) = normalize_optional_text(params.avatar, 256) {
+            upsert_agent_identity(entry, |identity| {
+                identity.avatar = Some(avatar.clone());
+            });
+        }
+        Ok(agent_id)
+    }
+
+    async fn delete(&self, params: AgentsDeleteParams) -> Result<AgentDeleteResult, String> {
+        let agent_id = normalize_agent_id(&params.agent_id);
+        if agent_id.eq_ignore_ascii_case(DEFAULT_AGENT_ID) {
+            return Err(format!("\"{DEFAULT_AGENT_ID}\" cannot be deleted"));
+        }
+        let _delete_files = params.delete_files.unwrap_or(true);
+
+        let mut guard = self.state.lock().await;
+        if guard.entries.remove(&agent_id).is_none() {
+            return Err(format!("agent \"{agent_id}\" not found"));
+        }
+        Ok(AgentDeleteResult {
+            agent_id,
+            removed_bindings: 1,
+        })
+    }
+
+    async fn list_files(
+        &self,
+        params: AgentsFilesListParams,
+    ) -> Result<(String, String, Vec<AgentFileView>), String> {
+        let agent_id = normalize_agent_id(&params.agent_id);
+        let guard = self.state.lock().await;
+        let Some(entry) = guard.entries.get(&agent_id) else {
+            return Err("unknown agent id".to_owned());
+        };
+
+        let mut files = Vec::new();
+        for name in AGENT_BOOTSTRAP_FILE_NAMES {
+            files.push(agent_file_view_from_state(entry, name, false));
+        }
+        if entry.files.contains_key(AGENT_PRIMARY_MEMORY_FILE_NAME) {
+            files.push(agent_file_view_from_state(
+                entry,
+                AGENT_PRIMARY_MEMORY_FILE_NAME,
+                false,
+            ));
+        } else if entry.files.contains_key(AGENT_ALT_MEMORY_FILE_NAME) {
+            files.push(agent_file_view_from_state(
+                entry,
+                AGENT_ALT_MEMORY_FILE_NAME,
+                false,
+            ));
+        } else {
+            files.push(agent_file_view_from_state(
+                entry,
+                AGENT_PRIMARY_MEMORY_FILE_NAME,
+                false,
+            ));
+        }
+
+        Ok((agent_id, entry.workspace.clone(), files))
+    }
+
+    async fn get_file(
+        &self,
+        params: AgentsFilesGetParams,
+    ) -> Result<(String, String, AgentFileView), String> {
+        let agent_id = normalize_agent_id(&params.agent_id);
+        let name = normalize_optional_text(Some(params.name), 128)
+            .ok_or_else(|| "unsupported file \"\"".to_owned())?;
+        if !is_allowed_agent_file_name(&name) {
+            return Err(format!("unsupported file \"{name}\""));
+        }
+
+        let guard = self.state.lock().await;
+        let Some(entry) = guard.entries.get(&agent_id) else {
+            return Err("unknown agent id".to_owned());
+        };
+        let file = agent_file_view_from_state(entry, &name, true);
+        Ok((agent_id, entry.workspace.clone(), file))
+    }
+
+    async fn set_file(
+        &self,
+        params: AgentsFilesSetParams,
+    ) -> Result<(String, String, AgentFileView), String> {
+        let agent_id = normalize_agent_id(&params.agent_id);
+        let name = normalize_optional_text(Some(params.name), 128)
+            .ok_or_else(|| "unsupported file \"\"".to_owned())?;
+        if !is_allowed_agent_file_name(&name) {
+            return Err(format!("unsupported file \"{name}\""));
+        }
+
+        let mut guard = self.state.lock().await;
+        let Some(entry) = guard.entries.get_mut(&agent_id) else {
+            return Err("unknown agent id".to_owned());
+        };
+        let now = now_ms();
+        entry.files.insert(
+            name.clone(),
+            AgentFileState {
+                content: params.content,
+                updated_at_ms: now,
+            },
+        );
+        let file = agent_file_view_from_state(entry, &name, true);
+        Ok((agent_id, entry.workspace.clone(), file))
+    }
+}
+
+fn upsert_agent_identity<F>(entry: &mut AgentEntry, mut mutate: F)
+where
+    F: FnMut(&mut AgentIdentityState),
+{
+    let mut identity = entry.identity.clone().unwrap_or(AgentIdentityState {
+        name: None,
+        theme: None,
+        emoji: None,
+        avatar: None,
+        avatar_url: None,
+    });
+    mutate(&mut identity);
+    entry.identity = Some(identity);
+}
+
+fn agent_summary_from_entry(entry: &AgentEntry) -> AgentSummaryView {
+    let _has_model_override = entry.model.is_some();
+    AgentSummaryView {
+        id: entry.id.clone(),
+        name: entry.name.clone(),
+        identity: entry.identity.as_ref().map(|identity| AgentIdentityView {
+            name: identity.name.clone(),
+            theme: identity.theme.clone(),
+            emoji: identity.emoji.clone(),
+            avatar: identity.avatar.clone(),
+            avatar_url: identity.avatar_url.clone(),
+        }),
+    }
+}
+
+fn agent_file_view_from_state(
+    entry: &AgentEntry,
+    name: &str,
+    include_content: bool,
+) -> AgentFileView {
+    let path = agent_workspace_file_path(&entry.workspace, name);
+    if let Some(file) = entry.files.get(name) {
+        return AgentFileView {
+            name: name.to_owned(),
+            path,
+            missing: false,
+            size: Some(file.content.len() as u64),
+            updated_at_ms: Some(file.updated_at_ms),
+            content: include_content.then(|| file.content.clone()),
+        };
+    }
+    AgentFileView {
+        name: name.to_owned(),
+        path,
+        missing: true,
+        size: None,
+        updated_at_ms: None,
+        content: None,
+    }
+}
+
+fn agent_workspace_file_path(workspace: &str, name: &str) -> String {
+    let trimmed = workspace
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches('\\')
+        .to_owned();
+    if trimmed.is_empty() {
+        return name.to_owned();
+    }
+    format!("{trimmed}/{name}")
+}
+
+fn is_allowed_agent_file_name(name: &str) -> bool {
+    AGENT_BOOTSTRAP_FILE_NAMES
+        .iter()
+        .any(|candidate| *candidate == name)
+        || name == AGENT_PRIMARY_MEMORY_FILE_NAME
+        || name == AGENT_ALT_MEMORY_FILE_NAME
+}
+
+fn normalize_agent_id(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return DEFAULT_AGENT_ID.to_owned();
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    if is_valid_agent_id(&lowered) {
+        return lowered;
+    }
+    let mut normalized = String::with_capacity(lowered.len());
+    let mut last_dash = false;
+    for ch in lowered.chars() {
+        let valid = ch.is_ascii_alphanumeric() || ch == '_' || ch == '-';
+        if valid {
+            normalized.push(ch);
+            last_dash = false;
+            continue;
+        }
+        if !last_dash {
+            normalized.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed_dash = normalized.trim_matches('-');
+    let output = trimmed_dash.chars().take(64).collect::<String>();
+    if output.is_empty() {
+        DEFAULT_AGENT_ID.to_owned()
+    } else {
+        output
+    }
+}
+
+fn is_valid_agent_id(value: &str) -> bool {
+    if value.is_empty() || value.len() > 64 {
+        return false;
+    }
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 struct ConfigRegistry {
@@ -3311,6 +4063,67 @@ struct TalkConfigParams {
 struct TalkModeParams {
     enabled: Option<bool>,
     phase: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ModelsListParams {}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AgentsListParams {}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentsCreateParams {
+    name: String,
+    workspace: String,
+    emoji: Option<String>,
+    avatar: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentsUpdateParams {
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: String,
+    name: Option<String>,
+    workspace: Option<String>,
+    model: Option<String>,
+    avatar: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentsDeleteParams {
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: String,
+    #[serde(rename = "deleteFiles", alias = "delete_files")]
+    delete_files: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentsFilesListParams {
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentsFilesGetParams {
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentsFilesSetParams {
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: String,
+    name: String,
+    content: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -6533,6 +7346,294 @@ mod tests {
                 }));
             }
             _ => panic!("expected logs.tail cursor handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_models_list_returns_catalog_and_rejects_unknown_params() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid = RpcRequestFrame {
+            id: "req-models-list-invalid".to_owned(),
+            method: "models.list".to_owned(),
+            params: serde_json::json!({
+                "extra": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let valid = RpcRequestFrame {
+            id: "req-models-list".to_owned(),
+            method: "models.list".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&valid).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let models = payload
+                    .pointer("/models")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(!models.is_empty());
+                assert!(models.iter().all(|entry| {
+                    entry
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some()
+                        && entry
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some()
+                        && entry
+                            .get("provider")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some()
+                }));
+                let providers = models
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .get("provider")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+                    .collect::<Vec<_>>();
+                let mut sorted = providers.clone();
+                sorted.sort();
+                assert_eq!(providers, sorted);
+            }
+            _ => panic!("expected models.list handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_agents_methods_manage_agents_and_workspace_files() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid_list = RpcRequestFrame {
+            id: "req-agents-list-invalid".to_owned(),
+            method: "agents.list".to_owned(),
+            params: serde_json::json!({
+                "extra": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_list).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let list = RpcRequestFrame {
+            id: "req-agents-list".to_owned(),
+            method: "agents.list".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&list).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/defaultId")
+                        .and_then(serde_json::Value::as_str),
+                    Some(super::DEFAULT_AGENT_ID)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/mainKey")
+                        .and_then(serde_json::Value::as_str),
+                    Some(super::DEFAULT_MAIN_KEY)
+                );
+                let agents = payload
+                    .pointer("/agents")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(agents.iter().any(|agent| {
+                    agent.get("id").and_then(serde_json::Value::as_str)
+                        == Some(super::DEFAULT_AGENT_ID)
+                }));
+            }
+            _ => panic!("expected agents.list handled"),
+        }
+
+        let create = RpcRequestFrame {
+            id: "req-agents-create".to_owned(),
+            method: "agents.create".to_owned(),
+            params: serde_json::json!({
+                "name": "Ops Bot",
+                "workspace": "memory://agents/ops",
+                "emoji": "ops"
+            }),
+        };
+        let created_agent_id = match dispatcher.handle_request(&create).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                payload
+                    .pointer("/agentId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("agentId")
+            }
+            _ => panic!("expected agents.create handled"),
+        };
+        assert_eq!(created_agent_id, "ops-bot");
+
+        let duplicate = RpcRequestFrame {
+            id: "req-agents-create-duplicate".to_owned(),
+            method: "agents.create".to_owned(),
+            params: serde_json::json!({
+                "name": "Ops Bot",
+                "workspace": "memory://agents/ops-2"
+            }),
+        };
+        let out = dispatcher.handle_request(&duplicate).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let update = RpcRequestFrame {
+            id: "req-agents-update".to_owned(),
+            method: "agents.update".to_owned(),
+            params: serde_json::json!({
+                "agentId": "ops-bot",
+                "name": "Ops Prime",
+                "model": "gpt-5.3",
+                "avatar": "ops.png"
+            }),
+        };
+        let out = dispatcher.handle_request(&update).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let files_list = RpcRequestFrame {
+            id: "req-agents-files-list".to_owned(),
+            method: "agents.files.list".to_owned(),
+            params: serde_json::json!({
+                "agentId": "ops-bot"
+            }),
+        };
+        match dispatcher.handle_request(&files_list).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let files = payload
+                    .pointer("/files")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(files.iter().any(|file| {
+                    file.get("name").and_then(serde_json::Value::as_str) == Some("AGENTS.md")
+                }));
+            }
+            _ => panic!("expected agents.files.list handled"),
+        }
+
+        let unsupported_file = RpcRequestFrame {
+            id: "req-agents-files-get-unsupported".to_owned(),
+            method: "agents.files.get".to_owned(),
+            params: serde_json::json!({
+                "agentId": "ops-bot",
+                "name": "README.md"
+            }),
+        };
+        let out = dispatcher.handle_request(&unsupported_file).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let set_file = RpcRequestFrame {
+            id: "req-agents-files-set".to_owned(),
+            method: "agents.files.set".to_owned(),
+            params: serde_json::json!({
+                "agentId": "ops-bot",
+                "name": "AGENTS.md",
+                "content": "# Ops"
+            }),
+        };
+        match dispatcher.handle_request(&set_file).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/file/missing")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/file/content")
+                        .and_then(serde_json::Value::as_str),
+                    Some("# Ops")
+                );
+            }
+            _ => panic!("expected agents.files.set handled"),
+        }
+
+        let get_file = RpcRequestFrame {
+            id: "req-agents-files-get".to_owned(),
+            method: "agents.files.get".to_owned(),
+            params: serde_json::json!({
+                "agentId": "ops-bot",
+                "name": "AGENTS.md"
+            }),
+        };
+        match dispatcher.handle_request(&get_file).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/file/missing")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/file/content")
+                        .and_then(serde_json::Value::as_str),
+                    Some("# Ops")
+                );
+            }
+            _ => panic!("expected agents.files.get handled"),
+        }
+
+        let delete_main = RpcRequestFrame {
+            id: "req-agents-delete-main".to_owned(),
+            method: "agents.delete".to_owned(),
+            params: serde_json::json!({
+                "agentId": "main"
+            }),
+        };
+        let out = dispatcher.handle_request(&delete_main).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let delete = RpcRequestFrame {
+            id: "req-agents-delete".to_owned(),
+            method: "agents.delete".to_owned(),
+            params: serde_json::json!({
+                "agentId": "ops-bot",
+                "deleteFiles": true
+            }),
+        };
+        match dispatcher.handle_request(&delete).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/removedBindings")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+            }
+            _ => panic!("expected agents.delete handled"),
+        }
+
+        let list_after_delete = RpcRequestFrame {
+            id: "req-agents-list-post-delete".to_owned(),
+            method: "agents.list".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&list_after_delete).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let agents = payload
+                    .pointer("/agents")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                assert!(!agents.iter().any(|agent| {
+                    agent.get("id").and_then(serde_json::Value::as_str) == Some("ops-bot")
+                }));
+            }
+            _ => panic!("expected agents.list handled after delete"),
         }
     }
 }
