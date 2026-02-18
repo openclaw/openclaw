@@ -6,9 +6,16 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+
+export type SignalGroupConfig = {
+  requireMention?: boolean;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
 
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -57,6 +64,8 @@ export type SignalAccountConfig = {
   dmHistoryLimit?: number;
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
+  /** Per-group config overrides keyed by group ID. */
+  groups?: Record<string, SignalGroupConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
