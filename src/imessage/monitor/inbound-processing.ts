@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
@@ -14,7 +16,6 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -26,7 +27,7 @@ import {
   isAllowedIMessageSender,
   normalizeIMessageHandle,
 } from "../targets.js";
-import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
+import { buildIMessageEchoScope } from "./echo-scope.js";
 
 type IMessageReplyContext = {
   id?: string;
@@ -469,15 +470,9 @@ export function buildIMessageInboundContext(params: {
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
 }
 
-export function buildIMessageEchoScope(params: {
-  accountId: string;
-  isGroup: boolean;
-  chatId?: number;
-  sender: string;
-}): string {
-  return `${params.accountId}:${params.isGroup ? formatIMessageChatTarget(params.chatId) : `imessage:${params.sender}`}`;
-}
+// Re-export from shared module for backwards compatibility.
+export { buildIMessageEchoScope } from "./echo-scope.js";
 
 export function describeIMessageEchoDropLog(params: { messageText: string }): string {
-  return `imessage: skipping echo message (matches recently sent text within 5s): "${truncateUtf16Safe(params.messageText, 50)}"`;
+  return `imessage: skipping echo message (matches recently sent text): "${truncateUtf16Safe(params.messageText, 50)}"`;
 }
