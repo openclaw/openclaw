@@ -170,13 +170,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const runPromise = processDiscordMessage(ctx as any);
 
-    let settled = false;
-    void runPromise.finally(() => {
-      settled = true;
-    });
-    for (let i = 0; i < 120 && !settled; i++) {
-      await vi.advanceTimersByTimeAsync(1_000);
-    }
+    await vi.advanceTimersByTimeAsync(120_000);
 
     await runPromise;
     const emojis = (
