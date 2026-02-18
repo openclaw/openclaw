@@ -1,0 +1,21 @@
+{
+  "id": "persist-postgres",
+  "uiHints": {
+    "databaseUrl": {
+      "label": "PostgreSQL URL",
+      "sensitive": true,
+      "placeholder": "postgresql://user:pass@host:5432/dbname",
+      "help": "PostgreSQL connection string (or use ${DATABASE_URL})"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "databaseUrl": {
+        "type": "string"
+      }
+    },
+    "required": []
+  }
+}

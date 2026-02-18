@@ -31,6 +31,8 @@ export type SessionEntry = {
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
   sessionId: string;
+  /** Timestamp (ms) when this session entry was first created. */
+  createdAt?: number;
   updatedAt: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
@@ -110,9 +112,12 @@ export function mergeSessionEntry(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
   if (!existing) {
-    return { ...patch, sessionId, updatedAt };
+    const createdAt = patch.createdAt ?? Date.now();
+    return { ...patch, sessionId, createdAt, updatedAt };
   }
-  return { ...existing, ...patch, sessionId, updatedAt };
+  // Preserve original createdAt; fall back to patch.createdAt when existing has none.
+  const createdAt = existing.createdAt ?? patch.createdAt;
+  return { ...existing, ...patch, sessionId, createdAt, updatedAt };
 }
 
 export function resolveFreshSessionTotalTokens(

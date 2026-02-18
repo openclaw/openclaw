@@ -469,6 +469,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/persist-postgres:
+    dependencies:
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.8
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/signal:
     devDependencies:
       openclaw:
@@ -631,8 +641,8 @@ packages:
   '@aws-crypto/util@5.2.0':
     resolution: {integrity: sha512-4RkU9EsI6ZpBve5fseQlGNUWKMa1RLPQ1dnjnQoe07ldfIzcsGb5hC5W0Dm7u423KWzawlrpbjXBrXCEv9zazQ==}
 
-  '@aws-sdk/client-bedrock-runtime@3.991.0':
-    resolution: {integrity: sha512-eKdkfIj2R/lfA6XGjTCQdFSVRKAjPd1Epndf1DvnzYInEzh/WOoaMMWuQn6HP9VPzHDb4xAiYmJX9FHmTJGFtg==}
+  '@aws-sdk/client-bedrock-runtime@3.990.0':
+    resolution: {integrity: sha512-8TtV9c0DWGxwYvlcED/NlhTM0aDHM9yb0Y3Q0b0NQwiyrahX+qlck/Wo8fJQ7GHAkFn8MtczvAQzbLszyo+w0Q==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-bedrock@3.991.0':
@@ -795,8 +805,8 @@ packages:
     resolution: {integrity: sha512-qMlSxKbpRlAridDExk92nSobyDdpPijUq2DW6oDnUqd0iOGxmQjyqhMIihI9+zv4LPyZdRje2cavWPbCbWm3eA==}
     engines: {node: '>=6.9.0'}
 
-  '@babel/helper-string-parser@8.0.0-rc.2':
-    resolution: {integrity: sha512-noLx87RwlBEMrTzncWd/FvTxoJ9+ycHNg0n8yyYydIoDsLZuxknKgWRJUqcrVkNrJ74uGyhWQzQaS3q8xfGAhQ==}
+  '@babel/helper-string-parser@8.0.0-rc.1':
+    resolution: {integrity: sha512-vi/pfmbrOtQmqgfboaBhaCU50G7mcySVu69VU8z+lYoPPB6WzI9VgV7WQfL908M4oeSH5fDkmoupIqoE0SdApw==}
     engines: {node: ^20.19.0 || >=22.12.0}
 
   '@babel/helper-validator-identifier@7.28.5':
@@ -5828,7 +5838,7 @@ snapshots:
       '@smithy/util-utf8': 2.3.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-bedrock-runtime@3.991.0':
+  '@aws-sdk/client-bedrock-runtime@3.990.0':
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
@@ -5842,9 +5852,9 @@ snapshots:
       '@aws-sdk/middleware-user-agent': 3.972.10
       '@aws-sdk/middleware-websocket': 3.972.6
       '@aws-sdk/region-config-resolver': 3.972.3
-      '@aws-sdk/token-providers': 3.991.0
+      '@aws-sdk/token-providers': 3.990.0
       '@aws-sdk/types': 3.973.1
-      '@aws-sdk/util-endpoints': 3.991.0
+      '@aws-sdk/util-endpoints': 3.990.0
       '@aws-sdk/util-user-agent-browser': 3.972.3
       '@aws-sdk/util-user-agent-node': 3.972.8
       '@smithy/config-resolver': 4.4.6
@@ -6360,7 +6370,7 @@ snapshots:
 
   '@babel/helper-string-parser@7.27.1': {}
 
-  '@babel/helper-string-parser@8.0.0-rc.2': {}
+  '@babel/helper-string-parser@8.0.0-rc.1': {}
 
   '@babel/helper-validator-identifier@7.28.5': {}
 
@@ -6383,7 +6393,7 @@ snapshots:
 
   '@babel/types@8.0.0-rc.1':
     dependencies:
-      '@babel/helper-string-parser': 8.0.0-rc.2
+      '@babel/helper-string-parser': 8.0.0-rc.1
       '@babel/helper-validator-identifier': 8.0.0-rc.1
 
   '@bcoe/v8-coverage@1.0.2': {}
@@ -6839,7 +6849,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.59.0':
     dependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -6855,7 +6865,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.13
     optionalDependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
     transitivePeerDependencies:
       - debug
 
@@ -6965,7 +6975,7 @@ snapshots:
   '@mariozechner/pi-ai@0.52.12(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
-      '@aws-sdk/client-bedrock-runtime': 3.991.0
+      '@aws-sdk/client-bedrock-runtime': 3.990.0
       '@google/genai': 1.41.0
       '@mistralai/mistralai': 1.10.0
       '@sinclair/typebox': 0.34.48
@@ -7058,7 +7068,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/msal-node': 3.8.7
       '@microsoft/agents-activity': 1.2.3
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       jsonwebtoken: 9.0.3
       jwks-rsa: 3.2.2
       object-path: 0.11.8
@@ -7957,7 +7967,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@slack/web-api': 7.14.1
       '@types/express': 5.0.6
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -8003,7 +8013,7 @@ snapshots:
       '@slack/types': 2.20.0
       '@types/node': 25.2.3
       '@types/retry': 0.12.0
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -8891,14 +8901,6 @@ snapshots:
 
   aws4@1.13.2: {}
 
-  axios@1.13.5:
-    dependencies:
-      follow-redirects: 1.15.11
-      form-data: 2.5.4
-      proxy-from-env: 1.1.0
-    transitivePeerDependencies:
-      - debug
-
   axios@1.13.5(debug@4.4.3):
     dependencies:
       follow-redirects: 1.15.11(debug@4.4.3)
@@ -9477,8 +9479,6 @@ snapshots:
       array-back: 3.1.0
 
   flatbuffers@24.12.23: {}
-
-  follow-redirects@1.15.11: {}
 
   follow-redirects@1.15.11(debug@4.4.3):
     optionalDependencies:

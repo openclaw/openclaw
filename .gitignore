@@ -91,3 +91,7 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# AI and code generation artifacts
+## Claude
+.claude/
