@@ -9,13 +9,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.js";
 
 function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return list.map((v) => String(v).trim()).filter(Boolean);
+  return normalizeStringEntries(Array.isArray(list) ? list : undefined);
 }
 
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
