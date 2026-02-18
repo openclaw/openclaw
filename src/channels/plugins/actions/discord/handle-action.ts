@@ -1,0 +1,269 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import {
+  readNumberParam,
+  readStringArrayParam,
+  readStringParam,
+} from "../../../../agents/tools/common.js";
+import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
+import { resolveDiscordChannelId } from "../../../../discord/targets.js";
+import type { ChannelMessageActionContext } from "../../types.js";
+import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
+
+const providerId = "discord";
+
+function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
+  if (params.clearParent === true) {
+    return null;
+  }
+  if (params.parentId === null) {
+    return null;
+  }
+  return readStringParam(params, "parentId");
+}
+
+export async function handleDiscordMessageAction(
+  ctx: Pick<ChannelMessageActionContext, "action" | "params" | "cfg" | "accountId">,
+): Promise<AgentToolResult<unknown>> {
+  const { action, params, cfg } = ctx;
+  const accountId = ctx.accountId ?? readStringParam(params, "accountId");
+
+  const resolveChannelId = () =>
+    resolveDiscordChannelId(
+      readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true }),
+    );
+
+  if (action === "send") {
+    const to = readStringParam(params, "to", { required: true });
+    const asVoice = params.asVoice === true;
+    const rawComponents = params.components;
+    const hasComponents =
+      Boolean(rawComponents) &&
+      (typeof rawComponents === "function" || typeof rawComponents === "object");
+    const components = hasComponents ? rawComponents : undefined;
+    const content = readStringParam(params, "message", {
+      required: !asVoice && !hasComponents,
+      allowEmpty: true,
+    });
+    // Support media, path, and filePath for media URL
+    const mediaUrl =
+      readStringParam(params, "media", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "filePath", { trim: false });
+    const filename = readStringParam(params, "filename");
+    const replyTo = readStringParam(params, "replyTo");
+    const rawEmbeds = params.embeds;
+    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
+    const silent = params.silent === true;
+    const sessionKey = readStringParam(params, "__sessionKey");
+    const agentId = readStringParam(params, "__agentId");
+    return await handleDiscordAction(
+      {
+        action: "sendMessage",
+        accountId: accountId ?? undefined,
+        to,
+        content,
+        mediaUrl: mediaUrl ?? undefined,
+        filename: filename ?? undefined,
+        replyTo: replyTo ?? undefined,
+        components,
+        embeds,
+        asVoice,
+        silent,
+        __sessionKey: sessionKey ?? undefined,
+        __agentId: agentId ?? undefined,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "poll") {
+    const to = readStringParam(params, "to", { required: true });
+    const question = readStringParam(params, "pollQuestion", {
+      required: true,
+    });
+    const answers = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+    const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+    const durationHours = readNumberParam(params, "pollDurationHours", {
+      integer: true,
+    });
+    return await handleDiscordAction(
+      {
+        action: "poll",
+        accountId: accountId ?? undefined,
+        to,
+        question,
+        answers,
+        allowMultiselect,
+        durationHours: durationHours ?? undefined,
+        content: readStringParam(params, "message"),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "react") {
+    const messageId = readStringParam(params, "messageId", { required: true });
+    const emoji = readStringParam(params, "emoji", { allowEmpty: true });
+    const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+    return await handleDiscordAction(
+      {
+        action: "react",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        messageId,
+        emoji,
+        remove,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "reactions") {
+    const messageId = readStringParam(params, "messageId", { required: true });
+    const limit = readNumberParam(params, "limit", { integer: true });
+    return await handleDiscordAction(
+      {
+        action: "reactions",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        messageId,
+        limit,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "read") {
+    const limit = readNumberParam(params, "limit", { integer: true });
+    return await handleDiscordAction(
+      {
+        action: "readMessages",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        limit,
+        before: readStringParam(params, "before"),
+        after: readStringParam(params, "after"),
+        around: readStringParam(params, "around"),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "edit") {
+    const messageId = readStringParam(params, "messageId", { required: true });
+    const content = readStringParam(params, "message", { required: true });
+    return await handleDiscordAction(
+      {
+        action: "editMessage",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        messageId,
+        content,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "delete") {
+    const messageId = readStringParam(params, "messageId", { required: true });
+    return await handleDiscordAction(
+      {
+        action: "deleteMessage",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        messageId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "pin" || action === "unpin" || action === "list-pins") {
+    const messageId =
+      action === "list-pins" ? undefined : readStringParam(params, "messageId", { required: true });
+    return await handleDiscordAction(
+      {
+        action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        messageId,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "permissions") {
+    return await handleDiscordAction(
+      {
+        action: "permissions",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "thread-create") {
+    const name = readStringParam(params, "threadName", { required: true });
+    const messageId = readStringParam(params, "messageId");
+    const content = readStringParam(params, "message");
+    const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
+      integer: true,
+    });
+    return await handleDiscordAction(
+      {
+        action: "threadCreate",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        name,
+        messageId,
+        content,
+        autoArchiveMinutes,
+      },
+      cfg,
+    );
+  }
+
+  if (action === "sticker") {
+    const stickerIds =
+      readStringArrayParam(params, "stickerId", {
+        required: true,
+        label: "sticker-id",
+      }) ?? [];
+    return await handleDiscordAction(
+      {
+        action: "sticker",
+        accountId: accountId ?? undefined,
+        to: readStringParam(params, "to", { required: true }),
+        stickerIds,
+        content: readStringParam(params, "message"),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "set-presence") {
+    return await handleDiscordAction(
+      {
+        action: "setPresence",
+        accountId: accountId ?? undefined,
+        status: readStringParam(params, "status"),
+        activityType: readStringParam(params, "activityType"),
+        activityName: readStringParam(params, "activityName"),
+        activityUrl: readStringParam(params, "activityUrl"),
+        activityState: readStringParam(params, "activityState"),
+      },
+      cfg,
+    );
+  }
+
+  const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
+    ctx,
+    resolveChannelId,
+    readParentIdParam,
+  });
+  if (adminResult !== undefined) {
+    return adminResult;
+  }
+
+  throw new Error(`Action ${String(action)} is not supported for provider ${providerId}.`);
+}

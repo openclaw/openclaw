@@ -1,0 +1,136 @@
+import { describe, expect, it } from "vitest";
+import { computeSandboxBrowserConfigHash, computeSandboxConfigHash } from "./config-hash.js";
+import type { SandboxDockerConfig } from "./types.js";
+
+function createDockerConfig(overrides?: Partial<SandboxDockerConfig>): SandboxDockerConfig {
+  return {
+    image: "openclaw-sandbox:test",
+    containerPrefix: "openclaw-sbx-",
+    workdir: "/workspace",
+    readOnlyRoot: true,
+    tmpfs: ["/tmp", "/var/tmp", "/run"],
+    network: "none",
+    capDrop: ["ALL"],
+    env: { LANG: "C.UTF-8" },
+    dns: ["1.1.1.1", "8.8.8.8"],
+    extraHosts: ["host.docker.internal:host-gateway"],
+    binds: ["/tmp/workspace:/workspace:rw", "/tmp/cache:/cache:ro"],
+    ...overrides,
+  };
+}
+
+type DockerArrayField = "tmpfs" | "capDrop" | "dns" | "extraHosts" | "binds";
+
+const ORDER_SENSITIVE_ARRAY_CASES: ReadonlyArray<{
+  field: DockerArrayField;
+  before: string[];
+  after: string[];
+}> = [
+  {
+    field: "tmpfs",
+    before: ["/tmp", "/var/tmp", "/run"],
+    after: ["/run", "/var/tmp", "/tmp"],
+  },
+  {
+    field: "capDrop",
+    before: ["ALL", "CHOWN"],
+    after: ["CHOWN", "ALL"],
+  },
+  {
+    field: "dns",
+    before: ["1.1.1.1", "8.8.8.8"],
+    after: ["8.8.8.8", "1.1.1.1"],
+  },
+  {
+    field: "extraHosts",
+    before: ["host.docker.internal:host-gateway", "db.local:10.0.0.5"],
+    after: ["db.local:10.0.0.5", "host.docker.internal:host-gateway"],
+  },
+  {
+    field: "binds",
+    before: ["/tmp/workspace:/workspace:rw", "/tmp/cache:/cache:ro"],
+    after: ["/tmp/cache:/cache:ro", "/tmp/workspace:/workspace:rw"],
+  },
+];
+
+describe("computeSandboxConfigHash", () => {
+  it("ignores object key order", () => {
+    const shared = {
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+    };
+    const left = computeSandboxConfigHash({
+      ...shared,
+      docker: createDockerConfig({
+        env: {
+          LANG: "C.UTF-8",
+          B: "2",
+          A: "1",
+        },
+      }),
+    });
+    const right = computeSandboxConfigHash({
+      ...shared,
+      docker: createDockerConfig({
+        env: {
+          A: "1",
+          B: "2",
+          LANG: "C.UTF-8",
+        },
+      }),
+    });
+    expect(left).toBe(right);
+  });
+
+  it.each(ORDER_SENSITIVE_ARRAY_CASES)("treats $field order as significant", (testCase) => {
+    const shared = {
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+    };
+    const left = computeSandboxConfigHash({
+      ...shared,
+      docker: createDockerConfig({
+        [testCase.field]: testCase.before,
+      } as Partial<SandboxDockerConfig>),
+    });
+    const right = computeSandboxConfigHash({
+      ...shared,
+      docker: createDockerConfig({
+        [testCase.field]: testCase.after,
+      } as Partial<SandboxDockerConfig>),
+    });
+    expect(left).not.toBe(right);
+  });
+});
+
+describe("computeSandboxBrowserConfigHash", () => {
+  it("treats docker bind order as significant", () => {
+    const shared = {
+      browser: {
+        cdpPort: 9222,
+        vncPort: 5900,
+        noVncPort: 6080,
+        headless: false,
+        enableNoVnc: true,
+      },
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+    };
+    const left = computeSandboxBrowserConfigHash({
+      ...shared,
+      docker: createDockerConfig({
+        binds: ["/tmp/workspace:/workspace:rw", "/tmp/cache:/cache:ro"],
+      }),
+    });
+    const right = computeSandboxBrowserConfigHash({
+      ...shared,
+      docker: createDockerConfig({
+        binds: ["/tmp/cache:/cache:ro", "/tmp/workspace:/workspace:rw"],
+      }),
+    });
+    expect(left).not.toBe(right);
+  });
+});

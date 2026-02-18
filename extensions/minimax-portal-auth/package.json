@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/minimax-portal-auth",
+  "version": "2026.2.18",
+  "private": true,
+  "description": "OpenClaw MiniMax Portal OAuth provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

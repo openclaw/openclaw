@@ -1,0 +1,5 @@
+parent_config: ../../.swiftlint.yml
+
+included:
+  - Sources
+  - ../shared/ClawdisNodeKit/Sources

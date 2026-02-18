@@ -1,0 +1,128 @@
+# Changelog
+
+## 2026.2.18
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.16
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.15
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.14
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.13
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.6-3
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.6-2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.6
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.4
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.2.2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.31
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.30
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.29
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.23
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.22
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.21
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.20
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.1.19-1
+
+Initial release.
+
+### Features
+
+- NIP-04 encrypted DM support (kind:4 events)
+- Key validation (hex and nsec formats)
+- Multi-relay support with sequential fallback
+- Event signature verification
+- TTL-based deduplication (24h)
+- Access control via dmPolicy (pairing, allowlist, open, disabled)
+- Pubkey normalization (hex/npub)
+
+### Protocol Support
+
+- NIP-01: Basic event structure
+- NIP-04: Encrypted direct messages
+
+### Planned for v2
+
+- NIP-17: Gift-wrapped DMs
+- NIP-44: Versioned encryption
+- Media attachments
