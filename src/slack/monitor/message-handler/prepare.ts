@@ -526,6 +526,7 @@ export async function prepareSlackMessage(params: {
         channelId: message.channel,
         threadTs,
         client: ctx.app.client,
+        userToken: ctx.userToken,
         currentMessageTs: message.ts,
         limit: threadInitialHistoryLimit,
       });

@@ -5,6 +5,8 @@ import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
+import { createSlackWebClient } from "../client.js";
+
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
@@ -434,6 +436,7 @@ export async function resolveSlackThreadHistory(params: {
   channelId: string;
   threadTs: string;
   client: SlackWebClient;
+  userToken?: string;
   currentMessageTs?: string;
   limit?: number;
 }): Promise<SlackThreadMessage[]> {
@@ -444,12 +447,13 @@ export async function resolveSlackThreadHistory(params: {
 
   // Slack recommends no more than 200 per page.
   const fetchLimit = 200;
-  const retained: SlackRepliesPageMessage[] = [];
-  let cursor: string | undefined;
 
-  try {
+  const doFetch = async (client: SlackWebClient): Promise<SlackThreadMessage[]> => {
+    const retained: SlackRepliesPageMessage[] = [];
+    let cursor: string | undefined;
+
     do {
-      const response = (await params.client.conversations.replies({
+      const response = (await client.conversations.replies({
         channel: params.channelId,
         ts: params.threadTs,
         limit: fetchLimit,
@@ -485,7 +489,28 @@ export async function resolveSlackThreadHistory(params: {
       ts: msg.ts,
       files: msg.files,
     }));
-  } catch {
+  };
+
+  try {
+    return await doFetch(params.client);
+  } catch (err) {
+    console.warn(
+      `resolveSlackThreadHistory failed for channel=${params.channelId} thread=${params.threadTs}: ${String(err)}`,
+    );
+    // Fallback: retry with user token if available
+    if (params.userToken) {
+      try {
+        console.warn(
+          `resolveSlackThreadHistory: retrying with user token for channel=${params.channelId}`,
+        );
+        const userClient = createSlackWebClient(params.userToken);
+        return await doFetch(userClient);
+      } catch (retryErr) {
+        console.warn(
+          `resolveSlackThreadHistory user token fallback also failed: ${String(retryErr)}`,
+        );
+      }
+    }
     return [];
   }
 }
