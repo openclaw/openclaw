@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 
-export function createModelAuthMockModule() {
+export function createModelAuthMockModule(): {
+  resolveApiKeyForProvider: ReturnType<typeof vi.fn>;
+  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => string;
+} {
   return {
     resolveApiKeyForProvider: vi.fn(),
     requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
