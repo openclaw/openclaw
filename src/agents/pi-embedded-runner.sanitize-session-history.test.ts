@@ -336,6 +336,10 @@ describe("sanitizeSessionHistory", () => {
     );
 
     expect(assistant).toBeDefined();
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("Expected an assistant message in sanitized result");
+    }
+
     expect(
       assistant.content.some(
         (block) =>
