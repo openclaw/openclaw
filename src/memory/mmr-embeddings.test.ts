@@ -109,7 +109,7 @@ describe("MMR with embeddings", () => {
     // With embedding similarity, "canine" is correctly identified as similar
     const embeddingRanked = mmrRerank(items, {
       enabled: true,
-      lambda: 0.5, // Equal balance to make diversity count more
+      lambda: 0.3, // Favor diversity over relevance
       useEmbeddingSimilarity: true,
     });
 
