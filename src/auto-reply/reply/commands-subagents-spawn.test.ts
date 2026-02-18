@@ -155,6 +155,8 @@ describe("/subagents spawn command", () => {
     const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg, {
       CommandSource: "native",
       CommandTargetSessionKey: "agent:main:main",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:12345",
     });
     params.sessionKey = "agent:main:slack:slash:u1";
 
@@ -164,6 +166,8 @@ describe("/subagents spawn command", () => {
     expect(result?.reply?.text).toContain("Spawned subagent beta");
     const [, spawnCtx] = spawnSubagentDirectMock.mock.calls[0];
     expect(spawnCtx.agentSessionKey).toBe("agent:main:main");
+    expect(spawnCtx.agentChannel).toBe("discord");
+    expect(spawnCtx.agentTo).toBe("channel:12345");
   });
 
   it("returns forbidden for unauthorized cross-agent spawn", async () => {
