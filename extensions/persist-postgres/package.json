@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/persist-postgres",
+  "version": "2026.2.1",
+  "private": true,
+  "description": "PostgreSQL-backed session and message persistence for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
