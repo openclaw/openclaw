@@ -1,0 +1,33 @@
+{
+  "success": false,
+  "review_summary": "Branch chore/codex-oauth-shim-validation-run is identical to origin/main, so the requested 'Validation run using Codex OAuth shim' work has no code or tests to inspect. The referenced PRP plan file and its issue_json payload are completely missing, so the feature requirements cannot even be verified. Ruff (run via uv) exits cleanly with only a 'no Python files' warning, while mypy and pytest both fail because there are no .py sources or tests/ directory in this TypeScript repo. No automatic fixes were possible because both the specification and the implementation are absent.",
+  "review_issues": [
+    {
+      "issue_number": 1,
+      "file_path": "PRPs/features",
+      "issue_description": "The PRP plan and the required issue_json payload do not exist anywhere in the repository, so reviewers cannot read the spec or confirm requirements.",
+      "issue_resolution": "Add the missing issue_json file (or provide its contents) and commit the PRP plan under PRPs/features before requesting validation or review.",
+      "severity": "blocker"
+    },
+    {
+      "issue_number": 2,
+      "file_path": ".",
+      "issue_description": "There are zero tracked changes versus origin/main, meaning the 'Validation run using Codex OAuth shim' feature was not implemented at all.",
+      "issue_resolution": "Implement the requested functionality (code, tests, docs) so the branch actually differs from origin/main, then rerun validation.",
+      "severity": "blocker"
+    },
+    {
+      "issue_number": 3,
+      "file_path": "tests/",
+      "issue_description": "Required validation commands `uv run mypy src/` and `uv run pytest tests/ -v` fail because the repository has no Python sources or tests directory.",
+      "issue_resolution": "Either supply the expected Python modules/tests or update the validation checklist to match the actual TypeScript toolchain so mypy/pytest can pass.",
+      "severity": "major"
+    }
+  ],
+  "validation_results": {
+    "linting_passed": true,
+    "type_checking_passed": false,
+    "tests_passed": false,
+    "api_endpoints_tested": false
+  }
+}
