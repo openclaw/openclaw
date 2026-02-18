@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
 
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
@@ -9,14 +9,7 @@ async function waitFor(
   fn: () => Promise<boolean>,
   opts: { timeoutMs: number; intervalMs: number },
 ): Promise<void> {
-  const deadline = Date.now() + opts.timeoutMs;
-  while (Date.now() < deadline) {
-    if (await fn()) {
-      return;
-    }
-    await new Promise((r) => setTimeout(r, opts.intervalMs));
-  }
-  throw new Error("timed out");
+  await expect.poll(fn, { timeout: opts.timeoutMs, interval: opts.intervalMs }).toBe(true);
 }
 
 describeLive("browser (live): remote CDP tab persistence", () => {
