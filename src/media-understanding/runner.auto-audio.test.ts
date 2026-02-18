@@ -54,7 +54,7 @@ describe("runCapability auto audio entries", () => {
         providerRegistry,
       });
       expect(result.outputs[0]?.text).toBe("ok");
-      expect(seenModel).toBe("gpt-4o-mini-transcribe");
+      expect(seenModel).toBe("gpt-4o-transcribe");
       expect(result.decision.outcome).toBe("success");
     } finally {
       process.env.PATH = originalPath;

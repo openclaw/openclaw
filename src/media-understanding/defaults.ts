@@ -29,7 +29,7 @@ export const DEFAULT_PROMPT: Record<MediaUnderstandingCapability, string> = {
 export const DEFAULT_VIDEO_MAX_BASE64_BYTES = 70 * MB;
 export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   groq: "whisper-large-v3-turbo",
-  openai: "gpt-4o-mini-transcribe",
+  openai: "gpt-4o-transcribe",
   deepgram: "nova-3",
 };
 
