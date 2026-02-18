@@ -66,9 +66,9 @@ describe("format-duration", () => {
 
   describe("formatDurationHuman", () => {
     it("returns fallback for invalid input", () => {
-      expect(formatDurationHuman(null)).toBe("n/a");
-      expect(formatDurationHuman(undefined)).toBe("n/a");
-      expect(formatDurationHuman(-100)).toBe("n/a");
+      for (const value of [null, undefined, -100]) {
+        expect(formatDurationHuman(value)).toBe("n/a");
+      }
       expect(formatDurationHuman(null, "unknown")).toBe("unknown");
     });
 
@@ -163,9 +163,9 @@ describe("format-datetime", () => {
 describe("format-relative", () => {
   describe("formatTimeAgo", () => {
     it("returns fallback for invalid input", () => {
-      expect(formatTimeAgo(null)).toBe("unknown");
-      expect(formatTimeAgo(undefined)).toBe("unknown");
-      expect(formatTimeAgo(-100)).toBe("unknown");
+      for (const value of [null, undefined, -100]) {
+        expect(formatTimeAgo(value)).toBe("unknown");
+      }
       expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
     });
 
@@ -192,8 +192,9 @@ describe("format-relative", () => {
 
   describe("formatRelativeTimestamp", () => {
     it("returns fallback for invalid input", () => {
-      expect(formatRelativeTimestamp(null)).toBe("n/a");
-      expect(formatRelativeTimestamp(undefined)).toBe("n/a");
+      for (const value of [null, undefined]) {
+        expect(formatRelativeTimestamp(value)).toBe("n/a");
+      }
       expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
     });
 
