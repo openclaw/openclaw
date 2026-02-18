@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   ChannelDeleteListener,
   ChannelType,
@@ -479,23 +480,34 @@ export class DiscordChannelDeleteListener extends ChannelDeleteListener {
   }
 }
 
+function resolveDiscordChannelDeleteChannelId(data: ChannelDeleteEvent): string | undefined {
+  if ("id" in data && (typeof data.id === "string" || typeof data.id === "number")) {
+    const trimmed = String(data.id).trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (!("channel" in data)) {
+    return undefined;
+  }
+  const channel = (data as { channel?: unknown }).channel;
+  if (!channel || typeof channel !== "object") {
+    return undefined;
+  }
+  const channelId = (channel as { id?: unknown }).id;
+  if (typeof channelId === "string" || typeof channelId === "number") {
+    const trimmed = String(channelId).trim();
+    return trimmed || undefined;
+  }
+  return undefined;
+}
+
 async function handleDiscordChannelDelete(params: {
   data: ChannelDeleteEvent;
   cfg: LoadedConfig;
   logger: Logger;
 }) {
-  // The raw channel ID is available from the underlying dispatch data.
-  // Carbon's parsed data wraps it as `data.channel`, but the raw `id` field
-  // from GatewayChannelDeleteDispatchData is also present on the object.
-  const channelId =
-    "id" in params.data && typeof params.data.id === "string"
-      ? params.data.id
-      : (params.data as Record<string, unknown>).channel &&
-          typeof (params.data as Record<string, unknown>).channel === "object" &&
-          "id" in ((params.data as Record<string, unknown>).channel as Record<string, unknown>)
-        ? String(((params.data as Record<string, unknown>).channel as Record<string, string>).id)
-        : undefined;
-
+  const channelId = resolveDiscordChannelDeleteChannelId(params.data);
   if (!channelId) {
     params.logger.warn("discord channel-delete: could not resolve channel ID from event data");
     return;
@@ -504,62 +516,75 @@ async function handleDiscordChannelDelete(params: {
   // Lazily import session store utilities to avoid circular dependencies
   // and keep the listener module lightweight.
   const { listAgentIds } = await import("../../agents/agent-scope.js");
-  const { loadSessionStore, resolveStorePath, updateSessionStore } =
+  const { resolveMaintenanceConfig, resolveStorePath, updateSessionStore } =
     await import("../../config/sessions.js");
-  const { archiveSessionTranscripts } = await import("../../gateway/session-utils.fs.js");
+  const { archiveSessionTranscripts, cleanupArchivedSessionTranscripts } =
+    await import("../../gateway/session-utils.fs.js");
 
   const agentIds = listAgentIds(params.cfg);
   const suffix = `discord:channel:${channelId}`;
+  const pruneAfterMs = resolveMaintenanceConfig().pruneAfterMs;
 
   let totalDeleted = 0;
 
+  // Best-effort cleanup: remove store entries + transcripts, without runtime shutdowns.
   for (const agentId of agentIds) {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
 
-    // Find all session keys for this channel across this agent.
-    const matchingKeys = Object.keys(store).filter((key) => key.endsWith(suffix));
+    const { matchingKeys, sessionsToArchive } = await updateSessionStore(
+      storePath,
+      (currentStore) => {
+        const matchingKeys = Object.keys(currentStore).filter((key) => key.endsWith(suffix));
+        if (matchingKeys.length === 0) {
+          return { matchingKeys: [], sessionsToArchive: [] };
+        }
+        const sessionsToArchive: Array<{
+          sessionId?: string;
+          sessionFile?: string;
+        }> = [];
+        for (const key of matchingKeys) {
+          const entry = currentStore[key];
+          if (entry) {
+            sessionsToArchive.push({
+              sessionId: entry.sessionId,
+              sessionFile: entry.sessionFile,
+            });
+          }
+          delete currentStore[key];
+        }
+        return { matchingKeys, sessionsToArchive };
+      },
+    );
 
     if (matchingKeys.length === 0) {
       continue;
     }
 
-    // Collect session info before deleting (needed for transcript cleanup).
-    const sessionsToArchive: Array<{
-      sessionId?: string;
-      sessionFile?: string;
-    }> = [];
-
-    for (const key of matchingKeys) {
-      const entry = store[key];
-      if (entry) {
-        sessionsToArchive.push({
-          sessionId: entry.sessionId,
-          sessionFile: entry.sessionFile,
-        });
-      }
-    }
-
-    // Remove matching entries from the session store.
-    await updateSessionStore(storePath, (currentStore) => {
-      for (const key of matchingKeys) {
-        if (currentStore[key]) {
-          delete currentStore[key];
-        }
-      }
-    });
+    const archivedDirs = new Set<string>();
 
     // Archive transcripts (best-effort).
     for (const session of sessionsToArchive) {
-      if (session.sessionId) {
-        archiveSessionTranscripts({
-          sessionId: session.sessionId,
-          storePath,
-          sessionFile: session.sessionFile,
-          agentId,
-          reason: "deleted",
-        });
+      if (!session.sessionId) {
+        continue;
       }
+      const archived = archiveSessionTranscripts({
+        sessionId: session.sessionId,
+        storePath,
+        sessionFile: session.sessionFile,
+        agentId,
+        reason: "deleted",
+      });
+      for (const archivedPath of archived) {
+        archivedDirs.add(path.dirname(archivedPath));
+      }
+    }
+
+    if (archivedDirs.size > 0) {
+      await cleanupArchivedSessionTranscripts({
+        directories: [...archivedDirs],
+        olderThanMs: pruneAfterMs,
+        reason: "deleted",
+      });
     }
 
     totalDeleted += matchingKeys.length;
