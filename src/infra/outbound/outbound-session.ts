@@ -595,6 +595,65 @@ function resolveMattermostSession(
   };
 }
 
+function resolveZulipDefaultTopic(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string | undefined {
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  const zulip = channels?.zulip as Record<string, unknown> | undefined;
+  if (!zulip) {
+    return undefined;
+  }
+  const accountId = typeof params.accountId === "string" ? params.accountId.trim() : "";
+  const accounts = zulip.accounts as Record<string, unknown> | undefined;
+  if (accountId && accounts && typeof accounts === "object") {
+    const entry = accounts[accountId] as Record<string, unknown> | undefined;
+    const topic = typeof entry?.defaultTopic === "string" ? entry.defaultTopic.trim() : "";
+    if (topic) {
+      return topic;
+    }
+  }
+  const defaultTopic = typeof zulip.defaultTopic === "string" ? zulip.defaultTopic.trim() : "";
+  return defaultTopic || undefined;
+}
+
+function resolveZulipSession(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  rawTarget: string;
+  session: OutboundSessionRoute;
+}): OutboundSessionRoute {
+  const { cfg, accountId, session } = params;
+
+  // Resolve the default topic for Zulip outbound messages.
+  const defaultTopic = resolveZulipDefaultTopic({ cfg, accountId });
+  if (!defaultTopic) {
+    return session;
+  }
+
+  // If a topic is already set in the session's 'to' field, don't override it.
+  // Zulip targets look like: stream:StreamName:TopicName or user:email
+  const existingTo = session.to.trim();
+  // Check if the target already has a topic component (stream:Name:Topic has 2+ colons after "stream:")
+  const streamMatch = existingTo.match(/^(?:stream:|#)/i);
+  if (streamMatch) {
+    // Count colons: "stream:Name" has 1 colon, "stream:Name:Topic" has 2+
+    const withoutPrefix = existingTo.replace(/^stream:/i, "").replace(/^#/, "");
+    const colonIdx = withoutPrefix.indexOf(":");
+    if (colonIdx !== -1) {
+      // Topic already present
+      return session;
+    }
+    // No topic yet — inject the default topic
+    return {
+      ...session,
+      to: `${existingTo}:${defaultTopic}`,
+    };
+  }
+
+  return session;
+}
+
 function resolveBlueBubblesSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -946,6 +1005,18 @@ export async function resolveOutboundSessionRoute(
       return resolveTlonSession({ ...params, target });
     case "feishu":
       return resolveFeishuSession({ ...params, target });
+    case "zulip": {
+      const session = resolveFallbackSession({ ...params, target });
+      if (!session) {
+        return null;
+      }
+      return resolveZulipSession({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        rawTarget: target,
+        session,
+      });
+    }
     default:
       return resolveFallbackSession({ ...params, target });
   }
