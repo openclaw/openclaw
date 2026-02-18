@@ -1,44 +1,43 @@
 ---
+summary: "OpenClawをインストールして、数分で最初のチャットを実行します。"
 read_when:
-  - ゼロからの初回セットアップ
-  - 動作するチャットへの最短ルートを知りたい
-summary: OpenClawをインストールし、数分で最初のチャットを実行しましょう。
-title: はじめに
-x-i18n:
-  generated_at: "2026-02-08T17:15:16Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 27aeeb3d18c495380e94e6b011b0df3def518535c9f1eee504f04871d8a32269
-  source_path: start/getting-started.md
-  workflow: 15
+  - ゼロからの初回セットアップ時
+  - 動作するチャット環境への最短パスを知りたい場合
+title: "はじめに"
 ---
 
 # はじめに
 
-目標：ゼロから最小限のセットアップで最初の動作するチャットを実現する。
+目標: ゼロから最初のチャットが動作する状態まで、最小限のセットアップで到達する。
 
 <Info>
-最速のチャット方法：Control UIを開く（チャンネル設定は不要）。`openclaw dashboard`を実行してブラウザでチャットするか、<Tooltip headline="Gatewayホスト" tip="OpenClaw Gatewayサービスを実行しているマシン。">Gatewayホスト</Tooltip>で`http://127.0.0.1:18789/`を開きます。
-ドキュメント：[Dashboard](/web/dashboard)と[Control UI](/web/control-ui)。
+最速のチャット: Control UIを開きます（チャネル設定は不要）。`openclaw dashboard`を実行してブラウザでチャットするか、
+<Tooltip headline="Gatewayホスト" tip="OpenClaw gatewayサービスを実行しているマシン。">gatewayホスト</Tooltip>上で`http://127.0.0.1:18789/`を開きます。
+ドキュメント: [ダッシュボード](/web/dashboard)および[Control UI](/web/control-ui)。
 </Info>
 
 ## 前提条件
 
-- Node 22以降
+- Node 22以上
 
 <Tip>
-不明な場合は`node --version`でNodeのバージョンを確認してください。
+不明な場合は、`node --version`でNodeのバージョンを確認してください。
 </Tip>
 
-## クイックセットアップ（CLI）
+## クイックセットアップ (CLI)
 
 <Steps>
-  <Step title="OpenClawをインストール（推奨）">
+  <Step title="OpenClawをインストール (推奨)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
         curl -fsSL https://openclaw.ai/install.sh | bash
         ```
+        <img
+  src="/assets/install-script.svg"
+  alt="インストールスクリプトのプロセス"
+  className="rounded-lg"
+/>
       </Tab>
       <Tab title="Windows (PowerShell)">
         ```powershell
@@ -48,7 +47,7 @@ x-i18n:
     </Tabs>
 
     <Note>
-    その他のインストール方法と要件：[インストール](/install)。
+    その他のインストール方法と要件: [インストール](/install)。
     </Note>
 
   </Step>
@@ -57,12 +56,12 @@ x-i18n:
     openclaw onboard --install-daemon
     ```
 
-    ウィザードは認証、Gateway設定、およびオプションのチャンネルを構成します。
+    ウィザードは認証、gateway設定、オプションのチャネルを設定します。
     詳細は[オンボーディングウィザード](/start/wizard)を参照してください。
 
   </Step>
   <Step title="Gatewayを確認">
-    サービスをインストールした場合、すでに実行されているはずです：
+    サービスとしてインストールした場合、すでに実行されているはずです:
 
     ```bash
     openclaw gateway status
@@ -77,10 +76,10 @@ x-i18n:
 </Steps>
 
 <Check>
-Control UIが読み込まれれば、Gatewayは使用可能な状態です。
+Control UIが読み込まれれば、Gatewayを使用する準備が整っています。
 </Check>
 
-## オプションの確認と追加機能
+## オプションのチェックと追加機能
 
 <AccordionGroup>
   <Accordion title="Gatewayをフォアグラウンドで実行">
@@ -92,7 +91,7 @@ Control UIが読み込まれれば、Gatewayは使用可能な状態です。
 
   </Accordion>
   <Accordion title="テストメッセージを送信">
-    構成済みのチャンネルが必要です。
+    設定済みのチャネルが必要です。
 
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
@@ -101,10 +100,20 @@ Control UIが読み込まれれば、Gatewayは使用可能な状態です。
   </Accordion>
 </AccordionGroup>
 
+## 便利な環境変数
+
+OpenClawをサービスアカウントとして実行する場合や、設定/状態の場所をカスタマイズしたい場合:
+
+- `OPENCLAW_HOME`: 内部パス解決に使用されるホームディレクトリを設定します。
+- `OPENCLAW_STATE_DIR`: 状態ディレクトリをオーバーライドします。
+- `OPENCLAW_CONFIG_PATH`: 設定ファイルパスをオーバーライドします。
+
+環境変数の完全なリファレンス: [環境変数](/help/environment)。
+
 ## さらに詳しく
 
 <Columns>
-  <Card title="オンボーディングウィザード（詳細）" href="/start/wizard">
+  <Card title="オンボーディングウィザード (詳細)" href="/start/wizard">
     完全なCLIウィザードリファレンスと高度なオプション。
   </Card>
   <Card title="macOSアプリのオンボーディング" href="/start/onboarding">
@@ -112,14 +121,14 @@ Control UIが読み込まれれば、Gatewayは使用可能な状態です。
   </Card>
 </Columns>
 
-## 完了後の状態
+## 得られるもの
 
 - 実行中のGateway
-- 構成済みの認証
-- Control UIアクセスまたは接続済みのチャンネル
+- 設定済みの認証
+- Control UIアクセスまたは接続されたチャネル
 
 ## 次のステップ
 
-- DMの安全性と承認：[ペアリング](/channels/pairing)
-- さらにチャンネルを接続：[チャンネル](/channels)
-- 高度なワークフローとソースからのビルド：[セットアップ](/start/setup)
+- DMの安全性と承認: [ペアリング](/channels/pairing)
+- さらなるチャネルの接続: [チャネル](/channels)
+- 高度なワークフローとソースからのビルド: [セットアップ](/start/setup)
