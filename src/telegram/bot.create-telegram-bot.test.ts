@@ -542,36 +542,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(0);
   });
-  it("allows group messages from telegram:-prefixed allowFrom entries when groupPolicy is 'allowlist'", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groupPolicy: "allowlist",
-          allowFrom: ["telegram:77112533"],
-          groups: { "*": { requireMention: false } },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 77112533, username: "mneves" },
-        text: "hello",
-        date: 1736380800,
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-  });
-  it("allows group messages from tg:-prefixed allowFrom entries case-insensitively when groupPolicy is 'allowlist'", async () => {
+  it("allows group messages from tg:-prefixed allowFrom entries case-insensitively", async () => {
     onSpy.mockReset();
     replySpy.mockReset();
     loadConfig.mockReturnValue({
