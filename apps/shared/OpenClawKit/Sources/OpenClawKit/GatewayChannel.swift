@@ -285,14 +285,8 @@ public actor GatewayChannelActor {
 
     private func keepaliveLoop() async {
         while self.shouldReconnect {
-            guard !Task.isCancelled else { return }
-            do {
-                try await Task.sleep(nanoseconds: UInt64(self.keepaliveIntervalSeconds * 1_000_000_000))
-            } catch {
-                // A canceled keepalive task must exit; otherwise it can spin and flood requests.
-                if Task.isCancelled { return }
-            }
-            guard self.shouldReconnect, !Task.isCancelled else { return }
+            try? await Task.sleep(nanoseconds: UInt64(self.keepaliveIntervalSeconds * 1_000_000_000))
+            guard self.shouldReconnect else { return }
             guard self.connected else { continue }
             // Best-effort outbound message to keep intermediate NAT/proxy state alive.
             // We intentionally ignore the response.
@@ -512,7 +506,7 @@ public actor GatewayChannelActor {
         }
         guard let data else { return }
         guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
-            self.logger.error("gateway decode failed: \(String(data: data, encoding: .utf8)?.prefix(200) ?? "nil")")
+            self.logger.error("gateway decode failed")
             return
         }
         switch frame {
