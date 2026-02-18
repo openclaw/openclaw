@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "../../memory/embeddings.js";
+import type { EmbeddingProvider } from "../../../memory/embeddings.js";
 import { SemanticRouter } from "../semantic-router.js";
 import { TaskType } from "../types.js";
 import { ROUTE_UTTERANCES } from "../utterances.js";
