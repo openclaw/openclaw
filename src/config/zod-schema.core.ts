@@ -94,6 +94,7 @@ export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
+    followUpWindowMs: z.number().int().nonnegative().optional(),
   })
   .strict()
   .optional();
