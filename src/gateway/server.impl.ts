@@ -512,15 +512,12 @@ export async function startGatewayServer(
         if (source === "user") {
           replyEnforcer.onTranscriptUpdate({ sessionKey, source, text });
         } else if (source === "agent") {
-          const isSignOff =
-            text.endsWith("NO_REPLY") ||
-            text === "NO_REPLY" ||
-            text.endsWith(SILENT_REPLY_TOKEN) ||
-            text === SILENT_REPLY_TOKEN ||
-            text === "HEARTBEAT_OK";
-          if (isSignOff) {
-            replyEnforcer.onTranscriptUpdate({ sessionKey, source, text: "NO_REPLY" });
-          }
+          log.info(
+            `[watchdog] transcript agent check textTail=${JSON.stringify(text?.slice(-30))}`,
+          );
+          // Transcript file is the single source of truth for arm/disarm.
+          // The lifecycle handler does NOT arm (buffer is unreliable).
+          replyEnforcer.onTranscriptUpdate({ sessionKey, source, text });
         }
       }
     } catch (err) {
@@ -536,18 +533,10 @@ export async function startGatewayServer(
       if (sessionKey) {
         if (evt.data.phase === "error") {
           replyEnforcer.onAgentLifecycle({ sessionKey, phase: "error" });
-        } else {
-          // Agent turn ended. Always arm the watchdog here.
-          // If the agent signed off with NO_REPLY, the transcript file watcher
-          // will disarm it when the complete text is persisted to disk.
-          // We don't check the buffer here because it may be incomplete
-          // (LLM streams "NO_REPLY" as "NO_" + "REPLY" tokens).
-          replyEnforcer.onTranscriptUpdate({
-            sessionKey,
-            source: "agent",
-            text: "agent-turn-ended",
-          });
         }
+        // Do NOT arm here. The transcript file watcher handles arming
+        // when the complete text is persisted to disk. Arming here races
+        // with the transcript watcher and can overwrite a valid disarm.
       }
     }
   });
