@@ -261,6 +261,56 @@ extension TestChatTransportState {
         }
     }
 
+    @Test func acceptsCanonicalSessionKeyEventsForExternalRuns() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "first"]],
+                    "timestamp": now,
+                ]),
+            ],
+            thinkingLevel: "off")
+        let history2 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "first"]],
+                    "timestamp": now,
+                ]),
+                AnyCodable([
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "from external run"]],
+                    "timestamp": now + 1,
+                ]),
+            ],
+            thinkingLevel: "off")
+
+        let transport = TestChatTransport(historyResponses: [history1, history2])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { vm.messages.count == 1 } }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: "external-run",
+                    sessionKey: "agent:main:main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        try await waitUntil("history refresh after canonical external event") {
+            await MainActor.run { vm.messages.count == 2 }
+        }
+    }
+
     @Test func preservesMessageIDsAcrossHistoryRefreshes() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = OpenClawChatHistoryPayload(
