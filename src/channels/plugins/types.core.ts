@@ -314,6 +314,8 @@ export type ChannelMessageActionContext = {
   };
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
+  /** Allowed local media roots for the active agent (includes agent workspace when scoped). */
+  mediaLocalRoots?: readonly string[];
 };
 
 export type ChannelToolSend = {

@@ -194,10 +194,14 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
+    const mediaLocalRoots = Array.isArray(params.mediaLocalRoots)
+      ? (params.mediaLocalRoots as readonly string[])
+      : undefined;
     const result = await sendMessageTelegram(to, content, {
       token,
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
+      mediaLocalRoots,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,

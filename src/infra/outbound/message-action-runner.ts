@@ -13,6 +13,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -511,6 +512,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+  const mediaLocalRoots = agentId ? getAgentScopedMediaLocalRoots(cfg, agentId) : undefined;
   throwIfAborted(abortSignal);
   const send = await executeSendAction({
     ctx: {
@@ -523,6 +525,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       toolContext: input.toolContext,
       deps: input.deps,
       dryRun,
+      mediaLocalRoots,
       mirror:
         outboundRoute && !dryRun
           ? {
