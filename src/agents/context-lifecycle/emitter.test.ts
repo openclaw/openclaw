@@ -139,6 +139,24 @@ describe("ContextLifecycleEmitter", () => {
     expect(JSON.parse(lines[0]).rule).toBe("compact:compaction");
   });
 
+  it("creates parent directories on first flush", async () => {
+    const nested = path.join(tmpDir, "nested", "deep", "lifecycle.jsonl");
+    const emitter = new ContextLifecycleEmitter(nested, "sk", "sid", 200_000);
+
+    emitter.emit({
+      turn: 1,
+      rule: "decay:pass",
+      beforeTokens: 80_000,
+      freedTokens: 5_000,
+      afterTokens: 75_000,
+    });
+
+    await emitter.flush();
+
+    const raw = await fs.readFile(nested, "utf-8");
+    expect(raw.trim().split("\n")).toHaveLength(1);
+  });
+
   it("includes details when provided", async () => {
     const emitter = new ContextLifecycleEmitter(filePath, "sk", "sid", 200_000);
 
