@@ -505,15 +505,22 @@ export async function startGatewayServer(
       }
 
       // Only feed user messages to the watchdog from the transcript path.
-      // Agent messages are handled by the lifecycle-end path (line ~548)
-      // which has direct access to the in-memory response buffer.
-      // Feeding agent messages from both paths creates race conditions.
-      if (source === "user" && sessionKey) {
-        replyEnforcer.onTranscriptUpdate({
-          sessionKey,
-          source,
-          text,
-        });
+      // Agent messages: Only disarm if NO_REPLY is found (buffer might be incomplete in lifecycle path).
+      // Lifecycle path (line ~548) handles arming on non-signoff, but transcript is the source of truth for completion.
+      if (sessionKey) {
+        if (source === "user") {
+          replyEnforcer.onTranscriptUpdate({ sessionKey, source, text });
+        } else if (source === "agent") {
+          const isSignOff =
+            text.endsWith("NO_REPLY") ||
+            text === "NO_REPLY" ||
+            text.endsWith(SILENT_REPLY_TOKEN) ||
+            text === SILENT_REPLY_TOKEN ||
+            text === "HEARTBEAT_OK";
+          if (isSignOff) {
+            replyEnforcer.onTranscriptUpdate({ sessionKey, source, text: "NO_REPLY" });
+          }
+        }
       }
     } catch (err) {
       log.warn("Failed to process transcript update", { file: evt.sessionFile, err });
