@@ -117,3 +117,55 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[1]).toContain("queued item two");
   });
 });
+
+  it("gives up and drops items after 3 consecutive send failures", async () => {
+    let attempts = 0;
+    const send = vi.fn(async () => {
+      attempts += 1;
+      throw new Error("persistent delivery failure");
+    });
+
+    enqueueAnnounce({
+      key: "announce:test:give-up",
+      item: {
+        prompt: "will fail",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+    });
+
+    await waitFor(() => attempts >= 3);
+    // Give-up clears the queue — no further retries after 3
+    const attemptsBefore = attempts;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(attempts).toBe(attemptsBefore);
+    expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it("resets consecutiveErrors after a successful send", async () => {
+    let attempts = 0;
+    const sendPrompts: string[] = [];
+    const send = vi.fn(async (item: { prompt: string }) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("transient failure");
+      }
+      sendPrompts.push(item.prompt);
+    });
+
+    enqueueAnnounce({
+      key: "announce:test:reset-errors",
+      item: {
+        prompt: "recover item",
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "followup", debounceMs: 0 },
+      send,
+    });
+
+    await waitFor(() => sendPrompts.length >= 1);
+    expect(sendPrompts).toEqual(["recover item"]);
+  });

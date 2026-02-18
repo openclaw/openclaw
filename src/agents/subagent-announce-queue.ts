@@ -44,6 +44,7 @@ type AnnounceQueueState = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  consecutiveErrors: number;
   send: (item: AnnounceQueueItem) => Promise<void>;
 };
 
@@ -85,6 +86,7 @@ function getAnnounceQueue(
     dropPolicy: settings.dropPolicy ?? "summarize",
     droppedCount: 0,
     summaryLines: [],
+    consecutiveErrors: 0,
     send,
   };
   applyQueueRuntimeSettings({
@@ -113,6 +115,7 @@ function scheduleAnnounceDrain(key: string) {
               break;
             }
             await queue.send(next);
+            queue.consecutiveErrors = 0;
             queue.items.shift();
             continue;
           }
@@ -132,6 +135,7 @@ function scheduleAnnounceDrain(key: string) {
               break;
             }
             await queue.send(next);
+            queue.consecutiveErrors = 0;
             queue.items.shift();
             continue;
           }
@@ -148,6 +152,7 @@ function scheduleAnnounceDrain(key: string) {
             break;
           }
           await queue.send({ ...last, prompt });
+          queue.consecutiveErrors = 0;
           queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);
@@ -162,6 +167,7 @@ function scheduleAnnounceDrain(key: string) {
             break;
           }
           await queue.send({ ...next, prompt: summaryPrompt });
+          queue.consecutiveErrors = 0;
           queue.items.shift();
           clearQueueSummaryState(queue);
           continue;
@@ -172,12 +178,24 @@ function scheduleAnnounceDrain(key: string) {
           break;
         }
         await queue.send(next);
+        queue.consecutiveErrors = 0;
         queue.items.shift();
       }
     } catch (err) {
-      // Keep items in queue and retry after debounce; avoid hot-loop retries.
-      queue.lastEnqueuedAt = Date.now();
+      queue.consecutiveErrors = (queue.consecutiveErrors ?? 0) + 1;
       defaultRuntime.error?.(`announce queue drain failed for ${key}: ${String(err)}`);
+      if (queue.consecutiveErrors >= 3) {
+        // Give up after 3 consecutive failures to avoid an infinite retry storm.
+        defaultRuntime.error?.(
+          `announce queue give-up for ${key} after ${queue.consecutiveErrors} consecutive errors; dropping ${queue.items.length} item(s)`,
+        );
+        queue.items.length = 0;
+        queue.droppedCount = 0;
+        queue.summaryLines.length = 0;
+      } else {
+        // Backoff: delay next retry by consecutiveErrors * debounceMs.
+        queue.lastEnqueuedAt = Date.now() + queue.consecutiveErrors * queue.debounceMs;
+      }
     } finally {
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {
