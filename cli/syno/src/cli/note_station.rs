@@ -6,6 +6,7 @@ use clap::Args;
 use crate::api::{client::SynoClient, note_station};
 use crate::config::{Config, Session};
 use crate::crypto;
+use crate::markdown;
 
 #[derive(Args)]
 pub struct NoteListArgs {
@@ -45,6 +46,15 @@ pub struct NoteCreateArgs {
     /// Read content from stdin instead of --content (for long/complex HTML)
     #[arg(long)]
     pub content_stdin: bool,
+    /// Read content from a file (UTF-8)
+    #[arg(long)]
+    pub content_file: Option<String>,
+    /// Treat content as Markdown and convert to HTML
+    #[arg(long)]
+    pub md: bool,
+    /// Read Markdown from a file and convert to HTML
+    #[arg(long)]
+    pub md_file: Option<String>,
 }
 
 #[derive(Args)]
@@ -66,6 +76,15 @@ pub struct NoteUpdateArgs {
     /// Read content from stdin instead of --content (for long/complex HTML)
     #[arg(long)]
     pub content_stdin: bool,
+    /// Read content from a file (UTF-8)
+    #[arg(long)]
+    pub content_file: Option<String>,
+    /// Treat content as Markdown and convert to HTML
+    #[arg(long)]
+    pub md: bool,
+    /// Read Markdown from a file and convert to HTML
+    #[arg(long)]
+    pub md_file: Option<String>,
 }
 
 #[derive(Args)]
@@ -309,6 +328,48 @@ pub async fn get(args: &NoteGetArgs) -> Result<()> {
     Ok(())
 }
 
+/// Resolve content from the various input sources, with optional Markdown→HTML conversion.
+fn resolve_content_create(args: &NoteCreateArgs) -> Result<String> {
+    if let Some(ref path) = args.md_file {
+        let md = std::fs::read_to_string(path)?;
+        return Ok(markdown::md_to_html(&md));
+    }
+    if args.content_stdin {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        return Ok(if args.md { markdown::md_to_html(&buf) } else { buf });
+    }
+    if let Some(ref path) = args.content_file {
+        return Ok(std::fs::read_to_string(path)?);
+    }
+    if args.md && !args.content.is_empty() {
+        return Ok(markdown::md_to_html(&args.content));
+    }
+    Ok(args.content.clone())
+}
+
+/// Resolve content for update, with optional Markdown→HTML conversion.
+fn resolve_content_update(args: &NoteUpdateArgs) -> Result<Option<String>> {
+    if let Some(ref path) = args.md_file {
+        let md = std::fs::read_to_string(path)?;
+        return Ok(Some(markdown::md_to_html(&md)));
+    }
+    if args.content_stdin {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        return Ok(Some(if args.md { markdown::md_to_html(&buf) } else { buf }));
+    }
+    if let Some(ref path) = args.content_file {
+        return Ok(Some(std::fs::read_to_string(path)?));
+    }
+    if args.md {
+        if let Some(ref c) = args.content {
+            return Ok(Some(markdown::md_to_html(c)));
+        }
+    }
+    Ok(args.content.clone())
+}
+
 /// Create a note.
 pub async fn create(args: &NoteCreateArgs) -> Result<()> {
     let cfg = Config::load()?;
@@ -317,13 +378,7 @@ pub async fn create(args: &NoteCreateArgs) -> Result<()> {
     let token = session.synotoken();
     let client = SynoClient::new(&cfg.base_url(), cfg.https.unwrap_or(false))?;
 
-    let content = if args.content_stdin {
-        let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf)?;
-        buf
-    } else {
-        args.content.clone()
-    };
+    let content = resolve_content_create(args)?;
 
     let data = note_station::create_note(
         &client,
@@ -558,16 +613,10 @@ pub async fn done_todo(args: &TodoDoneArgs) -> Result<()> {
 
 /// Update a note (title and/or content).
 pub async fn update(args: &NoteUpdateArgs) -> Result<()> {
-    let content = if args.content_stdin {
-        let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf)?;
-        Some(buf)
-    } else {
-        args.content.clone()
-    };
+    let content = resolve_content_update(args)?;
 
     if args.title.is_none() && content.is_none() {
-        anyhow::bail!("At least one of --title, --content, or --content-stdin must be provided");
+        anyhow::bail!("At least one of --title, --content, --content-stdin, --content-file, --md, or --md-file must be provided");
     }
     let cfg = Config::load()?;
     let session = Session::ensure(&cfg).await?;

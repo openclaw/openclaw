@@ -4,6 +4,8 @@ mod api;
 mod cli;
 mod config;
 mod crypto;
+mod markdown;
+mod mcp;
 
 #[derive(Parser)]
 #[command(name = "syno", version, about = "Synology DSM API CLI")]
@@ -38,6 +40,19 @@ enum Commands {
     /// NoteStation operations
     #[command(subcommand)]
     Note(NoteCmd),
+
+    /// Start MCP SSE server
+    Mcp(McpArgs),
+}
+
+#[derive(clap::Args)]
+struct McpArgs {
+    /// Listen host (default 0.0.0.0)
+    #[arg(long, default_value = "0.0.0.0")]
+    host: String,
+    /// Listen port (default 3000)
+    #[arg(long, default_value = "3000")]
+    port: u16,
 }
 
 #[derive(Subcommand)]
@@ -126,6 +141,15 @@ enum NoteCmd {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load .env file: try CWD first, then the crate source directory (for `cargo run`
+    // invoked from a parent directory with `--manifest-path`).
+    if dotenvy::dotenv().is_err() {
+        let manifest_env = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+        if manifest_env.is_file() {
+            dotenvy::from_path(&manifest_env).ok();
+        }
+    }
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -152,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
             DlCmd::Pause(args) => cli::download_station::pause(&args).await?,
             DlCmd::Resume(args) => cli::download_station::resume(&args).await?,
         },
+        Commands::Mcp(args) => mcp::run_server(&args.host, args.port).await?,
         Commands::Note(cmd) => match cmd {
             NoteCmd::Info => cli::note_station::info().await?,
             NoteCmd::Notebooks => cli::note_station::notebooks().await?,

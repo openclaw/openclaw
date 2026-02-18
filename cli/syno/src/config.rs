@@ -38,13 +38,30 @@ fn session_path() -> Result<PathBuf> {
 impl Config {
     pub fn load() -> Result<Self> {
         let path = config_path()?;
-        if path.exists() {
+        let mut cfg = if path.exists() {
             let content = std::fs::read_to_string(&path)?;
-            let cfg: Config = toml::from_str(&content)?;
-            Ok(cfg)
+            toml::from_str(&content)?
         } else {
-            Ok(Config::default())
+            Config::default()
+        };
+
+        // Environment variables override config file values
+        if let Ok(host) = std::env::var("SYNO_HOST") {
+            cfg.host = Some(host);
         }
+        if let Ok(port) = std::env::var("SYNO_PORT") {
+            if let Ok(p) = port.parse::<u16>() {
+                cfg.port = Some(p);
+            }
+        }
+        if let Ok(https) = std::env::var("SYNO_HTTPS") {
+            cfg.https = Some(https == "true" || https == "1");
+        }
+        if let Ok(username) = std::env::var("SYNO_USERNAME") {
+            cfg.username = Some(username);
+        }
+
+        Ok(cfg)
     }
 
     pub fn save(&self) -> Result<()> {

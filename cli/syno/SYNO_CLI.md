@@ -6,21 +6,33 @@
 
 | 变量 | 说明 |
 |---|---|
+| `SYNO_HOST` | NAS 地址 |
+| `SYNO_PORT` | NAS 端口 |
+| `SYNO_HTTPS` | 是否使用 HTTPS（`true`/`false`） |
 | `SYNO_USERNAME` | NAS 登录用户名 |
 | `SYNO_PASSWORD` | NAS 登录密码 |
+
+支持在项目目录下创建 `.env` 文件自动加载环境变量（优先级高于 config 文件）。
 
 设置后，执行任何需要认证的命令时，如果没有已保存的会话，会自动登录。登录后会话缓存到磁盘，后续命令不会重复登录。
 
 ## 初始配置
 
 ```bash
-# 配置 NAS 连接地址（一次性）
-syno config set --host <NAS地址> --port <端口> --https true
+# 方式一：使用 .env 文件（推荐）
+# 在 syno 目录下创建 .env 文件，参考 .env.example
+cat .env
+SYNO_HOST=dsm.example.com
+SYNO_PORT=5001
+SYNO_HTTPS=true
+SYNO_USERNAME=admin
+SYNO_PASSWORD=your_password
 
-# 方式一：手动登录
+# 方式二：手动配置连接地址 + 登录
+syno config set --host <NAS地址> --port <端口> --https true
 syno login --username <用户名> --password <密码>
 
-# 方式二：设置环境变量后直接使用，自动登录
+# 方式三：设置环境变量后直接使用，自动登录
 export SYNO_USERNAME=<用户名>
 export SYNO_PASSWORD=<密码>
 syno info  # 自动登录并执行
@@ -149,14 +161,34 @@ syno note get <笔记ID> --password <笔记密码>
 # 创建笔记
 syno note create <笔记本ID> --title "标题" --content "<p>内容</p>"
 
+# 创建笔记（从 Markdown 文件，自动转换为 HTML）
+syno note create <笔记本ID> --title "标题" --md-file /path/to/note.md
+
+# 创建笔记（直接传 Markdown 字符串）
+syno note create <笔记本ID> --title "标题" --md --content "# 标题\n**粗体**"
+
+# 创建笔记（从 HTML 文件读取内容）
+syno note create <笔记本ID> --title "标题" --content-file /path/to/note.html
+
 # 创建笔记（长内容通过 stdin 传递，避免 shell 参数截断）
 echo '<p>长HTML内容...</p>' | syno note create <笔记本ID> --title "标题" --content-stdin
-cat /tmp/note.html | syno note create <笔记本ID> --title "标题" --content-stdin
+
+# stdin + Markdown 转换
+cat note.md | syno note create <笔记本ID> --title "标题" --content-stdin --md
 
 # 编辑笔记（可只改标题、只改内容、或同时修改）
 syno note update <笔记ID> --title "新标题"
 syno note update <笔记ID> --content "<p>新内容</p>"
 syno note update <笔记ID> --title "新标题" --content "<p>新内容</p>"
+
+# 编辑笔记（从 Markdown 文件更新内容）
+syno note update <笔记ID> --md-file /path/to/updated.md
+
+# 编辑笔记（直接传 Markdown 字符串）
+syno note update <笔记ID> --md --content "# 新内容\n- 列表项"
+
+# 编辑笔记（从 HTML 文件更新内容）
+syno note update <笔记ID> --content-file /path/to/updated.html
 
 # 编辑笔记（长内容通过 stdin 传递）
 cat /tmp/note.html | syno note update <笔记ID> --content-stdin
@@ -208,5 +240,7 @@ syno note search "关键词" --offset 0 --limit 20
 
 - 会话文件保存在 `~/.config/synology-api/session.toml`
 - 配置文件保存在 `~/.config/synology-api/config.toml`
+- 支持 `.env` 文件自动注入环境变量（运行目录下的 `.env`）
+- 环境变量优先级高于 config 文件
 - 加密笔记内容使用 AES-256-CBC 加密，`--password` 参数会在客户端自动解密
-- 笔记内容均为 HTML 格式
+- 笔记内容均为 HTML 格式，`--md` / `--md-file` 会自动将 Markdown 转换为 HTML（支持表格、删除线、任务列表）
