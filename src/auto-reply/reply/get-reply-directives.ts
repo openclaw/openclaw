@@ -183,13 +183,7 @@ export async function resolveReplyDirectives(params: {
     }
   }
 
-  if (
-    !opts?.provider &&
-    !sessionEntry?.provider &&
-    !opts?.model &&
-    !sessionEntry?.model &&
-    routingConfig
-  ) {
+  if (provider === defaultProvider && model === defaultModel && routingConfig) {
     const now = Date.now();
     const cooldownMs = Math.max(0, routingConfig.cooldown_seconds) * 1000;
     const lastRoutedModel = sessionEntry?.lastRoutedModel;
