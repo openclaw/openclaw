@@ -142,58 +142,69 @@ function parseIpv6Hextets(address: string): number[] | null {
   return hextets;
 }
 
+function decodeIpv4FromHextets(high: number, low: number): number[] {
+  return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
+}
+
+type EmbeddedIpv4Rule = {
+  matches: (hextets: number[]) => boolean;
+  extract: (hextets: number[]) => [high: number, low: number];
+};
+
+const EMBEDDED_IPV4_RULES: EmbeddedIpv4Rule[] = [
+  {
+    // IPv4-mapped: ::ffff:a.b.c.d and IPv4-compatible ::a.b.c.d.
+    matches: (hextets) =>
+      hextets[0] === 0 &&
+      hextets[1] === 0 &&
+      hextets[2] === 0 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      (hextets[5] === 0xffff || hextets[5] === 0),
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
+  {
+    // NAT64 well-known prefix: 64:ff9b::/96.
+    matches: (hextets) =>
+      hextets[0] === 0x0064 &&
+      hextets[1] === 0xff9b &&
+      hextets[2] === 0 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      hextets[5] === 0,
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
+  {
+    // NAT64 local-use prefix: 64:ff9b:1::/48.
+    matches: (hextets) =>
+      hextets[0] === 0x0064 &&
+      hextets[1] === 0xff9b &&
+      hextets[2] === 0x0001 &&
+      hextets[3] === 0 &&
+      hextets[4] === 0 &&
+      hextets[5] === 0,
+    extract: (hextets) => [hextets[6], hextets[7]],
+  },
+  {
+    // 6to4 prefix: 2002::/16 where hextets[1..2] carry IPv4.
+    matches: (hextets) => hextets[0] === 0x2002,
+    extract: (hextets) => [hextets[1], hextets[2]],
+  },
+  {
+    // Teredo prefix: 2001:0000::/32 with client IPv4 obfuscated via XOR 0xffff.
+    matches: (hextets) => hextets[0] === 0x2001 && hextets[1] === 0x0000,
+    extract: (hextets) => [hextets[6] ^ 0xffff, hextets[7] ^ 0xffff],
+  },
+];
+
 function extractIpv4FromEmbeddedIpv6(hextets: number[]): number[] | null {
-  // IPv4-mapped: ::ffff:a.b.c.d (and full-form variants)
-  // IPv4-compatible: ::a.b.c.d (deprecated, but still needs private-network blocking)
-  const zeroPrefix = hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 && hextets[3] === 0;
-  if (zeroPrefix && hextets[4] === 0 && (hextets[5] === 0xffff || hextets[5] === 0)) {
-    const high = hextets[6];
-    const low = hextets[7];
-    return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
+  for (const rule of EMBEDDED_IPV4_RULES) {
+    if (!rule.matches(hextets)) {
+      continue;
+    }
+    const [high, low] = rule.extract(hextets);
+    return decodeIpv4FromHextets(high, low);
   }
-
-  // NAT64 well-known prefix: 64:ff9b::/96
-  if (
-    hextets[0] === 0x0064 &&
-    hextets[1] === 0xff9b &&
-    hextets[2] === 0 &&
-    hextets[3] === 0 &&
-    hextets[4] === 0 &&
-    hextets[5] === 0
-  ) {
-    const high = hextets[6];
-    const low = hextets[7];
-    return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
-  }
-
-  // NAT64 local-use prefix: 64:ff9b:1::/48 (common ::x.x.x.x form)
-  if (
-    hextets[0] === 0x0064 &&
-    hextets[1] === 0xff9b &&
-    hextets[2] === 0x0001 &&
-    hextets[3] === 0 &&
-    hextets[4] === 0 &&
-    hextets[5] === 0
-  ) {
-    const high = hextets[6];
-    const low = hextets[7];
-    return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
-  }
-
-  // 6to4 prefix: 2002::/16 where hextets[1..2] carry the IPv4 address.
-  if (hextets[0] === 0x2002) {
-    const high = hextets[1];
-    const low = hextets[2];
-    return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
-  }
-
-  // Teredo prefix: 2001:0000::/32 where client IPv4 is obfuscated via XOR 0xffff.
-  if (hextets[0] === 0x2001 && hextets[1] === 0x0000) {
-    const high = hextets[6] ^ 0xffff;
-    const low = hextets[7] ^ 0xffff;
-    return [(high >>> 8) & 0xff, high & 0xff, (low >>> 8) & 0xff, low & 0xff];
-  }
-
   return null;
 }
 
