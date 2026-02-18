@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -154,6 +155,30 @@ impl MethodRegistry {
                 MethodSpec {
                     name: "agents.files.set",
                     family: MethodFamily::Agent,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "skills.status",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "skills.bins",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "skills.install",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "skills.update",
+                    family: MethodFamily::Gateway,
                     requires_auth: true,
                     min_role: "client",
                 },
@@ -389,6 +414,7 @@ pub struct RpcDispatcher {
     talk: TalkRegistry,
     models: ModelRegistry,
     agents: AgentRegistry,
+    skills: SkillsRegistry,
     cron: CronRegistry,
     config: ConfigRegistry,
     channel_capabilities: Vec<ChannelCapabilities>,
@@ -446,6 +472,10 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "agents.files.list",
     "agents.files.get",
     "agents.files.set",
+    "skills.status",
+    "skills.bins",
+    "skills.install",
+    "skills.update",
     "cron.list",
     "cron.status",
     "cron.add",
@@ -489,6 +519,7 @@ impl RpcDispatcher {
             talk: TalkRegistry::new(),
             models: ModelRegistry::new(),
             agents: AgentRegistry::new(),
+            skills: SkillsRegistry::new(),
             cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
             channel_capabilities,
@@ -517,6 +548,10 @@ impl RpcDispatcher {
             "agents.files.list" => self.handle_agents_files_list(req).await,
             "agents.files.get" => self.handle_agents_files_get(req).await,
             "agents.files.set" => self.handle_agents_files_set(req).await,
+            "skills.status" => self.handle_skills_status(req).await,
+            "skills.bins" => self.handle_skills_bins(req).await,
+            "skills.install" => self.handle_skills_install(req).await,
+            "skills.update" => self.handle_skills_update(req).await,
             "cron.list" => self.handle_cron_list(req).await,
             "cron.status" => self.handle_cron_status(req).await,
             "cron.add" => self.handle_cron_add(req).await,
@@ -945,6 +980,87 @@ impl RpcDispatcher {
             "workspace": workspace,
             "file": file
         }))
+    }
+
+    async fn handle_skills_status(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SkillsStatusParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid skills.status params: {err}"
+                ));
+            }
+        };
+        let requested_agent = normalize_optional_text(params.agent_id, 64);
+        let agent_id = match requested_agent {
+            Some(raw) => {
+                if !self.agents.contains(&raw).await {
+                    return RpcDispatchOutcome::bad_request(format!("unknown agent id \"{raw}\""));
+                }
+                normalize_agent_id(&raw)
+            }
+            None => DEFAULT_AGENT_ID.to_owned(),
+        };
+        let workspace = self
+            .agents
+            .workspace_for(&agent_id)
+            .await
+            .unwrap_or_else(|| DEFAULT_AGENT_WORKSPACE.to_owned());
+        let report = self.skills.status(&workspace, &agent_id).await;
+        RpcDispatchOutcome::Handled(json!(report))
+    }
+
+    async fn handle_skills_bins(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        if let Err(err) = decode_params::<SkillsBinsParams>(&req.params) {
+            return RpcDispatchOutcome::bad_request(format!("invalid skills.bins params: {err}"));
+        }
+        let bins = self.skills.bins().await;
+        RpcDispatchOutcome::Handled(json!({
+            "bins": bins
+        }))
+    }
+
+    async fn handle_skills_install(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SkillsInstallParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid skills.install params: {err}"
+                ));
+            }
+        };
+        if matches!(params.timeout_ms, Some(timeout_ms) if timeout_ms < 1_000) {
+            return RpcDispatchOutcome::bad_request(
+                "invalid skills.install params: timeoutMs must be >= 1000",
+            );
+        }
+        let result = self.skills.install(params).await;
+        self.system
+            .log_line(format!(
+                "skills.install skillKey={} installId={}",
+                result.skill_key, result.install_id
+            ))
+            .await;
+        RpcDispatchOutcome::Handled(json!(result))
+    }
+
+    async fn handle_skills_update(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<SkillsUpdateParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid skills.update params: {err}"
+                ));
+            }
+        };
+        let result = match self.skills.update(params).await {
+            Ok(result) => result,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        self.system
+            .log_line(format!("skills.update skillKey={}", result.skill_key))
+            .await;
+        RpcDispatchOutcome::Handled(json!(result))
     }
 
     async fn handle_cron_list(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
@@ -2554,6 +2670,21 @@ impl AgentRegistry {
         }
     }
 
+    async fn contains(&self, raw_agent_id: &str) -> bool {
+        let agent_id = normalize_agent_id(raw_agent_id);
+        let guard = self.state.lock().await;
+        guard.entries.contains_key(&agent_id)
+    }
+
+    async fn workspace_for(&self, raw_agent_id: &str) -> Option<String> {
+        let agent_id = normalize_agent_id(raw_agent_id);
+        let guard = self.state.lock().await;
+        guard
+            .entries
+            .get(&agent_id)
+            .map(|entry| entry.workspace.clone())
+    }
+
     async fn list(&self) -> AgentListSnapshot {
         let guard = self.state.lock().await;
         let mut ids = guard.entries.keys().cloned().collect::<Vec<_>>();
@@ -3348,6 +3479,545 @@ impl CronRegistry {
         }
         Ok(entries)
     }
+}
+
+struct SkillsRegistry {
+    state: Mutex<SkillsState>,
+}
+
+#[derive(Debug, Clone)]
+struct SkillsState {
+    managed_skills_dir: String,
+    entries: HashMap<String, SkillConfigState>,
+    virtual_skills: HashMap<String, VirtualSkillEntry>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SkillConfigState {
+    enabled: Option<bool>,
+    api_key: Option<String>,
+    env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+struct VirtualSkillEntry {
+    name: String,
+    description: String,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredSkill {
+    name: String,
+    description: String,
+    source: String,
+    file_path: String,
+    base_dir: String,
+    skill_key: String,
+    bundled: bool,
+    primary_env: Option<String>,
+    emoji: Option<String>,
+    homepage: Option<String>,
+    requirements: SkillRequirementSet,
+    install: Vec<SkillInstallOption>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SkillRequirementSet {
+    bins: Vec<String>,
+    env: Vec<String>,
+    config: Vec<String>,
+    os: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillsStatusConfigCheck {
+    path: String,
+    satisfied: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillInstallOption {
+    id: String,
+    kind: String,
+    label: String,
+    bins: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillStatusRequirements {
+    bins: Vec<String>,
+    env: Vec<String>,
+    config: Vec<String>,
+    os: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillStatusEntryView {
+    name: String,
+    description: String,
+    source: String,
+    #[serde(rename = "filePath")]
+    file_path: String,
+    #[serde(rename = "baseDir")]
+    base_dir: String,
+    #[serde(rename = "skillKey")]
+    skill_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bundled: Option<bool>,
+    #[serde(rename = "primaryEnv", skip_serializing_if = "Option::is_none")]
+    primary_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emoji: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    homepage: Option<String>,
+    always: bool,
+    disabled: bool,
+    #[serde(rename = "blockedByAllowlist")]
+    blocked_by_allowlist: bool,
+    eligible: bool,
+    requirements: SkillStatusRequirements,
+    missing: SkillStatusRequirements,
+    #[serde(rename = "configChecks")]
+    config_checks: Vec<SkillsStatusConfigCheck>,
+    install: Vec<SkillInstallOption>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillsStatusReport {
+    #[serde(rename = "workspaceDir")]
+    workspace_dir: String,
+    #[serde(rename = "managedSkillsDir")]
+    managed_skills_dir: String,
+    skills: Vec<SkillStatusEntryView>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillConfigView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(rename = "apiKey", skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillsUpdateResult {
+    ok: bool,
+    #[serde(rename = "skillKey")]
+    skill_key: String,
+    config: SkillConfigView,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct SkillsInstallResult {
+    ok: bool,
+    #[serde(rename = "skillKey")]
+    skill_key: String,
+    name: String,
+    #[serde(rename = "installId")]
+    install_id: String,
+    installed: bool,
+    message: String,
+}
+
+impl SkillsRegistry {
+    fn new() -> Self {
+        let managed_skills_dir = default_codex_skills_dir().to_string_lossy().to_string();
+        Self {
+            state: Mutex::new(SkillsState {
+                managed_skills_dir,
+                entries: HashMap::new(),
+                virtual_skills: HashMap::new(),
+            }),
+        }
+    }
+
+    async fn status(&self, workspace_dir: &str, _agent_id: &str) -> SkillsStatusReport {
+        let snapshot = {
+            let guard = self.state.lock().await;
+            (
+                guard.managed_skills_dir.clone(),
+                guard.entries.clone(),
+                guard.virtual_skills.clone(),
+            )
+        };
+        let discovered = discover_skills(Path::new(&snapshot.0), &snapshot.1, &snapshot.2);
+        let skills = discovered
+            .into_iter()
+            .map(|skill| {
+                let cfg = snapshot
+                    .1
+                    .get(&skill.skill_key)
+                    .cloned()
+                    .unwrap_or_default();
+                build_skill_status_entry(skill, cfg)
+            })
+            .collect::<Vec<_>>();
+        SkillsStatusReport {
+            workspace_dir: workspace_dir.to_owned(),
+            managed_skills_dir: snapshot.0,
+            skills,
+        }
+    }
+
+    async fn bins(&self) -> Vec<String> {
+        let snapshot = {
+            let guard = self.state.lock().await;
+            (
+                guard.managed_skills_dir.clone(),
+                guard.entries.clone(),
+                guard.virtual_skills.clone(),
+            )
+        };
+        let discovered = discover_skills(Path::new(&snapshot.0), &snapshot.1, &snapshot.2);
+        let mut bins = Vec::new();
+        for skill in discovered {
+            bins.extend(skill.requirements.bins);
+            for install in skill.install {
+                bins.extend(install.bins);
+            }
+        }
+        sort_and_dedup_strings(&mut bins);
+        bins
+    }
+
+    async fn install(&self, params: SkillsInstallParams) -> SkillsInstallResult {
+        let name = params.name.trim().to_owned();
+        let install_id = params.install_id.trim().to_owned();
+        let skill_key = skill_key_from_name(&name);
+        let mut guard = self.state.lock().await;
+        guard
+            .virtual_skills
+            .entry(skill_key.clone())
+            .or_insert_with(|| VirtualSkillEntry {
+                name: name.clone(),
+                description: "User-managed skill".to_owned(),
+            });
+        SkillsInstallResult {
+            ok: true,
+            skill_key,
+            name: name.clone(),
+            install_id: install_id.clone(),
+            installed: true,
+            message: format!("Installed {name} ({install_id})"),
+        }
+    }
+
+    async fn update(&self, params: SkillsUpdateParams) -> Result<SkillsUpdateResult, String> {
+        let skill_key = normalize_optional_text(Some(params.skill_key), 128)
+            .ok_or_else(|| "skillKey is required".to_owned())?;
+        let mut guard = self.state.lock().await;
+        let config_view = {
+            let entry = guard
+                .entries
+                .entry(skill_key.clone())
+                .or_insert_with(SkillConfigState::default);
+            if let Some(enabled) = params.enabled {
+                entry.enabled = Some(enabled);
+            }
+            if let Some(api_key) = params.api_key {
+                let normalized = normalize_secret_input(&api_key);
+                if normalized.is_empty() {
+                    entry.api_key = None;
+                } else {
+                    entry.api_key = Some(normalized);
+                }
+            }
+            if let Some(env) = params.env {
+                for (raw_key, raw_value) in env {
+                    let key = raw_key.trim();
+                    if key.is_empty() {
+                        continue;
+                    }
+                    let value = raw_value.trim();
+                    if value.is_empty() {
+                        entry.env.remove(key);
+                    } else {
+                        entry.env.insert(key.to_owned(), value.to_owned());
+                    }
+                }
+            }
+            SkillConfigView {
+                enabled: entry.enabled,
+                api_key: entry.api_key.clone(),
+                env: entry.env.clone(),
+            }
+        };
+        guard
+            .virtual_skills
+            .entry(skill_key.clone())
+            .or_insert_with(|| VirtualSkillEntry {
+                name: skill_key.clone(),
+                description: "User-managed skill".to_owned(),
+            });
+        Ok(SkillsUpdateResult {
+            ok: true,
+            skill_key,
+            config: config_view,
+        })
+    }
+}
+
+fn discover_skills(
+    base_dir: &Path,
+    config_entries: &HashMap<String, SkillConfigState>,
+    virtual_skills: &HashMap<String, VirtualSkillEntry>,
+) -> Vec<DiscoveredSkill> {
+    let mut by_key = HashMap::new();
+    if base_dir.exists() {
+        let mut stack = vec![(base_dir.to_path_buf(), 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 6 {
+                continue;
+            }
+            let read_dir = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push((path, depth + 1));
+                    continue;
+                }
+                let is_skill_file = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.eq_ignore_ascii_case("SKILL.md"))
+                    .unwrap_or(false);
+                if !is_skill_file {
+                    continue;
+                }
+                if let Some(skill) = parse_skill_file(&path) {
+                    by_key.insert(skill.skill_key.clone(), skill);
+                    if by_key.len() >= 512 {
+                        break;
+                    }
+                }
+            }
+            if by_key.len() >= 512 {
+                break;
+            }
+        }
+    }
+
+    for (skill_key, virtual_skill) in virtual_skills {
+        by_key
+            .entry(skill_key.clone())
+            .or_insert_with(|| DiscoveredSkill {
+                name: virtual_skill.name.clone(),
+                description: virtual_skill.description.clone(),
+                source: "virtual".to_owned(),
+                file_path: String::new(),
+                base_dir: String::new(),
+                skill_key: skill_key.clone(),
+                bundled: false,
+                primary_env: None,
+                emoji: None,
+                homepage: None,
+                requirements: SkillRequirementSet::default(),
+                install: Vec::new(),
+            });
+    }
+
+    for skill_key in config_entries.keys() {
+        by_key
+            .entry(skill_key.clone())
+            .or_insert_with(|| DiscoveredSkill {
+                name: skill_key.clone(),
+                description: "Configured skill".to_owned(),
+                source: "config".to_owned(),
+                file_path: String::new(),
+                base_dir: String::new(),
+                skill_key: skill_key.clone(),
+                bundled: false,
+                primary_env: None,
+                emoji: None,
+                homepage: None,
+                requirements: SkillRequirementSet::default(),
+                install: Vec::new(),
+            });
+    }
+
+    let mut values = by_key.into_values().collect::<Vec<_>>();
+    values.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then_with(|| a.skill_key.cmp(&b.skill_key))
+    });
+    values
+}
+
+fn parse_skill_file(path: &Path) -> Option<DiscoveredSkill> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let mut frontmatter = HashMap::new();
+    let mut lines = raw.lines();
+    if matches!(lines.next().map(str::trim), Some("---")) {
+        for line in lines {
+            let trimmed = line.trim();
+            if trimmed == "---" {
+                break;
+            }
+            if let Some((key, value)) = trimmed.split_once(':') {
+                frontmatter.insert(
+                    key.trim().to_ascii_lowercase(),
+                    value.trim().trim_matches('"').to_owned(),
+                );
+            }
+        }
+    }
+
+    let parent = path.parent()?;
+    let fallback_name = parent
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("skill")
+        .to_owned();
+    let name = frontmatter
+        .get("name")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback_name.clone());
+    let description = frontmatter
+        .get("description")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Installed skill".to_owned());
+    let skill_key = skill_key_from_name(&name);
+    let source = if path.to_string_lossy().contains(".system") {
+        "system".to_owned()
+    } else {
+        "local".to_owned()
+    };
+    Some(DiscoveredSkill {
+        name,
+        description,
+        source,
+        file_path: path.to_string_lossy().to_string(),
+        base_dir: parent.to_string_lossy().to_string(),
+        skill_key,
+        bundled: path.to_string_lossy().contains(".system"),
+        primary_env: frontmatter.get("primary_env").cloned(),
+        emoji: frontmatter.get("emoji").cloned(),
+        homepage: frontmatter.get("homepage").cloned(),
+        requirements: SkillRequirementSet::default(),
+        install: Vec::new(),
+    })
+}
+
+fn build_skill_status_entry(skill: DiscoveredSkill, cfg: SkillConfigState) -> SkillStatusEntryView {
+    let mut missing_env = skill
+        .requirements
+        .env
+        .iter()
+        .filter(|key| !cfg.env.contains_key(*key))
+        .filter(|key| std::env::var(key.as_str()).is_err())
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_and_dedup_strings(&mut missing_env);
+
+    let mut missing_config = skill
+        .requirements
+        .config
+        .iter()
+        .filter(|path| path.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_and_dedup_strings(&mut missing_config);
+
+    let config_checks = skill
+        .requirements
+        .config
+        .iter()
+        .map(|path| SkillsStatusConfigCheck {
+            path: path.clone(),
+            satisfied: !path.trim().is_empty(),
+        })
+        .collect::<Vec<_>>();
+
+    SkillStatusEntryView {
+        name: skill.name,
+        description: skill.description,
+        source: skill.source,
+        file_path: skill.file_path,
+        base_dir: skill.base_dir,
+        skill_key: skill.skill_key,
+        bundled: skill.bundled.then_some(true),
+        primary_env: skill.primary_env,
+        emoji: skill.emoji,
+        homepage: skill.homepage,
+        always: false,
+        disabled: matches!(cfg.enabled, Some(false)),
+        blocked_by_allowlist: false,
+        eligible: true,
+        requirements: SkillStatusRequirements {
+            bins: skill.requirements.bins.clone(),
+            env: skill.requirements.env.clone(),
+            config: skill.requirements.config.clone(),
+            os: skill.requirements.os.clone(),
+        },
+        missing: SkillStatusRequirements {
+            bins: Vec::new(),
+            env: missing_env,
+            config: missing_config,
+            os: Vec::new(),
+        },
+        config_checks,
+        install: skill.install,
+    }
+}
+
+fn default_codex_skills_dir() -> PathBuf {
+    if let Some(value) = std::env::var_os("CODEX_HOME") {
+        return PathBuf::from(value).join("skills");
+    }
+    if cfg!(windows) {
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            return PathBuf::from(home).join(".codex").join("skills");
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".codex").join("skills");
+    }
+    PathBuf::from(".codex").join("skills")
+}
+
+fn skill_key_from_name(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in name.trim().chars() {
+        let lower = ch.to_ascii_lowercase();
+        let keep = lower.is_ascii_alphanumeric() || lower == '_' || lower == '-';
+        if keep {
+            out.push(lower);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_owned();
+    if trimmed.is_empty() {
+        "skill".to_owned()
+    } else {
+        trimmed
+    }
+}
+
+fn normalize_secret_input(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| *ch != '\r' && *ch != '\n')
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+fn sort_and_dedup_strings(values: &mut Vec<String>) {
+    values.sort();
+    values.dedup();
 }
 
 struct ConfigRegistry {
@@ -4832,6 +5502,38 @@ struct AgentsFilesSetParams {
     agent_id: String,
     name: String,
     content: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct SkillsStatusParams {
+    #[serde(rename = "agentId", alias = "agent_id")]
+    agent_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct SkillsBinsParams {}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SkillsInstallParams {
+    name: String,
+    #[serde(rename = "installId", alias = "install_id")]
+    install_id: String,
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SkillsUpdateParams {
+    #[serde(rename = "skillKey", alias = "skill_key")]
+    skill_key: String,
+    enabled: Option<bool>,
+    #[serde(rename = "apiKey", alias = "api_key")]
+    api_key: Option<String>,
+    env: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -8852,6 +9554,177 @@ mod tests {
             }
             _ => panic!("expected agents.list handled after delete"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_skills_methods_report_status_update_and_install() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid_status = RpcRequestFrame {
+            id: "req-skills-status-invalid".to_owned(),
+            method: "skills.status".to_owned(),
+            params: serde_json::json!({
+                "extra": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_status).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let status = RpcRequestFrame {
+            id: "req-skills-status".to_owned(),
+            method: "skills.status".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&status).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/workspaceDir")
+                        .and_then(serde_json::Value::as_str),
+                    Some(super::DEFAULT_AGENT_WORKSPACE)
+                );
+                assert!(payload
+                    .pointer("/managedSkillsDir")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some());
+            }
+            _ => panic!("expected skills.status handled"),
+        }
+
+        let update = RpcRequestFrame {
+            id: "req-skills-update".to_owned(),
+            method: "skills.update".to_owned(),
+            params: serde_json::json!({
+                "skillKey": "brave-search",
+                "enabled": false,
+                "apiKey": "abc\r\ndef",
+                "env": {
+                    " BRAVE_API_KEY ": " secret ",
+                    "REMOVE_ME": " ",
+                    "": "skip"
+                }
+            }),
+        };
+        match dispatcher.handle_request(&update).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/config/apiKey")
+                        .and_then(serde_json::Value::as_str),
+                    Some("abcdef")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/config/enabled")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/config/env/BRAVE_API_KEY")
+                        .and_then(serde_json::Value::as_str),
+                    Some("secret")
+                );
+                assert!(payload.pointer("/config/env/REMOVE_ME").is_none());
+            }
+            _ => panic!("expected skills.update handled"),
+        }
+
+        match dispatcher.handle_request(&status).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                let skills = payload
+                    .pointer("/skills")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let configured = skills
+                    .iter()
+                    .find(|entry| {
+                        entry
+                            .pointer("/skillKey")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("brave-search")
+                    })
+                    .expect("configured skill present");
+                assert_eq!(
+                    configured
+                        .pointer("/disabled")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected skills.status handled"),
+        }
+
+        let invalid_install = RpcRequestFrame {
+            id: "req-skills-install-invalid".to_owned(),
+            method: "skills.install".to_owned(),
+            params: serde_json::json!({
+                "name": "Brave Search",
+                "installId": "uv:brave-search",
+                "timeoutMs": 500
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_install).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let install = RpcRequestFrame {
+            id: "req-skills-install".to_owned(),
+            method: "skills.install".to_owned(),
+            params: serde_json::json!({
+                "name": "Brave Search",
+                "installId": "uv:brave-search",
+                "timeoutMs": 120000
+            }),
+        };
+        match dispatcher.handle_request(&install).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/installed")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected skills.install handled"),
+        }
+
+        let bins = RpcRequestFrame {
+            id: "req-skills-bins".to_owned(),
+            method: "skills.bins".to_owned(),
+            params: serde_json::json!({}),
+        };
+        match dispatcher.handle_request(&bins).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert!(payload
+                    .pointer("/bins")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some());
+            }
+            _ => panic!("expected skills.bins handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_skills_status_rejects_unknown_agent_id() {
+        let dispatcher = RpcDispatcher::new();
+        let req = RpcRequestFrame {
+            id: "req-skills-status-unknown-agent".to_owned(),
+            method: "skills.status".to_owned(),
+            params: serde_json::json!({
+                "agentId": "missing-agent"
+            }),
+        };
+        let out = dispatcher.handle_request(&req).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
     }
 
     #[tokio::test]
