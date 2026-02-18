@@ -235,6 +235,45 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
 
+    test("connect (req) handshake prefers service version fallback in hello-ok payload", async () => {
+      const prevOpenclawVersion = process.env.OPENCLAW_VERSION;
+      const prevServiceVersion = process.env.OPENCLAW_SERVICE_VERSION;
+      const prevPackageVersion = process.env.npm_package_version;
+      process.env.OPENCLAW_VERSION = " ";
+      process.env.OPENCLAW_SERVICE_VERSION = "2.4.6-service";
+      process.env.npm_package_version = "1.0.0-package";
+      try {
+        const ws = await openWs(port);
+        const res = await connectReq(ws);
+        expect(res.ok).toBe(true);
+        const payload = res.payload as
+          | {
+              type?: unknown;
+              server?: { version?: string };
+            }
+          | undefined;
+        expect(payload?.type).toBe("hello-ok");
+        expect(payload?.server?.version).toBe("2.4.6-service");
+        ws.close();
+      } finally {
+        if (prevOpenclawVersion === undefined) {
+          delete process.env.OPENCLAW_VERSION;
+        } else {
+          process.env.OPENCLAW_VERSION = prevOpenclawVersion;
+        }
+        if (prevServiceVersion === undefined) {
+          delete process.env.OPENCLAW_SERVICE_VERSION;
+        } else {
+          process.env.OPENCLAW_SERVICE_VERSION = prevServiceVersion;
+        }
+        if (prevPackageVersion === undefined) {
+          delete process.env.npm_package_version;
+        } else {
+          process.env.npm_package_version = prevPackageVersion;
+        }
+      }
+    });
+
     test("does not grant admin when scopes are empty", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, { scopes: [] });
