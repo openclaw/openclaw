@@ -26,6 +26,11 @@ function resolveCommand(command: string): string {
   if (cmdCommands.includes(basename)) {
     return `${command}.cmd`;
   }
+  // CLI tools with .cmd wrappers on Windows (gcloud, gog, tailscale)
+  const windowsCmdTools = ["gcloud", "gog", "tailscale"];
+  if (windowsCmdTools.includes(basename)) {
+    return `${command}.cmd`;
+  }
   return command;
 }
 
