@@ -142,4 +142,126 @@ describe("gateway plugin HTTP auth boundary", () => {
       },
     });
   });
+
+  test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/mattermost/command" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-callback-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/api/channels/mattermost/command") {
+            res.statusCode = 200;
+            res.end("ok:mm-callback");
+            return true;
+          }
+          if (pathname === "/api/channels/nostr/default/profile") {
+            res.statusCode = 200;
+            res.end("ok:nostr");
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        const slashCallback = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels/mattermost/command", method: "POST" }),
+          slashCallback.res,
+        );
+        expect(slashCallback.res.statusCode).toBe(200);
+        expect(slashCallback.getBody()).toBe("ok:mm-callback");
+
+        const otherChannelUnauthed = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels/nostr/default/profile" }),
+          otherChannelUnauthed.res,
+        );
+        expect(otherChannelUnauthed.res.statusCode).toBe(401);
+        expect(otherChannelUnauthed.getBody()).toContain("Unauthorized");
+      },
+    });
+  });
+
+  test("does not bypass auth when mattermost callbackPath points to non-mattermost channel routes", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: {
+        gateway: { trustedProxies: [] },
+        channels: {
+          mattermost: {
+            commands: { callbackPath: "/api/channels/nostr/default/profile" },
+          },
+        },
+      },
+      prefix: "openclaw-plugin-http-auth-mm-misconfig-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/api/channels/nostr/default/profile") {
+            res.statusCode = 200;
+            res.end("ok:nostr");
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        const unauthenticated = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels/nostr/default/profile", method: "POST" }),
+          unauthenticated.res,
+        );
+
+        expect(unauthenticated.res.statusCode).toBe(401);
+        expect(unauthenticated.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
 });

@@ -505,12 +505,21 @@ export function createGatewayHttpServer(opts: {
         const mattermostCallbackPaths = new Set<string>();
         const defaultMmCallbackPath = "/api/channels/mattermost/command";
 
+        const isMattermostCommandCallbackPath = (path: string): boolean =>
+          path === defaultMmCallbackPath || path.startsWith("/api/channels/mattermost/");
+
         const normalizeCallbackPath = (value: unknown): string => {
           const trimmed = typeof value === "string" ? value.trim() : "";
           if (!trimmed) {
             return defaultMmCallbackPath;
           }
           return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+        };
+
+        const addMattermostCallbackPathIfValid = (path: string) => {
+          if (isMattermostCommandCallbackPath(path)) {
+            mattermostCallbackPaths.add(path);
+          }
         };
 
         const tryAddCallbackUrlPath = (rawUrl: unknown) => {
@@ -524,7 +533,7 @@ export function createGatewayHttpServer(opts: {
           try {
             const pathname = new URL(trimmed).pathname;
             if (pathname) {
-              mattermostCallbackPaths.add(pathname);
+              addMattermostCallbackPathIfValid(pathname);
             }
           } catch {
             // ignore
@@ -537,7 +546,7 @@ export function createGatewayHttpServer(opts: {
             return;
           }
           const commands = raw as Record<string, unknown>;
-          mattermostCallbackPaths.add(normalizeCallbackPath(commands?.callbackPath));
+          addMattermostCallbackPathIfValid(normalizeCallbackPath(commands?.callbackPath));
           tryAddCallbackUrlPath(commands?.callbackUrl);
         };
 
