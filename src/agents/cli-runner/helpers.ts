@@ -297,6 +297,9 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
   if (inputMode === "stdin") {
     return { stdin: params.prompt };
   }
+  if (params.prompt.includes("\u0000")) {
+    return { stdin: params.prompt };
+  }
   if (params.backend.maxPromptArgChars && params.prompt.length > params.backend.maxPromptArgChars) {
     return { stdin: params.prompt };
   }
