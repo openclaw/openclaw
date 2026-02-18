@@ -10,11 +10,12 @@ export async function writeOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
   agentDir?: string,
-): Promise<void> {
+): Promise<string> {
   const email =
     typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
+  const profileId = `${provider}:${email}`;
   upsertAuthProfile({
-    profileId: `${provider}:${email}`,
+    profileId,
     credential: {
       type: "oauth",
       provider,
@@ -22,6 +23,7 @@ export async function writeOAuthCredentials(
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });
+  return profileId;
 }
 
 export async function setAnthropicApiKey(key: string, agentDir?: string) {
