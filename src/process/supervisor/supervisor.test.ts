@@ -80,6 +80,101 @@ describe("process supervisor", () => {
     expect(exit.timedOut).toBe(true);
   });
 
+  it("cancelAll terminates all active runs", async () => {
+    const supervisor = createProcessSupervisor();
+    const a = await supervisor.spawn({
+      sessionId: "s1",
+      backendId: "test",
+      mode: "child",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      timeoutMs: 10_000,
+      stdinMode: "pipe-closed",
+    });
+    const b = await supervisor.spawn({
+      sessionId: "s2",
+      backendId: "test",
+      mode: "child",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      timeoutMs: 10_000,
+      stdinMode: "pipe-closed",
+    });
+
+    supervisor.cancelAll();
+
+    const [exitA, exitB] = await Promise.all([a.wait(), b.wait()]);
+    expect(exitA.reason === "manual-cancel" || exitA.reason === "signal").toBe(true);
+    expect(exitB.reason === "manual-cancel" || exitB.reason === "signal").toBe(true);
+  });
+
+  it("cancelAll on empty supervisor is a no-op", () => {
+    const supervisor = createProcessSupervisor();
+    // Should not throw when there are no active runs
+    supervisor.cancelAll();
+  });
+
+  it("cancelAll is resilient to partial cancellation failures", async () => {
+    const supervisor = createProcessSupervisor();
+    const a = await supervisor.spawn({
+      sessionId: "s1",
+      backendId: "test",
+      mode: "child",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      timeoutMs: 10_000,
+      stdinMode: "pipe-closed",
+    });
+    const b = await supervisor.spawn({
+      sessionId: "s2",
+      backendId: "test",
+      mode: "child",
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 10_000)"],
+      timeoutMs: 10_000,
+      stdinMode: "pipe-closed",
+    });
+
+    // Cancel first run manually so it's already gone when cancelAll runs
+    a.cancel();
+    await a.wait();
+
+    // cancelAll should still terminate the remaining run without throwing
+    supervisor.cancelAll();
+    const exitB = await b.wait();
+    expect(exitB.reason === "manual-cancel" || exitB.reason === "signal").toBe(true);
+  });
+
+  it("full shutdown: zero orphan PIDs remain after cancelAll", async () => {
+    const supervisor = createProcessSupervisor();
+    const runs = await Promise.all(
+      Array.from({ length: 3 }, (_, i) =>
+        supervisor.spawn({
+          sessionId: `s-shutdown-${i}`,
+          backendId: "test",
+          mode: "child",
+          argv: [process.execPath, "-e", "setTimeout(() => {}, 30_000)"],
+          timeoutMs: 30_000,
+          stdinMode: "pipe-closed",
+        }),
+      ),
+    );
+
+    const pids = runs.map((r) => r.pid).filter(Boolean) as number[];
+    expect(pids.length).toBe(3);
+
+    supervisor.cancelAll();
+    await Promise.all(runs.map((r) => r.wait()));
+
+    // Verify all child PIDs are no longer alive
+    for (const pid of pids) {
+      let alive = false;
+      try {
+        process.kill(pid, 0);
+        alive = true;
+      } catch {
+        // Expected: process no longer exists
+      }
+      expect(alive).toBe(false);
+    }
+  });
+
   it("can stream output without retaining it in RunExit payload", async () => {
     const supervisor = createProcessSupervisor();
     let streamed = "";

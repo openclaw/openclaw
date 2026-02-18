@@ -16,6 +16,15 @@ vi.mock("../../kill-tree.js", () => ({
   killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
 }));
 
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
   child.stdin = new PassThrough() as ChildProcess["stdin"];
@@ -95,6 +104,67 @@ describe("createChildAdapter", () => {
       options?: { env?: NodeJS.ProcessEnv };
     };
     expect(spawnArgs.options?.env).toBeUndefined();
+  });
+
+  it("destroys stdio streams on dispose", async () => {
+    const { child } = createStubChild(5555);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const { createChildAdapter } = await import("./child.js");
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "1"],
+      stdinMode: "pipe-open",
+    });
+
+    expect(child.stdin!.destroyed).toBe(false);
+    expect(child.stdout!.destroyed).toBe(false);
+    expect(child.stderr!.destroyed).toBe(false);
+
+    adapter.dispose();
+
+    expect(child.stdin!.destroyed).toBe(true);
+    expect(child.stdout!.destroyed).toBe(true);
+    expect(child.stderr!.destroyed).toBe(true);
+  });
+
+  it("dispose is safe when streams are already destroyed", async () => {
+    const { child } = createStubChild(6666);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const { createChildAdapter } = await import("./child.js");
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "1"],
+      stdinMode: "pipe-open",
+    });
+
+    // Manually destroy all streams first
+    child.stdin!.destroy();
+    child.stdout!.destroy();
+    child.stderr!.destroy();
+
+    expect(child.stdin!.destroyed).toBe(true);
+    expect(child.stdout!.destroyed).toBe(true);
+    expect(child.stderr!.destroyed).toBe(true);
+
+    // Calling dispose again should not throw
+    adapter.dispose();
+  });
+
+  it("dispose is safe when child process already exited", async () => {
+    const { child } = createStubChild(7777);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const { createChildAdapter } = await import("./child.js");
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "1"],
+      stdinMode: "pipe-open",
+    });
+
+    // Simulate child exit by destroying streams and emitting close
+    child.stdin!.destroy();
+    child.stdout!.destroy();
+    child.stderr!.destroy();
+    child.emit("close", 0, null);
+
+    // dispose should be safe after child exit
+    adapter.dispose();
   });
 
   it("passes explicit env overrides as strings", async () => {

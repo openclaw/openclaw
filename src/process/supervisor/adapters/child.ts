@@ -1,8 +1,11 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import type { ManagedRunStdin } from "../types.js";
 import { toStringEnv } from "./env.js";
+
+const log = createSubsystemLogger("process/child-adapter");
 
 function resolveCommand(command: string): string {
   if (process.platform !== "win32") {
@@ -135,6 +138,10 @@ export async function createChildAdapter(params: {
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
+      // killProcessTree handles platform differences: on Unix it sends SIGTERM
+      // to the process group then escalates to SIGKILL after a grace period;
+      // on Windows it uses taskkill /T for tree termination with the same
+      // graceful-then-force pattern.
       if (pid) {
         killProcessTree(pid);
       } else {
@@ -154,6 +161,19 @@ export async function createChildAdapter(params: {
   };
 
   const dispose = () => {
+    // Destroy stdout/stderr before stdin. Closing stdin first while the child is
+    // still running could trigger EPIPE in the parent if the write end is shut down
+    // before all data has been consumed. In practice dispose() is always called after
+    // the child has exited, so the ordering is a safety measure for direct callers.
+    for (const stream of [child.stdout, child.stderr, child.stdin]) {
+      if (stream && !stream.destroyed) {
+        try {
+          stream.destroy();
+        } catch (err) {
+          log.debug(`stream destroy failed (pid=${child.pid}): ${String(err)}`);
+        }
+      }
+    }
     child.removeAllListeners();
   };
 
