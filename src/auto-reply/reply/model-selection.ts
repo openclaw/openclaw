@@ -420,6 +420,22 @@ export function resolveModelDirectiveSelection(params: {
   const rawTrimmed = raw.trim();
   const rawLower = rawTrimmed.toLowerCase();
 
+  // Reserved reset keywords (single token, no slash) clear the session model override
+  // and fall back to the configured default without going through allowlist validation.
+  // "provider/default" (contains a slash) is still treated as a literal model id.
+  if (
+    (rawLower === "default" || rawLower === "reset" || rawLower === "clear") &&
+    !rawTrimmed.includes("/")
+  ) {
+    return {
+      selection: {
+        provider: defaultProvider,
+        model: defaultModel,
+        isDefault: true,
+      },
+    };
+  }
+
   const pickAliasForKey = (provider: string, model: string): string | undefined =>
     aliasIndex.byKey.get(modelKey(provider, model))?.[0];
 

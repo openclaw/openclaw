@@ -189,7 +189,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
   const wantsStatus = directive === "status";
   const wantsSummary = !rawDirective;
   const wantsLegacyList = directive === "list";
-  if (!wantsSummary && !wantsStatus && !wantsLegacyList) {
+  // Reset keywords are handled by resolveModelSelectionFromDirective; skip info display.
+  const wantsReset = directive === "default" || directive === "reset" || directive === "clear";
+  if (!wantsSummary && !wantsStatus && !wantsLegacyList && !wantsReset) {
     return undefined;
   }
 
@@ -213,6 +215,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
     return reply ?? { text: "No models available." };
   }
 
+  // Reset keywords (default/reset/clear) are handled by resolveModelSelectionFromDirective;
+  // return undefined here so the caller proceeds to model selection handling.
+  if (wantsReset) {
+    return undefined;
+  }
+
   if (wantsSummary) {
     const current = `${params.provider}/${params.model}`;
     const isTelegram = params.surface === "telegram";
@@ -225,6 +233,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
           "",
           "Tap below to browse models, or use:",
           "/model <provider/model> to switch",
+          "/model default (or reset/clear) to restore default",
           "/model status for details",
         ].join("\n"),
         channelData: { telegram: { buttons } },
@@ -236,6 +245,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         `Current: ${current}`,
         "",
         "Switch: /model <provider/model>",
+        "Reset:  /model default (or reset, clear)",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
       ].join("\n"),
@@ -344,6 +354,22 @@ export function resolveModelSelectionFromDirective(params: {
         "Browse: /models or /models <provider>",
         "Switch: /model <provider/model>",
       ].join("\n"),
+    };
+  }
+
+  // Reserved reset keywords (single token, no slash) clear the session model override
+  // and fall back to the configured default. "provider/default" is still a valid model id.
+  const rawLower = raw.toLowerCase();
+  if (
+    (rawLower === "default" || rawLower === "reset" || rawLower === "clear") &&
+    !raw.includes("/")
+  ) {
+    return {
+      modelSelection: {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+        isDefault: true,
+      },
     };
   }
 

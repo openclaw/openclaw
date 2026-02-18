@@ -264,3 +264,80 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveModelDirectiveSelection — reset keyword tests (#20137)
+// ---------------------------------------------------------------------------
+import { resolveModelDirectiveSelection } from "./model-selection.js";
+
+const EMPTY_ALIAS_INDEX = {
+  byKey: new Map(),
+  byAlias: new Map(),
+};
+
+describe("resolveModelDirectiveSelection reset keywords", () => {
+  const defaultProvider = "anthropic";
+  const defaultModel = "claude-opus-4-5";
+
+  function resolve(raw: string, allowedModelKeys: Set<string> = new Set()) {
+    return resolveModelDirectiveSelection({
+      raw,
+      defaultProvider,
+      defaultModel,
+      aliasIndex: EMPTY_ALIAS_INDEX,
+      allowedModelKeys,
+    });
+  }
+
+  it("returns isDefault:true for 'default'", () => {
+    const result = resolve("default");
+    expect(result.error).toBeUndefined();
+    expect(result.selection?.isDefault).toBe(true);
+    expect(result.selection?.provider).toBe(defaultProvider);
+    expect(result.selection?.model).toBe(defaultModel);
+  });
+
+  it("returns isDefault:true for 'reset'", () => {
+    const result = resolve("reset");
+    expect(result.error).toBeUndefined();
+    expect(result.selection?.isDefault).toBe(true);
+  });
+
+  it("returns isDefault:true for 'clear'", () => {
+    const result = resolve("clear");
+    expect(result.error).toBeUndefined();
+    expect(result.selection?.isDefault).toBe(true);
+  });
+
+  it("is case-insensitive: DEFAULT, Reset, CLEAR", () => {
+    expect(resolve("DEFAULT").selection?.isDefault).toBe(true);
+    expect(resolve("Reset").selection?.isDefault).toBe(true);
+    expect(resolve("CLEAR").selection?.isDefault).toBe(true);
+  });
+
+  it("treats 'provider/default' as a literal model id (not a reset keyword)", () => {
+    // Contains a slash → not a reset keyword; goes through normal resolution.
+    // With an empty allowedModelKeys set (no allowlist), it should resolve normally.
+    const result = resolve("anthropic/default", new Set());
+    // resolveModelRefFromString will parse this as provider=anthropic, model=default.
+    // With no allowlist it passes through.
+    expect(result.selection?.isDefault).toBeFalsy();
+    expect(result.selection?.model).toBe("default");
+    expect(result.selection?.provider).toBe("anthropic");
+  });
+
+  it("reset keyword bypasses allowlist entirely", () => {
+    // Even with a strict allowlist that doesn't include the default model,
+    // reset keywords should still return isDefault:true.
+    const strictAllowlist = new Set(["openai/gpt-4o"]);
+    const result = resolve("default", strictAllowlist);
+    expect(result.selection?.isDefault).toBe(true);
+    expect(result.selection?.provider).toBe(defaultProvider);
+    expect(result.selection?.model).toBe(defaultModel);
+  });
+
+  it("reset keyword with trailing whitespace still works", () => {
+    const result = resolve("  default  ");
+    expect(result.selection?.isDefault).toBe(true);
+  });
+});
