@@ -156,6 +156,28 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   return models[0] ?? null;
 }
 
+function buildTestModel(id: string, provider = "anthropic"): Model<Api> {
+  return { id, provider } as Model<Api>;
+}
+
+describe("pickModel", () => {
+  it("resolves sonnet-4.6 aliases to claude-sonnet-4-6", () => {
+    const model = pickModel(
+      [buildTestModel("claude-opus-4-6"), buildTestModel("claude-sonnet-4-6")],
+      "sonnet-4.6",
+    );
+    expect(model?.id).toBe("claude-sonnet-4-6");
+  });
+
+  it("resolves opus-4.6 aliases to claude-opus-4-6", () => {
+    const model = pickModel(
+      [buildTestModel("claude-sonnet-4-6"), buildTestModel("claude-opus-4-6")],
+      "opus-4.6",
+    );
+    expect(model?.id).toBe("claude-opus-4-6");
+  });
+});
+
 describeLive("live anthropic setup-token", () => {
   it(
     "completes using a setup-token profile",
