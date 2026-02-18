@@ -117,7 +117,6 @@ describe("reply-notifications", () => {
     delete globalThis.Notification;
     const result = await requestNotificationPermission();
     expect(result).toBe(false);
-    // @ts-expect-error — restore mock
     globalThis.Notification = saved;
   });
 
@@ -160,7 +159,6 @@ describe("reply-notifications", () => {
     delete globalThis.Notification;
     notifyReplyComplete("Hello");
     expect(notifications).toHaveLength(0);
-    // @ts-expect-error — restore mock
     globalThis.Notification = saved;
   });
 

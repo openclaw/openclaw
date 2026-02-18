@@ -8,6 +8,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
+import { extractText } from "./chat/message-extract.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -230,8 +231,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     }
     if (state === "final") {
       void loadChatHistory(host as unknown as OpenClawApp);
-      const text = payload?.message?.content?.[0]?.text;
-      notifyReplyComplete(typeof text === "string" ? text : undefined);
+      const text = extractText(payload?.message);
+      notifyReplyComplete(text ?? undefined);
     }
     return;
   }
