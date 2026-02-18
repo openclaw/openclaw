@@ -16,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { extractImagePaths, loadImageAttachments } from "./tui-image-extract.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -443,6 +444,40 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`reset failed: ${String(err)}`);
         }
         break;
+      case "image":
+        if (!args) {
+          chatLog.addSystem("usage: /image <path>");
+          break;
+        }
+        let imgRunId: string | undefined;
+        try {
+          const attachments = await loadImageAttachments([args]);
+          chatLog.addSystem(`\u{1F4CE} 1 image attached: ${attachments[0].fileName}`);
+          chatLog.addUser(`[image: ${attachments[0].fileName}]`);
+          tui.requestRender();
+          imgRunId = randomUUID();
+          noteLocalRunId(imgRunId);
+          state.activeChatRunId = imgRunId;
+          setActivityStatus("sending");
+          await client.sendChat({
+            sessionKey: state.currentSessionKey,
+            message: `[image: ${attachments[0].fileName}]`,
+            thinking: opts.thinking,
+            deliver: deliverDefault,
+            timeoutMs: opts.timeoutMs,
+            runId: imgRunId,
+            attachments,
+          });
+          setActivityStatus("waiting");
+        } catch (err) {
+          if (imgRunId && state.activeChatRunId === imgRunId) {
+            forgetLocalRunId?.(imgRunId);
+            state.activeChatRunId = null;
+          }
+          chatLog.addSystem(`image failed: ${String(err)}`);
+          setActivityStatus("error");
+        }
+        break;
       case "abort":
         await abortActive();
         break;
@@ -463,27 +498,38 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const sendMessage = async (text: string) => {
+    let runId: string | undefined;
     try {
-      chatLog.addUser(text);
+      const { cleanText, paths } = extractImagePaths(text);
+      let attachments: Array<{ content: string; mimeType: string; fileName: string }> | undefined;
+      if (paths.length > 0) {
+        attachments = await loadImageAttachments(paths);
+        chatLog.addSystem(
+          `\u{1F4CE} ${attachments.length} image${attachments.length === 1 ? "" : "s"} attached`,
+        );
+      }
+      const message = cleanText || text;
+      chatLog.addUser(message);
       tui.requestRender();
-      const runId = randomUUID();
+      runId = randomUUID();
       noteLocalRunId(runId);
       state.activeChatRunId = runId;
       setActivityStatus("sending");
       await client.sendChat({
         sessionKey: state.currentSessionKey,
-        message: text,
+        message,
         thinking: opts.thinking,
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,
         runId,
+        attachments,
       });
       setActivityStatus("waiting");
     } catch (err) {
-      if (state.activeChatRunId) {
+      if (runId && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
+        state.activeChatRunId = null;
       }
-      state.activeChatRunId = null;
       chatLog.addSystem(`send failed: ${String(err)}`);
       setActivityStatus("error");
     }
