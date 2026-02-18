@@ -1,9 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { ExecFn } from "./windows-acl.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -36,6 +35,7 @@ import {
   inspectPathPermissions,
 } from "./audit-fs.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -186,6 +186,7 @@ async function collectFilesystemFindings(params: {
     exec: params.execIcacls,
   });
   if (configPerms.ok) {
+    const skipReadablePermWarnings = configPerms.isSymlink;
     if (configPerms.isSymlink) {
       findings.push({
         checkId: "fs.config.symlink",
@@ -208,7 +209,7 @@ async function collectFilesystemFindings(params: {
           env: params.env,
         }),
       });
-    } else if (configPerms.worldReadable) {
+    } else if (!skipReadablePermWarnings && configPerms.worldReadable) {
       findings.push({
         checkId: "fs.config.perms_world_readable",
         severity: "critical",
@@ -222,7 +223,7 @@ async function collectFilesystemFindings(params: {
           env: params.env,
         }),
       });
-    } else if (configPerms.groupReadable) {
+    } else if (!skipReadablePermWarnings && configPerms.groupReadable) {
       findings.push({
         checkId: "fs.config.perms_group_readable",
         severity: "warn",

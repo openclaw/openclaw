@@ -2,10 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { OutboundDeliveryJson } from "./format.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -20,6 +19,7 @@ import {
 } from "./delivery-queue.js";
 import { DirectoryCache } from "./directory-cache.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
+import type { OutboundDeliveryJson } from "./format.js";
 import {
   buildOutboundDeliveryJson,
   formatGatewaySummary,
@@ -446,7 +446,7 @@ describe("DirectoryCache", () => {
 describe("buildOutboundResultEnvelope", () => {
   it("flattens delivery-only payloads by default", () => {
     const delivery: OutboundDeliveryJson = {
-      provider: "whatsapp",
+      channel: "whatsapp",
       via: "gateway",
       to: "+1",
       messageId: "m1",
@@ -468,7 +468,7 @@ describe("buildOutboundResultEnvelope", () => {
 
   it("includes delivery when payloads are present", () => {
     const delivery: OutboundDeliveryJson = {
-      provider: "telegram",
+      channel: "telegram",
       via: "direct",
       to: "123",
       messageId: "m2",
@@ -489,7 +489,7 @@ describe("buildOutboundResultEnvelope", () => {
 
   it("can keep delivery wrapped when requested", () => {
     const delivery: OutboundDeliveryJson = {
-      provider: "discord",
+      channel: "discord",
       via: "gateway",
       to: "channel:C1",
       messageId: "m3",
@@ -1000,6 +1000,7 @@ describe("resolveSessionDeliveryTarget", () => {
       to: "+1555",
       accountId: "acct-1",
       threadId: undefined,
+      threadIdExplicit: false,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
@@ -1024,6 +1025,7 @@ describe("resolveSessionDeliveryTarget", () => {
       to: undefined,
       accountId: undefined,
       threadId: undefined,
+      threadIdExplicit: false,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
@@ -1049,6 +1051,7 @@ describe("resolveSessionDeliveryTarget", () => {
       to: "+1555",
       accountId: undefined,
       threadId: undefined,
+      threadIdExplicit: false,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
@@ -1074,6 +1077,7 @@ describe("resolveSessionDeliveryTarget", () => {
       to: undefined,
       accountId: undefined,
       threadId: undefined,
+      threadIdExplicit: false,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",

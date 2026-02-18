@@ -1,8 +1,8 @@
 import type { Command } from "commander";
-import type { ProgramContext } from "./context.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { formatHelpExamples } from "../help-format.js";
+import type { ProgramContext } from "./context.js";
 import { createMessageCliHelpers } from "./message/helpers.js";
 import { registerMessageBroadcastCommand } from "./message/register.broadcast.js";
 import { registerMessageDiscordAdminCommands } from "./message/register.discord-admin.js";

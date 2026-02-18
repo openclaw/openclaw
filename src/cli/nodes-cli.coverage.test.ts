@@ -1,7 +1,18 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGateway = vi.fn(async (opts: { method?: string }) => {
+type NodeInvokeCall = {
+  method?: string;
+  params?: {
+    idempotencyKey?: string;
+    command?: string;
+    params?: unknown;
+    timeoutMs?: number;
+  };
+};
+
+const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
     return {
       nodes: [
@@ -51,18 +62,10 @@ const callGateway = vi.fn(async (opts: { method?: string }) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts as { method?: string }),
+  callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
@@ -77,13 +80,15 @@ vi.mock("../config/config.js", () => ({
 describe("nodes-cli coverage", () => {
   let registerNodesCli: (program: Command) => void;
 
+  const getNodeInvokeCall = () =>
+    callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0] as NodeInvokeCall;
+
   beforeAll(async () => {
     ({ registerNodesCli } = await import("./nodes-cli.js"));
   });
 
   beforeEach(() => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
   });
@@ -114,7 +119,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.idempotencyKey).toBe("rk_test");
@@ -143,7 +148,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.idempotencyKey).toBe("rk_test");
@@ -179,7 +184,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("system.notify");
@@ -216,7 +221,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
+    const invoke = getNodeInvokeCall();
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("location.get");

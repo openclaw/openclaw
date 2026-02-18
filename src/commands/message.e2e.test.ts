@@ -20,33 +20,33 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  callGateway: callGatewayMock,
   randomIdempotencyKey: () => "idem-1",
 }));
 
 const webAuthExists = vi.fn(async () => false);
 vi.mock("../web/session.js", () => ({
-  webAuthExists: (...args: unknown[]) => webAuthExists(...args),
+  webAuthExists,
 }));
 
-const handleDiscordAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/discord-actions.js", () => ({
-  handleDiscordAction: (...args: unknown[]) => handleDiscordAction(...args),
+  handleDiscordAction,
 }));
 
-const handleSlackAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/slack-actions.js", () => ({
-  handleSlackAction: (...args: unknown[]) => handleSlackAction(...args),
+  handleSlackAction,
 }));
 
-const handleTelegramAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/telegram-actions.js", () => ({
-  handleTelegramAction: (...args: unknown[]) => handleTelegramAction(...args),
+  handleTelegramAction,
 }));
 
-const handleWhatsAppAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleWhatsAppAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/whatsapp-actions.js", () => ({
-  handleWhatsAppAction: (...args: unknown[]) => handleWhatsAppAction(...args),
+  handleWhatsAppAction,
 }));
 
 const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -117,6 +117,10 @@ const createStubPlugin = (params: {
   outbound: params.outbound,
 });
 
+type ChannelActionParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>
+>[0];
+
 const createDiscordPollPluginRegistration = () => ({
   pluginId: "discord",
   source: "test",
@@ -125,11 +129,12 @@ const createDiscordPollPluginRegistration = () => ({
     label: "Discord",
     actions: {
       listActions: () => ["poll"],
-      handleAction: async ({ action, params, cfg, accountId }) =>
-        await handleDiscordAction(
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleDiscordAction(
           { action, to: params.to, accountId: accountId ?? undefined },
           cfg,
-        ),
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
     },
   }),
 });
@@ -142,11 +147,12 @@ const createTelegramSendPluginRegistration = () => ({
     label: "Telegram",
     actions: {
       listActions: () => ["send"],
-      handleAction: async ({ action, params, cfg, accountId }) =>
-        await handleTelegramAction(
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleTelegramAction(
           { action, to: params.to, accountId: accountId ?? undefined },
           cfg,
-        ),
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
     },
   }),
 });

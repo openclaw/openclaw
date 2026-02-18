@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { stripMarkdown } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
@@ -322,7 +322,7 @@ export async function sendMessageBlueBubbles(
   text: string,
   opts: BlueBubblesSendOpts = {},
 ): Promise<BlueBubblesSendResult> {
-  const trimmedText = (text ?? "").trimStart();
+  const trimmedText = text ?? "";
   if (!trimmedText.trim()) {
     throw new Error("BlueBubbles send requires text");
   }

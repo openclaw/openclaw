@@ -1,7 +1,8 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -36,12 +37,12 @@ import {
 
 function createLegacyProviderConfig(params: {
   providerId: string;
-  api: string;
+  api: "anthropic-messages" | "openai-completions" | "openai-responses";
   modelId?: string;
   modelName?: string;
   baseUrl?: string;
   apiKey?: string;
-}) {
+}): OpenClawConfig {
   return {
     models: {
       providers: {
@@ -63,7 +64,7 @@ function createLegacyProviderConfig(params: {
         },
       },
     },
-  };
+  } as OpenClawConfig;
 }
 
 const EXPECTED_FALLBACKS = ["anthropic/claude-opus-4-5"] as const;

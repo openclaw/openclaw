@@ -36,6 +36,20 @@ export function replyTexts(res: ReplyPayloadText | ReplyPayloadText[]): string[]
     .filter((value): value is string => Boolean(value));
 }
 
+export function makeEmbeddedTextResult(text = "done") {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  };
+}
+
+export function mockEmbeddedTextResult(text = "done") {
+  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
+}
+
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {

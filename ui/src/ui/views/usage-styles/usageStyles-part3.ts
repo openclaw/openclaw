@@ -513,7 +513,7 @@ export const usageStylesPart3 = `
   /* ===== CHART AXIS ===== */
   .ts-axis-label {
     font-size: 5px;
-    fill: var(--text-muted);
+    fill: var(--muted);
   }
 
   /* ===== RANGE SELECTION HANDLES ===== */
@@ -537,7 +537,7 @@ export const usageStylesPart3 = `
     border-radius: 999px;
     padding: 2px 10px;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     cursor: pointer;
     transition: all 0.15s ease;
     margin-left: 8px;

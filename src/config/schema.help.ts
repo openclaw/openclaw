@@ -66,6 +66,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
+  "tools.loopDetection.enabled":
+    "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+  "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
+  "tools.loopDetection.warningThreshold":
+    "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
+  "tools.loopDetection.criticalThreshold":
+    "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
+  "tools.loopDetection.globalCircuitBreakerThreshold":
+    "Global no-progress breaker threshold (default: 30).",
+  "tools.loopDetection.detectors.genericRepeat":
+    "Enable generic repeated same-tool/same-params loop detection (default: true).",
+  "tools.loopDetection.detectors.knownPollNoProgress":
+    "Enable known poll tool no-progress loop detection (default: true).",
+  "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
   "tools.exec.notifyOnExitEmptySuccess":
@@ -102,8 +116,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
-  "tools.web.urlAllowlist":
-    "Optional URL/domain allowlist shared by web_search and web_fetch. Accepts domain patterns like 'example.com', '*.github.com'. When configured, only matching URLs are allowed.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
@@ -203,14 +215,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Weight for BM25 text relevance when merging results (0-1).",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Multiplier for candidate pool size (default: 4).",
-  "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
-    "Enable MMR re-ranking to reduce near-duplicate memory hits (default: false).",
-  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
-    "MMR relevance/diversity balance (0 = max diversity, 1 = max relevance, default: 0.7).",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
-    "Enable exponential recency decay for hybrid scoring (default: false).",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
-    "Half-life in days for temporal decay (default: 30).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   memory: "Memory backend configuration (global).",
@@ -286,6 +290,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.imageMaxDimensionPx":
+    "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",

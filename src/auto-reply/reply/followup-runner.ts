@@ -1,20 +1,20 @@
 import crypto from "node:crypto";
-import type { TypingMode } from "../../config/types.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingController } from "./typing.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import type { FollowupRun } from "./queue.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -25,6 +25,7 @@ import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
+import type { TypingController } from "./typing.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -135,8 +136,7 @@ export function createFollowupRunner(params: {
             resolveAgentIdFromSessionKey(queued.run.sessionKey),
           ),
           run: (provider, model) => {
-            const authProfileId =
-              provider === queued.run.provider ? queued.run.authProfileId : undefined;
+            const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
@@ -162,8 +162,7 @@ export function createFollowupRunner(params: {
               enforceFinalTag: queued.run.enforceFinalTag,
               provider,
               model,
-              authProfileId,
-              authProfileIdSource: authProfileId ? queued.run.authProfileIdSource : undefined,
+              ...authProfile,
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,

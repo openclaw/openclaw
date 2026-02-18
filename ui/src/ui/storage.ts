@@ -1,5 +1,6 @@
 const KEY = "openclaw.control.settings.v1";
 
+import { isSupportedLocale } from "../i18n/index.ts";
 import type { ThemeMode } from "./theme.ts";
 
 export type UiSettings = {
@@ -33,7 +34,6 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
-    locale: "en",
   };
 
   try {
@@ -79,7 +79,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
-      locale: typeof parsed.locale === "string" ? parsed.locale : defaults.locale,
+      locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
   } catch {
     return defaults;

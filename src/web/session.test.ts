@@ -7,6 +7,7 @@ import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "
 
 const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
   await import("./session.js");
+const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
 function mockCredsJsonSpies(readContents: string) {
   const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
@@ -65,7 +66,7 @@ describe("web session", () => {
     expect(passedLogger?.level).toBe("silent");
     expect(typeof passedLogger?.trace).toBe("function");
     const sock = getLastSocket();
-    const saveCreds = (await baileys.useMultiFileAuthState.mock.results[0].value).saveCreds;
+    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
     // trigger creds.update listener
     sock.ev.emit("creds.update", {});
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -145,7 +146,7 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
     const sock = getLastSocket();
-    const saveCreds = (await baileys.useMultiFileAuthState.mock.results[0].value).saveCreds;
+    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
 
     sock.ev.emit("creds.update", {});
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -170,8 +171,8 @@ describe("web session", () => {
       await gate;
       inFlight -= 1;
     });
-    baileys.useMultiFileAuthState.mockResolvedValueOnce({
-      state: { creds: {}, keys: {} },
+    useMultiFileAuthStateMock.mockResolvedValueOnce({
+      state: { creds: {} as never, keys: {} as never },
       saveCreds,
     });
 
@@ -184,7 +185,7 @@ describe("web session", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(inFlight).toBe(1);
 
-    release?.();
+    (release as (() => void) | null)?.();
 
     // let both queued saves complete
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -207,7 +208,7 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
     const sock = getLastSocket();
-    const saveCreds = (await baileys.useMultiFileAuthState.mock.results[0].value).saveCreds;
+    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
 
     sock.ev.emit("creds.update", {});
     await new Promise<void>((resolve) => setImmediate(resolve));

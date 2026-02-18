@@ -7,7 +7,7 @@ type SlackProviderMonitor = (params: {
   abortSignal: AbortSignal;
 }) => Promise<unknown>;
 
-const slackTestState: {
+type SlackTestState = {
   config: Record<string, unknown>;
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
@@ -15,7 +15,9 @@ const slackTestState: {
   reactMock: Mock<(...args: unknown[]) => unknown>;
   readAllowFromStoreMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   upsertPairingRequestMock: Mock<(...args: unknown[]) => Promise<unknown>>;
-} = vi.hoisted(() => ({
+};
+
+const slackTestState: SlackTestState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
   sendMock: vi.fn(),
   replyMock: vi.fn(),
@@ -25,7 +27,27 @@ const slackTestState: {
   upsertPairingRequestMock: vi.fn(),
 }));
 
-export const getSlackTestState: () => void = () => slackTestState;
+export const getSlackTestState = (): SlackTestState => slackTestState;
+
+type SlackClient = {
+  auth: { test: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>> };
+  conversations: {
+    info: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+    replies: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+    history: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
+  };
+  users: {
+    info: Mock<(...args: unknown[]) => Promise<{ user: { profile: { display_name: string } } }>>;
+  };
+  assistant: {
+    threads: {
+      setStatus: Mock<(...args: unknown[]) => Promise<{ ok: boolean }>>;
+    };
+  };
+  reactions: {
+    add: (...args: unknown[]) => unknown;
+  };
+};
 
 export const getSlackHandlers = () =>
   (
@@ -34,8 +56,7 @@ export const getSlackHandlers = () =>
     }
   ).__slackHandlers;
 
-export const getSlackClient = () =>
-  (globalThis as { __slackClient?: Record<string, unknown> }).__slackClient;
+export const getSlackClient = () => (globalThis as { __slackClient?: SlackClient }).__slackClient;
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -177,6 +198,7 @@ vi.mock("@slack/bolt", () => {
         channel: { name: "dm", is_im: true },
       }),
       replies: vi.fn().mockResolvedValue({ messages: [] }),
+      history: vi.fn().mockResolvedValue({ messages: [] }),
     },
     users: {
       info: vi.fn().mockResolvedValue({

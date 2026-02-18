@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./types.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { applyConfigEnvVars } from "./env-vars.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("config env vars", () => {
   it("applies env vars from env block when missing", async () => {

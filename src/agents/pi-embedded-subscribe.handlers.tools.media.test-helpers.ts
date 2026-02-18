@@ -1,11 +1,11 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { Mock } from "vitest";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
-import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 
 /**
  * Narrowed params type that omits the `session` class instance (never accessed

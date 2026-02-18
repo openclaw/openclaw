@@ -24,15 +24,15 @@ describe("compaction retry integration", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
   });
-  const testMessages: AgentMessage[] = [
+  const testMessages = [
     { role: "user", content: "Test message" },
     { role: "assistant", content: "Test response" },
-  ];
+  ] as unknown as AgentMessage[];
 
-  const testModel: NonNullable<ExtensionContext["model"]> = {
+  const testModel = {
     provider: "anthropic",
     model: "claude-3-opus",
-  };
+  } as unknown as NonNullable<ExtensionContext["model"]>;
 
   it("should successfully call generateSummary with retry wrapper", async () => {
     mockGenerateSummary.mockResolvedValueOnce("Test summary");

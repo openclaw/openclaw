@@ -2,6 +2,7 @@ import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Observation
+import os
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -39,6 +40,7 @@ private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
 @MainActor
 @Observable
 final class NodeAppModel {
+    private let deepLinkLogger = Logger(subsystem: "ai.openclaw.ios", category: "DeepLink")
     enum CameraHUDKind {
         case photo
         case recording
@@ -67,6 +69,8 @@ final class NodeAppModel {
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
+    var lastShareEventText: String = "No share events yet."
+    var openChatRequestID: Int = 0
 
     var mainSessionKey: String {
         let base = SessionKey.normalizeMainKey(self.mainSessionBaseKey)
@@ -109,6 +113,7 @@ final class NodeAppModel {
     private let calendarService: any CalendarServicing
     private let remindersService: any RemindersServicing
     private let motionService: any MotionServicing
+    private let watchMessagingService: any WatchMessagingServicing
     var lastAutoA2uiURL: String?
     private var pttVoiceWakeSuspended = false
     private var talkVoiceWakeSuspended = false
@@ -120,6 +125,8 @@ final class NodeAppModel {
 
     private var gatewayConnected = false
     private var operatorConnected = false
+    private var shareDeliveryChannel: String?
+    private var shareDeliveryTo: String?
     var gatewaySession: GatewayNodeSession { self.nodeGateway }
     var operatorSession: GatewayNodeSession { self.operatorGateway }
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -141,6 +148,7 @@ final class NodeAppModel {
         calendarService: any CalendarServicing = CalendarService(),
         remindersService: any RemindersServicing = RemindersService(),
         motionService: any MotionServicing = MotionService(),
+        watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
         talkMode: TalkModeManager = TalkModeManager())
     {
         self.screen = screen
@@ -154,6 +162,7 @@ final class NodeAppModel {
         self.calendarService = calendarService
         self.remindersService = remindersService
         self.motionService = motionService
+        self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         GatewayDiagnostics.bootstrap()
 
@@ -170,6 +179,7 @@ final class NodeAppModel {
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
         self.talkMode.attachGateway(self.operatorGateway)
+        self.refreshLastShareEventFromRelay()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         // Route through the coordinator so VoiceWake and Talk don't fight over the microphone.
         self.setTalkEnabled(talkEnabled)
@@ -466,6 +476,16 @@ final class NodeAppModel {
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: self.selectedAgentId)
         }
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        if let relay = ShareGatewayRelaySettings.loadConfig() {
+            ShareGatewayRelaySettings.saveConfig(
+                ShareGatewayRelayConfig(
+                    gatewayURLString: relay.gatewayURLString,
+                    token: relay.token,
+                    password: relay.password,
+                    sessionKey: self.mainSessionKey,
+                    deliveryChannel: self.shareDeliveryChannel,
+                    deliveryTo: self.shareDeliveryTo))
+        }
     }
 
     func setGlobalWakeWords(_ words: [String]) async {
@@ -567,8 +587,11 @@ final class NodeAppModel {
             onFailure: { [weak self] _ in
                 guard let self else { return }
                 await self.operatorGateway.disconnect()
+                await self.nodeGateway.disconnect()
                 await MainActor.run {
                     self.operatorConnected = false
+                    self.gatewayConnected = false
+                    self.gatewayStatusText = "Reconnecting…"
                     self.talkMode.updateGatewayConnected(false)
                 }
             })
@@ -637,22 +660,33 @@ final class NodeAppModel {
     private func handleAgentDeepLink(_ link: AgentDeepLink, originalURL: URL) async {
         let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
+        self.deepLinkLogger.info(
+            "agent deep link received messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)"
+        )
 
         if message.count > 20000 {
             self.screen.errorText = "Deep link too large (message exceeds 20,000 characters)."
+            self.recordShareEvent("Rejected: message too large (\(message.count) chars).")
             return
         }
 
         guard await self.isGatewayConnected() else {
             self.screen.errorText = "Gateway not connected (cannot forward deep link)."
+            self.recordShareEvent("Failed: gateway not connected.")
+            self.deepLinkLogger.error("agent deep link rejected: gateway not connected")
             return
         }
 
         do {
             try await self.sendAgentRequest(link: link)
             self.screen.errorText = nil
+            self.recordShareEvent("Sent to gateway (\(message.count) chars).")
+            self.deepLinkLogger.info("agent deep link forwarded to gateway")
+            self.openChatRequestID &+= 1
         } catch {
             self.screen.errorText = "Agent request failed: \(error.localizedDescription)"
+            self.recordShareEvent("Failed: \(error.localizedDescription)")
+            self.deepLinkLogger.error("agent deep link send failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -1399,6 +1433,14 @@ private extension NodeAppModel {
             return try await self.handleDeviceInvoke(req)
         }
 
+        register([
+            OpenClawWatchCommand.status.rawValue,
+            OpenClawWatchCommand.notify.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleWatchInvoke(req)
+        }
+
         register([OpenClawPhotosCommand.latest.rawValue]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handlePhotosInvoke(req)
@@ -1449,14 +1491,67 @@ private extension NodeAppModel {
         return NodeCapabilityRouter(handlers: handlers)
     }
 
+    func handleWatchInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        switch req.command {
+        case OpenClawWatchCommand.status.rawValue:
+            let status = await self.watchMessagingService.status()
+            let payload = OpenClawWatchStatusPayload(
+                supported: status.supported,
+                paired: status.paired,
+                appInstalled: status.appInstalled,
+                reachable: status.reachable,
+                activationState: status.activationState)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        case OpenClawWatchCommand.notify.rawValue:
+            let params = try Self.decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
+            let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
+            if title.isEmpty && body.isEmpty {
+                return BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: empty watch notification"))
+            }
+            do {
+                let result = try await self.watchMessagingService.sendNotification(
+                    id: req.id,
+                    title: title,
+                    body: body,
+                    priority: params.priority)
+                let payload = OpenClawWatchNotifyPayload(
+                    deliveredImmediately: result.deliveredImmediately,
+                    queuedForDelivery: result.queuedForDelivery,
+                    transport: result.transport)
+                let json = try Self.encodePayload(payload)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+            } catch {
+                return BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .unavailable,
+                        message: error.localizedDescription))
+            }
+        default:
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+        }
+    }
+
     func locationMode() -> OpenClawLocationMode {
         let raw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
         return OpenClawLocationMode(rawValue: raw) ?? .off
     }
 
     func isLocationPreciseEnabled() -> Bool {
-        if UserDefaults.standard.object(forKey: "location.preciseEnabled") == nil { return true }
-        return UserDefaults.standard.bool(forKey: "location.preciseEnabled")
+        // iOS settings now expose a single location mode control.
+        // Default location tool precision stays high unless a command explicitly requests balanced.
+        true
     }
 
     static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
@@ -1584,6 +1679,7 @@ extension NodeAppModel {
         self.seamColorHex = nil
         self.mainSessionBaseKey = "main"
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        ShareGatewayRelaySettings.clearConfig()
         self.showLocalCanvasOnDisconnect()
     }
 }
@@ -1626,6 +1722,10 @@ private extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
+                if !self.gatewayAutoReconnectEnabled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
                 if await self.isOperatorConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1654,6 +1754,7 @@ private extension NodeAppModel {
                                 "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
+                            await self.refreshShareRouteFromGateway()
                             await self.startVoiceWakeSync()
                             await MainActor.run { self.startGatewayHealthMonitor() }
                         },
@@ -1708,6 +1809,10 @@ private extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
+                if !self.gatewayAutoReconnectEnabled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
                 if await self.isGatewayConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1736,6 +1841,21 @@ private extension NodeAppModel {
                                 self.screen.errorText = nil
                                 UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
                             }
+                            let relayData = await MainActor.run {
+                                (
+                                    sessionKey: self.mainSessionKey,
+                                    deliveryChannel: self.shareDeliveryChannel,
+                                    deliveryTo: self.shareDeliveryTo
+                                )
+                            }
+                            ShareGatewayRelaySettings.saveConfig(
+                                ShareGatewayRelayConfig(
+                                    gatewayURLString: url.absoluteString,
+                                    token: token,
+                                    password: password,
+                                    sessionKey: relayData.sessionKey,
+                                    deliveryChannel: relayData.deliveryChannel,
+                                    deliveryTo: relayData.deliveryTo))
                             GatewayDiagnostics.log("gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
                             if let addr = await self.nodeGateway.currentRemoteAddress() {
                                 await MainActor.run { self.gatewayRemoteAddress = addr }
@@ -1795,10 +1915,18 @@ private extension NodeAppModel {
                     }
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
 
+                    // If auth is missing/rejected, pause reconnect churn until the user intervenes.
+                    // Reconnect loops only spam the same failing handshake and make onboarding noisy.
+                    let lower = error.localizedDescription.lowercased()
+                    if lower.contains("unauthorized") || lower.contains("gateway token missing") {
+                        await MainActor.run {
+                            self.gatewayAutoReconnectEnabled = false
+                        }
+                    }
+
                     // If pairing is required, stop reconnect churn. The user must approve the request
                     // on the gateway before another connect attempt will succeed, and retry loops can
                     // generate multiple pending requests.
-                    let lower = error.localizedDescription.lowercased()
                     if lower.contains("not_paired") || lower.contains("pairing required") {
                         let requestId: String? = {
                             // GatewayResponseError for connect decorates the message with `(requestId: ...)`.
@@ -1815,9 +1943,9 @@ private extension NodeAppModel {
                             self.gatewayPairingRequestId = requestId
                             if let requestId, !requestId.isEmpty {
                                 self.gatewayStatusText =
-                                    "Pairing required (requestId: \(requestId)). Approve on gateway, then tap Resume."
+                                    "Pairing required (requestId: \(requestId)). Approve on gateway and return to OpenClaw."
                             } else {
-                                self.gatewayStatusText = "Pairing required. Approve on gateway, then tap Resume."
+                                self.gatewayStatusText = "Pairing required. Approve on gateway and return to OpenClaw."
                             }
                         }
                         // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
@@ -1866,7 +1994,9 @@ private extension NodeAppModel {
             clientId: clientId,
             clientMode: "ui",
             clientDisplayName: displayName,
-            includeDeviceIdentity: true)
+            // Operator traffic should authenticate via shared gateway auth only.
+            // Including device identity here can trigger duplicate pairing flows.
+            includeDeviceIdentity: false)
     }
 
     func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
@@ -1885,6 +2015,93 @@ private extension NodeAppModel {
 }
 
 extension NodeAppModel {
+    private func refreshShareRouteFromGateway() async {
+        struct Params: Codable {
+            var includeGlobal: Bool
+            var includeUnknown: Bool
+            var limit: Int
+        }
+        struct SessionRow: Decodable {
+            var key: String
+            var updatedAt: Double?
+            var lastChannel: String?
+            var lastTo: String?
+        }
+        struct SessionsListResult: Decodable {
+            var sessions: [SessionRow]
+        }
+
+        let normalize: (String?) -> String? = { raw in
+            let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+
+        do {
+            let data = try JSONEncoder().encode(
+                Params(includeGlobal: true, includeUnknown: false, limit: 80))
+            guard let json = String(data: data, encoding: .utf8) else { return }
+            let response = try await self.operatorGateway.request(
+                method: "sessions.list",
+                paramsJSON: json,
+                timeoutSeconds: 10)
+            let decoded = try JSONDecoder().decode(SessionsListResult.self, from: response)
+            let currentKey = self.mainSessionKey
+            let sorted = decoded.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+            let exactMatch = sorted.first { row in
+                row.key == currentKey && normalize(row.lastChannel) != nil && normalize(row.lastTo) != nil
+            }
+            let selected = exactMatch
+            let channel = normalize(selected?.lastChannel)
+            let to = normalize(selected?.lastTo)
+
+            await MainActor.run {
+                self.shareDeliveryChannel = channel
+                self.shareDeliveryTo = to
+                if let relay = ShareGatewayRelaySettings.loadConfig() {
+                    ShareGatewayRelaySettings.saveConfig(
+                        ShareGatewayRelayConfig(
+                            gatewayURLString: relay.gatewayURLString,
+                            token: relay.token,
+                            password: relay.password,
+                            sessionKey: self.mainSessionKey,
+                            deliveryChannel: channel,
+                            deliveryTo: to))
+                }
+            }
+        } catch {
+            // Best-effort only.
+        }
+    }
+
+    func runSharePipelineSelfTest() async {
+        self.recordShareEvent("Share self-test running…")
+
+        let payload = SharedContentPayload(
+            title: "OpenClaw Share Self-Test",
+            url: URL(string: "https://openclaw.ai/share-self-test"),
+            text: "Validate iOS share->deep-link->gateway forwarding.")
+        guard let deepLink = ShareToAgentDeepLink.buildURL(
+            from: payload,
+            instruction: "Reply with: SHARE SELF-TEST OK")
+        else {
+            self.recordShareEvent("Self-test failed: could not build deep link.")
+            return
+        }
+
+        await self.handleDeepLink(url: deepLink)
+    }
+
+    func refreshLastShareEventFromRelay() {
+        if let event = ShareGatewayRelaySettings.loadLastEvent() {
+            self.lastShareEventText = event
+        }
+    }
+
+    func recordShareEvent(_ text: String) {
+        ShareGatewayRelaySettings.saveLastEvent(text)
+        self.refreshLastShareEventFromRelay()
+    }
+
     func reloadTalkConfig() {
         Task { [weak self] in
             await self?.talkMode.reloadConfig()
