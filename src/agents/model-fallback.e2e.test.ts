@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
@@ -98,6 +98,27 @@ async function expectFallsBackToHaiku(params: {
   expect(run.mock.calls[1]?.[0]).toBe("anthropic");
   expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
 }
+const originalEmptyStreamRetry = process.env.OPENCLAW_EMPTY_STREAM_RETRY;
+const originalEmptyStreamRetryMin = process.env.OPENCLAW_EMPTY_STREAM_RETRY_MIN_MS;
+const originalEmptyStreamRetryMax = process.env.OPENCLAW_EMPTY_STREAM_RETRY_MAX_MS;
+
+afterEach(() => {
+  if (originalEmptyStreamRetry === undefined) {
+    delete process.env.OPENCLAW_EMPTY_STREAM_RETRY;
+  } else {
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY = originalEmptyStreamRetry;
+  }
+  if (originalEmptyStreamRetryMin === undefined) {
+    delete process.env.OPENCLAW_EMPTY_STREAM_RETRY_MIN_MS;
+  } else {
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY_MIN_MS = originalEmptyStreamRetryMin;
+  }
+  if (originalEmptyStreamRetryMax === undefined) {
+    delete process.env.OPENCLAW_EMPTY_STREAM_RETRY_MAX_MS;
+  } else {
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY_MAX_MS = originalEmptyStreamRetryMax;
+  }
+});
 
 describe("runWithModelFallback", () => {
   it("normalizes openai gpt-5.3 codex to openai-codex before running", async () => {
@@ -129,6 +150,80 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("bad request");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries once on empty-stream errors before falling back", async () => {
+    const cfg = makeCfg();
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY_MIN_MS = "0";
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY_MAX_MS = "0";
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("request ended without sending any chunks"))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+    expect(result.attempts[0]?.error).toContain("Empty stream before first chunk");
+  });
+
+  it("falls back after empty-stream retry still fails", async () => {
+    const cfg = makeCfg();
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY_MIN_MS = "0";
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY_MAX_MS = "0";
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("request ended without sending any chunks"))
+      .mockRejectedValueOnce(new Error("request ended without sending any chunks"))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+  });
+
+  it("can disable empty-stream in-model retry with feature flag", async () => {
+    const cfg = makeCfg();
+    process.env.OPENCLAW_EMPTY_STREAM_RETRY = "0";
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("request ended without sending any chunks"))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
   });
 
   it("falls back on auth errors", async () => {

@@ -334,10 +334,16 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
     ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        '500 {"error":{"type":"new_api_error","message":"当前模型 claude-opus-4-6 负载已经达到上限，请稍后重试"}}',
+      ),
+    ).toBe("rate_limit");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(classifyFailoverReason("stream ended before first chunk")).toBe("timeout");
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",

@@ -580,16 +580,21 @@ const ERROR_PATTERNS = {
     "resource_exhausted",
     "usage limit",
   ],
-  overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
+  overloaded: [
+    /overloaded_error|"type"\s*:\s*"overloaded_error"|负载(?:已经)?达到上限/i,
+    "overloaded",
+  ],
   timeout: [
     "timeout",
     "timed out",
     "deadline exceeded",
     "context deadline exceeded",
     /without sending (?:any )?chunks?/i,
+
     /\bstop reason:\s*abort\b/i,
     /\breason:\s*abort\b/i,
     /\bunhandled stop reason:\s*abort\b/i,
+    "stream ended before first chunk",
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -764,15 +769,16 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageSizeError(raw)) {
     return null;
   }
-  if (isTransientHttpError(raw)) {
-    // Treat transient 5xx provider failures as retryable transport issues.
-    return "timeout";
-  }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
   }
   if (isOverloadedErrorMessage(raw)) {
     return "rate_limit";
+  }
+  if (isTransientHttpError(raw)) {
+    // Treat transient 5xx provider failures as retryable transport issues,
+    // but only after explicit rate-limit/overload classification.
+    return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
