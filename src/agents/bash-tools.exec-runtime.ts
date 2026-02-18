@@ -247,7 +247,14 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  // Only trigger an immediate heartbeat when explicitly opted-in via
+  // notifyOnExitHeartbeat. By default the system event is silently enqueued
+  // and consumed at the next natural checkpoint (interval heartbeat or user
+  // message). This prevents internal agent exec completions/failures from
+  // spamming the user's messaging channel with unsolicited notifications.
+  if (session.notifyOnExitHeartbeat) {
+    requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  }
 }
 
 export function createApprovalSlug(id: string) {
@@ -291,6 +298,7 @@ export async function runExecProcess(opts: {
   pendingMaxOutput: number;
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  notifyOnExitHeartbeat?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number;
@@ -308,6 +316,7 @@ export async function runExecProcess(opts: {
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
+    notifyOnExitHeartbeat: opts.notifyOnExitHeartbeat === true,
     exitNotified: false,
     child: undefined,
     stdin: undefined,

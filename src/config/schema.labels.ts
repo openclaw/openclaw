@@ -85,6 +85,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.sessions.visibility": "Session Tools Visibility",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",
   "tools.exec.notifyOnExitEmptySuccess": "Exec Notify On Empty Success",
+  "tools.exec.notifyOnExitHeartbeat": "Exec Notify Heartbeat On Exit",
   "tools.exec.approvalRunningNoticeMs": "Exec Approval Running Notice (ms)",
   "tools.exec.host": "Exec Host",
   "tools.exec.security": "Exec Security",

@@ -32,6 +32,7 @@ export interface ProcessSession {
   sessionKey?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  notifyOnExitHeartbeat?: boolean;
   exitNotified?: boolean;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;

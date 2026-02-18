@@ -112,6 +112,8 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
     notifyOnExitEmptySuccess:
       agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
+    notifyOnExitHeartbeat:
+      agentExec?.notifyOnExitHeartbeat ?? globalExec?.notifyOnExitHeartbeat,
     applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
   };
 }
@@ -370,6 +372,8 @@ export function createOpenClawCodingTools(options?: {
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     notifyOnExitEmptySuccess:
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
+    notifyOnExitHeartbeat:
+      options?.exec?.notifyOnExitHeartbeat ?? execConfig.notifyOnExitHeartbeat,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,

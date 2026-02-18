@@ -214,6 +214,15 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /**
+   * Trigger an immediate heartbeat when a backgrounded exec exits.
+   * When false (default), the exit event is silently enqueued and consumed at
+   * the next natural checkpoint (interval heartbeat or user message), preventing
+   * internal agent exec completions from spamming the user's messaging channel.
+   * Set to true only when you want immediate user-facing notification of every
+   * backgrounded exec completion.
+   */
+  notifyOnExitHeartbeat?: boolean;
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */

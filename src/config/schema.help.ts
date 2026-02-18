@@ -81,9 +81,11 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable known poll tool no-progress loop detection (default: true).",
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.exec.notifyOnExit":
-    "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
+    "When true (default), backgrounded exec sessions enqueue a system event on exit. The event is consumed at the next natural checkpoint unless notifyOnExitHeartbeat is also enabled.",
   "tools.exec.notifyOnExitEmptySuccess":
     "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
+  "tools.exec.notifyOnExitHeartbeat":
+    "When true, backgrounded exec exits also trigger an immediate heartbeat, causing the agent to relay the result to the user right away. Default false — events are silently enqueued and consumed at the next natural checkpoint.",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
