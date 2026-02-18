@@ -10,6 +10,7 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   type DeliveryContext,
   deliveryContextFromSession,
@@ -29,6 +30,67 @@ import {
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
+import { sanitizeTextContent } from "./tools/sessions-helpers.js";
+
+type ToolResultMessage = {
+  role?: unknown;
+  content?: unknown;
+};
+
+function extractToolResultText(content: unknown): string {
+  if (typeof content === "string") {
+    return sanitizeTextContent(content);
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const joined = extractTextFromChatContent(content, {
+    sanitizeText: sanitizeTextContent,
+    normalizeText: (text) => text,
+    joinWith: "\n",
+  });
+  return joined?.trim() ?? "";
+}
+
+async function readLatestToolResult(sessionKey: string): Promise<string | undefined> {
+  const history = await callGateway<{ messages?: Array<unknown> }>({
+    method: "chat.history",
+    params: { sessionKey, limit: 50 },
+  });
+  const messages = Array.isArray(history?.messages) ? history.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const candidate = msg as ToolResultMessage;
+    if (candidate.role !== "toolResult") {
+      continue;
+    }
+    const text = extractToolResultText(candidate.content);
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+async function readLatestToolResultWithRetry(params: {
+  sessionKey: string;
+  maxWaitMs: number;
+}): Promise<string | undefined> {
+  const RETRY_INTERVAL_MS = 100;
+  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
+  let result: string | undefined;
+  while (Date.now() < deadline) {
+    result = await readLatestToolResult(params.sessionKey);
+    if (result?.trim()) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+  }
+  return result;
+}
 
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -466,6 +528,13 @@ export async function runSubagentAnnounceFlow(params: {
       reply = await readLatestAssistantReplyWithRetry({
         sessionKey: params.childSessionKey,
         initialReply: reply,
+        maxWaitMs: params.timeoutMs,
+      });
+    }
+
+    if (!reply?.trim()) {
+      reply = await readLatestToolResultWithRetry({
+        sessionKey: params.childSessionKey,
         maxWaitMs: params.timeoutMs,
       });
     }
