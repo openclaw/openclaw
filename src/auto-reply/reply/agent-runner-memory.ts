@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -28,6 +30,7 @@ import {
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
 } from "./memory-flush.js";
+import { routeReply } from "./route-reply.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export async function runMemoryFlushIfNeeded(params: {
@@ -188,6 +191,74 @@ export async function runMemoryFlushIfNeeded(params: {
         }
       } catch (err) {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
+      }
+
+      // Proactive DM handoff — send formatted summary to DM channel immediately
+      // after setting the gate, so the user is notified without having to message
+      // first. This fires in code regardless of prompt compliance.
+      const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+      const dmChannelId = compactionCfg?.dmChannelId;
+      const dmProvider = compactionCfg?.dmChannelProvider ?? "discord";
+      const workspaceDir = params.followupRun.run.workspaceDir;
+      if (dmChannelId && workspaceDir) {
+        try {
+          let summary = "";
+          try {
+            const raw = await fs.readFile(
+              path.join(workspaceDir, ".context-transfer.json"),
+              "utf-8",
+            );
+            const data = JSON.parse(raw);
+            const lines: string[] = [];
+            const nextActions = Array.isArray(data.nextActions) ? data.nextActions.slice(0, 3) : [];
+            if (nextActions.length > 0) {
+              lines.push("**Where we were:**");
+              for (const item of nextActions) {
+                if (item && typeof item === "object") {
+                  const p = typeof item.priority === "number" ? `${item.priority}.` : "•";
+                  const action =
+                    typeof item.action === "string" ? item.action : JSON.stringify(item);
+                  const ctx = typeof item.context === "string" ? ` — ${item.context}` : "";
+                  lines.push(`${p} ${action}${ctx}`);
+                }
+              }
+            }
+            const tasks = Array.isArray(data.activeTasks) ? data.activeTasks : [];
+            if (tasks.length > 0) {
+              lines.push("\n**Active tasks:**");
+              for (const t of tasks) {
+                if (t && typeof t === "object") {
+                  const desc =
+                    typeof t.description === "string" ? t.description : JSON.stringify(t);
+                  const status = typeof t.status === "string" ? ` [${t.status}]` : "";
+                  lines.push(`• ${desc}${status}`);
+                }
+              }
+            }
+            const decisions = Array.isArray(data.pendingDecisions) ? data.pendingDecisions : [];
+            if (decisions.length > 0) {
+              lines.push("\n**Pending decisions:**");
+              for (const d of decisions) {
+                lines.push(`• ${typeof d === "string" ? d : JSON.stringify(d)}`);
+              }
+            }
+            if (lines.length > 0) {
+              summary = "\n\n" + lines.join("\n");
+            }
+          } catch {
+            // .context-transfer.json may not exist — that's fine
+          }
+          const dmText = `⏸️ **Context compacted — pausing for your direction.**${summary || ""}\n\nI'm not doing anything until you tell me what to do next. Reply here to direct me.`;
+          await routeReply({
+            payload: { text: dmText },
+            channel: dmProvider as Parameters<typeof routeReply>[0]["channel"],
+            to: dmChannelId,
+            sessionKey: params.sessionKey ?? "",
+            cfg: params.cfg,
+          });
+        } catch (err) {
+          logVerbose(`failed to send post-compaction DM handoff: ${String(err)}`);
+        }
       }
     }
   } catch (err) {
