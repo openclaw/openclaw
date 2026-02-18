@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseSetUnsetCommand, parseSetUnsetCommandAction } from "./commands-setunset.js";
 
+type ParsedSetUnsetAction =
+  | { action: "set"; path: string; value: unknown }
+  | { action: "unset"; path: string }
+  | { action: "error"; message: string };
+
 describe("parseSetUnsetCommand", () => {
   it("parses unset values", () => {
     expect(
@@ -25,7 +30,7 @@ describe("parseSetUnsetCommand", () => {
 
 describe("parseSetUnsetCommandAction", () => {
   it("returns null for non set/unset actions", () => {
-    const result = parseSetUnsetCommandAction({
+    const result = parseSetUnsetCommandAction<ParsedSetUnsetAction>({
       slash: "/config",
       action: "show",
       args: "",
@@ -37,7 +42,7 @@ describe("parseSetUnsetCommandAction", () => {
   });
 
   it("maps parse errors through onError", () => {
-    const result = parseSetUnsetCommandAction({
+    const result = parseSetUnsetCommandAction<ParsedSetUnsetAction>({
       slash: "/config",
       action: "set",
       args: "",
