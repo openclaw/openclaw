@@ -93,6 +93,27 @@ describe("handleTelegramAction", () => {
     await expectReactionAdded("extensive");
   });
 
+  it("accepts snake_case message_id for reactions", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        message_id: "456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      "✅",
+      expect.objectContaining({ token: "tok", remove: false }),
+    );
+  });
+
   it("removes reactions on empty emoji", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
@@ -170,32 +191,32 @@ describe("handleTelegramAction", () => {
 
   it("blocks reactions when reactionLevel is off", async () => {
     const cfg = reactionConfig("off");
-    await expect(
-      handleTelegramAction(
-        {
-          action: "react",
-          chatId: "123",
-          messageId: "456",
-          emoji: "✅",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/Telegram agent reactions disabled.*reactionLevel="off"/);
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: "456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(JSON.parse(text)).toMatchObject({ ok: false, reason: "disabled" });
   });
 
   it("blocks reactions when reactionLevel is ack", async () => {
     const cfg = reactionConfig("ack");
-    await expect(
-      handleTelegramAction(
-        {
-          action: "react",
-          chatId: "123",
-          messageId: "456",
-          emoji: "✅",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/Telegram agent reactions disabled.*reactionLevel="ack"/);
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: "456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(JSON.parse(text)).toMatchObject({ ok: false, reason: "disabled" });
   });
 
   it("also respects legacy actions.reactions gating", async () => {
@@ -208,17 +229,17 @@ describe("handleTelegramAction", () => {
         },
       },
     } as OpenClawConfig;
-    await expect(
-      handleTelegramAction(
-        {
-          action: "react",
-          chatId: "123",
-          messageId: "456",
-          emoji: "✅",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/Telegram reactions are disabled via actions.reactions/);
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: "456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(JSON.parse(text)).toMatchObject({ ok: false, reason: "disabled" });
   });
 
   it("sends a text message", async () => {
@@ -677,7 +698,12 @@ describe("handleTelegramAction per-account gating", () => {
         },
         cfg,
       ),
-    ).rejects.toThrow(/reactions are disabled via actions.reactions/i);
+    ).resolves.toMatchObject({
+      details: {
+        ok: false,
+        reason: "disabled",
+      },
+    });
   });
 
   it("allows account to explicitly re-enable top-level disabled reaction gate", async () => {

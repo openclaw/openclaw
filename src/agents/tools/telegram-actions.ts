@@ -91,20 +91,26 @@ export async function handleTelegramAction(
   const isActionEnabled = createTelegramActionGate({ cfg, accountId });
 
   if (action === "react") {
-    // Check reaction level first
+    // All react failures return soft results (jsonResult with ok:false) instead
+    // of throwing, because hard tool errors cause Gemini Flash to re-generate
+    // the entire preceding response as duplicate content.
     const reactionLevelInfo = resolveTelegramReactionLevel({
       cfg,
       accountId: accountId ?? undefined,
     });
     if (!reactionLevelInfo.agentReactionsEnabled) {
-      throw new Error(
-        `Telegram agent reactions disabled (reactionLevel="${reactionLevelInfo.level}"). ` +
-          `Set channels.telegram.reactionLevel to "minimal" or "extensive" to enable.`,
-      );
+      return jsonResult({
+        ok: false,
+        reason: "disabled",
+        hint: `Telegram agent reactions disabled (reactionLevel="${reactionLevelInfo.level}"). Do not retry.`,
+      });
     }
-    // Also check the existing action gate for backward compatibility
     if (!isActionEnabled("reactions")) {
-      throw new Error("Telegram reactions are disabled via actions.reactions.");
+      return jsonResult({
+        ok: false,
+        reason: "disabled",
+        hint: "Telegram reactions are disabled via actions.reactions. Do not retry.",
+      });
     }
     const chatId = readStringOrNumberParam(params, "chatId", {
       required: true,
@@ -118,15 +124,30 @@ export async function handleTelegramAction(
     });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
+      return jsonResult({
+        ok: false,
+        reason: "missing_token",
+        hint: "Telegram bot token missing. Do not retry.",
+      });
     }
-    const reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
-      token,
-      remove,
-      accountId: accountId ?? undefined,
-    });
+    let reactionResult: Awaited<ReturnType<typeof reactMessageTelegram>>;
+    try {
+      reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+        token,
+        remove,
+        accountId: accountId ?? undefined,
+      });
+    } catch (err) {
+      const isInvalid = String(err).includes("REACTION_INVALID");
+      return jsonResult({
+        ok: false,
+        reason: isInvalid ? "REACTION_INVALID" : "error",
+        emoji,
+        hint: isInvalid
+          ? "This emoji is not supported for Telegram reactions. Add it to your reaction disallow list so you don't try it again."
+          : "Reaction failed. Do not retry.",
+      });
+    }
     if (!reactionResult.ok) {
       return jsonResult({
         ok: false,
