@@ -1,8 +1,8 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runAcpClientInteractive = vi.fn(async (_opts?: unknown) => {});
-const serveAcpGateway = vi.fn(async (_opts?: unknown) => {});
+const runAcpClientInteractive = vi.fn(async (_opts: unknown) => {});
+const serveAcpGateway = vi.fn(async (_opts: unknown) => {});
 
 const defaultRuntime = {
   error: vi.fn(),

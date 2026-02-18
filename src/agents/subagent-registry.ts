@@ -60,10 +60,9 @@ const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
-  // retryCount tracks completed failed attempts. The next retry delay should
-  // start at 1s for retry #1, then 2s, 4s, ...
-  const exponent = Math.max(0, boundedRetryCount - 1);
-  const baseDelay = MIN_ANNOUNCE_RETRY_DELAY_MS * 2 ** exponent;
+  // retryCount is "attempts already made", so retry #1 waits 1s, then 2s, 4s...
+  const backoffExponent = Math.max(0, boundedRetryCount - 1);
+  const baseDelay = MIN_ANNOUNCE_RETRY_DELAY_MS * 2 ** backoffExponent;
   return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
 }
 

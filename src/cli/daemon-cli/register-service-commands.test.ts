@@ -2,12 +2,12 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 
-const runDaemonInstall = vi.fn(async (_opts?: unknown) => {});
-const runDaemonRestart = vi.fn(async (_opts?: unknown) => {});
-const runDaemonStart = vi.fn(async (_opts?: unknown) => {});
-const runDaemonStatus = vi.fn(async (_opts?: unknown) => {});
-const runDaemonStop = vi.fn(async (_opts?: unknown) => {});
-const runDaemonUninstall = vi.fn(async (_opts?: unknown) => {});
+const runDaemonInstall = vi.fn(async (_opts: unknown) => {});
+const runDaemonRestart = vi.fn(async (_opts: unknown) => {});
+const runDaemonStart = vi.fn(async (_opts: unknown) => {});
+const runDaemonStatus = vi.fn(async (_opts: unknown) => {});
+const runDaemonStop = vi.fn(async (_opts: unknown) => {});
+const runDaemonUninstall = vi.fn(async (_opts: unknown) => {});
 
 vi.mock("./runners.js", () => ({
   runDaemonInstall: (opts: unknown) => runDaemonInstall(opts),
