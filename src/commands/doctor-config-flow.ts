@@ -5,6 +5,7 @@ import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
 } from "../channels/telegram/allow-from.js";
+import { fetchTelegramChatId } from "../channels/telegram/api.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -329,18 +330,13 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
       try {
-        const url = `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(username)}`;
-        const res = await fetch(url, { signal: controller.signal }).catch(() => null);
-        if (!res || !res.ok) {
-          continue;
-        }
-        const data = (await res.json().catch(() => null)) as {
-          ok?: boolean;
-          result?: { id?: number | string };
-        } | null;
-        const id = data?.ok ? data?.result?.id : undefined;
-        if (typeof id === "number" || typeof id === "string") {
-          return String(id);
+        const id = await fetchTelegramChatId({
+          token,
+          chatId: username,
+          signal: controller.signal,
+        });
+        if (id) {
+          return id;
         }
       } catch {
         // ignore and try next token
