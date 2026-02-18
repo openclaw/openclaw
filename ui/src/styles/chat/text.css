@@ -25,6 +25,10 @@
   overflow-wrap: break-word;
 }
 
+.chat-text--plain {
+  white-space: pre-wrap;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
   margin: 0;
 }

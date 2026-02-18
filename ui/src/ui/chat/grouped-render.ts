@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { escapeHtml, toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { MessageGroup, ToolCard } from "../types/chat-types.ts";
@@ -625,6 +625,7 @@ function renderGroupedMessage(
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const normalizedRole = normalizeRoleForGrouping(role);
+  const isUser = role.toLowerCase() === "user";
   const isToolResult =
     isToolResultMessage(message) ||
     role.toLowerCase() === "toolresult" ||
@@ -738,6 +739,14 @@ function renderGroupedMessage(
             ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
           `
       }
+      ${
+        markdown
+          ? isUser
+            ? html`<div class="chat-text chat-text--plain" dir="${detectTextDirection(markdown)}">${unsafeHTML(escapeHtml(markdown))}</div>`
+            : html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          : nothing
+      }
+      ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;
 }

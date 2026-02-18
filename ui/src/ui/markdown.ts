@@ -210,7 +210,7 @@ htmlEscapeRenderer.code = ({
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
 };
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
