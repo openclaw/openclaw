@@ -37,6 +37,18 @@ export type UpdateWizardOptions = {
   timeout?: string;
 };
 
+const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
+
+export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
+  const timeoutMs = timeout ? Number.parseInt(timeout, 10) * 1000 : undefined;
+  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+    defaultRuntime.error(INVALID_TIMEOUT_ERROR);
+    defaultRuntime.exit(1);
+    return null;
+  }
+  return timeoutMs;
+}
+
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
 const MAX_LOG_CHARS = 8000;
 
