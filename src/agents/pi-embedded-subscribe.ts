@@ -377,10 +377,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       if (codeSpans.isInside(idx)) {
         continue;
       }
-      if (!inThinking) {
-        processed += text.slice(lastIndex, idx);
-      }
       const isClose = match[1] === "/";
+      if (!inThinking) {
+        if (isClose) {
+          // Orphan closing tag: strip everything before it (broken thinking output)
+          processed = "";
+        } else {
+          processed += text.slice(lastIndex, idx);
+        }
+      }
       inThinking = !isClose;
       lastIndex = idx + match[0].length;
     }
