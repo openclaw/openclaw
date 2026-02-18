@@ -102,6 +102,7 @@ const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
   "tokenlimit",
   "tokenbudget",
   "passwordFile",
+  "apiKeyFile",
 ] as const;
 const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFFIXES.map((suffix) =>
   suffix.toLowerCase(),

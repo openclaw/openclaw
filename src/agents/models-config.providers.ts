@@ -361,7 +361,9 @@ export function normalizeProviders(params: {
     let normalizedProvider = provider;
 
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
+    // Skip when apiKeyFile is set — the key will be read from file at runtime.
     if (
+      !normalizedProvider.apiKeyFile &&
       normalizedProvider.apiKey &&
       normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
     ) {
@@ -374,9 +376,10 @@ export function normalizeProviders(params: {
 
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
     // Fill it from the environment or auth profiles when possible.
+    // Skip when apiKeyFile is set — the key will be read from file at runtime.
     const hasModels =
       Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    if (hasModels && !normalizedProvider.apiKey?.trim()) {
+    if (hasModels && !normalizedProvider.apiKeyFile && !normalizedProvider.apiKey?.trim()) {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {

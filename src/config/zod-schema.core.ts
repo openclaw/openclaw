@@ -59,6 +59,7 @@ export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
     apiKey: z.string().optional().register(sensitive),
+    apiKeyFile: z.string().optional(),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),

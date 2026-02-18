@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -47,11 +48,22 @@ function resolveProviderConfig(
   );
 }
 
+function readApiKeyFile(filePath: string): string | undefined {
+  try {
+    return fs.readFileSync(filePath, "utf-8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function getCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
+  if (entry?.apiKeyFile) {
+    return readApiKeyFile(entry.apiKeyFile);
+  }
   return normalizeOptionalSecretInput(entry?.apiKey);
 }
 
