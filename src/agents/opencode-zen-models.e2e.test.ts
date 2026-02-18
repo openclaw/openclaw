@@ -11,9 +11,14 @@ describe("resolveOpencodeZenAlias", () => {
     expect(resolveOpencodeZenAlias("opus")).toBe("claude-opus-4-6");
   });
 
+  it("resolves sonnet alias to claude-sonnet-4-6", () => {
+    expect(resolveOpencodeZenAlias("sonnet")).toBe("claude-sonnet-4-6");
+    expect(resolveOpencodeZenAlias("sonnet-4")).toBe("claude-sonnet-4-6");
+    expect(resolveOpencodeZenAlias("sonnet-4.6")).toBe("claude-sonnet-4-6");
+  });
+
   it("keeps legacy aliases working", () => {
-    expect(resolveOpencodeZenAlias("sonnet")).toBe("claude-opus-4-6");
-    expect(resolveOpencodeZenAlias("haiku")).toBe("claude-opus-4-6");
+    expect(resolveOpencodeZenAlias("haiku")).toBe("claude-sonnet-4-6");
     expect(resolveOpencodeZenAlias("gpt4")).toBe("gpt-5.1");
     expect(resolveOpencodeZenAlias("o1")).toBe("gpt-5.2");
     expect(resolveOpencodeZenAlias("gemini-2.5")).toBe("gemini-3-pro");
@@ -91,9 +96,10 @@ describe("OPENCODE_ZEN_MODEL_ALIASES", () => {
     expect(OPENCODE_ZEN_MODEL_ALIASES.glm).toBe("glm-4.7");
     expect(OPENCODE_ZEN_MODEL_ALIASES["opus-4.5"]).toBe("claude-opus-4-5");
 
+    // Sonnet aliases (first-class, not legacy).
+    expect(OPENCODE_ZEN_MODEL_ALIASES.sonnet).toBe("claude-sonnet-4-6");
     // Legacy aliases (kept for backward compatibility).
-    expect(OPENCODE_ZEN_MODEL_ALIASES.sonnet).toBe("claude-opus-4-6");
-    expect(OPENCODE_ZEN_MODEL_ALIASES.haiku).toBe("claude-opus-4-6");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.haiku).toBe("claude-sonnet-4-6");
     expect(OPENCODE_ZEN_MODEL_ALIASES.gpt4).toBe("gpt-5.1");
     expect(OPENCODE_ZEN_MODEL_ALIASES.o1).toBe("gpt-5.2");
     expect(OPENCODE_ZEN_MODEL_ALIASES["gemini-2.5"]).toBe("gemini-3-pro");
