@@ -238,18 +238,55 @@ export async function runPreparedReply(
         const data = JSON.parse(raw);
         if (data && typeof data === "object") {
           const lines: string[] = [];
-          for (const [key, value] of Object.entries(data)) {
-            if (typeof value === "string") {
-              lines.push(`- **${key}:** ${value}`);
-            } else if (Array.isArray(value)) {
-              lines.push(`- **${key}:**`);
-              for (const item of value) {
-                lines.push(`  - ${typeof item === "string" ? item : JSON.stringify(item)}`);
+
+          // Next actions (most important — show first)
+          const nextActions = Array.isArray(data.nextActions) ? data.nextActions : [];
+          if (nextActions.length > 0) {
+            lines.push("**Next actions:**");
+            for (const item of nextActions) {
+              if (item && typeof item === "object") {
+                const action = typeof item.action === "string" ? item.action : JSON.stringify(item);
+                const ctx = typeof item.context === "string" ? ` — ${item.context}` : "";
+                const p = typeof item.priority === "number" ? `${item.priority}. ` : "• ";
+                lines.push(`${p}${action}${ctx}`);
+              } else if (typeof item === "string") {
+                lines.push(`• ${item}`);
               }
-            } else {
-              lines.push(`- **${key}:** ${JSON.stringify(value)}`);
             }
           }
+
+          // Active tasks
+          const activeTasks = Array.isArray(data.activeTasks) ? data.activeTasks : [];
+          if (activeTasks.length > 0) {
+            lines.push("\n**Active tasks:**");
+            for (const task of activeTasks) {
+              if (task && typeof task === "object") {
+                const desc =
+                  typeof task.description === "string" ? task.description : JSON.stringify(task);
+                const status = typeof task.status === "string" ? ` [${task.status}]` : "";
+                lines.push(`• ${desc}${status}`);
+              }
+            }
+          }
+
+          // Pending decisions
+          const decisions = Array.isArray(data.pendingDecisions) ? data.pendingDecisions : [];
+          if (decisions.length > 0) {
+            lines.push("\n**Pending decisions:**");
+            for (const d of decisions) {
+              lines.push(`• ${typeof d === "string" ? d : JSON.stringify(d)}`);
+            }
+          }
+
+          // Do not touch
+          const doNotTouch = Array.isArray(data.doNotTouch) ? data.doNotTouch : [];
+          if (doNotTouch.length > 0) {
+            lines.push("\n**Do not touch:**");
+            for (const d of doNotTouch) {
+              lines.push(`• ${typeof d === "string" ? d : JSON.stringify(d)}`);
+            }
+          }
+
           if (lines.length > 0) {
             contextSummary = "\n\n" + lines.join("\n");
           }
