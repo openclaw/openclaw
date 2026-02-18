@@ -194,6 +194,8 @@ export function registerBrowserAgentSnapshotRoutes(
       depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
     const selector = toStringOrEmpty(req.query.selector);
     const frameSelector = toStringOrEmpty(req.query.frame);
+    const selectorValue = selector.trim() || undefined;
+    const frameSelectorValue = frameSelector.trim() || undefined;
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
@@ -211,22 +213,23 @@ export function registerBrowserAgentSnapshotRoutes(
           interactive === true ||
           compact === true ||
           depth !== undefined ||
-          Boolean(selector.trim()) ||
-          Boolean(frameSelector.trim());
+          Boolean(selectorValue) ||
+          Boolean(frameSelectorValue);
+        const roleSnapshotArgs = {
+          cdpUrl: profileCtx.profile.cdpUrl,
+          targetId: tab.targetId,
+          selector: selectorValue,
+          frameSelector: frameSelectorValue,
+          refsMode,
+          options: {
+            interactive: interactive ?? undefined,
+            compact: compact ?? undefined,
+            maxDepth: depth ?? undefined,
+          },
+        };
 
         const snap = wantsRoleSnapshot
-          ? await pw.snapshotRoleViaPlaywright({
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
-              selector: selector.trim() || undefined,
-              frameSelector: frameSelector.trim() || undefined,
-              refsMode,
-              options: {
-                interactive: interactive ?? undefined,
-                compact: compact ?? undefined,
-                maxDepth: depth ?? undefined,
-              },
-            })
+          ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
           : await pw
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
@@ -236,18 +239,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
                 if (String(err).toLowerCase().includes("_snapshotforai")) {
-                  return await pw.snapshotRoleViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    selector: selector.trim() || undefined,
-                    frameSelector: frameSelector.trim() || undefined,
-                    refsMode,
-                    options: {
-                      interactive: interactive ?? undefined,
-                      compact: compact ?? undefined,
-                      maxDepth: depth ?? undefined,
-                    },
-                  });
+                  return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
                 }
                 throw err;
               });
