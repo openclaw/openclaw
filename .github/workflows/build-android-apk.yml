@@ -35,16 +35,26 @@ jobs:
           cp -r android/lib /tmp/build/
           cp android/pubspec.yaml /tmp/build/
           
-          # Merge our AndroidManifest permissions into scaffold's manifest
-          cp android/android/app/src/main/AndroidManifest.xml /tmp/build/android/app/src/main/
+          # Add BLE/audio/location permissions to scaffold's manifest
+          sed -i '/<\/manifest>/i \
+              <uses-permission android:name="android.permission.BLUETOOTH" \/>\
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" \/>\
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" \/>\
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" \/>\
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\
+              <uses-permission android:name="android.permission.RECORD_AUDIO" \/>\
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" \/>\
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" \/>\
+              <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" \/>' \
+            /tmp/build/android/app/src/main/AndroidManifest.xml
+          
+          # Set app label
+          sed -i 's/android:label="[^"]*"/android:label="ZEKE AI"/' /tmp/build/android/app/src/main/AndroidManifest.xml
           
           # Bump minSdk to 21 in scaffold's build.gradle (BLE requires it)
           sed -i 's/minSdk =.*/minSdk = 21/' /tmp/build/android/app/build.gradle
           sed -i 's/minSdkVersion.*/minSdkVersion 21/' /tmp/build/android/app/build.gradle
-          
-          # Set namespace
-          sed -i 's/namespace =.*/namespace = "com.openclaw.node"/' /tmp/build/android/app/build.gradle
-          sed -i 's/applicationId =.*/applicationId = "com.openclaw.node"/' /tmp/build/android/app/build.gradle
           
           # Ensure AndroidX + no Jetifier
           echo "android.enableJetifier=false" >> /tmp/build/android/gradle.properties

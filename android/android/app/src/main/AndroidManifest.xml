@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.openclaw.node">
+    package="com.openclaw.zeke_ai">
 
     <!-- BLE -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
