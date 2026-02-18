@@ -48,6 +48,15 @@ export type ReviewGateConfig = {
   timeout_ms: number; // 审核超时，默认 60000
 };
 
+export type BudgetConfig = {
+  enabled: boolean;
+  daily_budget_usd: number; // default 10
+  daily_token_limit: number; // default 500000
+  warning_threshold: number; // default 0.8 (80%)
+  critical_action: "degrade" | "block"; // action when over budget
+  fallback_model?: string; // model to degrade to when critical
+};
+
 export type RoutingConfig = {
   default_task_type: TaskType;
   cooldown_seconds: number;
@@ -57,4 +66,5 @@ export type RoutingConfig = {
   ha_matrix: Partial<Record<TaskType, Partial<Record<ModelTier, string>>>>;
   health?: HealthConfig;
   review_gate?: ReviewGateConfig;
+  budget?: BudgetConfig;
 };
