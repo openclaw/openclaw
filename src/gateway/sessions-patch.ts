@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
-  normalizeModelSelection,
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -62,15 +62,6 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
-function resolveSubagentModelHint(cfg: OpenClawConfig, agentId: string): string | undefined {
-  const agentConfig = resolveAgentConfig(cfg, agentId);
-  return (
-    normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(cfg.agents?.defaults?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model)
-  );
-}
-
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -84,7 +75,7 @@ export async function applySessionsPatchToStore(params: {
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
   const subagentModelHint = isSubagentSessionKey(storeKey)
-    ? resolveSubagentModelHint(cfg, sessionAgentId)
+    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
 
   const existing = store[storeKey];

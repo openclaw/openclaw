@@ -255,6 +255,40 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
   });
 
+  it("sessions_spawn prefers target agent primary model over global default", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: { model: { primary: "minimax/MiniMax-M2.1" } },
+        list: [{ id: "research", model: { primary: "opencode/claude" } }],
+      },
+    });
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-agent-primary-model" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-agent-primary-model", {
+      task: "do thing",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(patchCall?.params).toMatchObject({
+      model: "opencode/claude",
+    });
+  });
+
   it("sessions_spawn fails when model patch is rejected", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
