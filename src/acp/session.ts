@@ -11,11 +11,17 @@ export type AcpSessionStore = {
   clearAllSessionsForTest: () => void;
 };
 
+// Maximum number of concurrent ACP sessions allowed (CWE-400: prevent unbounded memory growth)
+const MAX_SESSIONS = 1000;
+
 export function createInMemorySessionStore(): AcpSessionStore {
   const sessions = new Map<string, AcpSession>();
   const runIdToSessionId = new Map<string, string>();
 
   const createSession: AcpSessionStore["createSession"] = (params) => {
+    if (sessions.size >= MAX_SESSIONS) {
+      throw new Error(`ACP session limit reached (max ${MAX_SESSIONS}). Cannot create new session.`);
+    }
     const sessionId = params.sessionId ?? randomUUID();
     const session: AcpSession = {
       sessionId,
