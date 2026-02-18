@@ -162,6 +162,18 @@ export function createWebListenerFactoryCapture(): AnyExport {
   };
 }
 
+export function createMockWebListener() {
+  return {
+    close: vi.fn(async () => undefined),
+    onClose: new Promise<import("./inbound.js").WebListenerCloseReason>(() => {}),
+    signalClose: vi.fn(),
+    sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
+    sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
+    sendReaction: vi.fn(async () => undefined),
+    sendComposingTo: vi.fn(async () => undefined),
+  };
+}
+
 export function createWebInboundDeliverySpies(): AnyExport {
   return {
     sendMedia: vi.fn(),
