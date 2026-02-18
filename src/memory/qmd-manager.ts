@@ -490,11 +490,23 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private matchesPath(target: string, pattern: string): boolean {
     // Simple glob matching
+    if (pattern === "**") return true;
+
     // Handle "dir/**"
     if (pattern.endsWith("/**")) {
       const prefix = pattern.slice(0, -3);
       return target.startsWith(prefix + "/") || target === prefix;
     }
+
+    // Handle "**/*.md" or "**/foo"
+    if (pattern.startsWith("**/")) {
+      const rest = pattern.slice(3);
+      if (rest.startsWith("*")) {
+        return target.endsWith(rest.slice(1));
+      }
+      return target.endsWith("/" + rest) || target === rest;
+    }
+
     // Handle "*.md"
     if (pattern.startsWith("*")) {
       return target.endsWith(pattern.slice(1));
