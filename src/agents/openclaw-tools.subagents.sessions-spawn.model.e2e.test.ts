@@ -83,7 +83,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
     expect(result.details).toMatchObject({
       status: "accepted",
-      note: "auto-announces on completion, do not poll",
+      note: "auto-announces on completion, do not poll/sleep. The response will be sent back as an agent message.",
       modelApplied: true,
     });
 
