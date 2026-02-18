@@ -14,6 +14,7 @@ import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import { resolveHeartbeatModelPrimary } from "../heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -79,7 +80,10 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   if (opts?.isHeartbeat) {
-    const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
+    const heartbeatRaw =
+      opts.heartbeatModelOverride?.trim() ??
+      resolveHeartbeatModelPrimary(agentCfg?.heartbeat?.model) ??
+      "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
           raw: heartbeatRaw,

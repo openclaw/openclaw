@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  resolveHeartbeatModelPrimary,
   resolveHeartbeatPrompt,
   stripHeartbeatToken,
 } from "../../auto-reply/heartbeat.js";
@@ -157,14 +158,21 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
+    const heartbeatConfig = cfg.agents?.defaults?.heartbeat;
+    const heartbeatModelOverride = resolveHeartbeatModelPrimary(heartbeatConfig?.model);
+    const suppressToolErrorWarnings = heartbeatConfig?.suppressToolErrorWarnings === true;
+    const replyOpts = heartbeatModelOverride
+      ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
+      : { isHeartbeat: true, suppressToolErrorWarnings };
+
     const replyResult = await replyResolver(
       {
-        Body: resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
+        Body: resolveHeartbeatPrompt(heartbeatConfig?.prompt),
         From: to,
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
       },
-      { isHeartbeat: true },
+      replyOpts,
       cfg,
     );
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);

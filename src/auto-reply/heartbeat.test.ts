@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  resolveHeartbeatModelPrimary,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -179,5 +180,27 @@ Check the server logs
 ### Subsection
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+});
+
+describe("resolveHeartbeatModelPrimary", () => {
+  it("returns trimmed string models", () => {
+    expect(resolveHeartbeatModelPrimary("  openai/gpt-4o-mini  ")).toBe("openai/gpt-4o-mini");
+  });
+
+  it("returns model.primary when heartbeat model is an object", () => {
+    expect(
+      resolveHeartbeatModelPrimary({
+        primary: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+        fallbacks: ["openrouter/anthropic/claude-haiku-4.5"],
+      }),
+    ).toBe("openrouter/meta-llama/llama-3.3-70b-instruct:free");
+  });
+
+  it("returns undefined for blank or malformed values", () => {
+    expect(resolveHeartbeatModelPrimary("  ")).toBeUndefined();
+    expect(resolveHeartbeatModelPrimary({ primary: " " })).toBeUndefined();
+    expect(resolveHeartbeatModelPrimary({})).toBeUndefined();
+    expect(resolveHeartbeatModelPrimary(undefined)).toBeUndefined();
   });
 });

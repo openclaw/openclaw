@@ -56,6 +56,22 @@ export function resolveHeartbeatPrompt(raw?: string): string {
   return trimmed || HEARTBEAT_PROMPT;
 }
 
+export function resolveHeartbeatModelPrimary(raw?: unknown): string | undefined {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const primary = (raw as { primary?: unknown }).primary;
+  if (typeof primary !== "string") {
+    return undefined;
+  }
+  const trimmedPrimary = primary.trim();
+  return trimmedPrimary || undefined;
+}
+
 export type StripHeartbeatMode = "heartbeat" | "message";
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
