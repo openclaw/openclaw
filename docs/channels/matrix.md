@@ -243,7 +243,7 @@ Notes:
 | Polls           | ✅ Send supported; inbound poll starts are converted to text (responses/ends ignored) |
 | Location        | ✅ Supported (geo URI; altitude ignored)                                              |
 | Native commands | ✅ Supported                                                                          |
-| Block streaming | ✅ Supported (coalesce: 1500 chars / 1s idle)                                        |
+| Block streaming | ✅ Supported (coalesce: 1500 chars / 1s idle)                                         |
 
 ## Streaming
 
