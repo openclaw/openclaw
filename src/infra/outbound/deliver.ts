@@ -1,8 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type {
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-} from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
@@ -25,7 +22,6 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -77,31 +73,13 @@ type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
-  sendPayload?: (
-    payload: ReplyPayload,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    },
-  ) => Promise<OutboundDeliveryResult>;
-  sendText: (
-    text: string,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    },
-  ) => Promise<OutboundDeliveryResult>;
-  sendMedia: (
-    caption: string,
-    mediaUrl: string,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    },
-  ) => Promise<OutboundDeliveryResult>;
+  sendPayload?: (payload: ReplyPayload) => Promise<OutboundDeliveryResult>;
+  sendText: (text: string) => Promise<OutboundDeliveryResult>;
+  sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
 };
 
-type ChannelHandlerParams = {
+// Channel docking: outbound delivery delegates to plugin.outbound adapters.
+async function createChannelHandler(params: {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -112,86 +90,105 @@ type ChannelHandlerParams = {
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
-  mediaLocalRoots?: readonly string[];
-};
-
-// Channel docking: outbound delivery delegates to plugin.outbound adapters.
-async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
+}): Promise<ChannelHandler> {
   const outbound = await loadChannelOutboundAdapter(params.channel);
-  const handler = createPluginHandler({ ...params, outbound });
+  if (!outbound?.sendText || !outbound?.sendMedia) {
+    throw new Error(`Outbound not configured for channel: ${params.channel}`);
+  }
+  const handler = createPluginHandler({
+    outbound,
+    cfg: params.cfg,
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    identity: params.identity,
+    deps: params.deps,
+    gifPlayback: params.gifPlayback,
+    silent: params.silent,
+  });
   if (!handler) {
     throw new Error(`Outbound not configured for channel: ${params.channel}`);
   }
   return handler;
 }
 
-function createPluginHandler(
-  params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
-): ChannelHandler | null {
+function createPluginHandler(params: {
+  outbound?: ChannelOutboundAdapter;
+  cfg: OpenClawConfig;
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  identity?: OutboundIdentity;
+  deps?: OutboundSendDeps;
+  gifPlayback?: boolean;
+  silent?: boolean;
+}): ChannelHandler | null {
   const outbound = params.outbound;
   if (!outbound?.sendText || !outbound?.sendMedia) {
     return null;
   }
-  const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
   const sendMedia = outbound.sendMedia;
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
-  const resolveCtx = (overrides?: {
-    replyToId?: string | null;
-    threadId?: string | number | null;
-  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
-    ...baseCtx,
-    replyToId: overrides?.replyToId ?? baseCtx.replyToId,
-    threadId: overrides?.threadId ?? baseCtx.threadId,
-  });
   return {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     sendPayload: outbound.sendPayload
-      ? async (payload, overrides) =>
+      ? async (payload) =>
           outbound.sendPayload!({
-            ...resolveCtx(overrides),
+            cfg: params.cfg,
+            to: params.to,
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
+            accountId: params.accountId,
+            replyToId: params.replyToId,
+            threadId: params.threadId,
+            identity: params.identity,
+            gifPlayback: params.gifPlayback,
+            deps: params.deps,
+            silent: params.silent,
             payload,
           })
       : undefined,
-    sendText: async (text, overrides) =>
+    sendText: async (text) =>
       sendText({
-        ...resolveCtx(overrides),
+        cfg: params.cfg,
+        to: params.to,
         text,
+        accountId: params.accountId,
+        replyToId: params.replyToId,
+        threadId: params.threadId,
+        identity: params.identity,
+        gifPlayback: params.gifPlayback,
+        deps: params.deps,
+        silent: params.silent,
       }),
-    sendMedia: async (caption, mediaUrl, overrides) =>
+    sendMedia: async (caption, mediaUrl) =>
       sendMedia({
-        ...resolveCtx(overrides),
+        cfg: params.cfg,
+        to: params.to,
         text: caption,
         mediaUrl,
+        accountId: params.accountId,
+        replyToId: params.replyToId,
+        threadId: params.threadId,
+        identity: params.identity,
+        gifPlayback: params.gifPlayback,
+        deps: params.deps,
+        silent: params.silent,
       }),
-  };
-}
-
-function createChannelOutboundContextBase(
-  params: ChannelHandlerParams,
-): Omit<ChannelOutboundContext, "text" | "mediaUrl"> {
-  return {
-    cfg: params.cfg,
-    to: params.to,
-    accountId: params.accountId,
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-    identity: params.identity,
-    gifPlayback: params.gifPlayback,
-    deps: params.deps,
-    silent: params.silent,
-    mediaLocalRoots: params.mediaLocalRoots,
   };
 }
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
 
-type DeliverOutboundPayloadsCoreParams = {
+export async function deliverOutboundPayloads(params: {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -206,8 +203,6 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
-  /** Active agent id for media local-root scoping. */
-  agentId?: string;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -215,16 +210,9 @@ type DeliverOutboundPayloadsCoreParams = {
     mediaUrls?: string[];
   };
   silent?: boolean;
-};
-
-type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
-};
-
-export async function deliverOutboundPayloads(
-  params: DeliverOutboundPayloadsParams,
-): Promise<OutboundDeliveryResult[]> {
+}): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
 
   // Write-ahead delivery queue: persist before sending, remove after success.
@@ -283,18 +271,34 @@ export async function deliverOutboundPayloads(
 }
 
 /** Core delivery logic (extracted for queue wrapper). */
-async function deliverOutboundPayloadsCore(
-  params: DeliverOutboundPayloadsCoreParams,
-): Promise<OutboundDeliveryResult[]> {
+async function deliverOutboundPayloadsCore(params: {
+  cfg: OpenClawConfig;
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  payloads: ReplyPayload[];
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  identity?: OutboundIdentity;
+  deps?: OutboundSendDeps;
+  gifPlayback?: boolean;
+  abortSignal?: AbortSignal;
+  bestEffort?: boolean;
+  onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
+  onPayload?: (payload: NormalizedOutboundPayload) => void;
+  mirror?: {
+    sessionKey: string;
+    agentId?: string;
+    text?: string;
+    mediaUrls?: string[];
+  };
+  silent?: boolean;
+}): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
-    cfg,
-    params.agentId ?? params.mirror?.agentId,
-  );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -307,7 +311,6 @@ async function deliverOutboundPayloadsCore(
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
-    mediaLocalRoots,
   });
   const textLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
@@ -329,13 +332,10 @@ async function deliverOutboundPayloadsCore(
       })
     : undefined;
 
-  const sendTextChunks = async (
-    text: string,
-    overrides?: { replyToId?: string | null; threadId?: string | number | null },
-  ) => {
+  const sendTextChunks = async (text: string) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text, overrides));
+      results.push(await handler.sendText(text));
       return;
     }
     if (chunkMode === "newline") {
@@ -355,7 +355,7 @@ async function deliverOutboundPayloadsCore(
         }
         for (const chunk of chunks) {
           throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk, overrides));
+          results.push(await handler.sendText(chunk));
         }
       }
       return;
@@ -363,7 +363,7 @@ async function deliverOutboundPayloadsCore(
     const chunks = handler.chunker(text, textLimit);
     for (const chunk of chunks) {
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(chunk, overrides));
+      results.push(await handler.sendText(chunk));
     }
   };
 
@@ -413,7 +413,6 @@ async function deliverOutboundPayloadsCore(
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: formatted.styles,
-        mediaLocalRoots,
       })),
     };
   };
@@ -499,12 +498,8 @@ async function deliverOutboundPayloadsCore(
       }
 
       params.onPayload?.(payloadSummary);
-      const sendOverrides = {
-        replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
-        threadId: params.threadId ?? undefined,
-      };
       if (handler.sendPayload && effectivePayload.channelData) {
-        results.push(await handler.sendPayload(effectivePayload, sendOverrides));
+        results.push(await handler.sendPayload(effectivePayload));
         emitMessageSent(true);
         continue;
       }
@@ -512,7 +507,7 @@ async function deliverOutboundPayloadsCore(
         if (isSignalChannel) {
           await sendSignalTextChunks(payloadSummary.text);
         } else {
-          await sendTextChunks(payloadSummary.text, sendOverrides);
+          await sendTextChunks(payloadSummary.text);
         }
         emitMessageSent(true);
         continue;
@@ -526,7 +521,7 @@ async function deliverOutboundPayloadsCore(
         if (isSignalChannel) {
           results.push(await sendSignalMedia(caption, url));
         } else {
-          results.push(await handler.sendMedia(caption, url, sendOverrides));
+          results.push(await handler.sendMedia(caption, url));
         }
       }
       emitMessageSent(true);

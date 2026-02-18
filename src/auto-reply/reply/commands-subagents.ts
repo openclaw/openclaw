@@ -4,13 +4,9 @@ import type { CommandHandler } from "./commands-types.js";
 import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import {
-  clearSubagentRunSteerRestart,
+  listAllSubagentRuns,
   listSubagentRunsForRequester,
-  markSubagentRunTerminated,
-  markSubagentRunForSteerRestart,
-  replaceSubagentRunAfterSteer,
 } from "../../agents/subagent-registry.js";
-import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import {
   extractAssistantText,
   resolveInternalSessionKey,
@@ -18,22 +14,13 @@ import {
   sanitizeTextContent,
   stripToolMessages,
 } from "../../agents/tools/sessions-helpers.js";
-import {
-  type SessionEntry,
-  loadSessionStore,
-  resolveStorePath,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { getSubtreeLeafFirst } from "../../agents/tools/sessions-lineage.js";
+import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import {
-  formatDurationCompact,
-  formatTokenUsageDisplay,
-  truncateLine,
-} from "../../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { stopSubagentsForRequester } from "./abort.js";
 import { clearSessionQueues } from "./queue.js";
@@ -45,64 +32,7 @@ type SubagentTargetResolution = {
 };
 
 const COMMAND = "/subagents";
-const COMMAND_KILL = "/kill";
-const COMMAND_STEER = "/steer";
-const COMMAND_TELL = "/tell";
-const ACTIONS = new Set(["list", "kill", "log", "send", "steer", "info", "spawn", "help"]);
-const RECENT_WINDOW_MINUTES = 30;
-const SUBAGENT_TASK_PREVIEW_MAX = 110;
-const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
-
-function compactLine(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function formatTaskPreview(value: string) {
-  return truncateLine(compactLine(value), SUBAGENT_TASK_PREVIEW_MAX);
-}
-
-function resolveModelDisplay(
-  entry?: {
-    model?: unknown;
-    modelProvider?: unknown;
-    modelOverride?: unknown;
-    providerOverride?: unknown;
-  },
-  fallbackModel?: string,
-) {
-  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  let combined = model.includes("/") ? model : model && provider ? `${provider}/${model}` : model;
-  if (!combined) {
-    // Fall back to override fields which are populated at spawn time,
-    // before the first run completes and writes model/modelProvider.
-    const overrideModel =
-      typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
-    const overrideProvider =
-      typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
-    combined = overrideModel.includes("/")
-      ? overrideModel
-      : overrideModel && overrideProvider
-        ? `${overrideProvider}/${overrideModel}`
-        : overrideModel;
-  }
-  if (!combined) {
-    combined = fallbackModel?.trim() || "";
-  }
-  if (!combined) {
-    return "model n/a";
-  }
-  const slash = combined.lastIndexOf("/");
-  if (slash >= 0 && slash < combined.length - 1) {
-    return combined.slice(slash + 1);
-  }
-  return combined;
-}
-
-function resolveDisplayStatus(entry: SubagentRunRecord) {
-  const status = formatRunStatus(entry);
-  return status === "error" ? "failed" : status;
-}
+const ACTIONS = new Set(["list", "tree", "stop", "log", "send", "info", "help"]);
 
 function formatTimestamp(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -127,6 +57,26 @@ function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): stri
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
 }
 
+function buildTreeIndexMap(): Map<string, string> {
+  const allRuns = listAllSubagentRuns();
+  const runByChild = new Map(allRuns.map((r) => [r.childSessionKey, r]));
+  const childrenOf = new Map<string, SubagentRunRecord[]>();
+  for (const r of allRuns) {
+    const list = childrenOf.get(r.requesterSessionKey) ?? [];
+    list.push(r);
+    childrenOf.set(r.requesterSessionKey, list);
+  }
+  const roots = sortSubagentRuns(allRuns.filter((r) => !runByChild.has(r.requesterSessionKey)));
+  const indexMap = new Map<string, string>();
+  const walk = (r: SubagentRunRecord, index: string) => {
+    indexMap.set(index, r.childSessionKey);
+    const children = sortSubagentRuns(childrenOf.get(r.childSessionKey) ?? []);
+    children.forEach((child, i) => walk(child, `${index}.${i + 1}`));
+  };
+  roots.forEach((root, i) => walk(root, `${i + 1}`));
+  return indexMap;
+}
+
 function resolveSubagentTarget(
   runs: SubagentRunRecord[],
   token: string | undefined,
@@ -139,39 +89,35 @@ function resolveSubagentTarget(
     const sorted = sortSubagentRuns(runs);
     return { entry: sorted[0] };
   }
+  // Check for tree index (e.g. "1.2.1")
+  if (/^\d+(\.\d+)+$/.test(trimmed)) {
+    const indexMap = buildTreeIndexMap();
+    const childKey = indexMap.get(trimmed);
+    if (!childKey) {
+      return { error: `Invalid tree index: ${trimmed}` };
+    }
+    const match = runs.find((entry) => entry.childSessionKey === childKey);
+    if (!match) {
+      // Might be a run from a different requester — search all runs
+      const allRuns = listAllSubagentRuns();
+      const globalMatch = allRuns.find((entry) => entry.childSessionKey === childKey);
+      return globalMatch
+        ? { entry: globalMatch }
+        : { error: `Tree index ${trimmed} not found in current session.` };
+    }
+    return { entry: match };
+  }
   const sorted = sortSubagentRuns(runs);
-  const recentCutoff = Date.now() - RECENT_WINDOW_MINUTES * 60_000;
-  const numericOrder = [
-    ...sorted.filter((entry) => !entry.endedAt),
-    ...sorted.filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff),
-  ];
   if (/^\d+$/.test(trimmed)) {
     const idx = Number.parseInt(trimmed, 10);
-    if (!Number.isFinite(idx) || idx <= 0 || idx > numericOrder.length) {
+    if (!Number.isFinite(idx) || idx <= 0 || idx > sorted.length) {
       return { error: `Invalid subagent index: ${trimmed}` };
     }
-    return { entry: numericOrder[idx - 1] };
+    return { entry: sorted[idx - 1] };
   }
   if (trimmed.includes(":")) {
     const match = runs.find((entry) => entry.childSessionKey === trimmed);
     return match ? { entry: match } : { error: `Unknown subagent session: ${trimmed}` };
-  }
-  const lowered = trimmed.toLowerCase();
-  const byLabel = runs.filter((entry) => formatRunLabel(entry).toLowerCase() === lowered);
-  if (byLabel.length === 1) {
-    return { entry: byLabel[0] };
-  }
-  if (byLabel.length > 1) {
-    return { error: `Ambiguous subagent label: ${trimmed}` };
-  }
-  const byLabelPrefix = runs.filter((entry) =>
-    formatRunLabel(entry).toLowerCase().startsWith(lowered),
-  );
-  if (byLabelPrefix.length === 1) {
-    return { entry: byLabelPrefix[0] };
-  }
-  if (byLabelPrefix.length > 1) {
-    return { error: `Ambiguous subagent label prefix: ${trimmed}` };
   }
   const byRunId = runs.filter((entry) => entry.runId.startsWith(trimmed));
   if (byRunId.length === 1) {
@@ -185,35 +131,61 @@ function resolveSubagentTarget(
 
 function buildSubagentsHelp() {
   return [
-    "Subagents",
+    "🧭 Subagents",
     "Usage:",
     "- /subagents list",
-    "- /subagents kill <id|#|all>",
+    "- /subagents tree",
+    "- /subagents stop <id|#|all> [--cascade]",
     "- /subagents log <id|#> [limit] [tools]",
     "- /subagents info <id|#>",
     "- /subagents send <id|#> <message>",
-    "- /subagents steer <id|#> <message>",
-    "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
-    "- /kill <id|#|all>",
-    "- /steer <id|#> <message>",
-    "- /tell <id|#> <message>",
     "",
-    "Ids: use the list index (#), runId/session prefix, label, or full session key.",
+    "Ids: use the list index (#), runId prefix, tree index (1.2.1), or full session key.",
   ].join("\n");
 }
 
 type ChatMessage = {
   role?: unknown;
   content?: unknown;
+  name?: unknown;
+  toolName?: unknown;
 };
+
+function normalizeMessageText(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
 
 export function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
   const shouldSanitize = role === "assistant";
-  const text = extractTextFromChatContent(message.content, {
-    sanitizeText: shouldSanitize ? sanitizeTextContent : undefined,
-  });
-  return text ? { role, text } : null;
+  const content = message.content;
+  if (typeof content === "string") {
+    const normalized = normalizeMessageText(
+      shouldSanitize ? sanitizeTextContent(content) : content,
+    );
+    return normalized ? { role, text: normalized } : null;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const chunks: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string") {
+      const value = shouldSanitize ? sanitizeTextContent(text) : text;
+      if (value.trim()) {
+        chunks.push(value);
+      }
+    }
+  }
+  const joined = normalizeMessageText(chunks.join(" "));
+  return joined ? { role, text: joined } : null;
 }
 
 function formatLogLines(messages: ChatMessage[]) {
@@ -229,20 +201,10 @@ function formatLogLines(messages: ChatMessage[]) {
   return lines;
 }
 
-type SessionStoreCache = Map<string, Record<string, SessionEntry>>;
-
-function loadSubagentSessionEntry(
-  params: Parameters<CommandHandler>[0],
-  childKey: string,
-  storeCache?: SessionStoreCache,
-) {
+function loadSubagentSessionEntry(params: Parameters<CommandHandler>[0], childKey: string) {
   const parsed = parseAgentSessionKey(childKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
-  let store = storeCache?.get(storePath);
-  if (!store) {
-    store = loadSessionStore(storePath);
-    storeCache?.set(storePath, store);
-  }
+  const store = loadSessionStore(storePath);
   return { storePath, store, entry: store[childKey] };
 }
 
@@ -251,39 +213,21 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     return null;
   }
   const normalized = params.command.commandBodyNormalized;
-  const handledPrefix = normalized.startsWith(COMMAND)
-    ? COMMAND
-    : normalized.startsWith(COMMAND_KILL)
-      ? COMMAND_KILL
-      : normalized.startsWith(COMMAND_STEER)
-        ? COMMAND_STEER
-        : normalized.startsWith(COMMAND_TELL)
-          ? COMMAND_TELL
-          : null;
-  if (!handledPrefix) {
+  if (!normalized.startsWith(COMMAND)) {
     return null;
   }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
-      `Ignoring ${handledPrefix} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+      `Ignoring /subagents from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
   }
 
-  const rest = normalized.slice(handledPrefix.length).trim();
-  const restTokens = rest.split(/\s+/).filter(Boolean);
-  let action = "list";
-  if (handledPrefix === COMMAND) {
-    const [actionRaw] = restTokens;
-    action = actionRaw?.toLowerCase() || "list";
-    if (!ACTIONS.has(action)) {
-      return { shouldContinue: false, reply: { text: buildSubagentsHelp() } };
-    }
-    restTokens.splice(0, 1);
-  } else if (handledPrefix === COMMAND_KILL) {
-    action = "kill";
-  } else {
-    action = "steer";
+  const rest = normalized.slice(COMMAND.length).trim();
+  const [actionRaw, ...restTokens] = rest.split(/\s+/).filter(Boolean);
+  const action = actionRaw?.toLowerCase() || "list";
+  if (!ACTIONS.has(action)) {
+    return { shouldContinue: false, reply: { text: buildSubagentsHelp() } };
   }
 
   const requesterKey = resolveRequesterSessionKey(params);
@@ -297,82 +241,100 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
   }
 
   if (action === "list") {
+    if (runs.length === 0) {
+      return { shouldContinue: false, reply: { text: "🧭 Subagents: none for this session." } };
+    }
     const sorted = sortSubagentRuns(runs);
-    const now = Date.now();
-    const recentCutoff = now - RECENT_WINDOW_MINUTES * 60_000;
-    const storeCache: SessionStoreCache = new Map();
-    let index = 1;
-    const activeLines = sorted
-      .filter((entry) => !entry.endedAt)
-      .map((entry) => {
-        const { entry: sessionEntry } = loadSubagentSessionEntry(
-          params,
-          entry.childSessionKey,
-          storeCache,
-        );
-        const usageText = formatTokenUsageDisplay(sessionEntry);
-        const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = formatTaskPreview(entry.task);
-        const runtime = formatDurationCompact(now - (entry.startedAt ?? entry.createdAt));
-        const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
-        index += 1;
-        return line;
-      });
-    const recentLines = sorted
-      .filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff)
-      .map((entry) => {
-        const { entry: sessionEntry } = loadSubagentSessionEntry(
-          params,
-          entry.childSessionKey,
-          storeCache,
-        );
-        const usageText = formatTokenUsageDisplay(sessionEntry);
-        const label = truncateLine(formatRunLabel(entry, { maxLength: 48 }), 48);
-        const task = formatTaskPreview(entry.task);
-        const runtime = formatDurationCompact(
-          (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt),
-        );
-        const status = resolveDisplayStatus(entry);
-        const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
-        index += 1;
-        return line;
-      });
-
-    const lines = ["active subagents:", "-----"];
-    if (activeLines.length === 0) {
-      lines.push("(none)");
-    } else {
-      lines.push(activeLines.join("\n"));
-    }
-    lines.push("", `recent subagents (last ${RECENT_WINDOW_MINUTES}m):`, "-----");
-    if (recentLines.length === 0) {
-      lines.push("(none)");
-    } else {
-      lines.push(recentLines.join("\n"));
-    }
+    const active = sorted.filter((entry) => !entry.endedAt);
+    const done = sorted.length - active.length;
+    const lines = ["🧭 Subagents (current session)", `Active: ${active.length} · Done: ${done}`];
+    sorted.forEach((entry, index) => {
+      const status = formatRunStatus(entry);
+      const label = formatRunLabel(entry);
+      const runtime =
+        entry.endedAt && entry.startedAt
+          ? (formatDurationCompact(entry.endedAt - entry.startedAt) ?? "n/a")
+          : formatTimeAgo(Date.now() - (entry.startedAt ?? entry.createdAt), { fallback: "n/a" });
+      const runId = entry.runId.slice(0, 8);
+      lines.push(
+        `${index + 1}) ${status} · ${label} · ${runtime} · run ${runId} · ${entry.childSessionKey}`,
+      );
+    });
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  if (action === "kill") {
+  if (action === "tree") {
+    const allRuns = listAllSubagentRuns();
+    if (allRuns.length === 0) {
+      return { shouldContinue: false, reply: { text: "🌳 Subagent Tree: no subagents." } };
+    }
+    const runByChild = new Map(allRuns.map((r) => [r.childSessionKey, r]));
+    const childrenOf = new Map<string, SubagentRunRecord[]>();
+    for (const r of allRuns) {
+      const list = childrenOf.get(r.requesterSessionKey) ?? [];
+      list.push(r);
+      childrenOf.set(r.requesterSessionKey, list);
+    }
+    const roots = sortSubagentRuns(allRuns.filter((r) => !runByChild.has(r.requesterSessionKey)));
+    const active = allRuns.filter((r) => !r.endedAt).length;
+    const statusIcon = (r: SubagentRunRecord) => {
+      if (!r.endedAt) {
+        return "🔄";
+      }
+      if (r.outcome?.status === "error") {
+        return "❌";
+      }
+      if (r.outcome?.status === "timeout") {
+        return "⏱️";
+      }
+      return "✅";
+    };
+    const runtimeStr = (r: SubagentRunRecord) => {
+      const start = typeof r.startedAt === "number" ? r.startedAt : r.createdAt;
+      const end = typeof r.endedAt === "number" ? r.endedAt : Date.now();
+      return formatDurationCompact(Math.max(0, end - start)) ?? "n/a";
+    };
+    const lines: string[] = [`🌳 Subagent Tree (${active} active, ${allRuns.length} total)`];
+    const treeIndexMap = new Map<string, string>();
+    const renderNode = (r: SubagentRunRecord, prefix: string, isLast: boolean, index: string) => {
+      const connector = isLast ? "└── " : "├── ";
+      const depth = typeof r.depth === "number" ? r.depth : 1;
+      const label = formatRunLabel(r, { maxLength: 40 });
+      lines.push(
+        `${prefix}${connector}${statusIcon(r)} [${index}] ${label} — ${runtimeStr(r)} [d${depth}]`,
+      );
+      treeIndexMap.set(index, r.childSessionKey);
+      const children = sortSubagentRuns(childrenOf.get(r.childSessionKey) ?? []);
+      const nextPrefix = prefix + (isLast ? "    " : "│   ");
+      children.forEach((child, i) => {
+        renderNode(child, nextPrefix, i === children.length - 1, `${index}.${i + 1}`);
+      });
+    };
+    roots.forEach((root, i) => {
+      renderNode(root, "", i === roots.length - 1, `${i + 1}`);
+    });
+    return { shouldContinue: false, reply: { text: lines.join("\n") } };
+  }
+
+  if (action === "stop") {
     const target = restTokens[0];
+    const hasCascade = restTokens.includes("--cascade");
     if (!target) {
       return {
         shouldContinue: false,
-        reply: {
-          text:
-            handledPrefix === COMMAND
-              ? "Usage: /subagents kill <id|#|all>"
-              : "Usage: /kill <id|#|all>",
-        },
+        reply: { text: "⚙️ Usage: /subagents stop <id|#|all> [--cascade]" },
       };
     }
     if (target === "all" || target === "*") {
-      stopSubagentsForRequester({
+      const { stopped } = stopSubagentsForRequester({
         cfg: params.cfg,
         requesterSessionKey: requesterKey,
       });
-      return { shouldContinue: false };
+      const label = stopped === 1 ? "subagent" : "subagents";
+      return {
+        shouldContinue: false,
+        reply: { text: `⚙️ Stopped ${stopped} ${label}.` },
+      };
     }
     const resolved = resolveSubagentTarget(runs, target);
     if (!resolved.entry) {
@@ -384,7 +346,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     if (resolved.entry.endedAt) {
       return {
         shouldContinue: false,
-        reply: { text: `${formatRunLabel(resolved.entry)} is already finished.` },
+        reply: { text: "⚙️ Subagent already finished." },
       };
     }
 
@@ -397,7 +359,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const cleared = clearSessionQueues([childKey, sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(
-        `subagents kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+        `subagents stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
       );
     }
     if (entry) {
@@ -408,17 +370,29 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         nextStore[childKey] = entry;
       });
     }
-    markSubagentRunTerminated({
-      runId: resolved.entry.runId,
-      childSessionKey: childKey,
-      reason: "killed",
-    });
-    // Cascade: also stop any sub-sub-agents spawned by this child.
-    stopSubagentsForRequester({
-      cfg: params.cfg,
-      requesterSessionKey: childKey,
-    });
-    return { shouldContinue: false };
+    if (hasCascade) {
+      const subtreeKeys = getSubtreeLeafFirst(childKey).filter((k) => k !== childKey);
+      let cascadeStopped = 0;
+      for (const subKey of subtreeKeys) {
+        const sub = loadSubagentSessionEntry(params, subKey);
+        const subSessionId = sub.entry?.sessionId;
+        if (subSessionId) {
+          abortEmbeddedPiRun(subSessionId);
+        }
+        clearSessionQueues([subKey, subSessionId]);
+        cascadeStopped++;
+      }
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `⚙️ Stop requested for ${formatRunLabel(resolved.entry)} + ${cascadeStopped} descendant(s).`,
+        },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: `⚙️ Stop requested for ${formatRunLabel(resolved.entry)}.` },
+    };
   }
 
   if (action === "info") {
@@ -444,7 +418,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       : "n/a";
     const lines = [
       "ℹ️ Subagent info",
-      `Status: ${resolveDisplayStatus(run)}`,
+      `Status: ${formatRunStatus(run)}`,
       `Label: ${formatRunLabel(run)}`,
       `Task: ${run.task}`,
       `Run: ${run.runId}`,
@@ -492,20 +466,13 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: [header, ...lines].join("\n") } };
   }
 
-  if (action === "send" || action === "steer") {
-    const steerRequested = action === "steer";
+  if (action === "send") {
     const target = restTokens[0];
     const message = restTokens.slice(1).join(" ").trim();
     if (!target || !message) {
       return {
         shouldContinue: false,
-        reply: {
-          text: steerRequested
-            ? handledPrefix === COMMAND
-              ? "Usage: /subagents steer <id|#> <message>"
-              : `Usage: ${handledPrefix} <id|#> <message>`
-            : "Usage: /subagents send <id|#> <message>",
-        },
+        reply: { text: "✉️ Usage: /subagents send <id|#> <message>" },
       };
     }
     const resolved = resolveSubagentTarget(runs, target);
@@ -515,52 +482,6 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         reply: { text: `⚠️ ${resolved.error ?? "Unknown subagent."}` },
       };
     }
-    if (steerRequested && resolved.entry.endedAt) {
-      return {
-        shouldContinue: false,
-        reply: { text: `${formatRunLabel(resolved.entry)} is already finished.` },
-      };
-    }
-    const { entry: targetSessionEntry } = loadSubagentSessionEntry(
-      params,
-      resolved.entry.childSessionKey,
-    );
-    const targetSessionId =
-      typeof targetSessionEntry?.sessionId === "string" && targetSessionEntry.sessionId.trim()
-        ? targetSessionEntry.sessionId.trim()
-        : undefined;
-
-    if (steerRequested) {
-      // Suppress stale announce before interrupting the in-flight run.
-      markSubagentRunForSteerRestart(resolved.entry.runId);
-
-      // Force an immediate interruption and make steer the next run.
-      if (targetSessionId) {
-        abortEmbeddedPiRun(targetSessionId);
-      }
-      const cleared = clearSessionQueues([resolved.entry.childSessionKey, targetSessionId]);
-      if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-        logVerbose(
-          `subagents steer: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-        );
-      }
-
-      // Best effort: wait for the interrupted run to settle so the steer
-      // message is appended on the existing conversation state.
-      try {
-        await callGateway({
-          method: "agent.wait",
-          params: {
-            runId: resolved.entry.runId,
-            timeoutMs: STEER_ABORT_SETTLE_TIMEOUT_MS,
-          },
-          timeoutMs: STEER_ABORT_SETTLE_TIMEOUT_MS + 2_000,
-        });
-      } catch {
-        // Continue even if wait fails; steer should still be attempted.
-      }
-    }
-
     const idempotencyKey = crypto.randomUUID();
     let runId: string = idempotencyKey;
     try {
@@ -569,12 +490,10 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         params: {
           message,
           sessionKey: resolved.entry.childSessionKey,
-          sessionId: targetSessionId,
           idempotencyKey,
           deliver: false,
           channel: INTERNAL_MESSAGE_CHANNEL,
           lane: AGENT_LANE_SUBAGENT,
-          timeout: 0,
         },
         timeoutMs: 10_000,
       });
@@ -583,29 +502,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         runId = responseRunId;
       }
     } catch (err) {
-      if (steerRequested) {
-        // Replacement launch failed; restore announce behavior for the
-        // original run so completion is not silently suppressed.
-        clearSubagentRunSteerRestart(resolved.entry.runId);
-      }
       const messageText =
         err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      return { shouldContinue: false, reply: { text: `send failed: ${messageText}` } };
-    }
-
-    if (steerRequested) {
-      replaceSubagentRunAfterSteer({
-        previousRunId: resolved.entry.runId,
-        nextRunId: runId,
-        fallback: resolved.entry,
-        runTimeoutSeconds: resolved.entry.runTimeoutSeconds ?? 0,
-      });
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `steered ${formatRunLabel(resolved.entry)} (run ${runId.slice(0, 8)}).`,
-        },
-      };
+      return { shouldContinue: false, reply: { text: `⚠️ Send failed: ${messageText}` } };
     }
 
     const waitMs = 30_000;
@@ -643,60 +542,6 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         text:
           replyText ?? `✅ Sent to ${formatRunLabel(resolved.entry)} (run ${runId.slice(0, 8)}).`,
       },
-    };
-  }
-
-  if (action === "spawn") {
-    const agentId = restTokens[0];
-    // Parse remaining tokens: task text with optional --model and --thinking flags.
-    const taskParts: string[] = [];
-    let model: string | undefined;
-    let thinking: string | undefined;
-    for (let i = 1; i < restTokens.length; i++) {
-      if (restTokens[i] === "--model" && i + 1 < restTokens.length) {
-        i += 1;
-        model = restTokens[i];
-      } else if (restTokens[i] === "--thinking" && i + 1 < restTokens.length) {
-        i += 1;
-        thinking = restTokens[i];
-      } else {
-        taskParts.push(restTokens[i]);
-      }
-    }
-    const task = taskParts.join(" ").trim();
-    if (!agentId || !task) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "Usage: /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
-        },
-      };
-    }
-
-    const result = await spawnSubagentDirect(
-      { task, agentId, model, thinking, cleanup: "keep" },
-      {
-        agentSessionKey: requesterKey,
-        agentChannel: params.command.channel,
-        agentAccountId: params.ctx.AccountId,
-        agentTo: params.command.to,
-        agentThreadId: params.ctx.MessageThreadId,
-        agentGroupId: params.sessionEntry?.groupId ?? null,
-        agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
-        agentGroupSpace: params.sessionEntry?.space ?? null,
-      },
-    );
-    if (result.status === "accepted") {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `Spawned subagent ${agentId} (session ${result.childSessionKey}, run ${result.runId?.slice(0, 8)}).${result.warning ? ` Warning: ${result.warning}` : ""}`,
-        },
-      };
-    }
-    return {
-      shouldContinue: false,
-      reply: { text: `Spawn failed: ${result.error ?? result.status}` },
     };
   }
 
