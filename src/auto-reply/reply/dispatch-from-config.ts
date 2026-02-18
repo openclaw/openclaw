@@ -83,7 +83,7 @@ export async function dispatchReplyFromConfig(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply" | "onAgentEvent">;
   replyResolver?: typeof getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
@@ -297,6 +297,7 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        onAgentEvent: params.replyOptions?.onAgentEvent,
         onToolResult: shouldSendToolSummaries
           ? (payload: ReplyPayload) => {
               const run = async () => {
