@@ -39,6 +39,8 @@ export type EmbeddedPiRunMeta = {
     kind: "context_overflow" | "compaction_failure" | "role_ordering" | "image_size";
     message: string;
   };
+  /** True when proactive handover was triggered during this run. */
+  proactiveHandover?: boolean;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */

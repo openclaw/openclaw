@@ -295,6 +295,8 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Trigger proactive handover when remaining tokens <= this value (default: disabled). */
+  proactiveThresholdTokens?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

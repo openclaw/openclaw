@@ -10,6 +10,7 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import { estimateMessagesTokens } from "../compaction.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -465,6 +466,8 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let proactiveHandoverTriggered = false;
+      const PROACTIVE_MIN_TURNS = 5;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -1011,6 +1014,84 @@ export async function runEmbeddedPiAgent(
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
+
+          // --- PROACTIVE HANDOVER CHECK ---
+          if (
+            !proactiveHandoverTriggered &&
+            !aborted &&
+            !attempt.promptError &&
+            attempt.messagesSnapshot &&
+            attempt.messagesSnapshot.length > 0
+          ) {
+            const proactiveThreshold =
+              params.config?.agents?.defaults?.compaction?.proactiveThresholdTokens;
+
+            if (typeof proactiveThreshold === "number" && proactiveThreshold > 0) {
+              const userMsgCount = attempt.messagesSnapshot.filter((m) => m.role === "user").length;
+
+              if (userMsgCount >= PROACTIVE_MIN_TURNS) {
+                const currentTokens = estimateMessagesTokens(attempt.messagesSnapshot);
+                const remainingTokens = ctxInfo.tokens - currentTokens;
+                const usagePercent = Math.round((currentTokens / ctxInfo.tokens) * 100);
+
+                if (remainingTokens <= proactiveThreshold) {
+                  log.info(
+                    `[proactive-handover] Triggering: ${currentTokens}/${ctxInfo.tokens} tokens ` +
+                      `(${usagePercent}%), remaining=${remainingTokens}, threshold=${proactiveThreshold}, ` +
+                      `userMessages=${userMsgCount}`,
+                  );
+
+                  proactiveHandoverTriggered = true;
+
+                  const proactiveResult = await compactEmbeddedPiSessionDirect({
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                    messageChannel: params.messageChannel,
+                    messageProvider: params.messageProvider,
+                    agentAccountId: params.agentAccountId,
+                    authProfileId: lastProfileId,
+                    sessionFile: params.sessionFile,
+                    workspaceDir: resolvedWorkspace,
+                    agentDir,
+                    config: params.config,
+                    skillsSnapshot: params.skillsSnapshot,
+                    senderIsOwner: params.senderIsOwner,
+                    provider,
+                    model: modelId,
+                    thinkLevel,
+                    reasoningLevel: params.reasoningLevel,
+                    bashElevated: params.bashElevated,
+                    extraSystemPrompt: params.extraSystemPrompt,
+                    ownerNumbers: params.ownerNumbers,
+                  });
+
+                  if (proactiveResult.compacted) {
+                    autoCompactionCount += 1;
+                    log.info(`[proactive-handover] Compaction succeeded.`);
+
+                    try {
+                      const { SessionManager } = await import("@mariozechner/pi-coding-agent");
+                      const sm = SessionManager.open(params.sessionFile);
+                      sm.appendMessage({
+                        role: "user",
+                        content: `[System] ⚠️ Proactive handover triggered at ${usagePercent}% context usage. Memory compacted successfully.`,
+                      } as Parameters<typeof sm.appendMessage>[0]);
+                    } catch (noteErr) {
+                      log.warn(
+                        `[proactive-handover] Failed to inject system note: ${describeUnknownError(noteErr)}`,
+                      );
+                    }
+                  } else {
+                    log.warn(
+                      `[proactive-handover] Compaction failed: ${proactiveResult.reason ?? "unknown"}`,
+                    );
+                  }
+                }
+              }
+            }
+          }
+          // --- END PROACTIVE HANDOVER CHECK ---
+
           if (lastProfileId) {
             await markAuthProfileGood({
               store: authStore,
@@ -1031,6 +1112,7 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              proactiveHandover: proactiveHandoverTriggered || undefined,
               // Handle client tool calls (OpenResponses hosted tools)
               stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
               pendingToolCalls: attempt.clientToolCall
