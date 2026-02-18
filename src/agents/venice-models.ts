@@ -192,6 +192,15 @@ export const VENICE_MODEL_CATALOG = [
     privacy: "anonymized",
   },
   {
+    id: "claude-sonnet-46",
+    name: "Claude Sonnet 4.6 (via Venice)",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 202752,
+    maxTokens: 8192,
+    privacy: "anonymized",
+  },
+  {
     id: "claude-sonnet-45",
     name: "Claude Sonnet 4.5 (via Venice)",
     reasoning: true,
