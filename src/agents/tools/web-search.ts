@@ -527,9 +527,9 @@ async function runGeminiSearch(params: {
   });
 
   if (!res.ok) {
-    const detail = await readResponseText(res);
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
     // Strip API key from any error detail to prevent accidental key leakage in logs
-    const safeDetail = (detail || res.statusText).replace(/key=[^&\s]+/gi, "key=***");
+    const safeDetail = (detailResult.text || res.statusText).replace(/key=[^&\s]+/gi, "key=***");
     throw new Error(`Gemini API error (${res.status}): ${safeDetail}`);
   }
 
