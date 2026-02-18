@@ -72,7 +72,7 @@ function getStatusCode(err: unknown): number | undefined {
   // Fallback: extract status code from error message (e.g., "429 status code (no body)")
   const message = getErrorMessage(err);
   if (message) {
-    const statusMatch = message.match(/\b(\d{3})\s+(?:status\s+code|error|http)/i);
+    const statusMatch = message.match(/\b(\d{3})\s+(?:status\s*code|error\s+code|http\s+error|http)/i);
     if (statusMatch) {
       const code = Number(statusMatch[1]);
       if (Number.isFinite(code) && code >= 100 && code < 600) {
