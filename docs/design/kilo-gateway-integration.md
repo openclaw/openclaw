@@ -21,7 +21,7 @@ Alternative considered: `kilo-gateway` - rejected because hyphenated names are l
 
 ### 2. Default Model Reference
 
-**Recommendation: `kilocode/anthropic/claude-opus-4.5`**
+**Recommendation: `kilocode/anthropic/claude-opus-4.6`**
 
 Rationale:
 
@@ -67,7 +67,7 @@ Since Kilo Gateway proxies to OpenRouter, the same special handling should apply
 Add:
 
 ```typescript
-export const KILOCODE_DEFAULT_MODEL_REF = "kilocode/anthropic/claude-opus-4.5";
+export const KILOCODE_DEFAULT_MODEL_REF = "kilocode/anthropic/claude-opus-4.6";
 
 export async function setKilocodeApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
@@ -477,7 +477,7 @@ const needsNonImageSanitize =
         "apiKey": "xxxxx",
         "api": "openai-completions",
         "models": [
-          { "id": "anthropic/claude-opus-4.5", "name": "Anthropic: Claude Opus 4.5" },
+          { "id": "anthropic/claude-opus-4.6", "name": "Anthropic: Claude Opus 4.6" },
           { "id": "minimax/minimax-m2.1:free", "name": "Minimax: Minimax M2.1" }
         ]
       }

@@ -1,8 +1,8 @@
 ---
-summary: "Use Kilo Gateway's unified API to access many models in Moltbot"
+summary: "Use Kilo Gateway's unified API to access many models in OpenClaw"
 read_when:
   - You want a single API key for many LLMs
-  - You want to run models via Kilo Gateway in Moltbot
+  - You want to run models via Kilo Gateway in OpenClaw
 ---
 
 # Kilo Gateway
@@ -19,7 +19,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-moltbot onboard --kilocode-api-key <key>
+openclaw onboard --kilocode-api-key <key>
 ```
 
 Or set the environment variable:
@@ -35,7 +35,7 @@ export KILOCODE_API_KEY="your-api-key"
   env: { KILOCODE_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kilocode/anthropic/claude-opus-4.5" },
+      model: { primary: "kilocode/anthropic/claude-opus-4.6" },
     },
   },
 }
@@ -43,8 +43,8 @@ export KILOCODE_API_KEY="your-api-key"
 
 ## Notes
 
-- Model refs are `kilocode/<provider>/<model>` (e.g., `kilocode/anthropic/claude-opus-4.5`).
-- Default model: `kilocode/anthropic/claude-opus-4.5`
+- Model refs are `kilocode/<provider>/<model>` (e.g., `kilocode/anthropic/claude-opus-4.6`).
+- Default model: `kilocode/anthropic/claude-opus-4.6`
 - Base URL: `https://api.kilo.ai/api/gateway/`
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - Kilo Gateway uses a Bearer token with your API key under the hood.

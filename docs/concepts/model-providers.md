@@ -130,8 +130,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `kilocode`
 - Auth: `KILOCODE_API_KEY`
-- Example model: `kilocode/anthropic/claude-opus-4.5`
-- CLI: `moltbot onboard --kilocode-api-key <key>`
+- Example model: `kilocode/anthropic/claude-opus-4.6`
+- CLI: `openclaw onboard --kilocode-api-key <key>`
 - Base URL: `https://api.kilo.ai/api/gateway/`
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
@@ -141,7 +141,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
-- Example model: `kilocode/anthropic/claude-opus-4.5`
+- Example model: `kilocode/anthropic/claude-opus-4.6`
 - xAI: `xai` (`XAI_API_KEY`)
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
