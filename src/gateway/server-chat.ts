@@ -229,10 +229,12 @@ export function createAgentEventHandler({
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
   const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-      return;
-    }
+    // Unconditionally update buffer so internal logic (watchdog signoff) sees the full text.
     chatRunState.buffers.set(clientRunId, text);
+    // Also remove the silent check completely - let the UI handle (or ignore) the token.
+    // This ensures we don't accidentally swallow the final update if it contains the token.
+    // The final emitChatFinal will handle suppression if needed.
+
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
