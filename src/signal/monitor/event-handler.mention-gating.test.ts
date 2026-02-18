@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { buildDispatchInboundCaptureMock } from "../../../test/helpers/dispatch-inbound-capture.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { createBaseSignalEventHandlerDeps } from "./event-handler.test-harness.js";
+import {
+  createBaseSignalEventHandlerDeps,
+  createSignalReceiveEvent,
+} from "./event-handler.test-harness.js";
 
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
@@ -38,23 +41,15 @@ type GroupEventOpts = {
 };
 
 function makeGroupEvent(opts: GroupEventOpts) {
-  return {
-    event: "receive",
-    data: JSON.stringify({
-      envelope: {
-        sourceNumber: "+15550001111",
-        sourceName: "Alice",
-        timestamp: 1700000000000,
-        dataMessage: {
-          message: opts.message ?? "",
-          attachments: opts.attachments ?? [],
-          quote: opts.quoteText ? { text: opts.quoteText } : undefined,
-          mentions: opts.mentions ?? undefined,
-          groupInfo: { groupId: "g1", groupName: "Test Group" },
-        },
-      },
-    }),
-  };
+  return createSignalReceiveEvent({
+    dataMessage: {
+      message: opts.message ?? "",
+      attachments: opts.attachments ?? [],
+      quote: opts.quoteText ? { text: opts.quoteText } : undefined,
+      mentions: opts.mentions ?? undefined,
+      groupInfo: { groupId: "g1", groupName: "Test Group" },
+    },
+  });
 }
 
 function createMentionGatedHistoryHandler() {
@@ -249,5 +244,12 @@ describe("renderSignalMentions", () => {
     ]);
 
     expect(normalized).toBe("@valid hi");
+  });
+
+  it("clamps and truncates fractional mention offsets", () => {
+    const message = `${PLACEHOLDER} ping`;
+    const normalized = renderSignalMentions(message, [{ uuid: "valid", start: -0.7, length: 1.9 }]);
+
+    expect(normalized).toBe("@valid ping");
   });
 });
