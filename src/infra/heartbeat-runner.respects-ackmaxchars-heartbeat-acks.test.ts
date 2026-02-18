@@ -94,6 +94,52 @@ describe("resolveHeartbeatIntervalMs", () => {
     return withTempHeartbeatSandbox(fn, { unsetEnvVars: ["TELEGRAM_BOT_TOKEN"] });
   }
 
+  function createMessageSendSpy(extra: Record<string, unknown> = {}) {
+    return vi.fn().mockResolvedValue({
+      messageId: "m1",
+      toJid: "jid",
+      ...extra,
+    });
+  }
+
+  async function runTelegramHeartbeatWithDefaults(params: {
+    tmpDir: string;
+    storePath: string;
+    replySpy: ReturnType<typeof vi.spyOn>;
+    replyText: string;
+    messages?: Record<string, unknown>;
+    telegramOverrides?: Record<string, unknown>;
+  }) {
+    const cfg = createHeartbeatConfig({
+      tmpDir: params.tmpDir,
+      storePath: params.storePath,
+      heartbeat: { every: "5m", target: "telegram" },
+      channels: {
+        telegram: {
+          token: "test-token",
+          allowFrom: ["*"],
+          heartbeat: { showOk: false },
+          ...params.telegramOverrides,
+        },
+      },
+      ...(params.messages ? { messages: params.messages } : {}),
+    });
+
+    await seedMainSession(params.storePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: "12345",
+    });
+
+    params.replySpy.mockResolvedValue({ text: params.replyText });
+    const sendTelegram = createMessageSendSpy();
+    await runHeartbeatOnce({
+      cfg,
+      deps: makeTelegramDeps({ sendTelegram }),
+    });
+    return sendTelegram;
+  }
+
   it("respects ackMaxChars for heartbeat acks", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createHeartbeatConfig({
@@ -114,10 +160,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK 🦞" });
-      const sendWhatsApp = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = createMessageSendSpy();
 
       await runHeartbeatOnce({
         cfg,
@@ -147,10 +190,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      const sendWhatsApp = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = createMessageSendSpy();
 
       await runHeartbeatOnce({
         cfg,
@@ -164,37 +204,11 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("does not deliver HEARTBEAT_OK to telegram when showOk is false", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const sendTelegram = await runTelegramHeartbeatWithDefaults({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "telegram",
-        },
-        channels: {
-          telegram: {
-            token: "test-token",
-            allowFrom: ["*"],
-            heartbeat: { showOk: false },
-          },
-        },
-      });
-
-      await seedMainSession(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "12345",
-      });
-
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      const sendTelegram = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
-
-      await runHeartbeatOnce({
-        cfg,
-        deps: makeTelegramDeps({ sendTelegram }),
+        replySpy,
+        replyText: "HEARTBEAT_OK",
       });
 
       expect(sendTelegram).not.toHaveBeenCalled();
@@ -203,38 +217,12 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const sendTelegram = await runTelegramHeartbeatWithDefaults({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "telegram",
-        },
-        channels: {
-          telegram: {
-            token: "test-token",
-            allowFrom: ["*"],
-            heartbeat: { showOk: false },
-          },
-        },
+        replySpy,
+        replyText: "[openclaw] HEARTBEAT_OK all good",
         messages: { responsePrefix: "[openclaw]" },
-      });
-
-      await seedMainSession(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "12345",
-      });
-
-      replySpy.mockResolvedValue({ text: "[openclaw] HEARTBEAT_OK all good" });
-      const sendTelegram = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
-
-      await runHeartbeatOnce({
-        cfg,
-        deps: makeTelegramDeps({ sendTelegram }),
       });
 
       expect(sendTelegram).not.toHaveBeenCalled();
@@ -243,38 +231,12 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("does not strip alphanumeric responsePrefix from larger words", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig({
+      const sendTelegram = await runTelegramHeartbeatWithDefaults({
         tmpDir,
         storePath,
-        heartbeat: {
-          every: "5m",
-          target: "telegram",
-        },
-        channels: {
-          telegram: {
-            token: "test-token",
-            allowFrom: ["*"],
-            heartbeat: { showOk: false },
-          },
-        },
+        replySpy,
+        replyText: "History check complete",
         messages: { responsePrefix: "Hi" },
-      });
-
-      await seedMainSession(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "12345",
-      });
-
-      replySpy.mockResolvedValue({ text: "History check complete" });
-      const sendTelegram = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
-
-      await runHeartbeatOnce({
-        cfg,
-        deps: makeTelegramDeps({ sendTelegram }),
       });
 
       expect(sendTelegram).toHaveBeenCalledTimes(1);
@@ -309,10 +271,7 @@ describe("resolveHeartbeatIntervalMs", () => {
         lastTo: "+1555",
       });
 
-      const sendWhatsApp = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = createMessageSendSpy();
 
       const result = await runHeartbeatOnce({
         cfg,
@@ -344,10 +303,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       replySpy.mockResolvedValue({ text: "<b>HEARTBEAT_OK</b>" });
-      const sendWhatsApp = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = createMessageSendSpy();
 
       await runHeartbeatOnce({
         cfg,
@@ -420,10 +376,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       replySpy.mockResolvedValue({ text: "Heartbeat alert" });
-      const sendWhatsApp = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        toJid: "jid",
-      });
+      const sendWhatsApp = createMessageSendSpy();
 
       const res = await runHeartbeatOnce({
         cfg,
@@ -459,10 +412,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       });
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-      const sendTelegram = vi.fn().mockResolvedValue({
-        messageId: "m1",
-        chatId: "123456",
-      });
+      const sendTelegram = createMessageSendSpy({ chatId: "123456" });
 
       await runHeartbeatOnce({
         cfg,

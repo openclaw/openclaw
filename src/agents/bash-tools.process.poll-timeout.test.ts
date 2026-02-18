@@ -1,12 +1,12 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
   markExited,
   resetProcessRegistryForTests,
 } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
 afterEach(() => {
@@ -14,32 +14,13 @@ afterEach(() => {
   resetDiagnosticSessionStateForTest();
 });
 
-function createBackgroundSession(id: string): ProcessSession {
-  return {
-    id,
-    command: "test",
-    startedAt: Date.now(),
-    cwd: "/tmp",
-    maxOutputChars: 10_000,
-    pendingMaxOutputChars: 30_000,
-    totalOutputChars: 0,
-    pendingStdout: [],
-    pendingStderr: [],
-    pendingStdoutChars: 0,
-    pendingStderrChars: 0,
-    aggregated: "",
-    tail: "",
-    exited: false,
-    exitCode: undefined,
-    exitSignal: undefined,
-    truncated: false,
-    backgrounded: true,
-  };
-}
-
 function createProcessSessionHarness(sessionId: string) {
   const processTool = createProcessTool();
-  const session = createBackgroundSession(sessionId);
+  const session = createProcessSessionFixture({
+    id: sessionId,
+    command: "test",
+    backgrounded: true,
+  });
   addSession(session);
   return { processTool, session };
 }
