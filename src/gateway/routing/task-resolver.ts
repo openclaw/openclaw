@@ -55,9 +55,9 @@ const rules: Array<[RegExp, TaskType]> = [
   [new RegExp(`${W}(计划|plan|设计|design|architecture|架构)${W_}`, "i"), TaskType.PLANNING],
   [new RegExp(`${W}(heartbeat|心跳)${W_}`, "i"), TaskType.HEARTBEAT_CHECK],
   [
-    // 修改|改代码 etc. before bare 改 so longer matches take priority within alternation
+    // 修改|改代码 etc. — bare 改 removed (too broad: "改天"、"改变主意" false-positives)
     new RegExp(
-      `${W}(implement|实现|写代码|write code|新增功能|feature|编码|修改|改代码|改函数|改逻辑|添加|加个|增加|改一下|改下|改)${W_}`,
+      `${W}(implement|实现|写代码|write code|新增功能|feature|编码|修改|改代码|改函数|改逻辑|添加|加个|增加|改一下|改下)${W_}`,
       "i",
     ),
     TaskType.CODE_EDIT,
@@ -110,4 +110,19 @@ export async function resolveTaskType(
   // For now, fall back to FALLBACK when no L1/L1.5 rule matches
   console.debug("[routing] fallback: %s", text.slice(0, 40));
   return TaskType.FALLBACK;
+}
+
+/**
+ * Run only the L1 keyword rules against the given text.
+ *
+ * Returns the matching TaskType or `null` when no rule matches.
+ * Useful for debug commands that want to show L1 and L1.5 results separately.
+ */
+export function resolveL1TaskType(text: string): TaskType | null {
+  for (const [pattern, taskType] of rules) {
+    if (pattern.test(text)) {
+      return taskType;
+    }
+  }
+  return null;
 }
