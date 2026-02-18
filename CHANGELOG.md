@@ -999,6 +999,7 @@ Docs: https://docs.openclaw.ai
 - Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
 - Docker: start gateway CMD by default for container deployments. (#6635) Thanks @kaizen403.
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
+- OAuth: fix refresh only refreshing one profile per provider, leaving other accounts expired. (#3803) Thanks @Daviey.
 - Security: sanitize WhatsApp accountId to prevent path traversal. (#4610)
 - Security: restrict MEDIA path extraction to prevent LFI. (#4930)
 - Security: validate message-tool filePath/path against sandbox root. (#6398)
