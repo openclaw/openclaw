@@ -223,8 +223,10 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
+      const linkStat = fs.lstatSync(configPath);
       const stat = fs.statSync(configPath);
-      if ((stat.mode & 0o077) !== 0) {
+      const isSymlink = linkStat.isSymbolicLink();
+      if (!isSymlink && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
