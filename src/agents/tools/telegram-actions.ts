@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveTelegramAccount } from "../../telegram/accounts.js";
+import { createTelegramActionGate } from "../../telegram/accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -8,17 +8,16 @@ import {
 } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
+  createForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
-  sendPollTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import {
-  createActionGate,
   jsonResult,
   readNumberParam,
   readReactionParams,
@@ -89,8 +88,7 @@ export async function handleTelegramAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const account = resolveTelegramAccount({ cfg, accountId });
-  const isActionEnabled = createActionGate(account.config.actions);
+  const isActionEnabled = createTelegramActionGate({ cfg, accountId });
 
   if (action === "react") {
     // Check reaction level first
@@ -211,66 +209,6 @@ export async function handleTelegramAction(
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
-    });
-  }
-
-  if (action === "poll") {
-    if (!isActionEnabled("polls")) {
-      throw new Error("Telegram polls are disabled.");
-    }
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "question", { required: true });
-    const options = params.options ?? params.answers;
-    if (!Array.isArray(options)) {
-      throw new Error("options must be an array of strings");
-    }
-    const pollOptions = options.filter((option): option is string => typeof option === "string");
-    if (pollOptions.length !== options.length) {
-      throw new Error("options must be an array of strings");
-    }
-    const durationSeconds = readNumberParam(params, "durationSeconds", {
-      integer: true,
-    });
-    const durationHours = readNumberParam(params, "durationHours", {
-      integer: true,
-    });
-    const replyToMessageId = readNumberParam(params, "replyToMessageId", {
-      integer: true,
-    });
-    const messageThreadId = readNumberParam(params, "messageThreadId", {
-      integer: true,
-    });
-    const maxSelections =
-      typeof params.allowMultiselect === "boolean" && params.allowMultiselect ? 2 : 1;
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
-    const result = await sendPollTelegram(
-      to,
-      {
-        question,
-        options: pollOptions,
-        maxSelections,
-        durationSeconds: durationSeconds ?? undefined,
-        durationHours: durationHours ?? undefined,
-      },
-      {
-        token,
-        accountId: accountId ?? undefined,
-        replyToMessageId: replyToMessageId ?? undefined,
-        messageThreadId: messageThreadId ?? undefined,
-        silent: typeof params.silent === "boolean" ? params.silent : undefined,
-        isAnonymous: typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined,
-      },
-    );
-    return jsonResult({
-      ok: true,
-      messageId: result.messageId,
-      chatId: result.chatId,
-      pollId: result.pollId,
     });
   }
 
@@ -402,40 +340,33 @@ export async function handleTelegramAction(
     return jsonResult({ ok: true, ...stats });
   }
 
-  if (action === "sendPoll") {
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "question") ?? readStringParam(params, "pollQuestion");
-    if (!question) {
-      throw new Error("sendPoll requires 'question'");
+  if (action === "createForumTopic") {
+    if (!isActionEnabled("createForumTopic")) {
+      throw new Error("Telegram createForumTopic is disabled.");
     }
-    const options = (params.options ?? params.pollOption) as string[] | undefined;
-    if (!options || options.length < 2) {
-      throw new Error("sendPoll requires at least 2 options");
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const name = readStringParam(params, "name", { required: true });
+    const iconColor = readNumberParam(params, "iconColor", { integer: true });
+    const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
     }
-    const maxSelections =
-      typeof params.maxSelections === "number" ? params.maxSelections : undefined;
-    const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
-    const silent = typeof params.silent === "boolean" ? params.silent : undefined;
-    const replyToMessageId = readNumberParam(params, "replyTo");
-    const messageThreadId = readNumberParam(params, "threadId");
-    const pollAccountId = readStringParam(params, "accountId");
-
-    const res = await sendPollTelegram(
-      to,
-      { question, options, maxSelections },
-      {
-        accountId: pollAccountId?.trim() || undefined,
-        replyToMessageId,
-        messageThreadId,
-        isAnonymous,
-        silent,
-      },
-    );
+    const result = await createForumTopicTelegram(chatId ?? "", name, {
+      token,
+      accountId: accountId ?? undefined,
+      iconColor: iconColor ?? undefined,
+      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+    });
     return jsonResult({
       ok: true,
-      messageId: res.messageId,
-      chatId: res.chatId,
-      pollId: res.pollId,
+      topicId: result.topicId,
+      name: result.name,
+      chatId: result.chatId,
     });
   }
 

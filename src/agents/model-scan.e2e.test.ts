@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
 function createFetchFixture(payload: unknown): typeof fetch {
-  return async () =>
-    new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+  return withFetchPreconnect(
+    async () =>
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  );
 }
 
 describe("scanOpenRouterModels", () => {

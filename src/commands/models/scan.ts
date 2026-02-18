@@ -24,6 +24,15 @@ const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
     ),
   });
 
+function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+  if (isCancel(value)) {
+    cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
+    runtime.exit(0);
+    throw new Error("unreachable");
+  }
+  return value;
+}
+
 const pad = (value: string, size: number) => value.padEnd(size);
 
 const truncate = (value: string, max: number) => {
@@ -262,12 +271,7 @@ export async function modelsScanCommand(
       initialValues: preselected,
     });
 
-    if (isCancel(selection)) {
-      cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
-      runtime.exit(0);
-    }
-
-    selected = selection;
+    selected = guardPromptCancel(selection, runtime);
     if (imageSorted.length > 0) {
       const imageSelection = await multiselect({
         message: "Select image fallback models (ordered)",
@@ -279,12 +283,7 @@ export async function modelsScanCommand(
         initialValues: imagePreselected,
       });
 
-      if (isCancel(imageSelection)) {
-        cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
-        runtime.exit(0);
-      }
-
-      selectedImages = imageSelection;
+      selectedImages = guardPromptCancel(imageSelection, runtime);
     }
   } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");

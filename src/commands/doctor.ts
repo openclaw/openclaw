@@ -98,6 +98,8 @@ export async function doctorCommand(
     confirm: (p) => prompter.confirm(p),
   });
   let cfg: OpenClawConfig = configResult.cfg;
+  const cfgForPersistence = structuredClone(cfg);
+  const sourceConfigValid = configResult.sourceConfigValid ?? true;
 
   const configPath = configResult.path ?? CONFIG_PATH;
   if (!cfg.gateway?.mode) {
@@ -123,19 +125,15 @@ export async function doctorCommand(
   if (gatewayDetails.remoteFallbackNote) {
     note(gatewayDetails.remoteFallbackNote, "Gateway");
   }
-  if (resolveMode(cfg) === "local") {
-    const gatewayBind = cfg.gateway?.bind ?? "loopback";
-    const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-    const requireGatewayAuth = gatewayBind !== "loopback" || tailscaleMode !== "off";
+  if (resolveMode(cfg) === "local" && sourceConfigValid) {
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
-      tailscaleMode,
+      tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     });
-    const needsToken =
-      requireGatewayAuth && auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
+    const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
     if (needsToken) {
       note(
-        "Gateway auth is off or missing a token. Token auth is recommended when the gateway is exposed beyond local loopback.",
+        "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
         "Gateway auth",
       );
       const shouldSetToken =
@@ -287,7 +285,8 @@ export async function doctorCommand(
     healthOk,
   });
 
-  const shouldWriteConfig = prompter.shouldRepair || configResult.shouldWriteConfig;
+  const shouldWriteConfig =
+    configResult.shouldWriteConfig || JSON.stringify(cfg) !== JSON.stringify(cfgForPersistence);
   if (shouldWriteConfig) {
     cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
     await writeConfigFile(cfg);
@@ -318,5 +317,4 @@ export async function doctorCommand(
   }
 
   outro("Doctor complete.");
-  runtime.exit(0);
 }

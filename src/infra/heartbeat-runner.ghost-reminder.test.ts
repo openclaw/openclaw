@@ -92,7 +92,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    getReplySpy: ReturnType<typeof vi.spyOn<typeof replyModule, "getReplyFromConfig">>;
+    getReplySpy: ReturnType<typeof vi.fn>;
   }> => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), tmpPrefix));
     const sendTelegram = vi.fn().mockResolvedValue({

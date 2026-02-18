@@ -23,6 +23,29 @@ function formatRuntimeLogCallArg(value: unknown): string {
 }
 
 describe("cli program (nodes basics)", () => {
+  function mockGatewayWithIosNodeListAnd(method: "node.describe" | "node.invoke", result: unknown) {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === method) {
+        return result;
+      }
+      return { ok: true };
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
@@ -39,7 +62,8 @@ describe("cli program (nodes basics)", () => {
 
   it("runs nodes list --connected and filters to connected nodes", async () => {
     const now = Date.now();
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
           pending: [],
@@ -81,7 +105,8 @@ describe("cli program (nodes basics)", () => {
 
   it("runs nodes status --last-connected and filters by age", async () => {
     const now = Date.now();
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return {
           ts: now,
@@ -188,31 +213,13 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes describe and calls node.describe", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.describe") {
-        return {
-          ts: Date.now(),
-          nodeId: "ios-node",
-          displayName: "iOS Node",
-          caps: ["canvas", "camera"],
-          commands: ["canvas.eval", "canvas.snapshot", "camera.snap"],
-          connected: true,
-        };
-      }
-      return { ok: true };
+    mockGatewayWithIosNodeListAnd("node.describe", {
+      ts: Date.now(),
+      nodeId: "ios-node",
+      displayName: "iOS Node",
+      caps: ["canvas", "camera"],
+      commands: ["canvas.eval", "canvas.snapshot", "camera.snap"],
+      connected: true,
     });
 
     const program = buildProgram();
@@ -254,29 +261,11 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.invoke") {
-        return {
-          ok: true,
-          nodeId: "ios-node",
-          command: "canvas.eval",
-          payload: { result: "ok" },
-        };
-      }
-      return { ok: true };
+    mockGatewayWithIosNodeListAnd("node.invoke", {
+      ok: true,
+      nodeId: "ios-node",
+      command: "canvas.eval",
+      payload: { result: "ok" },
     });
 
     const program = buildProgram();

@@ -86,6 +86,27 @@ async function createVoiceCallArchive(params: {
   return { pkgDir, archivePath };
 }
 
+async function setupVoiceCallArchiveInstall(params: { outName: string; version: string }) {
+  const stateDir = makeTempDir();
+  const workDir = makeTempDir();
+  const { archivePath } = await createVoiceCallArchive({
+    workDir,
+    outName: params.outName,
+    version: params.version,
+  });
+  return {
+    stateDir,
+    archivePath,
+    extensionsDir: path.join(stateDir, "extensions"),
+  };
+}
+
+function expectPluginFiles(result: { targetDir: string }, stateDir: string, pluginId: string) {
+  expect(result.targetDir).toBe(path.join(stateDir, "extensions", pluginId));
+  expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
+  expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
+}
+
 function setupPluginInstallDirs() {
   const tmpDir = makeTempDir();
   const pluginDir = path.join(tmpDir, "plugin-src");
@@ -164,15 +185,11 @@ beforeEach(() => {
 
 describe("installPluginFromArchive", () => {
   it("installs into ~/.openclaw/extensions and uses unscoped id", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const { archivePath } = await createVoiceCallArchive({
-      workDir,
+    const { stateDir, archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
       outName: "plugin.tgz",
       version: "0.0.1",
     });
 
-    const extensionsDir = path.join(stateDir, "extensions");
     const { installPluginFromArchive } = await import("./install.js");
     const result = await installPluginFromArchive({
       archivePath,
@@ -183,21 +200,15 @@ describe("installPluginFromArchive", () => {
       return;
     }
     expect(result.pluginId).toBe("voice-call");
-    expect(result.targetDir).toBe(path.join(stateDir, "extensions", "voice-call"));
-    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
-    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
+    expectPluginFiles(result, stateDir, "voice-call");
   });
 
   it("rejects installing when plugin already exists", async () => {
-    const stateDir = makeTempDir();
-    const workDir = makeTempDir();
-    const { archivePath } = await createVoiceCallArchive({
-      workDir,
+    const { archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
       outName: "plugin.tgz",
       version: "0.0.1",
     });
 
-    const extensionsDir = path.join(stateDir, "extensions");
     const { installPluginFromArchive } = await import("./install.js");
     const first = await installPluginFromArchive({
       archivePath,
@@ -246,9 +257,7 @@ describe("installPluginFromArchive", () => {
       return;
     }
     expect(result.pluginId).toBe("zipper");
-    expect(result.targetDir).toBe(path.join(stateDir, "extensions", "zipper"));
-    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
-    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
+    expectPluginFiles(result, stateDir, "zipper");
   });
 
   it("allows updates when mode is update", async () => {
@@ -423,7 +432,14 @@ describe("installPluginFromDir", () => {
 
     const { runCommandWithTimeout } = await import("../process/exec.js");
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
 
     const { installPluginFromDir } = await import("./install.js");
     const res = await installPluginFromDir({
@@ -468,9 +484,16 @@ describe("installPluginFromNpmSpec", () => {
     const packedName = "voice-call-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
       if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(opts?.cwd ?? "");
+        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
         await packToArchive({ pkgDir, outDir: packTmpDir, outName: packedName });
-        return { code: 0, stdout: `${packedName}\n`, stderr: "", signal: null, killed: false };
+        return {
+          code: 0,
+          stdout: `${packedName}\n`,
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
@@ -493,7 +516,8 @@ describe("installPluginFromNpmSpec", () => {
     }
     const [argv, options] = packCall;
     expect(argv).toEqual(["npm", "pack", "@openclaw/voice-call@0.0.1", "--ignore-scripts"]);
-    expect(options?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
+    const commandOptions = typeof options === "number" ? undefined : options;
+    expect(commandOptions?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);

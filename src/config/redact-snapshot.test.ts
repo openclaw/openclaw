@@ -33,7 +33,7 @@ function makeSnapshot<TConfig extends Record<string, unknown>>(
     issues: [],
     warnings: [],
     legacyIssues: [],
-  } as TestSnapshot<TConfig>;
+  } as unknown as TestSnapshot<TConfig>;
 }
 
 function restoreRedactedValues<TOriginal>(

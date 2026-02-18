@@ -153,6 +153,29 @@ describe("gateway.tools config", () => {
   });
 });
 
+describe("gateway.channelHealthCheckMinutes", () => {
+  it("accepts zero to disable monitor", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: 0,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative intervals", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: -1,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
+    }
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({

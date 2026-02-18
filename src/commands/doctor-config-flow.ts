@@ -147,6 +147,30 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   note(lines.join("\n"), "OpenCode Zen");
 }
 
+function noteIncludeConfinementWarning(snapshot: {
+  path?: string | null;
+  issues?: Array<{ message: string }>;
+}): void {
+  const issues = snapshot.issues ?? [];
+  const includeIssue = issues.find(
+    (issue) =>
+      issue.message.includes("Include path escapes config directory") ||
+      issue.message.includes("Include path resolves outside config directory"),
+  );
+  if (!includeIssue) {
+    return;
+  }
+  const configRoot = path.dirname(snapshot.path ?? CONFIG_PATH);
+  note(
+    [
+      `- $include paths must stay under: ${configRoot}`,
+      '- Move shared include files under that directory and update to relative paths like "./shared/common.json".',
+      `- Error: ${includeIssue.message}`,
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}
+
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
 type TelegramAllowFromListRef = {
@@ -571,34 +595,81 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   const next = structuredClone(cfg);
   const changes: string[] = [];
 
-  const ensureWildcard = (account: Record<string, unknown>, prefix: string) => {
+  type OpenPolicyAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
+
+  const resolveAllowFromMode = (channelName: string): OpenPolicyAllowFromMode => {
+    if (channelName === "googlechat") {
+      return "nestedOnly";
+    }
+    if (channelName === "discord" || channelName === "slack") {
+      return "topOrNested";
+    }
+    return "topOnly";
+  };
+
+  const hasWildcard = (list?: Array<string | number>) =>
+    list?.some((v) => String(v).trim() === "*") ?? false;
+
+  const ensureWildcard = (
+    account: Record<string, unknown>,
+    prefix: string,
+    mode: OpenPolicyAllowFromMode,
+  ) => {
+    const dmEntry = account.dm;
+    const dm =
+      dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
+        ? (dmEntry as Record<string, unknown>)
+        : undefined;
     const dmPolicy =
-      (account.dmPolicy as string | undefined) ??
-      ((account.dm as Record<string, unknown> | undefined)?.policy as string | undefined);
+      (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined) ?? undefined;
 
     if (dmPolicy !== "open") {
       return;
     }
 
-    // Check top-level allowFrom first, then nested dm.allowFrom
     const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
-    const dm = account.dm as Record<string, unknown> | undefined;
     const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
 
-    const hasWildcard = (list?: Array<string | number>) =>
-      list?.some((v) => String(v).trim() === "*") ?? false;
-
-    if (hasWildcard(topAllowFrom) || hasWildcard(nestedAllowFrom)) {
+    if (mode === "nestedOnly") {
+      if (hasWildcard(nestedAllowFrom)) {
+        return;
+      }
+      if (Array.isArray(nestedAllowFrom)) {
+        nestedAllowFrom.push("*");
+        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
+        return;
+      }
+      const nextDm = dm ?? {};
+      nextDm.allowFrom = ["*"];
+      account.dm = nextDm;
+      changes.push(`- ${prefix}.dm.allowFrom: set to ["*"] (required by dmPolicy="open")`);
       return;
     }
 
-    // Prefer setting top-level allowFrom (it takes precedence)
+    if (mode === "topOrNested") {
+      if (hasWildcard(topAllowFrom) || hasWildcard(nestedAllowFrom)) {
+        return;
+      }
+
+      if (Array.isArray(topAllowFrom)) {
+        topAllowFrom.push("*");
+        changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
+      } else if (Array.isArray(nestedAllowFrom)) {
+        nestedAllowFrom.push("*");
+        changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
+      } else {
+        account.allowFrom = ["*"];
+        changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
+      }
+      return;
+    }
+
+    if (hasWildcard(topAllowFrom)) {
+      return;
+    }
     if (Array.isArray(topAllowFrom)) {
-      (account.allowFrom as Array<string | number>).push("*");
+      topAllowFrom.push("*");
       changes.push(`- ${prefix}.allowFrom: added "*" (required by dmPolicy="open")`);
-    } else if (Array.isArray(nestedAllowFrom)) {
-      (dm!.allowFrom as Array<string | number>).push("*");
-      changes.push(`- ${prefix}.dm.allowFrom: added "*" (required by dmPolicy="open")`);
     } else {
       account.allowFrom = ["*"];
       changes.push(`- ${prefix}.allowFrom: set to ["*"] (required by dmPolicy="open")`);
@@ -611,15 +682,21 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
       continue;
     }
 
+    const allowFromMode = resolveAllowFromMode(channelName);
+
     // Check the top-level channel config
-    ensureWildcard(channelConfig, `channels.${channelName}`);
+    ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
 
     // Check per-account configs (e.g. channels.discord.accounts.mybot)
     const accounts = channelConfig.accounts as Record<string, Record<string, unknown>> | undefined;
     if (accounts && typeof accounts === "object") {
       for (const [accountName, accountConfig] of Object.entries(accounts)) {
         if (accountConfig && typeof accountConfig === "object") {
-          ensureWildcard(accountConfig, `channels.${channelName}.accounts.${accountName}`);
+          ensureWildcard(
+            accountConfig,
+            `channels.${channelName}.accounts.${accountName}`,
+            allowFromMode,
+          );
         }
       }
     }
@@ -705,6 +782,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const fixHints: string[] = [];
   if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
     note("Config invalid; doctor will run with best-effort config.", "Config");
+    noteIncludeConfinementWarning(snapshot);
   }
   const warnings = snapshot.warnings ?? [];
   if (warnings.length > 0) {
@@ -849,5 +927,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   noteOpencodeProviderOverrides(cfg);
 
-  return { cfg, path: snapshot.path ?? CONFIG_PATH, shouldWriteConfig };
+  return {
+    cfg,
+    path: snapshot.path ?? CONFIG_PATH,
+    shouldWriteConfig,
+    sourceConfigValid: snapshot.valid,
+  };
 }

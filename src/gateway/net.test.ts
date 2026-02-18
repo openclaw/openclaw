@@ -122,6 +122,11 @@ describe("isTrustedProxyAddress", () => {
     it("ignores surrounding whitespace in CIDR entries", () => {
       expect(isTrustedProxyAddress("10.42.0.59", [" 10.42.0.0/24 "])).toBe(true);
     });
+
+    it("ignores blank trusted proxy entries", () => {
+      expect(isTrustedProxyAddress("10.0.0.5", [" ", "\t"])).toBe(false);
+      expect(isTrustedProxyAddress("10.0.0.5", [" ", "10.0.0.5", ""])).toBe(true);
+    });
   });
 });
 

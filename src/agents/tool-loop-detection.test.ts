@@ -235,8 +235,8 @@ describe("tool-loop-detection", () => {
       expect(criticalResult.stuck).toBe(true);
       if (criticalResult.stuck) {
         expect(criticalResult.level).toBe("critical");
+        expect(criticalResult.detector).toBe("known_poll_no_progress");
       }
-      expect(criticalResult.detector).toBe("known_poll_no_progress");
     });
 
     it("can disable specific detectors", () => {

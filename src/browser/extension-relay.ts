@@ -1,14 +1,12 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
+import { loadConfig } from "../config/config.js";
 import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-
-const logService = createSubsystemLogger("browser").child("relay");
 
 type CdpCommand = {
   id: number;
@@ -147,8 +145,66 @@ function rejectUpgrade(socket: Duplex, status: number, bodyText: string) {
 
 const serversByPort = new Map<number, ChromeExtensionRelayServer>();
 const relayAuthByPort = new Map<number, string>();
-// Track original requested port -> relay when fallback occurs (EADDRINUSE)
-const relayByOriginalPort = new Map<number, ChromeExtensionRelayServer>();
+
+function resolveGatewayAuthToken(): string | null {
+  const envToken =
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  if (envToken) {
+    return envToken;
+  }
+  try {
+    const cfg = loadConfig();
+    const configToken = cfg.gateway?.auth?.token?.trim();
+    if (configToken) {
+      return configToken;
+    }
+  } catch {
+    // ignore config read failures; caller can fallback to per-process random token
+  }
+  return null;
+}
+
+function deriveDeterministicRelayAuthToken(port: number): string | null {
+  const gatewayToken = resolveGatewayAuthToken();
+  if (!gatewayToken) {
+    return null;
+  }
+  return createHash("sha256")
+    .update(`openclaw-relay:${port}:`)
+    .update(gatewayToken)
+    .digest("base64url");
+}
+
+function resolveRelayAuthToken(port: number): string {
+  return deriveDeterministicRelayAuthToken(port) ?? randomBytes(32).toString("base64url");
+}
+
+function isAddrInUseError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "EADDRINUSE"
+  );
+}
+
+async function looksLikeOpenClawRelay(baseUrl: string): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 500);
+  try {
+    const statusUrl = new URL("/extension/status", `${baseUrl}/`).toString();
+    const res = await fetch(statusUrl, { signal: ctrl.signal });
+    if (!res.ok) {
+      return false;
+    }
+    const body = (await res.json()) as { connected?: unknown };
+    return typeof body.connected === "boolean";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function relayAuthTokenForUrl(url: string): string | null {
   try {
@@ -165,7 +221,7 @@ function relayAuthTokenForUrl(url: string): string | null {
     if (!Number.isFinite(port)) {
       return null;
     }
-    return relayAuthByPort.get(port) ?? null;
+    return relayAuthByPort.get(port) ?? deriveDeterministicRelayAuthToken(port);
   } catch {
     return null;
   }
@@ -187,10 +243,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
     throw new Error(`extension relay requires loopback cdpUrl host (got ${info.host})`);
   }
 
-  const existing = serversByPort.get(info.port) ?? relayByOriginalPort.get(info.port);
+  const existing = serversByPort.get(info.port);
   if (existing) {
     return existing;
   }
+
+  const relayAuthToken = resolveRelayAuthToken(info.port);
 
   let extensionWs: WebSocket | null = null;
   const cdpClients = new Set<WebSocket>();
@@ -330,8 +388,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
     }
   };
-
-  const relayAuthToken = randomBytes(32).toString("base64url");
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", info.baseUrl);
@@ -708,36 +764,29 @@ export async function ensureChromeExtensionRelayServer(opts: {
     });
   });
 
-  // Try to bind to the requested port, with automatic fallback on EADDRINUSE.
-  let boundPort = info.port;
-  const maxRetries = 10;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const onError = (err: Error) => {
-          server.removeListener("listening", resolve);
-          reject(err);
-        };
-        const onListening = () => {
-          server.removeListener("error", onError);
-          resolve();
-        };
-        server.once("error", onError);
-        server.once("listening", onListening);
-        server.listen(boundPort, info.host);
-      });
-      // Successfully bound
-      break;
-    } catch (err) {
-      const isAddrInUse = (err as { code?: string }).code === "EADDRINUSE";
-      if (isAddrInUse && attempt < maxRetries - 1) {
-        // Try a random port in the dynamic range (49152-65535)
-        boundPort = Math.floor(Math.random() * (65535 - 49152 + 1)) + 49152;
-        logService.warn(`Port ${info.port} is in use, trying alternative port ${boundPort}...`);
-      } else {
-        throw err;
-      }
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.listen(info.port, info.host, () => resolve());
+      server.once("error", reject);
+    });
+  } catch (err) {
+    if (isAddrInUseError(err) && (await looksLikeOpenClawRelay(info.baseUrl))) {
+      const existingRelay: ChromeExtensionRelayServer = {
+        host: info.host,
+        port: info.port,
+        baseUrl: info.baseUrl,
+        cdpWsUrl: `ws://${info.host}:${info.port}/cdp`,
+        extensionConnected: () => false,
+        stop: async () => {
+          serversByPort.delete(info.port);
+          relayAuthByPort.delete(info.port);
+        },
+      };
+      relayAuthByPort.set(info.port, relayAuthToken);
+      serversByPort.set(info.port, existingRelay);
+      return existingRelay;
     }
+    throw err;
   }
 
   const addr = server.address() as AddressInfo | null;
@@ -754,8 +803,6 @@ export async function ensureChromeExtensionRelayServer(opts: {
     stop: async () => {
       serversByPort.delete(port);
       relayAuthByPort.delete(port);
-      // Also clean up original port mapping if this was a fallback
-      relayByOriginalPort.delete(info.port);
       try {
         extensionWs?.close(1001, "server stopping");
       } catch {
@@ -778,21 +825,16 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
   relayAuthByPort.set(port, relayAuthToken);
   serversByPort.set(port, relay);
-  // If we fell back to a different port, also map the original requested port
-  if (port !== info.port) {
-    relayByOriginalPort.set(info.port, relay);
-  }
   return relay;
 }
 
 export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): Promise<boolean> {
   const info = parseBaseUrl(opts.cdpUrl);
-  const existing = serversByPort.get(info.port) ?? relayByOriginalPort.get(info.port);
+  const existing = serversByPort.get(info.port);
   if (!existing) {
     return false;
   }
   await existing.stop();
-  // Note: stop() cleans up both serversByPort and relayByOriginalPort
-  relayAuthByPort.delete(existing.port);
+  relayAuthByPort.delete(info.port);
   return true;
 }

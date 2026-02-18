@@ -87,7 +87,10 @@ describe("DiscordMessageListener", () => {
     expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
 
-    resolveHandler?.();
+    const release = resolveHandler;
+    if (typeof release === "function") {
+      (release as () => void)();
+    }
     await handlerPromise;
   });
 
@@ -132,13 +135,18 @@ describe("DiscordMessageListener", () => {
       );
 
       vi.setSystemTime(31_000);
-      resolveHandler?.();
+      const release = resolveHandler;
+      if (typeof release === "function") {
+        (release as () => void)();
+      }
       await handlerPromise;
       await Promise.resolve();
 
       expect(logger.warn).toHaveBeenCalled();
-      const [, meta] = logger.warn.mock.calls[0] ?? [];
-      expect(meta?.durationMs).toBeGreaterThanOrEqual(30_000);
+      const warnMock = logger.warn as unknown as { mock: { calls: unknown[][] } };
+      const [, meta] = warnMock.mock.calls[0] ?? [];
+      const durationMs = (meta as { durationMs?: number } | undefined)?.durationMs;
+      expect(durationMs).toBeGreaterThanOrEqual(30_000);
     } finally {
       vi.useRealTimers();
     }
@@ -751,11 +759,12 @@ describe("discord media payload", () => {
 
 const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
-  resolveAgentRouteMock: vi.fn(() => ({
+  resolveAgentRouteMock: vi.fn((params: unknown) => ({
     agentId: "default",
     channel: "discord",
     accountId: "acc-1",
     sessionKey: "discord:acc-1:dm:user-1",
+    ...(typeof params === "object" && params !== null ? { _params: params } : {}),
   })),
 }));
 
@@ -935,7 +944,12 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
-    const routeArgs = resolveAgentRouteMock.mock.calls[0][0];
+    const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
+      peer?: unknown;
+    };
+    if (!routeArgs) {
+      throw new Error("expected route arguments");
+    }
     expect(routeArgs.peer).toEqual({ kind: "direct", id: "user-42" });
   });
 
@@ -950,7 +964,12 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
-    const routeArgs = resolveAgentRouteMock.mock.calls[0][0];
+    const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
+      peer?: unknown;
+    };
+    if (!routeArgs) {
+      throw new Error("expected route arguments");
+    }
     expect(routeArgs.peer).toEqual({ kind: "group", id: "channel-1" });
   });
 });

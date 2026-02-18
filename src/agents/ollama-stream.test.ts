@@ -264,7 +264,7 @@ describe("createOllamaStreamFn", () => {
     try {
       const streamFn = createOllamaStreamFn("http://ollama-host:11434/v1/");
       const signal = new AbortController().signal;
-      const stream = streamFn(
+      const stream = await streamFn(
         {
           id: "qwen3:32b",
           api: "ollama",
@@ -287,7 +287,7 @@ describe("createOllamaStreamFn", () => {
       expect(events.at(-1)?.type).toBe("done");
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [url, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://ollama-host:11434/api/chat");
       expect(requestInit.signal).toBe(signal);
       if (typeof requestInit.body !== "string") {
@@ -321,7 +321,7 @@ describe("createOllamaStreamFn", () => {
 
     try {
       const streamFn = createOllamaStreamFn("http://ollama-host:11434");
-      const stream = streamFn(
+      const stream = await streamFn(
         {
           id: "qwen3:32b",
           api: "ollama",

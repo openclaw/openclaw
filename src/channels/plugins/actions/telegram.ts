@@ -1,5 +1,4 @@
 import {
-  createActionGate,
   readNumberParam,
   readStringArrayParam,
   readStringOrNumberParam,
@@ -8,7 +7,10 @@ import {
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import type { TelegramActionConfig } from "../../../config/types.telegram.js";
 import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
-import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
+import {
+  createTelegramActionGate,
+  listEnabledTelegramAccounts,
+} from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
@@ -48,21 +50,17 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       return [];
     }
     // Union of all accounts' action gates (any account enabling an action makes it available)
-    const gates = accounts.map((a) => createActionGate(a.config.actions));
+    const gates = accounts.map((account) =>
+      createTelegramActionGate({ cfg, accountId: account.accountId }),
+    );
     const gate = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gates.some((g) => g(key, defaultValue));
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (gate("poll")) {
-      actions.add("poll");
-    }
     if (gate("reactions")) {
       actions.add("react");
     }
     if (gate("deleteMessage")) {
       actions.add("delete");
-    }
-    if (gate("polls")) {
-      actions.add("poll");
     }
     if (gate("editMessage")) {
       actions.add("edit");
@@ -70,6 +68,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
+    }
+    if (gate("createForumTopic")) {
+      actions.add("topic-create");
     }
     return Array.from(actions);
   },
@@ -116,40 +117,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           messageId,
           emoji,
           remove,
-          accountId: accountId ?? undefined,
-        },
-        cfg,
-      );
-    }
-
-    if (action === "poll") {
-      const to = readStringParam(params, "to", { required: true });
-      const question = readStringParam(params, "pollQuestion", { required: true });
-      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
-      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
-      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
-        integer: true,
-      });
-      const durationHours = readNumberParam(params, "pollDurationHours", {
-        integer: true,
-      });
-      const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
-      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
-      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
-      const isAnonymous = typeof params.isAnonymous === "boolean" ? params.isAnonymous : undefined;
-      return await handleTelegramAction(
-        {
-          action: "poll",
-          to,
-          question,
-          options,
-          allowMultiselect,
-          durationSeconds: durationSeconds ?? undefined,
-          durationHours: durationHours ?? undefined,
-          replyToMessageId: replyToMessageId ?? undefined,
-          messageThreadId: messageThreadId ?? undefined,
-          silent,
-          isAnonymous,
           accountId: accountId ?? undefined,
         },
         cfg,
@@ -229,6 +196,27 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "searchSticker",
           query,
           limit: limit ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "topic-create") {
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "to", { required: true });
+      const name = readStringParam(params, "name", { required: true });
+      const iconColor = readNumberParam(params, "iconColor", { integer: true });
+      const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+      return await handleTelegramAction(
+        {
+          action: "createForumTopic",
+          chatId,
+          name,
+          iconColor: iconColor ?? undefined,
+          iconCustomEmojiId: iconCustomEmojiId ?? undefined,
           accountId: accountId ?? undefined,
         },
         cfg,

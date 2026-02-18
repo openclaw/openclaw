@@ -19,7 +19,7 @@ import {
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
-import { buildStatusMessage, getTranscriptInfo } from "../status.js";
+import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
@@ -178,13 +178,6 @@ export async function buildStatusReply(params: {
     subagentsLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
-    transcriptInfo: getTranscriptInfo({
-      sessionId: sessionEntry?.sessionId,
-      sessionEntry,
-      agentId: statusAgentId,
-      sessionKey,
-      storePath,
-    }),
   });
 
   return { text: statusText };

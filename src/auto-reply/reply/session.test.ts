@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -866,11 +867,11 @@ describe("applyResetModelOverride", () => {
   it("selects a model hint and strips it from the body", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -896,14 +897,14 @@ describe("applyResetModelOverride", () => {
   it("clears auth profile overrides when reset applies a model", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       authProfileOverride: "anthropic:default",
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: 2,
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -929,11 +930,11 @@ describe("applyResetModelOverride", () => {
   it("skips when resetTriggered is false", async () => {
     const cfg = {} as OpenClawConfig;
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
     };
-    const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
     const sessionCtx = { BodyStripped: "minimax summarize" };
     const ctx = { ChatType: "direct" };
 
@@ -1294,6 +1295,54 @@ describe("persistSessionUsageUpdate", () => {
 });
 
 describe("initSessionState stale threadId fallback", () => {
+  async function seedSessionStore(params: {
+    storePath: string;
+    sessionKey: string;
+    entry: Record<string, unknown>;
+  }) {
+    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+    await fs.writeFile(
+      params.storePath,
+      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+      "utf-8",
+    );
+  }
+
+  it("ignores persisted lastThreadId on main sessions for non-thread messages", async () => {
+    const storePath = await createStorePath("stale-main-thread-");
+    const sessionKey = "agent:main:main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:123",
+          threadId: 42,
+        },
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello from DM",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastThreadId).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext?.threadId).toBeUndefined();
+  });
+
   it("does not inherit lastThreadId from a previous thread interaction in non-thread sessions", async () => {
     const storePath = await createStorePath("stale-thread-");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
