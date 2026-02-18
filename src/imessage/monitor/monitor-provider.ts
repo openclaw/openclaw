@@ -18,6 +18,7 @@ import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { expandHomePrefix } from "../../infra/home-dir.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -50,9 +51,7 @@ import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
   try {
     // Expand ~ to home directory
-    const expanded = cliPath.startsWith("~")
-      ? cliPath.replace(/^~/, process.env.HOME ?? "")
-      : cliPath;
+    const expanded = expandHomePrefix(cliPath);
     const content = await fs.readFile(expanded, "utf8");
 
     // Match user@host pattern first (e.g., openclaw@192.168.64.3)
