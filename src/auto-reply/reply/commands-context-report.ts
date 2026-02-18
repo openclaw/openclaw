@@ -144,7 +144,7 @@ async function resolveContextReport(
     reasoningLevel: params.resolvedReasoningLevel,
     extraSystemPrompt: undefined,
     ownerNumbers: undefined,
-    reasoningTagHint: false,
+    reasoningFormatHint: undefined,
     toolNames,
     toolSummaries,
     modelAliasLines: [],

@@ -17,7 +17,8 @@ import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.j
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
-import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { buildPromptAdaptation } from "../../prompt-adaptation.js";
+import { resolveProviderCapabilities } from "../../provider-capabilities.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -300,7 +301,9 @@ export async function runEmbeddedAttempt(
       config: params.config,
     });
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
-    const reasoningTagHint = isReasoningTagProvider(params.provider);
+    const { reasoningFormatHint } = buildPromptAdaptation(
+      resolveProviderCapabilities({ provider: params.provider, modelId: params.modelId }),
+    );
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions({
@@ -355,7 +358,7 @@ export async function runEmbeddedAttempt(
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
-      reasoningTagHint,
+      reasoningFormatHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
         : undefined,

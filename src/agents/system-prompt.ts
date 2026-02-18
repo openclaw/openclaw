@@ -167,7 +167,7 @@ export function buildAgentSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
-  reasoningTagHint?: boolean;
+  reasoningFormatHint?: string;
   toolNames?: string[];
   toolSummaries?: Record<string, string>;
   modelAliasLines?: string[];
@@ -319,18 +319,7 @@ export function buildAgentSystemPrompt(params: {
     ownerNumbers.length > 0
       ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user.`
       : undefined;
-  const reasoningHint = params.reasoningTagHint
-    ? [
-        "ALL internal reasoning MUST be inside <think>...</think>.",
-        "Do not output any analysis outside <think>.",
-        "Format every reply as <think>...</think> then <final>...</final>, with no other text.",
-        "Only the final user-visible reply may appear inside <final>.",
-        "Only text inside <final> is shown to the user; everything else is discarded and never seen by the user.",
-        "Example:",
-        "<think>Short internal reasoning.</think>",
-        "<final>Hey there! What would you like to do next?</final>",
-      ].join(" ")
-    : undefined;
+  const reasoningHint = params.reasoningFormatHint ?? undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();

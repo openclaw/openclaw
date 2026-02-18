@@ -82,10 +82,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Voice (TTS) is enabled.");
   });
 
-  it("adds reasoning tag hint when enabled", () => {
+  it("adds reasoning format hint when provided", () => {
+    const hint =
+      "ALL internal reasoning MUST be inside <think>...</think>. Format every reply as <think>...</think> then <final>...</final>.";
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: true,
+      reasoningFormatHint: hint,
     });
 
     expect(prompt).toContain("## Reasoning Format");

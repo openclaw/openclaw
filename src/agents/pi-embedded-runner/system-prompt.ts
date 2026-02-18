@@ -14,7 +14,7 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
-  reasoningTagHint: boolean;
+  reasoningFormatHint?: string;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
   docsPath?: string;
@@ -55,7 +55,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningLevel: params.reasoningLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
-    reasoningTagHint: params.reasoningTagHint,
+    reasoningFormatHint: params.reasoningFormatHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
     docsPath: params.docsPath,

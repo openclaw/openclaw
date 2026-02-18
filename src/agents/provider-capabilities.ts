@@ -77,6 +77,14 @@ export interface ProviderCapabilities {
    */
   reasoningFormat: "tags" | "none";
 
+  /**
+   * Level of detail for the reasoning format hint injected into the system prompt.
+   * null      = no hint needed (reasoningFormat is "none").
+   * "standard" = default multi-line hint with a basic example (Google, MiniMax, …).
+   * "verbose"  = extended hint with a multi-step CoT example for weaker local models (Ollama).
+   */
+  reasoningHintDetail: "verbose" | "standard" | null;
+
   // ── Tool Schema ─────────────────────────────────────────────────────────────
 
   /**
@@ -256,6 +264,13 @@ export function resolveProviderCapabilities(params: {
       ? "tags"
       : "none";
 
+  const reasoningHintDetail: ProviderCapabilities["reasoningHintDetail"] =
+    reasoningFormat === "none"
+      ? null
+      : provider === "ollama"
+        ? "verbose"
+        : "standard";
+
   // ── Tool Schema ─────────────────────────────────────────────────────────
 
   const toolSchemaUnsupportedKeywords: ProviderCapabilities["toolSchemaUnsupportedKeywords"] =
@@ -309,6 +324,7 @@ export function resolveProviderCapabilities(params: {
   return {
     // Prompt engineering
     reasoningFormat,
+    reasoningHintDetail,
     // Tool schema
     toolSchemaUnsupportedKeywords,
     // Caching

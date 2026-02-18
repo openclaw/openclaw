@@ -233,7 +233,7 @@ export function buildSystemPrompt(params: {
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
-    reasoningTagHint: false,
+    reasoningFormatHint: undefined,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     runtimeInfo,
