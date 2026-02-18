@@ -109,10 +109,14 @@ vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
-  buildAgentMainSessionKey: vi.fn().mockReturnValue("agent:default:cron:test"),
-  normalizeAgentId: vi.fn((id: string) => id),
-}));
+vi.mock("../../routing/session-key.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
+  return {
+    ...actual,
+    buildAgentMainSessionKey: vi.fn().mockReturnValue("agent:default:cron:test"),
+    normalizeAgentId: vi.fn((id: string) => id),
+  };
+});
 
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: vi.fn(),
