@@ -1,0 +1,53 @@
+{
+  "id": "daedalus-memory",
+  "name": "Memory (DAEDALUS)",
+  "description": "Trust-gradient memory with explicit blue/green/red provenance tracking. AI writes enter as [SUGGESTED]; only human approval creates [VERIFIED] facts.",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "staleness_days": {
+        "type": "number",
+        "minimum": 1,
+        "default": 7,
+        "description": "Days before unvalidated (green) facts auto-expire to red"
+      },
+      "show_trust_tags": {
+        "type": "boolean",
+        "default": true,
+        "description": "Include [VERIFIED]/[SUGGESTED] tags in agent context injection"
+      },
+      "data_dir": {
+        "type": "string",
+        "description": "Custom path for facts.db (default: ~/.openclaw/daedalus/)"
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": false,
+        "description": "Automatically extract and store facts from conversations"
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically inject relevant memories before each prompt build"
+      }
+    }
+  },
+  "uiHints": {
+    "staleness_days": {
+      "label": "Staleness Threshold (days)",
+      "placeholder": "7"
+    },
+    "data_dir": {
+      "label": "Database Path",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "openclaw-daedalus-memory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trust-gradient memory plugin for OpenClaw (DAEDALUS architecture)",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./src/index.ts"]
+  },
+  "files": ["src", "openclaw.plugin.json", "skills", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.0",
+    "openclaw": "workspace:*",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.0"
+  }
+}
