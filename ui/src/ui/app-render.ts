@@ -941,6 +941,24 @@ export function renderApp(state: AppViewState) {
                 onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
                 onRefresh: () => loadLogs(state, { reset: true }),
                 onExport: (lines, label) => state.exportLogs(lines, label),
+                onCopy: (lines) => {
+                  navigator.clipboard.writeText(lines.join("\n")).then(
+                    () => {
+                      if (state.logsCopiedTimer) {
+                        clearTimeout(state.logsCopiedTimer);
+                      }
+                      state.logsCopied = true;
+                      state.logsCopiedTimer = setTimeout(() => {
+                        state.logsCopied = false;
+                        state.logsCopiedTimer = null;
+                      }, 1500);
+                    },
+                    () => {
+                      /* clipboard write failed — button stays as "Copy" */
+                    },
+                  );
+                },
+                copied: state.logsCopied,
                 onScroll: (event) => state.handleLogsScroll(event),
               })
             : nothing

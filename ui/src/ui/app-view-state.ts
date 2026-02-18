@@ -221,6 +221,8 @@ export type AppViewState = {
   logsLimit: number;
   logsMaxBytes: number;
   logsAtBottom: boolean;
+  logsCopied: boolean;
+  logsCopiedTimer: ReturnType<typeof setTimeout> | null;
   client: GatewayBrowserClient | null;
   refreshSessionsAfterChat: Set<string>;
   connect: () => void;
