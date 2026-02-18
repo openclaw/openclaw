@@ -134,7 +134,7 @@ describe("subagent-announce-queue", () => {
       send,
     });
 
-    await waitFor(() => attempts >= 3);
+    await vi.waitFor(() => attempts >= 3);
     // Give-up clears the queue — no further retries after 3 consecutive failures
     const attemptsBefore = attempts;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -164,7 +164,7 @@ describe("subagent-announce-queue", () => {
       send,
     });
 
-    await waitFor(() => sendPrompts.length >= 1);
+    await vi.waitFor(() => sendPrompts.length >= 1);
     expect(sendPrompts).toEqual(["recover item"]);
   });
 });

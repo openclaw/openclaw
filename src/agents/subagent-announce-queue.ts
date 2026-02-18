@@ -58,6 +58,7 @@ export function resetAnnounceQueuesForTests() {
     queue.summaryLines.length = 0;
     queue.droppedCount = 0;
     queue.lastEnqueuedAt = 0;
+    queue.consecutiveErrors = 0;
   }
   ANNOUNCE_QUEUES.clear();
 }
@@ -192,6 +193,8 @@ function scheduleAnnounceDrain(key: string) {
         queue.items.length = 0;
         queue.droppedCount = 0;
         queue.summaryLines.length = 0;
+        // Reset error count so fresh items enqueued after give-up start clean.
+        queue.consecutiveErrors = 0;
       } else {
         // Backoff: delay next retry by consecutiveErrors * debounceMs.
         queue.lastEnqueuedAt = Date.now() + queue.consecutiveErrors * queue.debounceMs;
