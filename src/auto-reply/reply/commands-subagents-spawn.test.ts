@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.js";
 import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -94,6 +94,7 @@ describe("/subagents spawn command", () => {
     expect(spawnParams.task).toBe("do the thing");
     expect(spawnParams.agentId).toBe("beta");
     expect(spawnParams.cleanup).toBe("keep");
+    expect(spawnParams.expectsCompletionMessage).toBe(true);
     expect(spawnCtx.agentSessionKey).toBeDefined();
   });
 

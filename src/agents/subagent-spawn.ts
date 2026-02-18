@@ -25,6 +25,7 @@ export type SpawnSubagentParams = {
   thinking?: string;
   runTimeoutSeconds?: number;
   cleanup?: "delete" | "keep";
+  expectsCompletionMessage?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -318,6 +319,7 @@ export async function spawnSubagentDirect(
     label: label || undefined,
     model: resolvedModel,
     runTimeoutSeconds,
+    expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
 
   return {
