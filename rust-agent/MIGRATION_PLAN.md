@@ -15,6 +15,8 @@
 - Gateway known-method registry plus first RPC dispatcher for:
   - `health`
   - `status`
+  - `usage.status`
+  - `usage.cost`
   - `sessions.list`
   - `sessions.preview`
   - `sessions.patch`

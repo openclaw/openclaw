@@ -1549,4 +1549,112 @@ mod tests {
         server.await??;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn rpc_usage_status_and_cost_roundtrip() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let ws = accept_async(stream).await?;
+            let (mut write, mut read) = ws.split();
+
+            let _connect = read
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing connect frame"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "event",
+                        "event": "agent",
+                        "payload": {
+                            "id": "req-usage-status-cost-seed",
+                            "sessionKey": "agent:main:discord:group:g14",
+                            "chatType": "group",
+                            "wasMentioned": true,
+                            "command": "git status"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let _decision = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for decision"))?
+                .ok_or_else(|| anyhow::anyhow!("decision stream ended"))??;
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-usage-status-rpc",
+                        "method": "usage.status",
+                        "params": {}
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let usage_status_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for usage.status response"))?
+                .ok_or_else(|| anyhow::anyhow!("usage.status response stream ended"))??;
+            let usage_status_json: Value = serde_json::from_str(usage_status_response.to_text()?)?;
+            assert_eq!(
+                usage_status_json
+                    .pointer("/result/totals/totalRequests")
+                    .and_then(Value::as_u64),
+                Some(1)
+            );
+
+            write
+                .send(Message::Text(
+                    json!({
+                        "type": "req",
+                        "id": "req-usage-cost-rpc",
+                        "method": "usage.cost",
+                        "params": {
+                            "days": 7
+                        }
+                    })
+                    .to_string(),
+                ))
+                .await?;
+            let usage_cost_response = timeout(Duration::from_secs(2), read.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("timed out waiting for usage.cost response"))?
+                .ok_or_else(|| anyhow::anyhow!("usage.cost response stream ended"))??;
+            let usage_cost_json: Value = serde_json::from_str(usage_cost_response.to_text()?)?;
+            assert_eq!(
+                usage_cost_json.get("ok").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                usage_cost_json
+                    .pointer("/result/range/days")
+                    .and_then(Value::as_i64),
+                Some(7)
+            );
+
+            write.send(Message::Close(None)).await?;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let bridge = GatewayBridge::new(
+            GatewayConfig {
+                url: format!("ws://{addr}"),
+                token: None,
+            },
+            "security.decision".to_owned(),
+            16,
+            SessionQueueMode::Followup,
+            GroupActivationMode::Always,
+        );
+        let evaluator: Arc<dyn ActionEvaluator> = Arc::new(StubEvaluator);
+        bridge.run_once(evaluator).await?;
+        server.await??;
+        Ok(())
+    }
 }

@@ -53,6 +53,18 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "usage.status",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "usage.cost",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "agent.exec",
                     family: MethodFamily::Agent,
                     requires_auth: true,
@@ -205,6 +217,8 @@ const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
+    "usage.status",
+    "usage.cost",
     "sessions.list",
     "sessions.preview",
     "sessions.patch",
@@ -232,6 +246,8 @@ impl RpcDispatcher {
         match normalize(&req.method).as_str() {
             "health" => self.handle_health().await,
             "status" => self.handle_status().await,
+            "usage.status" => self.handle_usage_status().await,
+            "usage.cost" => self.handle_usage_cost(req).await,
             "sessions.list" => self.handle_sessions_list(req).await,
             "sessions.preview" => self.handle_sessions_preview(req).await,
             "sessions.patch" => self.handle_sessions_patch(req).await,
@@ -280,6 +296,49 @@ impl RpcDispatcher {
             "rpc": {
                 "supportedMethods": SUPPORTED_RPC_METHODS,
                 "count": SUPPORTED_RPC_METHODS.len()
+            }
+        }))
+    }
+
+    async fn handle_usage_status(&self) -> RpcDispatchOutcome {
+        let totals = self.sessions.usage_totals().await;
+        RpcDispatchOutcome::Handled(json!({
+            "enabled": true,
+            "source": "rust-parity",
+            "updatedAtMs": now_ms(),
+            "totals": totals
+        }))
+    }
+
+    async fn handle_usage_cost(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<UsageCostParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => return RpcDispatchOutcome::bad_request(format!("invalid params: {err}")),
+        };
+        let totals = self.sessions.usage_totals().await;
+        let range = normalize_usage_range(params.start_date, params.end_date, params.days);
+        RpcDispatchOutcome::Handled(json!({
+            "updatedAtMs": now_ms(),
+            "range": range,
+            "summary": {
+                "totalCost": 0.0,
+                "inputCost": 0.0,
+                "outputCost": 0.0,
+                "cacheReadCost": 0.0,
+                "cacheWriteCost": 0.0,
+                "missingCostEntries": 0
+            },
+            "tokens": {
+                "total": totals.total_requests,
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0
+            },
+            "actions": {
+                "allow": totals.allowed_count,
+                "review": totals.review_count,
+                "block": totals.blocked_count
             }
         }))
     }
@@ -1111,6 +1170,17 @@ impl SessionRegistry {
         )
     }
 
+    async fn usage_totals(&self) -> UsageTotals {
+        let guard = self.entries.lock().await;
+        UsageTotals {
+            sessions: guard.len() as u64,
+            total_requests: guard.values().map(|e| e.total_requests).sum(),
+            allowed_count: guard.values().map(|e| e.allowed_count).sum(),
+            review_count: guard.values().map(|e| e.review_count).sum(),
+            blocked_count: guard.values().map(|e| e.blocked_count).sum(),
+        }
+    }
+
     async fn summary(&self) -> SessionSummary {
         let guard = self.entries.lock().await;
         let total_sessions = guard.len() as u64;
@@ -1349,6 +1419,19 @@ struct SessionUsageTimeseriesPoint {
     block_count: u64,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct UsageTotals {
+    sessions: u64,
+    #[serde(rename = "totalRequests")]
+    total_requests: u64,
+    #[serde(rename = "allowedCount")]
+    allowed_count: u64,
+    #[serde(rename = "reviewCount")]
+    review_count: u64,
+    #[serde(rename = "blockedCount")]
+    blocked_count: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SendPolicyOverride {
@@ -1409,6 +1492,16 @@ struct SessionsListParams {
     #[serde(rename = "agentId", alias = "agent_id")]
     agent_id: Option<String>,
     search: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct UsageCostParams {
+    #[serde(rename = "startDate", alias = "start_date")]
+    start_date: Option<String>,
+    #[serde(rename = "endDate", alias = "end_date")]
+    end_date: Option<String>,
+    days: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1603,6 +1696,84 @@ fn format_utc_date(ms: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+fn normalize_usage_range(
+    start_date: Option<String>,
+    end_date: Option<String>,
+    days: Option<u32>,
+) -> Value {
+    let today = format_utc_date(now_ms());
+    let normalized_start = normalize_date_yyyy_mm_dd(start_date);
+    let normalized_end = normalize_date_yyyy_mm_dd(end_date);
+
+    let (start, end) = match (normalized_start, normalized_end) {
+        (Some(start), Some(end)) => {
+            let start_days = parse_date_to_days(&start).unwrap_or(0);
+            let end_days = parse_date_to_days(&end).unwrap_or(0);
+            if start_days <= end_days {
+                (start, end)
+            } else {
+                (end, start)
+            }
+        }
+        (Some(start), None) => (start, today.clone()),
+        (None, Some(end)) => {
+            let span = days.unwrap_or(30).max(1);
+            let end_days = parse_date_to_days(&end).unwrap_or(0);
+            let start_days = end_days.saturating_sub((span - 1) as i64);
+            let (y, m, d) = civil_from_days(start_days);
+            (format!("{y:04}-{m:02}-{d:02}"), end)
+        }
+        (None, None) => {
+            let span = days.unwrap_or(30).max(1);
+            let end_days = parse_date_to_days(&today).unwrap_or(0);
+            let start_days = end_days.saturating_sub((span - 1) as i64);
+            let (y, m, d) = civil_from_days(start_days);
+            (format!("{y:04}-{m:02}-{d:02}"), today)
+        }
+    };
+
+    let start_days = parse_date_to_days(&start).unwrap_or(0);
+    let end_days = parse_date_to_days(&end).unwrap_or(start_days);
+    let day_span = end_days.saturating_sub(start_days) + 1;
+    json!({
+        "startDate": start,
+        "endDate": end,
+        "days": if day_span > 0 { day_span } else { 1 }
+    })
+}
+
+fn normalize_date_yyyy_mm_dd(value: Option<String>) -> Option<String> {
+    let raw = value?.trim().to_owned();
+    let days = parse_date_to_days(&raw)?;
+    let (y, m, d) = civil_from_days(days);
+    let normalized = format!("{y:04}-{m:02}-{d:02}");
+    if normalized == raw {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn parse_date_to_days(value: &str) -> Option<i64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let year = value[0..4].parse::<i32>().ok()?;
+    let month = value[5..7].parse::<u32>().ok()?;
+    let day = value[8..10].parse::<u32>().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let days = civil_to_days(year, month, day);
+    let (cy, cm, cd) = civil_from_days(days);
+    if cy == year && cm == month && cd == day {
+        Some(days)
+    } else {
+        None
+    }
+}
+
 fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     let z = days_since_unix_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -1615,6 +1786,17 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = y + if month <= 2 { 1 } else { 0 };
     (year as i32, month as u32, day as u32)
+}
+
+fn civil_to_days(year: i32, month: u32, day: u32) -> i64 {
+    let y = year as i64 - if month <= 2 { 1 } else { 0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = month as i64;
+    let d = day as i64;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 fn normalize(method: &str) -> String {
@@ -2402,6 +2584,76 @@ mod tests {
                 );
             }
             _ => panic!("expected status handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_usage_status_and_cost_return_totals_and_range() {
+        let dispatcher = RpcDispatcher::new();
+        let request = ActionRequest {
+            id: "req-usage-cost-1".to_owned(),
+            source: "agent".to_owned(),
+            session_id: Some("agent:main:discord:group:g-usage-cost".to_owned()),
+            prompt: Some("hello".to_owned()),
+            command: None,
+            tool_name: None,
+            channel: Some("discord".to_owned()),
+            url: None,
+            file_path: None,
+            raw: serde_json::json!({}),
+        };
+        let decision = Decision {
+            action: DecisionAction::Block,
+            risk_score: 90,
+            reasons: vec![],
+            tags: vec![],
+            source: "openclaw-agent-rs".to_owned(),
+        };
+        dispatcher.record_decision(&request, &decision).await;
+
+        let usage_status = RpcRequestFrame {
+            id: "req-usage-status".to_owned(),
+            method: "usage.status".to_owned(),
+            params: serde_json::json!({}),
+        };
+        let out = dispatcher.handle_request(&usage_status).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/totals/blockedCount")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+            }
+            _ => panic!("expected usage.status handled"),
+        }
+
+        let usage_cost = RpcRequestFrame {
+            id: "req-usage-cost".to_owned(),
+            method: "usage.cost".to_owned(),
+            params: serde_json::json!({
+                "startDate": "2026-01-01",
+                "endDate": "2026-01-15"
+            }),
+        };
+        let out = dispatcher.handle_request(&usage_cost).await;
+        match out {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/range/startDate")
+                        .and_then(serde_json::Value::as_str),
+                    Some("2026-01-01")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/actions/block")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+            }
+            _ => panic!("expected usage.cost handled"),
         }
     }
 }
