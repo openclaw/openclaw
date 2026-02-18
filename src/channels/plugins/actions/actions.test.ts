@@ -30,6 +30,39 @@ const { telegramMessageActions } = await import("./telegram.js");
 const { signalMessageActions } = await import("./signal.js");
 const { createSlackActions } = await import("../slack.actions.js");
 
+function telegramCfg(): OpenClawConfig {
+  return { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+}
+
+function slackHarness() {
+  const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+  const actions = createSlackActions("slack");
+  return { cfg, actions };
+}
+
+type SlackActionInput = Parameters<
+  NonNullable<ReturnType<typeof createSlackActions>["handleAction"]>
+>[0];
+
+async function runSlackAction(
+  action: SlackActionInput["action"],
+  params: SlackActionInput["params"],
+) {
+  const { cfg, actions } = slackHarness();
+  await actions.handleAction?.({
+    channel: "slack",
+    action,
+    cfg,
+    params,
+  });
+  return { cfg, actions };
+}
+
+function expectFirstSlackAction(expected: Record<string, unknown>) {
+  const [params] = handleSlackAction.mock.calls[0] ?? [];
+  expect(params).toMatchObject(expected);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -309,14 +342,14 @@ describe("handleDiscordMessageAction", () => {
 
 describe("telegramMessageActions", () => {
   it("excludes sticker actions when not enabled", () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = telegramCfg();
     const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
     expect(actions).not.toContain("sticker");
     expect(actions).not.toContain("sticker-search");
   });
 
   it("allows media-only sends and passes asVoice", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = telegramCfg();
 
     await telegramMessageActions.handleAction?.({
       channel: "telegram",
@@ -343,7 +376,7 @@ describe("telegramMessageActions", () => {
   });
 
   it("passes silent flag for silent sends", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = telegramCfg();
 
     await telegramMessageActions.handleAction?.({
       channel: "telegram",
@@ -369,7 +402,7 @@ describe("telegramMessageActions", () => {
   });
 
   it("maps edit action params into editMessage", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = telegramCfg();
 
     await telegramMessageActions.handleAction?.({
       channel: "telegram",
@@ -398,7 +431,7 @@ describe("telegramMessageActions", () => {
   });
 
   it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = telegramCfg();
     const handleAction = telegramMessageActions.handleAction;
     if (!handleAction) {
       throw new Error("telegram handleAction unavailable");
@@ -473,7 +506,7 @@ describe("telegramMessageActions", () => {
   });
 
   it("accepts numeric messageId and channelId for reactions", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = telegramCfg();
 
     await telegramMessageActions.handleAction?.({
       channel: "telegram",
@@ -500,7 +533,7 @@ describe("telegramMessageActions", () => {
   });
 
   it("maps topic-create params into createForumTopic", async () => {
-    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = telegramCfg();
 
     await telegramMessageActions.handleAction?.({
       channel: "telegram",
@@ -678,21 +711,12 @@ describe("signalMessageActions", () => {
 
 describe("slack actions adapter", () => {
   it("forwards threadId for read", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
-
-    await actions.handleAction?.({
-      channel: "slack",
-      action: "read",
-      cfg,
-      params: {
-        channelId: "C1",
-        threadId: "171234.567",
-      },
+    await runSlackAction("read", {
+      channelId: "C1",
+      threadId: "171234.567",
     });
 
-    const [params] = handleSlackAction.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    expectFirstSlackAction({
       action: "readMessages",
       channelId: "C1",
       threadId: "171234.567",
@@ -700,42 +724,24 @@ describe("slack actions adapter", () => {
   });
 
   it("forwards normalized limit for emoji-list", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
-
-    await actions.handleAction?.({
-      channel: "slack",
-      action: "emoji-list",
-      cfg,
-      params: {
-        limit: "2.9",
-      },
+    await runSlackAction("emoji-list", {
+      limit: "2.9",
     });
 
-    const [params] = handleSlackAction.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    expectFirstSlackAction({
       action: "emojiList",
       limit: 2,
     });
   });
 
   it("forwards blocks JSON for send", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
-
-    await actions.handleAction?.({
-      channel: "slack",
-      action: "send",
-      cfg,
-      params: {
-        to: "channel:C1",
-        message: "",
-        blocks: JSON.stringify([{ type: "divider" }]),
-      },
+    await runSlackAction("send", {
+      to: "channel:C1",
+      message: "",
+      blocks: JSON.stringify([{ type: "divider" }]),
     });
 
-    const [params] = handleSlackAction.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    expectFirstSlackAction({
       action: "sendMessage",
       to: "channel:C1",
       content: "",
@@ -744,22 +750,13 @@ describe("slack actions adapter", () => {
   });
 
   it("forwards blocks arrays for send", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
-
-    await actions.handleAction?.({
-      channel: "slack",
-      action: "send",
-      cfg,
-      params: {
-        to: "channel:C1",
-        message: "",
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: "hi" } }],
-      },
+    await runSlackAction("send", {
+      to: "channel:C1",
+      message: "",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "hi" } }],
     });
 
-    const [params] = handleSlackAction.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    expectFirstSlackAction({
       action: "sendMessage",
       to: "channel:C1",
       content: "",
@@ -768,8 +765,7 @@ describe("slack actions adapter", () => {
   });
 
   it("rejects invalid blocks JSON for send", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
+    const { cfg, actions } = slackHarness();
 
     await expect(
       actions.handleAction?.({
@@ -787,8 +783,7 @@ describe("slack actions adapter", () => {
   });
 
   it("rejects empty blocks arrays for send", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
+    const { cfg, actions } = slackHarness();
 
     await expect(
       actions.handleAction?.({
@@ -806,8 +801,7 @@ describe("slack actions adapter", () => {
   });
 
   it("rejects send when both blocks and media are provided", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
+    const { cfg, actions } = slackHarness();
 
     await expect(
       actions.handleAction?.({
@@ -826,23 +820,14 @@ describe("slack actions adapter", () => {
   });
 
   it("forwards blocks JSON for edit", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
-
-    await actions.handleAction?.({
-      channel: "slack",
-      action: "edit",
-      cfg,
-      params: {
-        channelId: "C1",
-        messageId: "171234.567",
-        message: "",
-        blocks: JSON.stringify([{ type: "divider" }]),
-      },
+    await runSlackAction("edit", {
+      channelId: "C1",
+      messageId: "171234.567",
+      message: "",
+      blocks: JSON.stringify([{ type: "divider" }]),
     });
 
-    const [params] = handleSlackAction.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    expectFirstSlackAction({
       action: "editMessage",
       channelId: "C1",
       messageId: "171234.567",
@@ -852,23 +837,14 @@ describe("slack actions adapter", () => {
   });
 
   it("forwards blocks arrays for edit", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
-
-    await actions.handleAction?.({
-      channel: "slack",
-      action: "edit",
-      cfg,
-      params: {
-        channelId: "C1",
-        messageId: "171234.567",
-        message: "",
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: "updated" } }],
-      },
+    await runSlackAction("edit", {
+      channelId: "C1",
+      messageId: "171234.567",
+      message: "",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "updated" } }],
     });
 
-    const [params] = handleSlackAction.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    expectFirstSlackAction({
       action: "editMessage",
       channelId: "C1",
       messageId: "171234.567",
@@ -878,8 +854,7 @@ describe("slack actions adapter", () => {
   });
 
   it("rejects edit when both message and blocks are missing", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    const actions = createSlackActions("slack");
+    const { cfg, actions } = slackHarness();
 
     await expect(
       actions.handleAction?.({
