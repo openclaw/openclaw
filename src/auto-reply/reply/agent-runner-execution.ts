@@ -487,6 +487,9 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code ? String(attempt.code) : undefined,
           }))
         : [];
+      // TODO(routing-phase4): Call recordRoutingResult() here after model call completes
+      // to feed HealthTracker + BudgetTracker with real data.
+      // See: src/gateway/routing/routing-hooks.ts
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
