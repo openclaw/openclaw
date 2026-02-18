@@ -1,4 +1,5 @@
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
+import { wrapFetchWithEgressAudit } from "./fetch-egress-audit.js";
 
 type FetchWithPreconnect = typeof fetch & {
   preconnect: (url: string, init?: { credentials?: RequestCredentials }) => void;
@@ -105,5 +106,5 @@ export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined
   if (!resolved) {
     return undefined;
   }
-  return wrapFetchWithAbortSignal(resolved);
+  return wrapFetchWithAbortSignal(wrapFetchWithEgressAudit(resolved));
 }

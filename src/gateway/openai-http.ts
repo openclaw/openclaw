@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -10,8 +11,8 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import { auditModelTrafficWrite } from "./audit-model-traffic.js";
+import { type ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
@@ -38,6 +39,27 @@ type OpenAiChatCompletionRequest = {
 
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function auditSseChunk(params: {
+  runId: string;
+  sessionKey: string;
+  model: string;
+  data: unknown;
+}) {
+  auditModelTrafficWrite({
+    ts: Date.now(),
+    kind: "model_traffic",
+    source: "gateway/openai-compat",
+    direction: "out",
+    id: params.runId,
+    sessionKey: params.sessionKey,
+    provider: "openai-compat",
+    model: params.model,
+    stream: true,
+    body: { sse: params.data },
+    note: "sse_chunk",
+  });
 }
 
 function asMessages(val: unknown): OpenAiChatMessage[] {
@@ -177,6 +199,22 @@ export async function handleOpenAiHttpRequest(
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
+  const runId = `chatcmpl_${randomUUID()}`;
+
+  auditModelTrafficWrite({
+    ts: Date.now(),
+    kind: "model_traffic",
+    source: "gateway/openai-compat",
+    direction: "in",
+    id: runId,
+    sessionKey: undefined,
+    provider: "openai-compat",
+    model,
+    stream,
+    headers: req.headers as unknown as Record<string, unknown>,
+    body: payload,
+  });
+
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
@@ -189,9 +227,23 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
-
-  const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
+
+  // Now that we have runId/sessionKey, emit a second record including them.
+  auditModelTrafficWrite({
+    ts: Date.now(),
+    kind: "model_traffic",
+    source: "gateway/openai-compat",
+    direction: "in",
+    id: runId,
+    sessionKey,
+    provider: "openai-compat",
+    model,
+    stream,
+    headers: req.headers as unknown as Record<string, unknown>,
+    body: payload,
+    note: "resolved_session",
+  });
 
   if (!stream) {
     try {
@@ -211,7 +263,7 @@ export async function handleOpenAiHttpRequest(
 
       const content = resolveAgentResponseText(result);
 
-      sendJson(res, 200, {
+      const responseBody = {
         id: runId,
         object: "chat.completion",
         created: Math.floor(Date.now() / 1000),
@@ -224,17 +276,68 @@ export async function handleOpenAiHttpRequest(
           },
         ],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      };
+
+      auditModelTrafficWrite({
+        ts: Date.now(),
+        kind: "model_traffic",
+        source: "gateway/openai-compat",
+        direction: "out",
+        id: runId,
+        sessionKey,
+        provider: "openai-compat",
+        model,
+        stream,
+        status: 200,
+        headers: res.getHeaders() as unknown as Record<string, unknown>,
+        body: responseBody,
       });
+
+      sendJson(res, 200, responseBody);
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
-      sendJson(res, 500, {
+
+      const responseBody = {
         error: { message: "internal error", type: "api_error" },
+      };
+      auditModelTrafficWrite({
+        ts: Date.now(),
+        kind: "model_traffic",
+        source: "gateway/openai-compat",
+        direction: "out",
+        id: runId,
+        sessionKey,
+        provider: "openai-compat",
+        model,
+        stream,
+        status: 500,
+        headers: res.getHeaders() as unknown as Record<string, unknown>,
+        body: responseBody,
+        note: String(err),
       });
+
+      sendJson(res, 500, responseBody);
     }
     return true;
   }
 
   setSseHeaders(res);
+
+  auditModelTrafficWrite({
+    ts: Date.now(),
+    kind: "model_traffic",
+    source: "gateway/openai-compat",
+    direction: "out",
+    id: runId,
+    sessionKey,
+    provider: "openai-compat",
+    model,
+    stream,
+    status: 200,
+    headers: res.getHeaders() as unknown as Record<string, unknown>,
+    body: { sse: true },
+    note: "sse_start",
+  });
 
   let wroteRole = false;
   let sawAssistantDelta = false;
@@ -256,17 +359,19 @@ export async function handleOpenAiHttpRequest(
 
       if (!wroteRole) {
         wroteRole = true;
-        writeSse(res, {
+        const sse = {
           id: runId,
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
           model,
           choices: [{ index: 0, delta: { role: "assistant" } }],
-        });
+        };
+        auditSseChunk({ runId, sessionKey, model, data: sse });
+        writeSse(res, sse);
       }
 
       sawAssistantDelta = true;
-      writeSse(res, {
+      const sse = {
         id: runId,
         object: "chat.completion.chunk",
         created: Math.floor(Date.now() / 1000),
@@ -278,7 +383,9 @@ export async function handleOpenAiHttpRequest(
             finish_reason: null,
           },
         ],
-      });
+      };
+      auditSseChunk({ runId, sessionKey, model, data: sse });
+      writeSse(res, sse);
       return;
     }
 
@@ -321,19 +428,21 @@ export async function handleOpenAiHttpRequest(
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;
-          writeSse(res, {
+          const sse = {
             id: runId,
             object: "chat.completion.chunk",
             created: Math.floor(Date.now() / 1000),
             model,
             choices: [{ index: 0, delta: { role: "assistant" } }],
-          });
+          };
+          auditSseChunk({ runId, sessionKey, model, data: sse });
+          writeSse(res, sse);
         }
 
         const content = resolveAgentResponseText(result);
 
         sawAssistantDelta = true;
-        writeSse(res, {
+        const sse = {
           id: runId,
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
@@ -345,14 +454,16 @@ export async function handleOpenAiHttpRequest(
               finish_reason: null,
             },
           ],
-        });
+        };
+        auditSseChunk({ runId, sessionKey, model, data: sse });
+        writeSse(res, sse);
       }
     } catch (err) {
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       if (closed) {
         return;
       }
-      writeSse(res, {
+      const sse = {
         id: runId,
         object: "chat.completion.chunk",
         created: Math.floor(Date.now() / 1000),
@@ -364,7 +475,9 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-      });
+      };
+      auditSseChunk({ runId, sessionKey, model, data: sse });
+      writeSse(res, sse);
       emitAgentEvent({
         runId,
         stream: "lifecycle",

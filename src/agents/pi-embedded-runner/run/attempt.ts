@@ -1,9 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs/promises";
+import os from "node:os";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -35,6 +36,7 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
+import { createModelEgressAuditor } from "../../model-egress-audit.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
 import {
@@ -106,7 +108,6 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -623,6 +624,17 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
+      const modelEgressAuditor = createModelEgressAuditor({
+        env: process.env,
+        runId: params.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        workspaceDir: params.workspaceDir,
+      });
+
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
       if (params.model.api === "ollama") {
@@ -659,6 +671,28 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+      if (modelEgressAuditor) {
+        const prior = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = async (model, context, options) => {
+          const nextOnPayload = (payload: unknown) => {
+            modelEgressAuditor.recordChunk(payload);
+            options?.onPayload?.(payload);
+          };
+          const nextOnError = (err: unknown) => {
+            modelEgressAuditor.recordError(err);
+            // SimpleStreamOptions doesn't currently expose onError, but keep compatibility
+            // if upstream adds it later.
+            (options as { onError?: (e: unknown) => void } | undefined)?.onError?.(err);
+          };
+          const out = await prior(model, context, {
+            ...options,
+            onPayload: nextOnPayload,
+            onError: nextOnError,
+          } as unknown as typeof options);
+          modelEgressAuditor.recordResponse(out);
+          return out;
+        };
       }
 
       try {
