@@ -52,6 +52,8 @@ type TelegramSendOpts = {
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
   silent?: boolean;
+  /** Disable web page preview for messages with links. Defaults to false. */
+  disableWebPagePreview?: boolean;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Quote text for Telegram reply_parameters. */
@@ -490,6 +492,7 @@ export async function sendMessageTelegram(
           parse_mode: "HTML" as const,
           ...baseParams,
           ...(opts.silent === true ? { disable_notification: true } : {}),
+          ...(opts.disableWebPagePreview === true ? { disable_web_page_preview: true } : {}),
         };
         return await withTelegramHtmlParseFallback({
           label,
@@ -559,6 +562,7 @@ export async function sendMessageTelegram(
       ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
       ...(opts.silent === true ? { disable_notification: true } : {}),
+      ...(opts.disableWebPagePreview === true ? { disable_web_page_preview: true } : {}),
     };
     const sendMedia = async (
       label: string,
@@ -1049,6 +1053,7 @@ export async function sendPollTelegram(
     ...(durationSeconds !== undefined ? { open_period: durationSeconds } : {}),
     ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
     ...(opts.silent === true ? { disable_notification: true } : {}),
+    ...(opts.disableWebPagePreview === true ? { disable_web_page_preview: true } : {}),
   };
 
   const result = await withTelegramThreadFallback(
