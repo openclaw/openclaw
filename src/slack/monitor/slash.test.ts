@@ -266,6 +266,71 @@ function createArgMenusHarness() {
   return { commands, actions, options, postEphemeral, ctx, account };
 }
 
+function requireHandler(
+  handlers: Map<string, (args: unknown) => Promise<void>>,
+  key: string,
+  label: string,
+): (args: unknown) => Promise<void> {
+  const handler = handlers.get(key);
+  if (!handler) {
+    throw new Error(`Missing ${label} handler`);
+  }
+  return handler;
+}
+
+function createSlashCommand(overrides: Partial<Record<string, string>> = {}) {
+  return {
+    user_id: "U1",
+    user_name: "Ada",
+    channel_id: "C1",
+    channel_name: "directmessage",
+    text: "",
+    trigger_id: "t1",
+    ...overrides,
+  };
+}
+
+async function runCommandHandler(handler: (args: unknown) => Promise<void>) {
+  const respond = vi.fn().mockResolvedValue(undefined);
+  const ack = vi.fn().mockResolvedValue(undefined);
+  await handler({
+    command: createSlashCommand(),
+    ack,
+    respond,
+  });
+  return { respond, ack };
+}
+
+async function runArgMenuAction(
+  handler: (args: unknown) => Promise<void>,
+  params: {
+    action: Record<string, unknown>;
+    userId?: string;
+    userName?: string;
+    channelId?: string;
+    channelName?: string;
+    respond?: ReturnType<typeof vi.fn>;
+    includeRespond?: boolean;
+  },
+) {
+  const includeRespond = params.includeRespond ?? true;
+  const respond = params.respond ?? vi.fn().mockResolvedValue(undefined);
+  const payload: Record<string, unknown> = {
+    ack: vi.fn().mockResolvedValue(undefined),
+    action: params.action,
+    body: {
+      user: { id: params.userId ?? "U1", name: params.userName ?? "Ada" },
+      channel: { id: params.channelId ?? "C1", name: params.channelName ?? "directmessage" },
+      trigger_id: "t1",
+    },
+  };
+  if (includeRespond) {
+    payload.respond = respond;
+  }
+  await handler(payload);
+  return respond;
+}
+
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
   let usageHandler: (args: unknown) => Promise<void>;
@@ -280,48 +345,14 @@ describe("Slack native command argument menus", () => {
   beforeAll(async () => {
     harness = createArgMenusHarness();
     await registerCommands(harness.ctx, harness.account);
-
-    const usage = harness.commands.get("/usage");
-    if (!usage) {
-      throw new Error("Missing /usage handler");
-    }
-    usageHandler = usage;
-    const report = harness.commands.get("/report");
-    if (!report) {
-      throw new Error("Missing /report handler");
-    }
-    reportHandler = report;
-    const reportCompact = harness.commands.get("/reportcompact");
-    if (!reportCompact) {
-      throw new Error("Missing /reportcompact handler");
-    }
-    reportCompactHandler = reportCompact;
-    const reportExternal = harness.commands.get("/reportexternal");
-    if (!reportExternal) {
-      throw new Error("Missing /reportexternal handler");
-    }
-    reportExternalHandler = reportExternal;
-    const reportLong = harness.commands.get("/reportlong");
-    if (!reportLong) {
-      throw new Error("Missing /reportlong handler");
-    }
-    reportLongHandler = reportLong;
-    const unsafeConfirm = harness.commands.get("/unsafeconfirm");
-    if (!unsafeConfirm) {
-      throw new Error("Missing /unsafeconfirm handler");
-    }
-    unsafeConfirmHandler = unsafeConfirm;
-
-    const argMenu = harness.actions.get("openclaw_cmdarg");
-    if (!argMenu) {
-      throw new Error("Missing arg-menu action handler");
-    }
-    argMenuHandler = argMenu;
-    const argMenuOptions = harness.options.get("openclaw_cmdarg");
-    if (!argMenuOptions) {
-      throw new Error("Missing arg-menu options handler");
-    }
-    argMenuOptionsHandler = argMenuOptions;
+    usageHandler = requireHandler(harness.commands, "/usage", "/usage");
+    reportHandler = requireHandler(harness.commands, "/report", "/report");
+    reportCompactHandler = requireHandler(harness.commands, "/reportcompact", "/reportcompact");
+    reportExternalHandler = requireHandler(harness.commands, "/reportexternal", "/reportexternal");
+    reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
+    unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
+    argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
+    argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
   });
 
   beforeEach(() => {
@@ -329,21 +360,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("shows a button menu when required args are omitted", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await usageHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(usageHandler);
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
@@ -357,21 +374,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("shows a static_select menu when choices exceed button row size", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await reportHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(reportHandler);
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
@@ -386,21 +389,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("falls back to buttons when static_select value limit would be exceeded", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await reportLongHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(reportLongHandler);
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
@@ -411,21 +400,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("shows an overflow menu when choices fit compact range", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await reportCompactHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(reportCompactHandler);
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
@@ -437,21 +412,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("escapes mrkdwn characters in confirm dialog text", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await unsafeConfirmHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(unsafeConfirmHandler);
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
@@ -465,18 +426,10 @@ describe("Slack native command argument menus", () => {
   });
 
   it("dispatches the command when a menu button is clicked", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
-      body: {
-        user: { id: "U1", name: "Ada" },
-        channel: { id: "C1", name: "directmessage" },
-        trigger_id: "t1",
-      },
-      respond,
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
@@ -485,20 +438,12 @@ describe("Slack native command argument menus", () => {
   });
 
   it("dispatches the command when a static_select option is chosen", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: {
         selected_option: {
           value: encodeValue({ command: "report", arg: "period", value: "month", userId: "U1" }),
         },
       },
-      body: {
-        user: { id: "U1", name: "Ada" },
-        channel: { id: "C1", name: "directmessage" },
-        trigger_id: "t1",
-      },
-      respond,
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
@@ -507,9 +452,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("dispatches the command when an overflow option is chosen", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: {
         selected_option: {
           value: encodeValue({
@@ -520,12 +463,6 @@ describe("Slack native command argument menus", () => {
           }),
         },
       },
-      body: {
-        user: { id: "U1", name: "Ada" },
-        channel: { id: "C1", name: "directmessage" },
-        trigger_id: "t1",
-      },
-      respond,
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
@@ -534,21 +471,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("shows an external_select menu when choices exceed static_select options max", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await reportExternalHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(reportExternalHandler);
 
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = respond.mock.calls[0]?.[0] as {
@@ -564,21 +487,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("serves filtered options for external_select menus", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-
-    await reportExternalHandler({
-      command: {
-        user_id: "U1",
-        user_name: "Ada",
-        channel_id: "C1",
-        channel_name: "directmessage",
-        text: "",
-        trigger_id: "t1",
-      },
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(reportExternalHandler);
 
     const payload = respond.mock.calls[0]?.[0] as {
       blocks?: Array<{ type: string; block_id?: string }>;
@@ -605,18 +514,12 @@ describe("Slack native command argument menus", () => {
   });
 
   it("rejects menu clicks from other users", async () => {
-    const respond = vi.fn().mockResolvedValue(undefined);
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    const respond = await runArgMenuAction(argMenuHandler, {
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
-      body: {
-        user: { id: "U2", name: "Eve" },
-        channel: { id: "C1", name: "directmessage" },
-        trigger_id: "t1",
-      },
-      respond,
+      userId: "U2",
+      userName: "Eve",
     });
 
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -627,10 +530,9 @@ describe("Slack native command argument menus", () => {
   });
 
   it("falls back to postEphemeral with token when respond is unavailable", async () => {
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: { value: "garbage" },
-      body: { user: { id: "U1" }, channel: { id: "C1" } },
+      includeRespond: false,
     });
 
     expect(harness.postEphemeral).toHaveBeenCalledWith(
@@ -643,10 +545,9 @@ describe("Slack native command argument menus", () => {
   });
 
   it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
-    await argMenuHandler({
-      ack: vi.fn().mockResolvedValue(undefined),
+    await runArgMenuAction(argMenuHandler, {
       action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
-      body: { user: { id: "U1" }, channel: { id: "C1" } },
+      includeRespond: false,
     });
 
     expect(harness.postEphemeral).toHaveBeenCalledWith(
