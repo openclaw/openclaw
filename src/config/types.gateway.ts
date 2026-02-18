@@ -318,4 +318,10 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Maximum WebSocket payload size in bytes.
+   * Controls the largest single message the gateway will accept over WS.
+   * Default: 25MB (26214400).
+   */
+  maxPayloadBytes?: number;
 };
