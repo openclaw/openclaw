@@ -686,7 +686,9 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const originatingTo =
       typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "";
     const fallbackTo = typeof params.ctx.To === "string" ? params.ctx.To.trim() : "";
-    const normalizedTo = commandTo || originatingTo || fallbackTo || undefined;
+    // OriginatingTo reflects the active conversation target and is safer than
+    // command.to for cross-surface command dispatch.
+    const normalizedTo = originatingTo || commandTo || fallbackTo || undefined;
 
     const result = await spawnSubagentDirect(
       { task, agentId, model, thinking, cleanup: "keep", expectsCompletionMessage: true },
