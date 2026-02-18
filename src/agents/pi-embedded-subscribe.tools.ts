@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { MEDIA_TOKEN_RE } from "../media/parse.js";
+import { MEDIA_TOKEN_RE, isValidMedia } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 
@@ -167,7 +167,7 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
             ?.replace(/^[`"'[{(]+/, "")
             .replace(/[`"'\]})\\,]+$/, "")
             .trim();
-          if (p && p.length <= 4096) {
+          if (p && isValidMedia(p, { allowSpaces: true })) {
             paths.push(p);
           }
         }

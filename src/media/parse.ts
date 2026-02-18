@@ -33,7 +33,7 @@ function isLikelyLocalPath(candidate: string): boolean {
   );
 }
 
-function isValidMedia(
+export function isValidMedia(
   candidate: string,
   opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
 ) {

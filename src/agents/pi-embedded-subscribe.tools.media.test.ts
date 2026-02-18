@@ -206,6 +206,30 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/tts-output.opus"]);
   });
 
+  it("does not match markdown bold **Media:** as a file path", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "**Media:** 1 photo attached",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
+  it("does not extract non-path/non-URL strings after MEDIA:", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "MEDIA: some random text that is not a path",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
   it("extracts multiple MEDIA: lines from a single text block", () => {
     const result = {
       content: [
