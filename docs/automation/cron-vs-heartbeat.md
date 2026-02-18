@@ -279,7 +279,6 @@ openclaw cron add \
 - Use `target: "none"` on heartbeat if you only want internal processing.
 - Use isolated cron with a cheaper model for routine tasks.
 
-
 ## Pattern: Autonomous improvement loop (multi-hop questions)
 
 For long-running dev projects, use heartbeat/cron as the scheduler for a **question loop**:
