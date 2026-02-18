@@ -1,4 +1,4 @@
-name: Build and Release OpenClaw Beta
+name: Build and Release OpenClaw
 
 on:
   push:
@@ -39,7 +39,7 @@ jobs:
     - name: Build UI
       run: pnpm ui:build
         
-    - name: Create package
+    - name: Create npm package
       run: |
         npm pack
         ls -la *.tgz
@@ -51,7 +51,7 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         
-    - name: Create Beta Release
+    - name: Create Release
       id: create_release
       uses: actions/create-release@v1
       env:
@@ -62,7 +62,7 @@ jobs:
         draft: false
         prerelease: true
         
-    - name: Upload Release Asset
+    - name: Upload npm Release Asset
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -71,17 +71,133 @@ jobs:
         asset_path: ./openclaw-${{ env.VERSION }}.tgz
         asset_name: openclaw-${{ env.VERSION }}.tgz
         asset_content_type: application/gzip
+
+  build-macos:
+    needs: build-and-release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
         
-    - name: Update README with new beta release link
-      run: |
-        # Update README badges and links to point to this repository
-        sed -i "s|https://github.com/openclaw/openclaw/releases|https://github.com/mufengxue6/openclaw/releases|g" README.md
-        sed -i "s|https://img.shields.io/github/v/release/openclaw/openclaw|https://img.shields.io/github/v/release/mufengxue6/openclaw?include_prereleases|g" README.md
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
         
-    - name: Commit and push README changes
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v3
+      with:
+        version: 10.23.0
+        
+    - name: Install dependencies
+      run: pnpm install
+        
+    - name: Build OpenClaw
+      run: pnpm build
+        
+    - name: Build UI
+      run: pnpm ui:build
+        
+    - name: Build macOS App Bundle
       run: |
-        git config --global user.name 'GitHub Actions'
-        git config --global user.email 'actions@github.com'
-        git add README.md
-        git commit -m "chore: update README beta release links for v${{ env.VERSION }}-beta"
-        git push
+        bash scripts/package-mac-app.sh
+        ls -la dist/
+        
+    - name: Create ZIP archive
+      run: |
+        cd dist
+        zip -r OpenClaw-${{ env.VERSION }}-mac.zip OpenClaw.app
+        
+    - name: Get version from package.json
+      id: get_version_mac
+      run: |
+        VERSION=$(node -p "require('../package.json').version")
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        
+    - name: Download Release Asset
+      uses: actions/download-artifact@v4
+      with:
+        name: release-info
+        path: .
+        
+    - name: Get Release Upload URL
+      id: get_release
+      run: |
+        RELEASE_ID=$(gh release view v${{ env.VERSION }}-beta --json id --jq '.id')
+        UPLOAD_URL=$(gh api repos/mufengxue6/openclaw/releases/$RELEASE_ID/assets --jq '.[].url')
+        echo "UPLOAD_URL=$UPLOAD_URL" >> $GITHUB_ENV
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Upload ZIP Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.get_release.outputs.upload_url }}
+        asset_path: ./dist/OpenClaw-${{ env.VERSION }}-mac.zip
+        asset_name: OpenClaw-${{ env.VERSION }}-mac.zip
+        asset_content_type: application/zip
+
+  build-dmg:
+    needs: build-macos
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        
+    - name: Install dependencies
+      run: pnpm install
+        
+    - name: Build OpenClaw
+      run: pnpm build
+        
+    - name: Build macOS App Bundle
+      run: bash scripts/package-mac-app.sh
+        
+    - name: Install create-dmg
+      run: npm install -g create-dmg
+        
+    - name: Create DMG
+      run: |
+        create-dmg \
+          --volname "OpenClaw" \
+          --window-pos 200 120 \
+          --window-size 800 400 \
+          --icon-size 100 \
+          --icon "OpenClaw.app" 200 190 \
+          --hide-extension "OpenClaw.app" \
+          --app-drop-link 600 185 \
+          "OpenClaw-${{ env.VERSION }}.dmg" \
+          "dist/OpenClaw.app"
+        
+    - name: Get version from package.json
+      id: get_version_dmg
+      run: |
+        VERSION=$(node -p "require('./package.json').version")
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        
+    - name: Upload DMG Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.get_release.outputs.upload_url }}
+        asset_path: ./OpenClaw-${{ env.VERSION }}.dmg
+        asset_name: OpenClaw-${{ env.VERSION }}.dmg
+        asset_content_type: application/x-apple-diskimage
