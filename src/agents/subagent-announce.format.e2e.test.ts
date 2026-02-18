@@ -209,35 +209,41 @@ describe("subagent announce formatting", () => {
     );
   });
 
-  it("falls back to latest toolResult output when assistant reply is empty", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    chatHistoryMock.mockResolvedValueOnce({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "" }],
-        },
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: "tool output line 1" }],
-        },
-      ],
-    });
-    readLatestAssistantReplyMock.mockResolvedValue("");
+  it.each([
+    { role: "toolResult", toolOutput: "tool output line 1", childRunId: "run-tool-fallback-1" },
+    { role: "tool", toolOutput: "tool output line 2", childRunId: "run-tool-fallback-2" },
+  ] as const)(
+    "falls back to latest $role output when assistant reply is empty",
+    async (testCase) => {
+      const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+      chatHistoryMock.mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "" }],
+          },
+          {
+            role: testCase.role,
+            content: [{ type: "text", text: testCase.toolOutput }],
+          },
+        ],
+      });
+      readLatestAssistantReplyMock.mockResolvedValue("");
 
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-tool-fallback",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      ...defaultOutcomeAnnounce,
-      waitForCompletion: false,
-    });
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:worker",
+        childRunId: testCase.childRunId,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+        waitForCompletion: false,
+      });
 
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
-    const msg = call?.params?.message as string;
-    expect(msg).toContain("tool output line 1");
-  });
+      const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+      const msg = call?.params?.message as string;
+      expect(msg).toContain(testCase.toolOutput);
+    },
+  );
 
   it("uses latest assistant text when it appears after a tool output", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
@@ -267,36 +273,6 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("assistant final line");
-  });
-
-  it("falls back to latest tool output when assistant reply is empty", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    chatHistoryMock.mockResolvedValueOnce({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "" }],
-        },
-        {
-          role: "tool",
-          content: [{ type: "text", text: "tool output line 2" }],
-        },
-      ],
-    });
-    readLatestAssistantReplyMock.mockResolvedValue("");
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-tool-fallback-2",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      ...defaultOutcomeAnnounce,
-      waitForCompletion: false,
-    });
-
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
-    const msg = call?.params?.message as string;
-    expect(msg).toContain("tool output line 2");
   });
 
   it("keeps full findings and includes compact stats", async () => {
@@ -730,7 +706,24 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.to).toBeUndefined();
   });
 
-  it("includes threadId when origin has an active topic/thread", async () => {
+  it.each([
+    {
+      testName: "includes threadId when origin has an active topic/thread",
+      childRunId: "run-thread",
+      expectedThreadId: "42",
+      requesterOrigin: undefined,
+    },
+    {
+      testName: "prefers requesterOrigin.threadId over session entry threadId",
+      childRunId: "run-thread-override",
+      expectedThreadId: "99",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:123",
+        threadId: 99,
+      },
+    },
+  ] as const)("$testName", async (testCase) => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
@@ -747,9 +740,10 @@ describe("subagent announce formatting", () => {
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-thread",
+      childRunId: testCase.childRunId,
       requesterSessionKey: "main",
       requesterDisplayKey: "main",
+      ...(testCase.requesterOrigin ? { requesterOrigin: testCase.requesterOrigin } : {}),
       ...defaultOutcomeAnnounce,
     });
 
@@ -757,42 +751,7 @@ describe("subagent announce formatting", () => {
     const params = await getSingleAgentCallParams();
     expect(params.channel).toBe("telegram");
     expect(params.to).toBe("telegram:123");
-    expect(params.threadId).toBe("42");
-  });
-
-  it("prefers requesterOrigin.threadId over session entry threadId", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
-    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
-    sessionStore = {
-      "agent:main:main": {
-        sessionId: "session-thread-override",
-        lastChannel: "telegram",
-        lastTo: "telegram:123",
-        lastThreadId: 42,
-        queueMode: "collect",
-        queueDebounceMs: 0,
-      },
-    };
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-thread-override",
-      requesterSessionKey: "main",
-      requesterDisplayKey: "main",
-      requesterOrigin: {
-        channel: "telegram",
-        to: "telegram:123",
-        threadId: 99,
-      },
-      ...defaultOutcomeAnnounce,
-    });
-
-    expect(didAnnounce).toBe(true);
-    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
-
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.threadId).toBe("99");
+    expect(params.threadId).toBe(testCase.expectedThreadId);
   });
 
   it("splits collect-mode queues when accountId differs", async () => {
