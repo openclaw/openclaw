@@ -244,7 +244,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const hasThinkingInSummary = containsThinkingBlocks(messagesToSummarize);
       if (hasThinkingInSummary) {
         console.warn(
-          `Compaction: ${messagesToSummarize.length} messages with thinking blocks will be summarized. ` +
+          `Compaction: summarizing ${messagesToSummarize.length} messages, some containing thinking blocks. ` +
             `Thinking content will be incorporated into summary but original blocks will be replaced.`,
         );
       }
