@@ -1,0 +1,22 @@
+---
+description: 
+alwaysApply: true
+enabled: true
+updatedAt: 2026-02-18T01:19:19.727Z
+provider: 
+---
+
+# Git Push 规则
+
+## Remote 配置
+
+本项目关联两个 Git 远程仓库：
+
+- `origin` — GitHub（`github.com/openclaw/openclaw`），公共仓库
+- `leot` — 私有 Gitea（`git.leot.fun/leotwang/openclaw`），带内嵌凭证
+
+## Push 规则
+
+- **默认 push 到 `leot`（私有 Gitea）**，不要 push 到 `origin`（GitHub）
+- 命令：`git push leot <branch>`
+- 除非用户明确要求 push 到 GitHub，否则一律使用 `leot` remote

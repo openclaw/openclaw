@@ -1,0 +1,41 @@
+---
+description: 
+alwaysApply: true
+enabled: true
+updatedAt: 2026-02-18T00:00:16.245Z
+provider: 
+---
+
+# Syno CLI (群晖 NAS 命令行工具)
+
+## 位置
+`cli/syno/` — 独立 Rust crate，不在 workspace 根 Cargo.toml 中。
+
+## 运行方式
+从项目根目录运行时必须指定 manifest path：
+```bash
+cargo run --manifest-path cli/syno/Cargo.toml -- <subcommand> [args]
+```
+
+或者先 cd 到 `cli/syno/` 再 `cargo run`：
+```bash
+cd cli/syno && cargo run -- <subcommand> [args]
+```
+
+## 配置
+- `.env` 文件位于 `cli/syno/.env`，包含 `SYNO_HOST`、`SYNO_PORT`、`SYNO_HTTPS`、`SYNO_USERNAME`、`SYNO_PASSWORD`
+- 程序会先尝试 CWD 下的 `.env`，找不到则回退到 `CARGO_MANIFEST_DIR`（即 `cli/syno/`）下的 `.env`
+- Session 缓存：`%APPDATA%/synology-api/session.toml`（Windows）或 `~/.config/synology-api/session.toml`（Linux/Mac）
+- 连接配置：同目录下 `config.toml`
+
+## 常用命令示例
+```bash
+cargo run --manifest-path cli/syno/Cargo.toml -- info
+cargo run --manifest-path cli/syno/Cargo.toml -- note notes --limit 50
+cargo run --manifest-path cli/syno/Cargo.toml -- note search "关键词"
+cargo run --manifest-path cli/syno/Cargo.toml -- note get <笔记ID>
+cargo run --manifest-path cli/syno/Cargo.toml -- fs ls /volume1/homes
+```
+
+## 文档
+详细命令参考见 `cli/syno/SYNO_CLI.md`
