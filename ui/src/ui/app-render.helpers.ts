@@ -226,6 +226,25 @@ export function renderChatControls(state: AppViewState) {
       >
         ${focusIcon}
       </button>
+      <span class="chat-controls__separator">|</span>
+      <button
+        class="btn btn--sm chat-controls__new-session"
+        tabindex="-1"
+        ?disabled=${!state.connected}
+        @click=${async () => {
+          if (
+            !window.confirm(
+              "Start a new session? This clears active context for this chat, but keeps history on disk.",
+            )
+          ) {
+            return;
+          }
+          await state.handleSendChat("/new", { restoreDraft: true });
+        }}
+        title="Start a new session (same as typing /new)"
+      >
+        New Session
+      </button>
     </div>
   `;
 }
