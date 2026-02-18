@@ -153,4 +153,32 @@ describe("createModelSelectionState parent inheritance", () => {
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe(defaultModel);
   });
+
+  it("preserves session override for explicitly allowlisted models missing from catalog", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/us.deepseek.r1-v1:0": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:slack:channel:c1";
+    const sessionEntry = makeEntry({
+      providerOverride: "amazon-bedrock",
+      modelOverride: "us.deepseek.r1-v1:0",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await resolveState({
+      cfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+    });
+
+    expect(state.provider).toBe("amazon-bedrock");
+    expect(state.model).toBe("us.deepseek.r1-v1:0");
+  });
 });

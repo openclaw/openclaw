@@ -297,13 +297,23 @@ export function buildAllowedModelSet(params: {
     const providerKey = normalizeProviderId(parsed.provider);
     if (isCliProvider(parsed.provider, params.cfg)) {
       allowedKeys.add(key);
-    } else if (catalogKeys.has(key)) {
+      continue;
+    }
+    if (catalogKeys.has(key)) {
       allowedKeys.add(key);
-    } else if (configuredProviders[providerKey] != null) {
+      continue;
+    }
+    if (configuredProviders[providerKey] != null) {
       // Explicitly configured providers should be allowlist-able even when
       // they don't exist in the curated model catalog.
       allowedKeys.add(key);
+      continue;
     }
+
+    // If users explicitly put a model ref in agents.defaults.models, treat it as
+    // allowlisted even when the discovery catalog does not surface it (for example,
+    // Bedrock inference profile ids).
+    allowedKeys.add(key);
   }
 
   if (defaultKey) {

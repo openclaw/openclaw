@@ -203,4 +203,54 @@ describe("openclaw-tools: subagents", () => {
       model: "minimax/MiniMax-M2.1",
     });
   });
+
+  it("sessions_spawn applies allowlisted bedrock inference profile defaults", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/us.deepseek.r1-v1:0": {},
+          },
+          subagents: { model: "amazon-bedrock/us.deepseek.r1-v1:0" },
+        },
+      },
+    };
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-bedrock-model", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
+
+    const result = await tool.execute("call-default-bedrock-model", {
+      task: "do thing",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find((call) => call.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
+      model: "amazon-bedrock/us.deepseek.r1-v1:0",
+    });
+  });
 });
