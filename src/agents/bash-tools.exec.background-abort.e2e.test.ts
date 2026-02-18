@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from "vitest";
-import { sleep } from "../utils.ts";
 import {
   getFinishedSession,
   getSession,
@@ -52,7 +51,17 @@ async function expectBackgroundSessionSurvivesAbort(params: {
   const sessionId = (result.details as { sessionId: string }).sessionId;
 
   abortController.abort();
-  await sleep(150);
+  const startedAt = Date.now();
+  await expect
+    .poll(
+      () => {
+        const running = getSession(sessionId);
+        const finished = getFinishedSession(sessionId);
+        return Date.now() - startedAt >= 100 && !finished && running?.exited === false;
+      },
+      { timeout: process.platform === "win32" ? 1_500 : 800, interval: 20 },
+    )
+    .toBe(true);
 
   const running = getSession(sessionId);
   const finished = getFinishedSession(sessionId);
