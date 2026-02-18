@@ -175,6 +175,7 @@ Additional usage hints are injected into the system prompt:
 - **File**: `extensions/whatsapp/src/channel.ts`
 - **Section**: `agentPrompt.messageToolHints`
 - **Content**:
+
   ```
   - WhatsApp message history: use `action=read` with `channel=whatsapp`,
     `target=<chat_jid>`, and optional `limit=<number>` to retrieve recent
