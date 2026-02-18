@@ -8,6 +8,7 @@ export type ChatState = {
   connected: boolean;
   sessionKey: string;
   chatLoading: boolean;
+  chatLoadingOlder: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
   chatSending: boolean;
@@ -16,6 +17,8 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatCursor: number | null;
+  chatHasMore: boolean;
   lastError: string | null;
 };
 
@@ -27,6 +30,13 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type ChatHistoryResponse = {
+  messages?: Array<unknown>;
+  thinkingLevel?: string;
+  cursor?: number;
+  hasMore?: boolean;
+};
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
@@ -34,19 +44,47 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey: state.sessionKey,
-        limit: 200,
-      },
-    );
+    const res = await state.client.request<ChatHistoryResponse>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 200,
+    });
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    state.chatCursor = typeof res.cursor === "number" ? res.cursor : null;
+    state.chatHasMore = res.hasMore === true;
   } catch (err) {
     state.lastError = String(err);
   } finally {
     state.chatLoading = false;
+  }
+}
+
+export async function loadOlderChatHistory(state: ChatState) {
+  if (!state.client || !state.connected || state.chatLoadingOlder || !state.chatHasMore) {
+    return;
+  }
+  if (state.chatCursor === null || state.chatCursor <= 0) {
+    return;
+  }
+  const sessionKey = state.sessionKey;
+  state.chatLoadingOlder = true;
+  try {
+    const res = await state.client.request<ChatHistoryResponse>("chat.history", {
+      sessionKey,
+      limit: 200,
+      before: state.chatCursor,
+    });
+    if (state.sessionKey !== sessionKey) return;
+    const older = Array.isArray(res.messages) ? res.messages : [];
+    if (older.length > 0) {
+      state.chatMessages = [...older, ...state.chatMessages];
+    }
+    state.chatCursor = typeof res.cursor === "number" ? res.cursor : null;
+    state.chatHasMore = res.hasMore === true;
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.chatLoadingOlder = false;
   }
 }
 

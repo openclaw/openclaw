@@ -5,6 +5,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
     chatLoading: false,
+    chatLoadingOlder: false,
     chatMessage: "",
     chatMessages: [],
     chatRunId: null,
@@ -12,6 +13,8 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatStream: null,
     chatStreamStartedAt: null,
     chatThinkingLevel: null,
+    chatCursor: null,
+    chatHasMore: false,
     client: null,
     connected: true,
     lastError: null,

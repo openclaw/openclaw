@@ -809,6 +809,7 @@ export function renderApp(state: AppViewState) {
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
                 loading: state.chatLoading,
+                loadingOlder: state.chatLoadingOlder,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,
                 assistantAvatarUrl: chatAvatarUrl,

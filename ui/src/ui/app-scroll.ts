@@ -1,6 +1,11 @@
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
 
+/** Cooldown (ms) after triggering a load-older fetch before allowing another. */
+const LOAD_OLDER_COOLDOWN_MS = 500;
+
+let lastLoadOlderTriggeredAt = 0;
+
 type ScrollHost = {
   updateComplete: Promise<unknown>;
   querySelector: (selectors: string) => Element | null;
@@ -13,6 +18,7 @@ type ScrollHost = {
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
+  onLoadOlderMessages?: (() => void) | null;
 };
 
 export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
@@ -119,6 +125,9 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   });
 }
 
+/** Distance (px) from the top within which we trigger loading older messages. */
+const NEAR_TOP_THRESHOLD = 200;
+
 export function handleChatScroll(host: ScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) {
@@ -129,6 +138,14 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   // Clear the "new messages below" indicator when user scrolls back to bottom.
   if (host.chatUserNearBottom) {
     host.chatNewMessagesBelow = false;
+  }
+  // Trigger loading older messages when user scrolls near the top (with cooldown).
+  if (container.scrollTop < NEAR_TOP_THRESHOLD && host.onLoadOlderMessages) {
+    const now = Date.now();
+    if (now - lastLoadOlderTriggeredAt >= LOAD_OLDER_COOLDOWN_MS) {
+      lastLoadOlderTriggeredAt = now;
+      host.onLoadOlderMessages();
+    }
   }
 }
 
