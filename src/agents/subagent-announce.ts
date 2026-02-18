@@ -37,6 +37,14 @@ type ToolResultMessage = {
   content?: unknown;
 };
 
+function isToolResultMessage(msg: unknown): boolean {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+  const role = (msg as { role?: unknown }).role;
+  return role === "toolResult" || role === "tool";
+}
+
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
     return sanitizeTextContent(content);
@@ -60,13 +68,10 @@ async function readLatestToolResult(sessionKey: string): Promise<string | undefi
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i];
-    if (!msg || typeof msg !== "object") {
+    if (!isToolResultMessage(msg)) {
       continue;
     }
     const candidate = msg as ToolResultMessage;
-    if (candidate.role !== "toolResult") {
-      continue;
-    }
     const text = extractToolResultText(candidate.content);
     if (text) {
       return text;
