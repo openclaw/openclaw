@@ -1,7 +1,6 @@
-import type { RuntimeEnv } from "../runtime.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef, resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -9,9 +8,11 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { classifySessionKey } from "../gateway/session-utils.js";
+import { classifySessionKey, resolveSessionModelRef } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 type SessionRow = {
@@ -117,35 +118,6 @@ const formatModelCell = (model: string | null | undefined, rich: boolean) => {
   return rich ? theme.info(label) : label;
 };
 
-const resolveEntryModel = (
-  entry:
-    | {
-        model?: string;
-        modelProvider?: string;
-        modelOverride?: string;
-        providerOverride?: string;
-      }
-    | undefined,
-  fallbackModel: string,
-  fallbackProvider: string,
-): string => {
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    const parsedRuntime = parseModelRef(runtimeModel, runtimeProvider || fallbackProvider);
-    return parsedRuntime ? parsedRuntime.model : runtimeModel;
-  }
-
-  const overrideModel = entry?.modelOverride?.trim();
-  if (overrideModel) {
-    const overrideProvider = entry?.providerOverride?.trim() || fallbackProvider;
-    const parsedOverride = parseModelRef(overrideModel, overrideProvider);
-    return parsedOverride ? parsedOverride.model : overrideModel;
-  }
-
-  return fallbackModel;
-};
-
 const formatFlagsCell = (row: SessionRow, rich: boolean) => {
   const flags = [
     row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
@@ -241,7 +213,12 @@ export async function sessionsCommand(
           count: rows.length,
           activeMinutes: activeMinutes ?? null,
           sessions: rows.map((r) => {
-            const model = resolveEntryModel(r, configModel, resolved.provider ?? DEFAULT_PROVIDER);
+            const resolvedModel = resolveSessionModelRef(
+              cfg,
+              r,
+              parseAgentSessionKey(r.key)?.agentId,
+            );
+            const model = resolvedModel.model ?? configModel;
             return {
               ...r,
               totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
@@ -283,7 +260,8 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = resolveEntryModel(row, configModel, resolved.provider ?? DEFAULT_PROVIDER);
+    const resolvedModel = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
+    const model = resolvedModel.model ?? configModel;
     const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 

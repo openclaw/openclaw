@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -14,6 +12,8 @@ import {
   normalizeUsageDisplay,
   supportsXHighThinking,
 } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -58,6 +58,31 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
+function normalizeModelSelection(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const primary = (value as { primary?: unknown }).primary;
+  if (typeof primary === "string") {
+    const trimmed = primary.trim();
+    return trimmed || undefined;
+  }
+  return undefined;
+}
+
+function resolveSubagentModelHint(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  return (
+    normalizeModelSelection(agentConfig?.subagents?.model) ??
+    normalizeModelSelection(cfg.agents?.defaults?.subagents?.model) ??
+    normalizeModelSelection(agentConfig?.model)
+  );
+}
+
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -70,23 +95,8 @@ export async function applySessionsPatchToStore(params: {
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
-  const normalizeModelSelection = (value: unknown): string | undefined => {
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      return trimmed || undefined;
-    }
-    if (!value || typeof value !== "object") {
-      return undefined;
-    }
-    const primary = (value as { primary?: unknown }).primary;
-    if (typeof primary === "string") {
-      const trimmed = primary.trim();
-      return trimmed || undefined;
-    }
-    return undefined;
-  };
   const subagentModelHint = isSubagentSessionKey(storeKey)
-    ? normalizeModelSelection(resolveAgentConfig(cfg, sessionAgentId)?.model)
+    ? resolveSubagentModelHint(cfg, sessionAgentId)
     : undefined;
 
   const existing = store[storeKey];

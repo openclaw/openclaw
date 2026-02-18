@@ -104,7 +104,6 @@ export async function spawnSubagentDirect(
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : 0;
-  let modelWarning: string | undefined;
   let modelApplied = false;
 
   const cfg = loadConfig();
@@ -222,16 +221,11 @@ export async function spawnSubagentDirect(
     } catch (err) {
       const messageText =
         err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      const recoverable =
-        messageText.includes("invalid model") || messageText.includes("model not allowed");
-      if (!recoverable) {
-        return {
-          status: "error",
-          error: messageText,
-          childSessionKey,
-        };
-      }
-      modelWarning = messageText;
+      return {
+        status: "error",
+        error: messageText,
+        childSessionKey,
+      };
     }
   }
   if (thinkingOverride !== undefined) {
@@ -328,6 +322,5 @@ export async function spawnSubagentDirect(
     runId: childRunId,
     note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
     modelApplied: resolvedModel ? modelApplied : undefined,
-    warning: modelWarning,
   };
 }
