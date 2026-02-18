@@ -28,6 +28,7 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./plugins/group-mentions.js";
+import { normalizeSignalMessagingTarget } from "./plugins/normalize/signal.js";
 import type {
   ChannelCapabilities,
   ChannelCommandAdapter,
@@ -97,16 +98,32 @@ const formatDiscordAllowFrom = (allowFrom: Array<string | number>) =>
     )
     .filter(Boolean);
 
-function buildDirectOrGroupThreadToolContext(params: {
+function resolveDirectOrGroupChannelId(context: ChannelThreadingContext): string | undefined {
+  const isDirect = context.ChatType?.toLowerCase() === "direct";
+  return (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
+}
+
+function buildSignalThreadToolContext(params: {
   context: ChannelThreadingContext;
   hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
 }): ChannelThreadingToolContext {
-  const isDirect = params.context.ChatType?.toLowerCase() === "direct";
-  const channelId =
-    (isDirect ? (params.context.From ?? params.context.To) : params.context.To)?.trim() ||
-    undefined;
+  const currentChannelIdRaw = resolveDirectOrGroupChannelId(params.context);
+  const currentChannelId = currentChannelIdRaw
+    ? (normalizeSignalMessagingTarget(currentChannelIdRaw) ?? currentChannelIdRaw.trim())
+    : undefined;
   return {
-    currentChannelId: channelId,
+    currentChannelId,
+    currentThreadTs: params.context.ReplyToId,
+    hasRepliedRef: params.hasRepliedRef,
+  };
+}
+
+function buildIMessageThreadToolContext(params: {
+  context: ChannelThreadingContext;
+  hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
+}): ChannelThreadingToolContext {
+  return {
+    currentChannelId: resolveDirectOrGroupChannelId(params.context),
     currentThreadTs: params.context.ReplyToId,
     hasRepliedRef: params.hasRepliedRef,
   };
@@ -437,7 +454,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
-        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
+        buildSignalThreadToolContext({ context, hasRepliedRef }),
     },
   },
   imessage: {
@@ -462,7 +479,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
-        buildDirectOrGroupThreadToolContext({ context, hasRepliedRef }),
+        buildIMessageThreadToolContext({ context, hasRepliedRef }),
     },
   },
 };

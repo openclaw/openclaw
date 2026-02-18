@@ -29,9 +29,14 @@ targets:
   OpenClaw:
     type: application
     platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     sources:
       - path: Sources
     dependencies:
+      - target: OpenClawShareExtension
+        embed: true
       - package: OpenClawKit
       - package: OpenClawKit
         product: OpenClawChatUI
@@ -66,12 +71,13 @@ targets:
             exit 1
           fi
           swiftlint lint --config "$SRCROOT/.swiftlint.yml" --use-script-input-file-lists
-    configFiles:
-      Debug: Config/Signing.xcconfig
-      Release: Config/Signing.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
+        PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_APP_PROFILE)"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_APPINTENTS_METADATA: NO
@@ -80,8 +86,12 @@ targets:
       properties:
         CFBundleDisplayName: OpenClaw
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2026.2.16"
-        CFBundleVersion: "20260216"
+        CFBundleURLTypes:
+          - CFBundleURLName: ai.openclaw.ios
+            CFBundleURLSchemes:
+              - openclaw
+        CFBundleShortVersionString: "2026.2.18"
+        CFBundleVersion: "20260218"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -108,6 +118,28 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
+  OpenClawShareExtension:
+    type: app-extension
+    platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    sources:
+      - path: ShareExtension
+    dependencies:
+      - package: OpenClawKit
+    settings:
+      base:
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_SHARE_BUNDLE_ID)"
+        PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_SHARE_PROFILE)"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: ShareExtension/Info.plist
+
   OpenClawTests:
     type: bundle.unit-test
     platform: iOS
@@ -129,5 +161,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.2.16"
-        CFBundleVersion: "20260216"
+        CFBundleShortVersionString: "2026.2.18"
+        CFBundleVersion: "20260218"

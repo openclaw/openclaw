@@ -6,6 +6,7 @@ import {
 } from "../legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -377,6 +378,26 @@ export async function ensureLoaded(
                 : null;
         if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
           sched.anchorMs = normalizedAnchor;
+          mutated = true;
+        }
+      }
+
+      const exprRaw = typeof sched.expr === "string" ? sched.expr.trim() : "";
+      if (typeof sched.expr === "string" && sched.expr !== exprRaw) {
+        sched.expr = exprRaw;
+        mutated = true;
+      }
+      if ((kind === "cron" || sched.kind === "cron") && exprRaw) {
+        const explicitStaggerMs = normalizeCronStaggerMs(sched.staggerMs);
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(exprRaw);
+        const targetStaggerMs = explicitStaggerMs ?? defaultStaggerMs;
+        if (targetStaggerMs === undefined) {
+          if ("staggerMs" in sched) {
+            delete sched.staggerMs;
+            mutated = true;
+          }
+        } else if (sched.staggerMs !== targetStaggerMs) {
+          sched.staggerMs = targetStaggerMs;
           mutated = true;
         }
       }

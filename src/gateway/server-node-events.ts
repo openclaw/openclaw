@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseMessageWithAttachments } from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry,
@@ -193,6 +199,35 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   return sessionKey.length > 0 ? sessionKey : null;
 }
 
+async function sendReceiptAck(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  deps: NodeEventContext["deps"];
+  sessionKey: string;
+  channel: string;
+  to: string;
+  text: string;
+}) {
+  const resolved = resolveOutboundTarget({
+    channel: params.channel,
+    to: params.to,
+    cfg: params.cfg,
+    mode: "explicit",
+  });
+  if (!resolved.ok) {
+    throw new Error(String(resolved.error));
+  }
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+  await deliverOutboundPayloads({
+    cfg: params.cfg,
+    channel: params.channel,
+    to: resolved.to,
+    payloads: [{ text: params.text }],
+    agentId,
+    bestEffort: true,
+    deps: createOutboundSendDeps(params.deps),
+  });
+}
+
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -273,6 +308,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionKey?: string | null;
         thinking?: string | null;
         deliver?: boolean;
+        attachments?: Array<{
+          type?: string;
+          mimeType?: string;
+          fileName?: string;
+          content?: unknown;
+        }> | null;
+        receipt?: boolean;
+        receiptText?: string | null;
         to?: string | null;
         channel?: string | null;
         timeoutSeconds?: number | null;
@@ -284,7 +327,23 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       } catch {
         return;
       }
-      const message = (link?.message ?? "").trim();
+      let message = (link?.message ?? "").trim();
+      const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
+        link?.attachments ?? undefined,
+      );
+      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      if (normalizedAttachments.length > 0) {
+        try {
+          const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
+            maxBytes: 5_000_000,
+            log: ctx.logGateway,
+          });
+          message = parsed.message.trim();
+          images = parsed.images;
+        } catch {
+          return;
+        }
+      }
       if (!message) {
         return;
       }
@@ -293,9 +352,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
-      const channel = normalizeChannelId(channelRaw) ?? undefined;
-      const to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
-      const deliver = Boolean(link?.deliver) && Boolean(channel);
+      let channel = normalizeChannelId(channelRaw) ?? undefined;
+      let to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
+      const deliverRequested = Boolean(link?.deliver);
+      const wantsReceipt = Boolean(link?.receipt);
+      const receiptTextRaw = typeof link?.receiptText === "string" ? link.receiptText.trim() : "";
+      const receiptText =
+        receiptTextRaw || "Just received your iOS share + request, working on it.";
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
@@ -305,15 +368,56 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const sessionId = entry?.sessionId ?? randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
 
+      if (deliverRequested && (!channel || !to)) {
+        const entryChannel =
+          typeof entry?.lastChannel === "string"
+            ? normalizeChannelId(entry.lastChannel)
+            : undefined;
+        const entryTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
+        if (!channel && entryChannel) {
+          channel = entryChannel;
+        }
+        if (!to && entryTo) {
+          to = entryTo;
+        }
+      }
+      const deliver = deliverRequested && Boolean(channel && to);
+      const deliveryChannel = deliver ? channel : undefined;
+      const deliveryTo = deliver ? to : undefined;
+
+      if (deliverRequested && !deliver) {
+        ctx.logGateway.warn(
+          `agent delivery disabled node=${nodeId}: missing session delivery route (channel=${channel ?? "-"} to=${to ?? "-"})`,
+        );
+      }
+
+      if (wantsReceipt && deliveryChannel && deliveryTo) {
+        void sendReceiptAck({
+          cfg,
+          deps: ctx.deps,
+          sessionKey: canonicalKey,
+          channel: deliveryChannel,
+          to: deliveryTo,
+          text: receiptText,
+        }).catch((err) => {
+          ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
+        });
+      } else if (wantsReceipt) {
+        ctx.logGateway.warn(
+          `agent receipt skipped node=${nodeId}: missing delivery route (channel=${deliveryChannel ?? "-"} to=${deliveryTo ?? "-"})`,
+        );
+      }
+
       void agentCommand(
         {
           message,
+          images,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
           deliver,
-          to,
-          channel,
+          to: deliveryTo,
+          channel: deliveryChannel,
           timeout:
             typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",

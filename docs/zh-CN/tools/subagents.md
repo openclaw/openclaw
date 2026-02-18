@@ -22,12 +22,23 @@ x-i18n:
 使用 `/subagents` 检查或控制**当前会话**的子智能体运行：
 
 - `/subagents list`
-- `/subagents stop <id|#|all>`
+- `/subagents kill <id|#|all>`
 - `/subagents log <id|#> [limit] [tools]`
 - `/subagents info <id|#>`
 - `/subagents send <id|#> <message>`
+- `/subagents steer <id|#> <message>`
+- `/subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]`
 
 `/subagents info` 显示运行元数据（状态、时间戳、会话 id、转录路径、清理）。
+
+### 启动行为
+
+`/subagents spawn` 以用户命令方式启动后台子智能体，任务完成后会向请求者聊天频道回发一条最终完成消息。
+
+- 该命令非阻塞，先返回 `runId`。
+- 完成后，子智能体会将汇总/结果消息发布到请求者聊天渠道。
+- `--model` 与 `--thinking` 可仅对本次运行做覆盖设置。
+- 可在完成后通过 `info`/`log` 查看详细信息和输出。
 
 主要目标：
 
