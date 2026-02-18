@@ -1,15 +1,17 @@
 import fs from "node:fs";
-import path from "node:path";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { ReplyPayload } from "../types.js";
-import type { HandleCommandsParams } from "./commands-types.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import { resolveSessionFilePath } from "../../config/sessions/paths.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 
 function estimateTokensFromChars(chars: number): number {
   return Math.ceil(Math.max(0, chars) / 4);
@@ -112,10 +114,10 @@ function readConversationStats(params: {
     filePath = resolveSessionFilePath(
       params.sessionId,
       params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
-      {
+      resolveSessionFilePathOptions({
         agentId: params.agentId,
-        sessionsDir: params.storePath ? path.dirname(params.storePath) : undefined,
-      },
+        storePath: params.storePath,
+      }),
     );
   } catch {
     return empty;
