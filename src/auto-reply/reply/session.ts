@@ -251,11 +251,15 @@ export async function initSessionState(params: {
     // When a reset trigger (/new, /reset) starts a new session, carry over
     // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
     // so the user doesn't have to re-enable them every time.
+    // But DO NOT carry over model/provider overrides — reset to defaults.
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      // Explicitly clear model overrides so THIS turn uses defaults
+      persistedModelOverride = undefined;
+      persistedProviderOverride = undefined;
     }
   }
 
