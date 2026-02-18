@@ -315,6 +315,15 @@ pub fn classify_method(method: &str) -> MethodFamily {
     if normalized.starts_with("skills.") || normalized == "skills" {
         return MethodFamily::Gateway;
     }
+    if normalized.starts_with("update.") || normalized == "update" {
+        return MethodFamily::Gateway;
+    }
+    if normalized.starts_with("web.") || normalized == "web" {
+        return MethodFamily::Gateway;
+    }
+    if normalized.starts_with("wizard.") || normalized == "wizard" {
+        return MethodFamily::Gateway;
+    }
     if normalized.starts_with("message.") || normalized == "message" {
         return MethodFamily::Message;
     }
@@ -584,6 +593,9 @@ mod tests {
         assert_eq!(classify_method("agents.list"), MethodFamily::Agent);
         assert_eq!(classify_method("models.list"), MethodFamily::Gateway);
         assert_eq!(classify_method("skills.status"), MethodFamily::Gateway);
+        assert_eq!(classify_method("update.run"), MethodFamily::Gateway);
+        assert_eq!(classify_method("web.login.start"), MethodFamily::Gateway);
+        assert_eq!(classify_method("wizard.start"), MethodFamily::Gateway);
         assert_eq!(classify_method("sessions.patch"), MethodFamily::Sessions);
         assert_eq!(classify_method("node.invoke"), MethodFamily::Node);
         assert_eq!(classify_method("browser.open"), MethodFamily::Browser);

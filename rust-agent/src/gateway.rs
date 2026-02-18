@@ -195,6 +195,48 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "update.run",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "web.login.start",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "web.login.wait",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "wizard.start",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "wizard.next",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "wizard.cancel",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "wizard.status",
+                    family: MethodFamily::Gateway,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "config.get",
                     family: MethodFamily::Config,
                     requires_auth: true,
@@ -417,6 +459,8 @@ pub struct RpcDispatcher {
     skills: SkillsRegistry,
     cron: CronRegistry,
     config: ConfigRegistry,
+    web_login: WebLoginRegistry,
+    wizard: WizardRegistry,
     channel_capabilities: Vec<ChannelCapabilities>,
     started_at_ms: u64,
 }
@@ -452,6 +496,8 @@ const CRON_STORE_PATH: &str = "memory://cron/jobs.json";
 const MAX_CRON_RUN_LOGS_PER_JOB: usize = 500;
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static WEB_LOGIN_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static WIZARD_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
@@ -485,6 +531,13 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "cron.runs",
     "channels.status",
     "channels.logout",
+    "update.run",
+    "web.login.start",
+    "web.login.wait",
+    "wizard.start",
+    "wizard.next",
+    "wizard.cancel",
+    "wizard.status",
     "config.get",
     "config.set",
     "config.patch",
@@ -522,6 +575,8 @@ impl RpcDispatcher {
             skills: SkillsRegistry::new(),
             cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
+            web_login: WebLoginRegistry::new(),
+            wizard: WizardRegistry::new(),
             channel_capabilities,
             started_at_ms: now_ms(),
         }
@@ -561,6 +616,13 @@ impl RpcDispatcher {
             "cron.runs" => self.handle_cron_runs(req).await,
             "channels.status" => self.handle_channels_status(req).await,
             "channels.logout" => self.handle_channels_logout(req).await,
+            "update.run" => self.handle_update_run(req).await,
+            "web.login.start" => self.handle_web_login_start(req).await,
+            "web.login.wait" => self.handle_web_login_wait(req).await,
+            "wizard.start" => self.handle_wizard_start(req).await,
+            "wizard.next" => self.handle_wizard_next(req).await,
+            "wizard.cancel" => self.handle_wizard_cancel(req).await,
+            "wizard.status" => self.handle_wizard_status(req).await,
             "config.get" => self.handle_config_get(req).await,
             "config.set" => self.handle_config_set(req).await,
             "config.patch" => self.handle_config_patch(req).await,
@@ -1344,6 +1406,267 @@ impl RpcDispatcher {
             "loggedOut": false,
             "supported": false
         }))
+    }
+
+    async fn handle_update_run(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<UpdateRunParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid update.run params: {err}"
+                ));
+            }
+        };
+
+        let session_key = normalize_optional_text(params.session_key, 256);
+        let note = normalize_optional_text(params.note, 512);
+        let restart_delay_ms = params.restart_delay_ms.unwrap_or(0);
+        let timeout_ms = params
+            .timeout_ms
+            .map(|value| value.max(1_000))
+            .unwrap_or(30_000);
+        let (delivery_context, thread_id) = extract_update_delivery_info(session_key.as_deref());
+
+        let step = json!({
+            "name": "noop",
+            "command": "rust-agent parity update stub",
+            "cwd": ".",
+            "durationMs": 0,
+            "log": {
+                "stdoutTail": Value::Null,
+                "stderrTail": Value::Null,
+                "exitCode": 0
+            }
+        });
+        let result = json!({
+            "status": "ok",
+            "mode": "rust-parity",
+            "root": "memory://openclaw-rust-agent",
+            "before": Value::Null,
+            "after": Value::Null,
+            "steps": [step.clone()],
+            "durationMs": 0
+        });
+        let sentinel_payload = json!({
+            "kind": "update",
+            "status": "ok",
+            "ts": now_ms(),
+            "sessionKey": session_key,
+            "deliveryContext": delivery_context,
+            "threadId": thread_id,
+            "message": note,
+            "doctorHint": "Run `openclaw doctor --non-interactive` after restart.",
+            "stats": {
+                "mode": "rust-parity",
+                "root": "memory://openclaw-rust-agent",
+                "before": Value::Null,
+                "after": Value::Null,
+                "steps": [step],
+                "reason": Value::Null,
+                "durationMs": 0,
+                "timeoutMs": timeout_ms
+            }
+        });
+        let sentinel_path = format!("memory://restart-sentinel/update-{}", now_ms());
+        self.system
+            .log_line(format!(
+                "update.run status=ok restartDelayMs={restart_delay_ms}"
+            ))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "result": result,
+            "restart": {
+                "scheduled": true,
+                "delayMs": restart_delay_ms,
+                "reason": "update.run",
+                "signal": "SIGUSR1"
+            },
+            "sentinel": {
+                "path": sentinel_path,
+                "payload": sentinel_payload
+            }
+        }))
+    }
+
+    async fn handle_web_login_start(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<WebLoginStartParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid web.login.start params: {err}"
+                ));
+            }
+        };
+        let Some(provider_id) = resolve_web_login_provider(&self.channel_capabilities) else {
+            return RpcDispatchOutcome::bad_request("web login provider is not available");
+        };
+        let start = self
+            .web_login
+            .start(WebLoginStartInput {
+                provider_id: provider_id.clone(),
+                account_id: normalize_optional_text(params.account_id, 64)
+                    .unwrap_or_else(|| "default".to_owned()),
+                force: params.force.unwrap_or(false),
+                verbose: params.verbose.unwrap_or(false),
+                timeout_ms: params.timeout_ms.unwrap_or(30_000),
+            })
+            .await;
+        self.system
+            .log_line(format!(
+                "web.login.start provider={} account={}",
+                start.provider_id, start.account_id
+            ))
+            .await;
+        RpcDispatchOutcome::Handled(json!(start))
+    }
+
+    async fn handle_web_login_wait(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<WebLoginWaitParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid web.login.wait params: {err}"
+                ));
+            }
+        };
+        let Some(provider_id) = resolve_web_login_provider(&self.channel_capabilities) else {
+            return RpcDispatchOutcome::bad_request("web login provider is not available");
+        };
+        let wait = self
+            .web_login
+            .wait(WebLoginWaitInput {
+                provider_id: provider_id.clone(),
+                account_id: normalize_optional_text(params.account_id, 64)
+                    .unwrap_or_else(|| "default".to_owned()),
+                timeout_ms: params.timeout_ms.unwrap_or(120_000),
+            })
+            .await;
+        self.system
+            .log_line(format!(
+                "web.login.wait provider={} account={} connected={}",
+                wait.provider_id, wait.account_id, wait.connected
+            ))
+            .await;
+        RpcDispatchOutcome::Handled(json!(wait))
+    }
+
+    async fn handle_wizard_start(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<WizardStartParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid wizard.start params: {err}"
+                ));
+            }
+        };
+        let mode = match parse_wizard_mode(params.mode) {
+            Ok(mode) => mode,
+            Err(err) => return RpcDispatchOutcome::bad_request(err),
+        };
+        let workspace = normalize_optional_text(params.workspace, 1_024);
+        let result = match self.wizard.start(mode, workspace).await {
+            Ok(v) => v,
+            Err(WizardRegistryError::Unavailable(message)) => {
+                return RpcDispatchOutcome::Error {
+                    code: 503,
+                    message,
+                    details: None,
+                };
+            }
+            Err(WizardRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        self.system.log_line("wizard.start".to_owned()).await;
+        RpcDispatchOutcome::Handled(result)
+    }
+
+    async fn handle_wizard_next(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<WizardNextParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid wizard.next params: {err}"
+                ));
+            }
+        };
+        let result = match self.wizard.next(params).await {
+            Ok(v) => v,
+            Err(WizardRegistryError::Unavailable(message)) => {
+                return RpcDispatchOutcome::Error {
+                    code: 503,
+                    message,
+                    details: None,
+                };
+            }
+            Err(WizardRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        self.system.log_line("wizard.next".to_owned()).await;
+        RpcDispatchOutcome::Handled(result)
+    }
+
+    async fn handle_wizard_cancel(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<WizardSessionParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid wizard.cancel params: {err}"
+                ));
+            }
+        };
+        let Some(session_id) = normalize_optional_text(params.session_id, 128) else {
+            return RpcDispatchOutcome::bad_request(
+                "invalid wizard.cancel params: sessionId required",
+            );
+        };
+        let result = match self.wizard.cancel(&session_id).await {
+            Ok(v) => v,
+            Err(WizardRegistryError::Unavailable(message)) => {
+                return RpcDispatchOutcome::Error {
+                    code: 503,
+                    message,
+                    details: None,
+                };
+            }
+            Err(WizardRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        self.system.log_line("wizard.cancel".to_owned()).await;
+        RpcDispatchOutcome::Handled(result)
+    }
+
+    async fn handle_wizard_status(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<WizardSessionParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid wizard.status params: {err}"
+                ));
+            }
+        };
+        let Some(session_id) = normalize_optional_text(params.session_id, 128) else {
+            return RpcDispatchOutcome::bad_request(
+                "invalid wizard.status params: sessionId required",
+            );
+        };
+        let result = match self.wizard.status(&session_id).await {
+            Ok(v) => v,
+            Err(WizardRegistryError::Unavailable(message)) => {
+                return RpcDispatchOutcome::Error {
+                    code: 503,
+                    message,
+                    details: None,
+                };
+            }
+            Err(WizardRegistryError::Invalid(message)) => {
+                return RpcDispatchOutcome::bad_request(message);
+            }
+        };
+        RpcDispatchOutcome::Handled(result)
     }
 
     async fn handle_config_get(&self, _req: &RpcRequestFrame) -> RpcDispatchOutcome {
@@ -3759,6 +4082,464 @@ impl SkillsRegistry {
     }
 }
 
+struct WebLoginRegistry {
+    state: Mutex<WebLoginState>,
+}
+
+#[derive(Debug, Clone)]
+struct WebLoginState {
+    sessions: HashMap<String, WebLoginSession>,
+}
+
+#[derive(Debug, Clone)]
+struct WebLoginSession {
+    session_id: String,
+    provider_id: String,
+    account_id: String,
+    started_at_ms: u64,
+    ready_at_ms: u64,
+    expires_at_ms: u64,
+    qr_data_url: String,
+    verbose: bool,
+}
+
+#[derive(Debug, Clone)]
+struct WebLoginStartInput {
+    provider_id: String,
+    account_id: String,
+    force: bool,
+    verbose: bool,
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct WebLoginWaitInput {
+    provider_id: String,
+    account_id: String,
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct WebLoginStartResult {
+    #[serde(rename = "providerId")]
+    provider_id: String,
+    #[serde(rename = "accountId")]
+    account_id: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(rename = "startedAtMs")]
+    started_at_ms: u64,
+    #[serde(rename = "expiresAtMs")]
+    expires_at_ms: u64,
+    #[serde(rename = "qrDataUrl")]
+    qr_data_url: String,
+    message: String,
+    verbose: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct WebLoginWaitResult {
+    #[serde(rename = "providerId")]
+    provider_id: String,
+    #[serde(rename = "accountId")]
+    account_id: String,
+    connected: bool,
+    message: String,
+}
+
+impl WebLoginRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(WebLoginState {
+                sessions: HashMap::new(),
+            }),
+        }
+    }
+
+    async fn start(&self, input: WebLoginStartInput) -> WebLoginStartResult {
+        let now = now_ms();
+        let timeout_ms = input.timeout_ms.max(5_000);
+        let key = format!(
+            "{}:{}",
+            normalize(&input.provider_id),
+            normalize(&input.account_id)
+        );
+        let mut guard = self.state.lock().await;
+        if !input.force {
+            if let Some(existing) = guard.sessions.get(&key) {
+                if now <= existing.expires_at_ms {
+                    return WebLoginStartResult {
+                        provider_id: existing.provider_id.clone(),
+                        account_id: existing.account_id.clone(),
+                        session_id: existing.session_id.clone(),
+                        started_at_ms: existing.started_at_ms,
+                        expires_at_ms: existing.expires_at_ms,
+                        qr_data_url: existing.qr_data_url.clone(),
+                        message: "QR already active. Scan it in WhatsApp -> Linked Devices."
+                            .to_owned(),
+                        verbose: existing.verbose,
+                    };
+                }
+            }
+        }
+
+        let session_id = next_web_login_session_id();
+        let started_at_ms = now;
+        let expires_at_ms = now.saturating_add(timeout_ms.max(60_000));
+        let ready_at_ms = now.saturating_add(timeout_ms.min(3_000));
+        let qr_data_url = format!(
+            "data:image/png;base64,cnVzdC1wYXJpdHktd2ViLWxvZ2luLXNlc3Npb24t{}",
+            session_id
+        );
+        let session = WebLoginSession {
+            session_id: session_id.clone(),
+            provider_id: input.provider_id.clone(),
+            account_id: input.account_id.clone(),
+            started_at_ms,
+            ready_at_ms,
+            expires_at_ms,
+            qr_data_url: qr_data_url.clone(),
+            verbose: input.verbose,
+        };
+        guard.sessions.insert(key, session);
+        if guard.sessions.len() > 64 {
+            let mut oldest_key: Option<String> = None;
+            let mut oldest_started = u64::MAX;
+            for (entry_key, entry) in &guard.sessions {
+                if entry.started_at_ms < oldest_started {
+                    oldest_started = entry.started_at_ms;
+                    oldest_key = Some(entry_key.clone());
+                }
+            }
+            if let Some(oldest_key) = oldest_key {
+                let _ = guard.sessions.remove(&oldest_key);
+            }
+        }
+        WebLoginStartResult {
+            provider_id: input.provider_id,
+            account_id: input.account_id,
+            session_id,
+            started_at_ms,
+            expires_at_ms,
+            qr_data_url,
+            message: "Scan this QR in WhatsApp -> Linked Devices.".to_owned(),
+            verbose: input.verbose,
+        }
+    }
+
+    async fn wait(&self, input: WebLoginWaitInput) -> WebLoginWaitResult {
+        let now = now_ms();
+        let timeout_ms = input.timeout_ms.max(1_000);
+        let key = format!(
+            "{}:{}",
+            normalize(&input.provider_id),
+            normalize(&input.account_id)
+        );
+        let mut guard = self.state.lock().await;
+        let Some(session) = guard.sessions.get(&key).cloned() else {
+            return WebLoginWaitResult {
+                provider_id: input.provider_id,
+                account_id: input.account_id,
+                connected: false,
+                message: "No active WhatsApp login in progress.".to_owned(),
+            };
+        };
+        if now > session.expires_at_ms {
+            let _ = guard.sessions.remove(&key);
+            return WebLoginWaitResult {
+                provider_id: input.provider_id,
+                account_id: input.account_id,
+                connected: false,
+                message: "The login QR expired. Ask me to generate a new one.".to_owned(),
+            };
+        }
+        if now.saturating_add(timeout_ms) >= session.ready_at_ms {
+            let _ = guard.sessions.remove(&key);
+            return WebLoginWaitResult {
+                provider_id: input.provider_id,
+                account_id: input.account_id,
+                connected: true,
+                message: "Linked! Channel account is ready.".to_owned(),
+            };
+        }
+        WebLoginWaitResult {
+            provider_id: input.provider_id,
+            account_id: input.account_id,
+            connected: false,
+            message: "Still waiting for the QR scan. Let me know when you've scanned it."
+                .to_owned(),
+        }
+    }
+}
+
+struct WizardRegistry {
+    state: Mutex<WizardState>,
+}
+
+#[derive(Debug, Clone)]
+struct WizardState {
+    sessions: HashMap<String, WizardSessionState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WizardRunStatus {
+    Running,
+    Done,
+    Cancelled,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+struct WizardSessionState {
+    mode: String,
+    workspace: Option<String>,
+    status: WizardRunStatus,
+    error: Option<String>,
+    created_at_ms: u64,
+    updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+enum WizardRegistryError {
+    Invalid(String),
+    Unavailable(String),
+}
+
+impl WizardRunStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl WizardRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(WizardState {
+                sessions: HashMap::new(),
+            }),
+        }
+    }
+
+    async fn start(
+        &self,
+        mode: String,
+        workspace: Option<String>,
+    ) -> Result<Value, WizardRegistryError> {
+        let mut guard = self.state.lock().await;
+        if guard
+            .sessions
+            .values()
+            .any(|session| session.status == WizardRunStatus::Running)
+        {
+            return Err(WizardRegistryError::Unavailable(
+                "wizard already running".to_owned(),
+            ));
+        }
+        let now = now_ms();
+        let session_id = next_wizard_session_id();
+        let session = WizardSessionState {
+            mode,
+            workspace,
+            status: WizardRunStatus::Running,
+            error: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        guard.sessions.insert(session_id.clone(), session.clone());
+        if guard.sessions.len() > 64 {
+            let mut oldest_key: Option<String> = None;
+            let mut oldest_started = u64::MAX;
+            for (entry_key, entry) in &guard.sessions {
+                if entry.status == WizardRunStatus::Running {
+                    continue;
+                }
+                if entry.created_at_ms < oldest_started {
+                    oldest_started = entry.created_at_ms;
+                    oldest_key = Some(entry_key.clone());
+                }
+            }
+            if let Some(oldest_key) = oldest_key {
+                let _ = guard.sessions.remove(&oldest_key);
+            }
+        }
+        Ok(json!({
+            "sessionId": session_id,
+            "done": false,
+            "step": wizard_step_payload(&session),
+            "status": WizardRunStatus::Running.as_str()
+        }))
+    }
+
+    async fn next(&self, params: WizardNextParams) -> Result<Value, WizardRegistryError> {
+        let session_id = normalize_optional_text(params.session_id, 128).ok_or_else(|| {
+            WizardRegistryError::Invalid(
+                "invalid wizard.next params: sessionId required".to_owned(),
+            )
+        })?;
+        let mut guard = self.state.lock().await;
+        let Some(session) = guard.sessions.get_mut(&session_id) else {
+            return Err(WizardRegistryError::Invalid("wizard not found".to_owned()));
+        };
+
+        if let Some(answer) = params.answer {
+            if session.status != WizardRunStatus::Running {
+                return Err(WizardRegistryError::Invalid(
+                    "wizard not running".to_owned(),
+                ));
+            }
+            let step_id = normalize_optional_text(Some(answer.step_id), 128).ok_or_else(|| {
+                WizardRegistryError::Invalid(
+                    "invalid wizard.next params: answer.stepId required".to_owned(),
+                )
+            })?;
+            if normalize(&step_id) != "confirm-setup" {
+                session.status = WizardRunStatus::Error;
+                session.error = Some("invalid wizard step".to_owned());
+                return Err(WizardRegistryError::Invalid(
+                    "invalid wizard.next params: unknown stepId".to_owned(),
+                ));
+            }
+            let accepted = match answer.value {
+                Some(value) => json_value_as_bool(&value).ok_or_else(|| {
+                    WizardRegistryError::Invalid(
+                        "invalid wizard.next params: answer.value must be boolean".to_owned(),
+                    )
+                })?,
+                None => true,
+            };
+            session.updated_at_ms = now_ms();
+            session.status = if accepted {
+                WizardRunStatus::Done
+            } else {
+                WizardRunStatus::Cancelled
+            };
+        }
+
+        let running = session.status == WizardRunStatus::Running;
+        let response = if running {
+            json!({
+                "done": false,
+                "step": wizard_step_payload(session),
+                "status": session.status.as_str(),
+                "error": session.error
+            })
+        } else {
+            json!({
+                "done": true,
+                "status": session.status.as_str(),
+                "error": session.error
+            })
+        };
+        if !running {
+            let _ = guard.sessions.remove(&session_id);
+        }
+        Ok(response)
+    }
+
+    async fn cancel(&self, session_id: &str) -> Result<Value, WizardRegistryError> {
+        let mut guard = self.state.lock().await;
+        let Some(mut session) = guard.sessions.remove(session_id) else {
+            return Err(WizardRegistryError::Invalid("wizard not found".to_owned()));
+        };
+        session.status = WizardRunStatus::Cancelled;
+        session.updated_at_ms = now_ms();
+        Ok(json!({
+            "status": session.status.as_str(),
+            "error": session.error
+        }))
+    }
+
+    async fn status(&self, session_id: &str) -> Result<Value, WizardRegistryError> {
+        let mut guard = self.state.lock().await;
+        let Some(session) = guard.sessions.get(session_id).cloned() else {
+            return Err(WizardRegistryError::Invalid("wizard not found".to_owned()));
+        };
+        if session.status != WizardRunStatus::Running {
+            let _ = guard.sessions.remove(session_id);
+        }
+        Ok(json!({
+            "status": session.status.as_str(),
+            "error": session.error
+        }))
+    }
+}
+
+fn wizard_step_payload(session: &WizardSessionState) -> Value {
+    let workspace_label = session
+        .workspace
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("default");
+    json!({
+        "id": "confirm-setup",
+        "type": "confirm",
+        "title": "Rust Gateway Wizard",
+        "message": format!(
+            "Mode: {}. Workspace: {}. Confirm to apply Rust parity wizard setup.",
+            session.mode, workspace_label
+        ),
+        "initialValue": true,
+        "executor": "gateway"
+    })
+}
+
+fn parse_wizard_mode(mode: Option<String>) -> Result<String, String> {
+    let normalized = normalize_optional_text(mode, 32).unwrap_or_else(|| "local".to_owned());
+    match normalize(&normalized).as_str() {
+        "local" => Ok("local".to_owned()),
+        "remote" => Ok("remote".to_owned()),
+        _ => Err("invalid wizard.start params: mode must be local|remote".to_owned()),
+    }
+}
+
+fn resolve_web_login_provider(channel_capabilities: &[ChannelCapabilities]) -> Option<String> {
+    for candidate in ["whatsapp", "zalouser", "zalo"] {
+        if channel_capabilities
+            .iter()
+            .any(|cap| cap.name.eq_ignore_ascii_case(candidate))
+        {
+            return Some(candidate.to_owned());
+        }
+    }
+    None
+}
+
+fn extract_update_delivery_info(session_key: Option<&str>) -> (Option<Value>, Option<String>) {
+    let Some(session_key) = session_key else {
+        return (None, None);
+    };
+    let parsed = parse_session_key(session_key);
+    let mut delivery = serde_json::Map::new();
+    if let Some(channel) = parsed.channel {
+        delivery.insert("channel".to_owned(), Value::String(channel));
+    }
+    if let Some(to) = parsed.scope_id {
+        delivery.insert("to".to_owned(), Value::String(to));
+    }
+    (
+        (!delivery.is_empty()).then_some(Value::Object(delivery)),
+        parsed.topic_id,
+    )
+}
+
+fn json_value_as_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(v) => Some(*v),
+        Value::Number(v) => v.as_i64().map(|raw| raw != 0),
+        Value::String(v) => match normalize(v).as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn discover_skills(
     base_dir: &Path,
     config_entries: &HashMap<String, SkillConfigState>,
@@ -5693,6 +6474,68 @@ struct ChannelsLogoutParams {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct UpdateRunParams {
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    note: Option<String>,
+    #[serde(rename = "restartDelayMs", alias = "restart_delay_ms")]
+    restart_delay_ms: Option<u64>,
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WebLoginStartParams {
+    force: Option<bool>,
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    timeout_ms: Option<u64>,
+    verbose: Option<bool>,
+    #[serde(rename = "accountId", alias = "account_id")]
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WebLoginWaitParams {
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    timeout_ms: Option<u64>,
+    #[serde(rename = "accountId", alias = "account_id")]
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WizardStartParams {
+    mode: Option<String>,
+    workspace: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WizardNextParams {
+    #[serde(rename = "sessionId", alias = "session_id")]
+    session_id: Option<String>,
+    answer: Option<WizardAnswerInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WizardAnswerInput {
+    #[serde(rename = "stepId", alias = "step_id")]
+    step_id: String,
+    value: Option<Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WizardSessionParams {
+    #[serde(rename = "sessionId", alias = "session_id")]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ConfigWriteParams {
     raw: Option<String>,
@@ -6854,6 +7697,16 @@ fn now_ms() -> u64 {
 fn next_session_id() -> String {
     let sequence = SESSION_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("sess-{}-{sequence}", now_ms())
+}
+
+fn next_web_login_session_id() -> String {
+    let sequence = WEB_LOGIN_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("web-login-{}-{sequence}", now_ms())
+}
+
+fn next_wizard_session_id() -> String {
+    let sequence = WIZARD_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("wizard-{}-{sequence}", now_ms())
 }
 
 #[cfg(test)]
@@ -9724,6 +10577,249 @@ mod tests {
             }),
         };
         let out = dispatcher.handle_request(&req).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_update_and_web_login_methods_report_expected_payloads() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid_update = RpcRequestFrame {
+            id: "req-update-invalid".to_owned(),
+            method: "update.run".to_owned(),
+            params: serde_json::json!({
+                "extra": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_update).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let update = RpcRequestFrame {
+            id: "req-update-run".to_owned(),
+            method: "update.run".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": "agent:main:discord:group:g-upd:topic:42",
+                "note": "rollout",
+                "restartDelayMs": 2500,
+                "timeoutMs": 10
+            }),
+        };
+        match dispatcher.handle_request(&update).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/result/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("ok")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/restart/delayMs")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(2500)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sentinel/payload/threadId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("42")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/sentinel/payload/deliveryContext/channel")
+                        .and_then(serde_json::Value::as_str),
+                    Some("discord")
+                );
+            }
+            _ => panic!("expected update.run handled"),
+        }
+
+        let invalid_web_start = RpcRequestFrame {
+            id: "req-web-start-invalid".to_owned(),
+            method: "web.login.start".to_owned(),
+            params: serde_json::json!({
+                "unknown": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_web_start).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let web_start = RpcRequestFrame {
+            id: "req-web-start".to_owned(),
+            method: "web.login.start".to_owned(),
+            params: serde_json::json!({
+                "timeoutMs": 6000,
+                "verbose": true
+            }),
+        };
+        match dispatcher.handle_request(&web_start).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/providerId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("whatsapp")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/accountId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("default")
+                );
+                let qr = payload
+                    .pointer("/qrDataUrl")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert!(qr.starts_with("data:image/png;base64,"));
+            }
+            _ => panic!("expected web.login.start handled"),
+        }
+
+        let web_wait = RpcRequestFrame {
+            id: "req-web-wait".to_owned(),
+            method: "web.login.wait".to_owned(),
+            params: serde_json::json!({
+                "timeoutMs": 5000
+            }),
+        };
+        match dispatcher.handle_request(&web_wait).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/connected")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected web.login.wait handled"),
+        }
+
+        match dispatcher.handle_request(&web_wait).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/connected")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+            }
+            _ => panic!("expected web.login.wait handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_wizard_methods_manage_session_lifecycle() {
+        let dispatcher = RpcDispatcher::new();
+
+        let invalid_start = RpcRequestFrame {
+            id: "req-wizard-start-invalid".to_owned(),
+            method: "wizard.start".to_owned(),
+            params: serde_json::json!({
+                "mode": "cluster"
+            }),
+        };
+        let out = dispatcher.handle_request(&invalid_start).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let start = RpcRequestFrame {
+            id: "req-wizard-start".to_owned(),
+            method: "wizard.start".to_owned(),
+            params: serde_json::json!({
+                "mode": "remote",
+                "workspace": "C:/workspace/openclaw"
+            }),
+        };
+        let session_id = match dispatcher.handle_request(&start).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/done")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(false)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("running")
+                );
+                payload
+                    .pointer("/sessionId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("wizard session id")
+            }
+            _ => panic!("expected wizard.start handled"),
+        };
+
+        let start_again = RpcRequestFrame {
+            id: "req-wizard-start-again".to_owned(),
+            method: "wizard.start".to_owned(),
+            params: serde_json::json!({}),
+        };
+        let out = dispatcher.handle_request(&start_again).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 503, .. }));
+
+        let status = RpcRequestFrame {
+            id: "req-wizard-status".to_owned(),
+            method: "wizard.status".to_owned(),
+            params: serde_json::json!({
+                "sessionId": session_id.clone()
+            }),
+        };
+        match dispatcher.handle_request(&status).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("running")
+                );
+            }
+            _ => panic!("expected wizard.status handled"),
+        }
+
+        let next = RpcRequestFrame {
+            id: "req-wizard-next".to_owned(),
+            method: "wizard.next".to_owned(),
+            params: serde_json::json!({
+                "sessionId": session_id.clone(),
+                "answer": {
+                    "stepId": "confirm-setup",
+                    "value": true
+                }
+            }),
+        };
+        match dispatcher.handle_request(&next).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/done")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/status")
+                        .and_then(serde_json::Value::as_str),
+                    Some("done")
+                );
+            }
+            _ => panic!("expected wizard.next handled"),
+        }
+
+        let missing_status = RpcRequestFrame {
+            id: "req-wizard-status-missing".to_owned(),
+            method: "wizard.status".to_owned(),
+            params: serde_json::json!({
+                "sessionId": session_id
+            }),
+        };
+        let out = dispatcher.handle_request(&missing_status).await;
         assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
     }
 
