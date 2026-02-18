@@ -144,7 +144,7 @@
             <title>2026.2.15</title>
             <pubDate>Mon, 16 Feb 2026 05:04:34 +0100</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
-            <sparkle:version>11213</sparkle:version>
+            <sparkle:version>202602150</sparkle:version>
             <sparkle:shortVersionString>2026.2.15</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <description><![CDATA[<h2>OpenClaw 2026.2.15</h2>

@@ -1,7 +1,7 @@
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type TranscriptLine = {
@@ -107,6 +107,9 @@ describe("chat abort transcript persistence", () => {
       params: { sessionKey: "main", runId },
       respond,
       context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
     });
 
     const [ok1, payload1] = respond.mock.calls.at(-1) ?? [];
@@ -121,6 +124,9 @@ describe("chat abort transcript persistence", () => {
       params: { sessionKey: "main", runId },
       respond,
       context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
     });
 
     const lines = await readTranscriptLines(transcriptPath);
@@ -178,6 +184,9 @@ describe("chat abort transcript persistence", () => {
       params: { sessionKey: "main" },
       respond,
       context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
     });
 
     const [ok, payload] = respond.mock.calls.at(-1) ?? [];
@@ -235,7 +244,9 @@ describe("chat abort transcript persistence", () => {
       },
       respond,
       context: context as never,
-      client: undefined,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
     });
 
     const [ok, payload] = respond.mock.calls.at(-1) ?? [];

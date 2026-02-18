@@ -1,19 +1,19 @@
 import { describe, expect, it, test, vi } from "vitest";
-import type { RequestFrame } from "./protocol/index.js";
-import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { GatewayClient } from "./client.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
+import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
+import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 const wsMockState = vi.hoisted(() => ({
   last: null as { url: unknown; opts: unknown } | null,
@@ -36,11 +36,10 @@ describe("GatewayClient", () => {
     wsMockState.last = null;
     const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
     client.start();
+    const last = wsMockState.last as { url: unknown; opts: unknown } | null;
 
-    expect(wsMockState.last?.url).toBe("ws://127.0.0.1:1");
-    expect(wsMockState.last?.opts).toEqual(
-      expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }),
-    );
+    expect(last?.url).toBe("ws://127.0.0.1:1");
+    expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
   });
 });
 
@@ -153,7 +152,8 @@ describe("late-arriving invoke results", () => {
         context,
       });
 
-      const [ok, payload, error] = respond.mock.lastCall ?? [];
+      const [ok, rawPayload, error] = respond.mock.lastCall ?? [];
+      const payload = rawPayload as { ok?: boolean; ignored?: boolean } | undefined;
 
       // Late-arriving results return success instead of error to reduce log noise.
       expect(ok).toBe(true);

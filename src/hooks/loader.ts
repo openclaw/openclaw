@@ -8,10 +8,10 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
-import type { InternalHookHandler } from "./internal-hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
+import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 

@@ -12,7 +12,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
@@ -31,7 +31,7 @@ jobs:
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
           exempt-pr-labels: maintainer,no-stale
-          operations-per-run: 500
+          operations-per-run: 10000
           exempt-all-assignees: true
           remove-stale-when-updated: true
           stale-issue-message: |

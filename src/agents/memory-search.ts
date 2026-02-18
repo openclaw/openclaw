@@ -62,6 +62,14 @@ export type ResolvedMemorySearchConfig = {
       vectorWeight: number;
       textWeight: number;
       candidateMultiplier: number;
+      mmr: {
+        enabled: boolean;
+        lambda: number;
+      };
+      temporalDecay: {
+        enabled: boolean;
+        halfLifeDays: number;
+      };
     };
   };
   cache: {
@@ -84,6 +92,10 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
+const DEFAULT_MMR_ENABLED = false;
+const DEFAULT_MMR_LAMBDA = 0.7;
+const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
+const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 
@@ -236,6 +248,26 @@ function mergeConfig(
       overrides?.query?.hybrid?.candidateMultiplier ??
       defaults?.query?.hybrid?.candidateMultiplier ??
       DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    mmr: {
+      enabled:
+        overrides?.query?.hybrid?.mmr?.enabled ??
+        defaults?.query?.hybrid?.mmr?.enabled ??
+        DEFAULT_MMR_ENABLED,
+      lambda:
+        overrides?.query?.hybrid?.mmr?.lambda ??
+        defaults?.query?.hybrid?.mmr?.lambda ??
+        DEFAULT_MMR_LAMBDA,
+    },
+    temporalDecay: {
+      enabled:
+        overrides?.query?.hybrid?.temporalDecay?.enabled ??
+        defaults?.query?.hybrid?.temporalDecay?.enabled ??
+        DEFAULT_TEMPORAL_DECAY_ENABLED,
+      halfLifeDays:
+        overrides?.query?.hybrid?.temporalDecay?.halfLifeDays ??
+        defaults?.query?.hybrid?.temporalDecay?.halfLifeDays ??
+        DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+    },
   };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
@@ -250,6 +282,14 @@ function mergeConfig(
   const normalizedVectorWeight = sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
   const normalizedTextWeight = sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
   const candidateMultiplier = clampInt(hybrid.candidateMultiplier, 1, 20);
+  const temporalDecayHalfLifeDays = Math.max(
+    1,
+    Math.floor(
+      Number.isFinite(hybrid.temporalDecay.halfLifeDays)
+        ? hybrid.temporalDecay.halfLifeDays
+        : DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS,
+    ),
+  );
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
   return {
@@ -281,6 +321,16 @@ function mergeConfig(
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
+        mmr: {
+          enabled: Boolean(hybrid.mmr.enabled),
+          lambda: Number.isFinite(hybrid.mmr.lambda)
+            ? Math.max(0, Math.min(1, hybrid.mmr.lambda))
+            : DEFAULT_MMR_LAMBDA,
+        },
+        temporalDecay: {
+          enabled: Boolean(hybrid.temporalDecay.enabled),
+          halfLifeDays: temporalDecayHalfLifeDays,
+        },
       },
     },
     cache: {

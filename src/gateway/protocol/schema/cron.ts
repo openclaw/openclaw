@@ -8,7 +8,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       message: params.message,
       model: Type.Optional(Type.String()),
       thinking: Type.Optional(Type.String()),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       deliver: Type.Optional(Type.Boolean()),
       channel: Type.Optional(Type.String()),
@@ -40,6 +40,7 @@ export const CronScheduleSchema = Type.Union([
       kind: Type.Literal("cron"),
       expr: NonEmptyString,
       tz: Type.Optional(Type.String()),
+      staggerMs: Type.Optional(Type.Integer({ minimum: 0 })),
     },
     { additionalProperties: false },
   ),
@@ -135,6 +136,7 @@ export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
@@ -164,6 +166,7 @@ export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     description: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
@@ -180,6 +183,7 @@ export const CronJobPatchSchema = Type.Object(
   {
     name: Type.Optional(NonEmptyString),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     description: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),

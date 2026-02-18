@@ -2,6 +2,8 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
+  emitMessageStartAndEndForAssistantText,
+  expectSingleAgentEventText,
   extractAgentEventPayloads,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
@@ -17,6 +19,54 @@ describe("subscribeEmbeddedPiSession", () => {
     { tag: "thought", open: "<thought>", close: "</thought>" },
     { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
   ] as const;
+
+  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: options?.runId ?? "run",
+      onAgentEvent,
+      sessionKey: options?.sessionKey,
+    });
+
+    return { emit, onAgentEvent };
+  }
+
+  function createToolErrorHarness(runId: string) {
+    const { session, emit } = createStubSessionHarness();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId,
+      sessionKey: "test-session",
+    });
+
+    return { emit, subscription };
+  }
+
+  function emitToolRun(params: {
+    emit: (evt: unknown) => void;
+    toolName: string;
+    toolCallId: string;
+    args?: Record<string, unknown>;
+    isError: boolean;
+    result: unknown;
+  }): void {
+    params.emit({
+      type: "tool_execution_start",
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      args: params.args,
+    });
+    params.emit({
+      type: "tool_execution_end",
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      isError: params.isError,
+      result: params.result,
+    });
+  }
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
@@ -152,37 +202,21 @@ describe("subscribeEmbeddedPiSession", () => {
   );
 
   it("emits delta chunks in agent events for streaming assistant text", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, onAgentEvent } = createAgentEventHarness();
 
-    const onAgentEvent = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onAgentEvent,
-    });
-
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: "Hello" },
     });
-    handler?.({
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: " world" },
     });
 
-    const payloads = onAgentEvent.mock.calls
-      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
-      .filter((value): value is Record<string, unknown> => Boolean(value));
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads[0]?.text).toBe("Hello");
     expect(payloads[0]?.delta).toBe("Hello");
     expect(payloads[1]?.text).toBe("Hello world");
@@ -199,6 +233,12 @@ describe("subscribeEmbeddedPiSession", () => {
       runId: "run",
       onAgentEvent,
     });
+    emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
+  it("does not emit duplicate agent events when message_end repeats", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
 
     const assistantMessage = {
       role: "assistant",
@@ -207,153 +247,66 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emit({ type: "message_start", message: assistantMessage });
     emit({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Hello world");
-    expect(payloads[0]?.delta).toBe("Hello world");
-  });
-
-  it("does not emit duplicate agent events when message_end repeats", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onAgentEvent = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onAgentEvent,
-    });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello world" }],
-    } as AssistantMessage;
-
-    handler?.({ type: "message_start", message: assistantMessage });
-    handler?.({ type: "message_end", message: assistantMessage });
-    handler?.({ type: "message_end", message: assistantMessage });
-
-    const payloads = onAgentEvent.mock.calls
-      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
-      .filter((value): value is Record<string, unknown> => Boolean(value));
     expect(payloads).toHaveLength(1);
   });
 
   it("skips agent events when cleaned text rewinds mid-stream", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, onAgentEvent } = createAgentEventHarness();
 
-    const onAgentEvent = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onAgentEvent,
-    });
-
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: "MEDIA:" },
     });
-    handler?.({
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: " https://example.com/a.png\nCaption" },
     });
 
-    const payloads = onAgentEvent.mock.calls
-      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
-      .filter((value): value is Record<string, unknown> => Boolean(value));
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("MEDIA:");
   });
 
   it("emits agent events when media arrives without text", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, onAgentEvent } = createAgentEventHarness();
 
-    const onAgentEvent = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onAgentEvent,
-    });
-
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: "MEDIA: https://example.com/a.png" },
     });
 
-    const payloads = onAgentEvent.mock.calls
-      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
-      .filter((value): value is Record<string, unknown> => Boolean(value));
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("");
     expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
   it("keeps unresolved mutating failure when an unrelated tool succeeds", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, subscription } = createToolErrorHarness("run-tools-1");
 
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run-tools-1",
-      sessionKey: "test-session",
-    });
-
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "write",
       toolCallId: "w1",
       args: { path: "/tmp/demo.txt", content: "next" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "write",
-      toolCallId: "w1",
       isError: true,
       result: { error: "disk full" },
     });
     expect(subscription.getLastToolError()?.toolName).toBe("write");
 
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "read",
       toolCallId: "r1",
       args: { path: "/tmp/demo.txt" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "read",
-      toolCallId: "r1",
       isError: false,
       result: { text: "ok" },
     });
@@ -362,45 +315,23 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("clears unresolved mutating failure when the same action succeeds", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, subscription } = createToolErrorHarness("run-tools-2");
 
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run-tools-2",
-      sessionKey: "test-session",
-    });
-
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "write",
       toolCallId: "w1",
       args: { path: "/tmp/demo.txt", content: "next" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "write",
-      toolCallId: "w1",
       isError: true,
       result: { error: "disk full" },
     });
     expect(subscription.getLastToolError()?.toolName).toBe("write");
 
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "write",
       toolCallId: "w2",
       args: { path: "/tmp/demo.txt", content: "retry" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "write",
-      toolCallId: "w2",
       isError: false,
       result: { ok: true },
     });
@@ -409,44 +340,22 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, subscription } = createToolErrorHarness("run-tools-3");
 
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run-tools-3",
-      sessionKey: "test-session",
-    });
-
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "write",
       toolCallId: "w1",
       args: { path: "/tmp/a.txt", content: "first" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "write",
-      toolCallId: "w1",
       isError: true,
       result: { error: "disk full" },
     });
 
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "write",
       toolCallId: "w2",
       args: { path: "/tmp/b.txt", content: "second" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "write",
-      toolCallId: "w2",
       isError: false,
       result: { ok: true },
     });
@@ -455,44 +364,22 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("keeps unresolved session_status model-mutation failure on later read-only status success", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, subscription } = createToolErrorHarness("run-tools-4");
 
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run-tools-4",
-      sessionKey: "test-session",
-    });
-
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "session_status",
       toolCallId: "s1",
       args: { sessionKey: "agent:main:main", model: "openai/gpt-4o" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "session_status",
-      toolCallId: "s1",
       isError: true,
       result: { error: "Model not allowed." },
     });
 
-    handler?.({
-      type: "tool_execution_start",
+    emitToolRun({
+      emit,
       toolName: "session_status",
       toolCallId: "s2",
       args: { sessionKey: "agent:main:main" },
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "session_status",
-      toolCallId: "s2",
       isError: false,
       result: { ok: true },
     });
@@ -501,20 +388,8 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("emits lifecycle:error event on agent_end when last assistant message was an error", async () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onAgentEvent = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+    const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "run-error",
-      onAgentEvent,
       sessionKey: "test-session",
     });
 
@@ -525,10 +400,10 @@ describe("subscribeEmbeddedPiSession", () => {
     } as AssistantMessage;
 
     // Simulate message update to set lastAssistant
-    handler?.({ type: "message_update", message: assistantMessage });
+    emit({ type: "message_update", message: assistantMessage });
 
     // Trigger agent_end
-    handler?.({ type: "agent_end" });
+    emit({ type: "agent_end" });
 
     // Look for lifecycle:error event
     const lifecycleError = onAgentEvent.mock.calls.find(
@@ -536,6 +411,6 @@ describe("subscribeEmbeddedPiSession", () => {
     );
 
     expect(lifecycleError).toBeDefined();
-    expect(lifecycleError[0].data.error).toContain("API rate limit reached");
+    expect(lifecycleError?.[0]?.data?.error).toContain("API rate limit reached");
   });
 });

@@ -4,8 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
@@ -15,9 +13,11 @@ import {
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
+import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,6 +48,16 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
 
 function normalizeExecutablePath(value: string): string {
   return path.resolve(value);
+}
+
+function resolveGatewayAuthToken(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string | undefined {
+  const configToken = cfg.gateway?.auth?.token?.trim();
+  if (configToken) {
+    return configToken;
+  }
+  const envToken = env.OPENCLAW_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN;
+  const trimmedEnvToken = envToken?.trim();
+  return trimmedEnvToken || undefined;
 }
 
 function extractDetailPath(detail: string, prefix: string): string | null {
@@ -115,9 +125,11 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
+  const expectedGatewayToken = resolveGatewayAuthToken(cfg, process.env);
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
+    expectedGatewayToken,
   });
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
   const systemNodeInfo = needsNodeRuntime
@@ -140,7 +152,7 @@ export async function maybeRepairGatewayServiceConfig(
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+    token: expectedGatewayToken,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
     warn: (message, title) => note(message, title),

@@ -1,5 +1,5 @@
-import type { CallManagerContext } from "./context.js";
 import { TerminalStates, type CallId } from "../types.js";
+import type { CallManagerContext } from "./context.js";
 import { persistCallRecord } from "./store.js";
 
 type TimerContext = Pick<
@@ -87,8 +87,9 @@ export function resolveTranscriptWaiter(
 }
 
 export function waitForFinalTranscript(ctx: TimerContext, callId: CallId): Promise<string> {
-  // Only allow one in-flight waiter per call.
-  rejectTranscriptWaiter(ctx, callId, "Transcript waiter replaced");
+  if (ctx.transcriptWaiters.has(callId)) {
+    return Promise.reject(new Error("Already waiting for transcript"));
+  }
 
   const timeoutMs = ctx.config.transcriptTimeoutMs;
   return new Promise((resolve, reject) => {

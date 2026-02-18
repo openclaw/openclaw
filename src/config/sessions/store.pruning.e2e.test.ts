@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "./types.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
 vi.mock("../config.js", () => ({
@@ -13,11 +13,26 @@ vi.mock("../config.js", () => ({
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
+
 let fixtureRoot = "";
 let fixtureCount = 0;
 
 function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
+}
+
+function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+  mockLoadConfig.mockReturnValue({
+    session: {
+      maintenance: {
+        mode: "enforce",
+        pruneAfter: "7d",
+        maxEntries: 500,
+        rotateBytes: 10_485_760,
+      },
+    },
+  });
 }
 
 async function createCaseDir(prefix: string): Promise<string> {
@@ -62,16 +77,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("saveSessionStore prunes stale entries on write", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "7d",
-          maxEntries: 500,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -84,6 +90,71 @@ describe("Integration: saveSessionStore with pruning", () => {
     const loaded = loadSessionStore(storePath);
     expect(loaded.stale).toBeUndefined();
     expect(loaded.fresh).toBeDefined();
+  });
+
+  it("archives transcript files for stale sessions pruned on write", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const staleSessionId = "stale-session";
+    const freshSessionId = "fresh-session";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: freshSessionId, updatedAt: now },
+    };
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    const freshTranscript = path.join(testDir, `${freshSessionId}.jsonl`);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(freshTranscript, '{"type":"session"}\n', "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    const loaded = loadSessionStore(storePath);
+    expect(loaded.stale).toBeUndefined();
+    expect(loaded.fresh).toBeDefined();
+    await expect(fs.stat(staleTranscript)).rejects.toThrow();
+    await expect(fs.stat(freshTranscript)).resolves.toBeDefined();
+    const dirEntries = await fs.readdir(testDir);
+    const archived = dirEntries.filter((entry) =>
+      entry.startsWith(`${staleSessionId}.jsonl.deleted.`),
+    );
+    expect(archived).toHaveLength(1);
+  });
+
+  it("cleans up archived transcripts older than the prune window", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const staleSessionId = "stale-session";
+    const store: Record<string, SessionEntry> = {
+      stale: { sessionId: staleSessionId, updatedAt: now - 30 * DAY_MS },
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+
+    const staleTranscript = path.join(testDir, `${staleSessionId}.jsonl`);
+    await fs.writeFile(staleTranscript, '{"type":"session"}\n', "utf-8");
+
+    const oldArchived = path.join(
+      testDir,
+      `old-session.jsonl.deleted.${archiveTimestamp(now - 9 * DAY_MS)}`,
+    );
+    const recentArchived = path.join(
+      testDir,
+      `recent-session.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
+    );
+    const bakArchived = path.join(
+      testDir,
+      `bak-session.jsonl.bak.${archiveTimestamp(now - 20 * DAY_MS)}`,
+    );
+    await fs.writeFile(oldArchived, "old", "utf-8");
+    await fs.writeFile(recentArchived, "recent", "utf-8");
+    await fs.writeFile(bakArchived, "bak", "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    await expect(fs.stat(oldArchived)).rejects.toThrow();
+    await expect(fs.stat(recentArchived)).resolves.toBeDefined();
+    await expect(fs.stat(bakArchived)).resolves.toBeDefined();
   });
 
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {

@@ -96,7 +96,7 @@ describe("session cost usage", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const originalState = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = root;
@@ -275,7 +275,11 @@ describe("session cost usage", () => {
     try {
       const summary = await loadSessionCostSummary({
         sessionId: "sess-worker-1",
-        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        sessionEntry: {
+          sessionId: "sess-worker-1",
+          updatedAt: Date.now(),
+          sessionFile: workerSessionFile,
+        },
         agentId: "worker1",
       });
       expect(summary?.totalTokens).toBe(18);
@@ -317,7 +321,11 @@ describe("session cost usage", () => {
     try {
       const timeseries = await loadSessionUsageTimeSeries({
         sessionId: "sess-worker-2",
-        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        sessionEntry: {
+          sessionId: "sess-worker-2",
+          updatedAt: Date.now(),
+          sessionFile: workerSessionFile,
+        },
         agentId: "worker2",
       });
       expect(timeseries?.points.length).toBe(1);
@@ -357,7 +365,11 @@ describe("session cost usage", () => {
     try {
       const logs = await loadSessionLogs({
         sessionId: "sess-worker-3",
-        sessionEntry: { sessionFile: workerSessionFile } as { sessionFile: string },
+        sessionEntry: {
+          sessionId: "sess-worker-3",
+          updatedAt: Date.now(),
+          sessionFile: workerSessionFile,
+        },
         agentId: "worker3",
       });
       expect(logs).toHaveLength(1);
@@ -370,5 +382,58 @@ describe("session cost usage", () => {
         process.env.OPENCLAW_STATE_DIR = originalState;
       }
     }
+  });
+
+  it("preserves totals and cumulative values when downsampling timeseries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-downsample-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-downsample.jsonl");
+
+    const entries = Array.from({ length: 10 }, (_, i) => {
+      const idx = i + 1;
+      return {
+        type: "message",
+        timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx, 0)).toISOString(),
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: idx,
+            output: idx * 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: idx * 3,
+            cost: { total: idx * 0.001 },
+          },
+        },
+      };
+    });
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const timeseries = await loadSessionUsageTimeSeries({
+      sessionFile,
+      maxPoints: 3,
+    });
+
+    expect(timeseries).toBeTruthy();
+    expect(timeseries?.points.length).toBe(3);
+
+    const points = timeseries?.points ?? [];
+    const totalTokens = points.reduce((sum, point) => sum + point.totalTokens, 0);
+    const totalCost = points.reduce((sum, point) => sum + point.cost, 0);
+    const lastPoint = points[points.length - 1];
+
+    // Full-series totals: sum(1..10)*3 = 165 tokens, sum(1..10)*0.001 = 0.055 cost.
+    expect(totalTokens).toBe(165);
+    expect(totalCost).toBeCloseTo(0.055, 8);
+    expect(lastPoint?.cumulativeTokens).toBe(165);
+    expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
   });
 });

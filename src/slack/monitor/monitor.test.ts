@@ -94,6 +94,8 @@ const baseParams = () => ({
   textLimit: 4000,
   ackReactionScope: "group-mentions",
   mediaMaxBytes: 1,
+  threadHistoryScope: "thread" as const,
+  threadInheritParent: false,
   removeAckAfterReply: false,
 });
 

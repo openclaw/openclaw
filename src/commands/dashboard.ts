@@ -1,6 +1,6 @@
-import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   detectBrowserOpenSupport,

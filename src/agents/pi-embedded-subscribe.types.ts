@@ -17,6 +17,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   shouldEmitToolOutput?: () => boolean;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  /** Called when a thinking/reasoning block ends (</think> tag processed). */
+  onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: {
     text?: string;
     mediaUrls?: string[];

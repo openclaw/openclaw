@@ -6,10 +6,10 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
+import type { MSTeamsAdapter } from "./messenger.js";
 import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {

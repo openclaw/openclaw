@@ -430,7 +430,7 @@ State:
 - `openclaw browser storage local set theme dark`
 - `openclaw browser storage session clear`
 - `openclaw browser set offline on`
-- `openclaw browser set headers --json '{"X-Debug":"1"}'`
+- `openclaw browser set headers --headers-json '{"X-Debug":"1"}'`
 - `openclaw browser set credentials user pass`
 - `openclaw browser set credentials --clear`
 - `openclaw browser set geo 37.7749 -122.4194 --origin "https://example.com"`
@@ -542,7 +542,7 @@ These are useful for “make the site behave like X” workflows:
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
 - Offline: `set offline on|off`
-- Headers: `set headers --json '{"X-Debug":"1"}'` (or `--clear`)
+- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (legacy `set headers --json '{"X-Debug":"1"}'` remains supported)
 - HTTP basic auth: `set credentials user pass` (or `--clear`)
 - Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
 - Media: `set media dark|light|no-preference|none`

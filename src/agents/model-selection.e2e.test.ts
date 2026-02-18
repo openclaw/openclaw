@@ -45,6 +45,14 @@ describe("model-selection", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
       });
+      expect(parseModelRef("anthropic/sonnet-4.6", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+      expect(parseModelRef("sonnet-4.6", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
     });
 
     it("should use default provider if none specified", () => {
@@ -142,7 +150,7 @@ describe("model-selection", () => {
       const cfg: Partial<OpenClawConfig> = {
         agents: {
           defaults: {
-            model: "claude-3-5-sonnet",
+            model: { primary: "claude-3-5-sonnet" },
           },
         },
       };

@@ -106,7 +106,9 @@ describe("sessions.usage", () => {
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    const result = respond.mock.calls[0]?.[1] as unknown as { sessions: Array<unknown> };
+    const result = respond.mock.calls[0]?.[1] as unknown as {
+      sessions: Array<{ key: string; agentId: string }>;
+    };
     expect(result.sessions).toHaveLength(2);
 
     // Sorted by most recent first (mtime=200 -> opus first).

@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
+import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { sleep } from "../src/utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
@@ -243,17 +244,8 @@ const connectNode = async (
   const identityPath = path.join(inst.homeDir, `${label}-device.json`);
   const deviceIdentity = loadOrCreateDeviceIdentity(identityPath);
   const nodeId = deviceIdentity.deviceId;
-  let settled = false;
-  let resolveReady: (() => void) | null = null;
-  let rejectReady: ((err: Error) => void) | null = null;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-
-  const client = new GatewayClient({
+  const client = await connectGatewayClient({
     url: `ws://127.0.0.1:${inst.port}`,
-    connectDelayMs: 0,
     token: inst.gatewayToken,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: label,
@@ -265,41 +257,8 @@ const connectNode = async (
     caps: ["system"],
     commands: ["system.run"],
     deviceIdentity,
-    onHelloOk: () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolveReady?.();
-    },
-    onConnectError: (err) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      rejectReady?.(err);
-    },
-    onClose: (code, reason) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      rejectReady?.(new Error(`gateway closed (${code}): ${reason}`));
-    },
+    timeoutMessage: `timeout waiting for ${label} to connect`,
   });
-
-  client.start();
-  try {
-    await Promise.race([
-      ready,
-      sleep(10_000).then(() => {
-        throw new Error(`timeout waiting for ${label} to connect`);
-      }),
-    ]);
-  } catch (err) {
-    client.stop();
-    throw err;
-  }
   return { client, nodeId };
 };
 

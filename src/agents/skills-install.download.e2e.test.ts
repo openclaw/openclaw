@@ -1,9 +1,10 @@
-import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -36,48 +37,6 @@ vi.mock("../security/skill-scanner.js", async (importOriginal) => {
   };
 });
 
-async function writeDownloadSkill(params: {
-  workspaceDir: string;
-  name: string;
-  installId: string;
-  url: string;
-  archive: "tar.gz" | "tar.bz2" | "zip";
-  stripComponents?: number;
-  targetDir: string;
-}): Promise<string> {
-  const skillDir = path.join(params.workspaceDir, "skills", params.name);
-  await fs.mkdir(skillDir, { recursive: true });
-  const meta = {
-    openclaw: {
-      install: [
-        {
-          id: params.installId,
-          kind: "download",
-          url: params.url,
-          archive: params.archive,
-          extract: true,
-          stripComponents: params.stripComponents,
-          targetDir: params.targetDir,
-        },
-      ],
-    },
-  };
-  await fs.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    `---
-name: ${params.name}
-description: test skill
-metadata: ${JSON.stringify(meta)}
----
-
-# ${params.name}
-`,
-    "utf-8",
-  );
-  await fs.writeFile(path.join(skillDir, "runner.js"), "export {};\n", "utf-8");
-  return skillDir;
-}
-
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.stat(filePath);
@@ -87,10 +46,37 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-function setTempStateDir(workspaceDir: string): string {
-  const stateDir = path.join(workspaceDir, "state");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  return stateDir;
+async function seedZipDownloadResponse() {
+  const zip = new JSZip();
+  zip.file("hello.txt", "hi");
+  const buffer = await zip.generateAsync({ type: "nodebuffer" });
+  fetchWithSsrFGuardMock.mockResolvedValue({
+    response: new Response(new Uint8Array(buffer), { status: 200 }),
+    release: async () => undefined,
+  });
+}
+
+async function installZipDownloadSkill(params: {
+  workspaceDir: string;
+  name: string;
+  targetDir: string;
+}) {
+  const url = "https://example.invalid/good.zip";
+  await seedZipDownloadResponse();
+  await writeDownloadSkill({
+    workspaceDir: params.workspaceDir,
+    name: params.name,
+    installId: "dl",
+    url,
+    archive: "zip",
+    targetDir: params.targetDir,
+  });
+
+  return installSkill({
+    workspaceDir: params.workspaceDir,
+    skillName: params.name,
+    installId: "dl",
+  });
 }
 
 describe("installSkill download extraction safety", () => {
@@ -121,7 +107,7 @@ describe("installSkill download extraction safety", () => {
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
 
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -164,7 +150,7 @@ describe("installSkill download extraction safety", () => {
 
       const buffer = await fs.readFile(archivePath);
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -196,7 +182,7 @@ describe("installSkill download extraction safety", () => {
       zip.file("package/hello.txt", "hi");
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -229,7 +215,7 @@ describe("installSkill download extraction safety", () => {
       zip.file("hello.txt", "hi");
       const buffer = await zip.generateAsync({ type: "nodebuffer" });
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
+        response: new Response(new Uint8Array(buffer), { status: 200 }),
         release: async () => undefined,
       });
 
@@ -261,29 +247,10 @@ describe("installSkill download extraction safety", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
     try {
       const stateDir = setTempStateDir(workspaceDir);
-      const url = "https://example.invalid/good.zip";
-
-      const zip = new JSZip();
-      zip.file("hello.txt", "hi");
-      const buffer = await zip.generateAsync({ type: "nodebuffer" });
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
-        release: async () => undefined,
-      });
-
-      await writeDownloadSkill({
+      const result = await installZipDownloadSkill({
         workspaceDir,
         name: "relative-targetdir",
-        installId: "dl",
-        url,
-        archive: "zip",
         targetDir: "runtime",
-      });
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "relative-targetdir",
-        installId: "dl",
       });
       expect(result.ok).toBe(true);
       expect(
@@ -301,29 +268,10 @@ describe("installSkill download extraction safety", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
     try {
       setTempStateDir(workspaceDir);
-      const url = "https://example.invalid/good.zip";
-
-      const zip = new JSZip();
-      zip.file("hello.txt", "hi");
-      const buffer = await zip.generateAsync({ type: "nodebuffer" });
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(buffer, { status: 200 }),
-        release: async () => undefined,
-      });
-
-      await writeDownloadSkill({
+      const result = await installZipDownloadSkill({
         workspaceDir,
         name: "relative-traversal",
-        installId: "dl",
-        url,
-        archive: "zip",
         targetDir: "../outside",
-      });
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "relative-traversal",
-        installId: "dl",
       });
       expect(result.ok).toBe(false);
       expect(result.stderr).toContain("Refusing to install outside the skill tools directory");

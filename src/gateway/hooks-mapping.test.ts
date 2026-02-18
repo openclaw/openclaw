@@ -7,12 +7,40 @@ import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
 
 describe("hooks mapping", () => {
+  const gmailPayload = { messages: [{ subject: "Hello" }] };
+
   function expectSkippedTransformResult(result: Awaited<ReturnType<typeof applyHookMappings>>) {
     expect(result?.ok).toBe(true);
     if (result?.ok) {
       expect(result.action).toBeNull();
       expect("skipped" in result).toBe(true);
     }
+  }
+
+  function createGmailAgentMapping(params: {
+    id: string;
+    messageTemplate: string;
+    model?: string;
+    agentId?: string;
+  }) {
+    return {
+      id: params.id,
+      match: { path: "gmail" },
+      action: "agent" as const,
+      messageTemplate: params.messageTemplate,
+      ...(params.model ? { model: params.model } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    };
+  }
+
+  async function applyGmailMappings(config: Parameters<typeof resolveHookMappings>[0]) {
+    const mappings = resolveHookMappings(config);
+    return applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
   }
 
   async function applyNullTransformFromTempConfig(params: {
@@ -55,49 +83,33 @@ describe("hooks mapping", () => {
   });
 
   it("renders template from payload", async () => {
-    const mappings = resolveHookMappings({
+    const result = await applyGmailMappings({
       mappings: [
-        {
+        createGmailAgentMapping({
           id: "demo",
-          match: { path: "gmail" },
-          action: "agent",
           messageTemplate: "Subject: {{messages[0].subject}}",
-        },
+        }),
       ],
     });
-    const result = await applyHookMappings(mappings, {
-      payload: { messages: [{ subject: "Hello" }] },
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
     expect(result?.ok).toBe(true);
-    if (result?.ok) {
+    if (result?.ok && result.action?.kind === "agent") {
       expect(result.action.kind).toBe("agent");
       expect(result.action.message).toBe("Subject: Hello");
     }
   });
 
   it("passes model override from mapping", async () => {
-    const mappings = resolveHookMappings({
+    const result = await applyGmailMappings({
       mappings: [
-        {
+        createGmailAgentMapping({
           id: "demo",
-          match: { path: "gmail" },
-          action: "agent",
           messageTemplate: "Subject: {{messages[0].subject}}",
           model: "openai/gpt-4.1-mini",
-        },
+        }),
       ],
     });
-    const result = await applyHookMappings(mappings, {
-      payload: { messages: [{ subject: "Hello" }] },
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
     expect(result?.ok).toBe(true);
-    if (result?.ok && result.action.kind === "agent") {
+    if (result?.ok && result.action && result.action.kind === "agent") {
       expect(result.action.model).toBe("openai/gpt-4.1-mini");
     }
   });
@@ -134,11 +146,9 @@ describe("hooks mapping", () => {
     });
 
     expect(result?.ok).toBe(true);
-    if (result?.ok) {
+    if (result?.ok && result.action?.kind === "wake") {
       expect(result.action.kind).toBe("wake");
-      if (result.action.kind === "wake") {
-        expect(result.action.text).toBe("Ping Ada");
-      }
+      expect(result.action.text).toBe("Ping Ada");
     }
   });
 
@@ -237,47 +247,31 @@ describe("hooks mapping", () => {
   });
 
   it("prefers explicit mappings over presets", async () => {
-    const mappings = resolveHookMappings({
+    const result = await applyGmailMappings({
       presets: ["gmail"],
       mappings: [
-        {
+        createGmailAgentMapping({
           id: "override",
-          match: { path: "gmail" },
-          action: "agent",
           messageTemplate: "Override subject: {{messages[0].subject}}",
-        },
+        }),
       ],
     });
-    const result = await applyHookMappings(mappings, {
-      payload: { messages: [{ subject: "Hello" }] },
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
     expect(result?.ok).toBe(true);
-    if (result?.ok) {
+    if (result?.ok && result.action?.kind === "agent") {
       expect(result.action.kind).toBe("agent");
       expect(result.action.message).toBe("Override subject: Hello");
     }
   });
 
   it("passes agentId from mapping", async () => {
-    const mappings = resolveHookMappings({
+    const result = await applyGmailMappings({
       mappings: [
-        {
+        createGmailAgentMapping({
           id: "hooks-agent",
-          match: { path: "gmail" },
-          action: "agent",
           messageTemplate: "Subject: {{messages[0].subject}}",
           agentId: "hooks",
-        },
+        }),
       ],
-    });
-    const result = await applyHookMappings(mappings, {
-      payload: { messages: [{ subject: "Hello" }] },
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
     });
     expect(result?.ok).toBe(true);
     if (result?.ok && result.action?.kind === "agent") {
@@ -286,21 +280,13 @@ describe("hooks mapping", () => {
   });
 
   it("agentId is undefined when not set", async () => {
-    const mappings = resolveHookMappings({
+    const result = await applyGmailMappings({
       mappings: [
-        {
+        createGmailAgentMapping({
           id: "no-agent",
-          match: { path: "gmail" },
-          action: "agent",
           messageTemplate: "Subject: {{messages[0].subject}}",
-        },
+        }),
       ],
-    });
-    const result = await applyHookMappings(mappings, {
-      payload: { messages: [{ subject: "Hello" }] },
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
     });
     expect(result?.ok).toBe(true);
     if (result?.ok && result.action?.kind === "agent") {

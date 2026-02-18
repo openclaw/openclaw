@@ -1,4 +1,3 @@
-import type { Tab } from "./navigation.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -18,6 +17,7 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
   basePath: string;

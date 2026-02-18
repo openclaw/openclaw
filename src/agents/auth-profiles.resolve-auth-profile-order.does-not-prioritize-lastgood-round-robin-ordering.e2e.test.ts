@@ -4,6 +4,7 @@ import {
   ANTHROPIC_CFG,
   ANTHROPIC_STORE,
 } from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("resolveAuthProfileOrder", () => {
   const store = ANTHROPIC_STORE;
@@ -37,7 +38,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:work", "anthropic:default"] },
-          profiles: cfg.auth.profiles,
+          profiles: cfg.auth?.profiles,
         },
       },
       store,
@@ -50,7 +51,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth.profiles,
+          profiles: cfg.auth?.profiles,
         },
       },
       store: {
@@ -82,7 +83,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth.profiles,
+          profiles: cfg.auth?.profiles,
         },
       },
       store: {
@@ -120,7 +121,7 @@ describe("resolveAuthProfileOrder", () => {
       cfg: {
         auth: {
           order: { anthropic: ["anthropic:default", "anthropic:work"] },
-          profiles: cfg.auth.profiles,
+          profiles: cfg.auth?.profiles,
         },
       },
       store: {

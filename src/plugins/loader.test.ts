@@ -43,6 +43,56 @@ function writePlugin(params: {
   return { dir, file, id: params.id };
 }
 
+function loadBundledMemoryPluginRegistry(options?: {
+  packageMeta?: { name: string; version: string; description?: string };
+  pluginBody?: string;
+  pluginFilename?: string;
+}) {
+  const bundledDir = makeTempDir();
+  let pluginDir = bundledDir;
+  let pluginFilename = options?.pluginFilename ?? "memory-core.js";
+
+  if (options?.packageMeta) {
+    pluginDir = path.join(bundledDir, "memory-core");
+    pluginFilename = "index.js";
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: options.packageMeta.name,
+          version: options.packageMeta.version,
+          description: options.packageMeta.description,
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+  }
+
+  writePlugin({
+    id: "memory-core",
+    body:
+      options?.pluginBody ?? `export default { id: "memory-core", kind: "memory", register() {} };`,
+    dir: pluginDir,
+    filename: pluginFilename,
+  });
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+  return loadOpenClawPlugins({
+    cache: false,
+    config: {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    },
+  });
+}
+
 afterEach(() => {
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -145,63 +195,21 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("enables bundled memory plugin when selected by slot", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "memory-core",
-      body: `export default { id: "memory-core", kind: "memory", register() {} };`,
-      dir: bundledDir,
-      filename: "memory-core.js",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          slots: {
-            memory: "memory-core",
-          },
-        },
-      },
-    });
+    const registry = loadBundledMemoryPluginRegistry();
 
     const memory = registry.plugins.find((entry) => entry.id === "memory-core");
     expect(memory?.status).toBe("loaded");
   });
 
   it("preserves package.json metadata for bundled memory plugins", () => {
-    const bundledDir = makeTempDir();
-    const pluginDir = path.join(bundledDir, "memory-core");
-    fs.mkdirSync(pluginDir, { recursive: true });
-
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
+    const registry = loadBundledMemoryPluginRegistry({
+      packageMeta: {
         name: "@openclaw/memory-core",
         version: "1.2.3",
         description: "Memory plugin package",
-        openclaw: { extensions: ["./index.js"] },
-      }),
-      "utf-8",
-    );
-    writePlugin({
-      id: "memory-core",
-      body: `export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };`,
-      dir: pluginDir,
-      filename: "index.js",
-    });
-
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          slots: {
-            memory: "memory-core",
-          },
-        },
       },
+      pluginBody:
+        'export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
     });
 
     const memory = registry.plugins.find((entry) => entry.id === "memory-core");

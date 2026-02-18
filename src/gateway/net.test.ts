@@ -5,7 +5,20 @@ import {
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
   resolveGatewayListenHosts,
+  resolveHostName,
 } from "./net.js";
+
+describe("resolveHostName", () => {
+  it("returns hostname without port for IPv4/hostnames", () => {
+    expect(resolveHostName("localhost:18789")).toBe("localhost");
+    expect(resolveHostName("127.0.0.1:18789")).toBe("127.0.0.1");
+  });
+
+  it("handles bracketed and unbracketed IPv6 loopback hosts", () => {
+    expect(resolveHostName("[::1]:18789")).toBe("::1");
+    expect(resolveHostName("::1")).toBe("::1");
+  });
+});
 
 describe("isTrustedProxyAddress", () => {
   describe("exact IP matching", () => {
@@ -21,6 +34,10 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.0.0.5", ["192.168.1.1", "10.0.0.5", "172.16.0.1"])).toBe(
         true,
       );
+    });
+
+    it("ignores surrounding whitespace in exact IP entries", () => {
+      expect(isTrustedProxyAddress("10.0.0.5", [" 10.0.0.5 "])).toBe(true);
     });
   });
 
@@ -100,6 +117,15 @@ describe("isTrustedProxyAddress", () => {
       expect(isTrustedProxyAddress("10.42.0.59", ["10.42.0.0/33"])).toBe(false); // invalid prefix
       expect(isTrustedProxyAddress("10.42.0.59", ["10.42.0.0/-1"])).toBe(false); // negative prefix
       expect(isTrustedProxyAddress("10.42.0.59", ["invalid/24"])).toBe(false); // invalid IP
+    });
+
+    it("ignores surrounding whitespace in CIDR entries", () => {
+      expect(isTrustedProxyAddress("10.42.0.59", [" 10.42.0.0/24 "])).toBe(true);
+    });
+
+    it("ignores blank trusted proxy entries", () => {
+      expect(isTrustedProxyAddress("10.0.0.5", [" ", "\t"])).toBe(false);
+      expect(isTrustedProxyAddress("10.0.0.5", [" ", "10.0.0.5", ""])).toBe(true);
     });
   });
 });

@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { CronRunStatus, CronRunTelemetry } from "./types.js";
 
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
   action: "finished";
-  status?: "ok" | "error" | "skipped";
+  status?: CronRunStatus;
   error?: string;
   summary?: string;
   sessionId?: string;
@@ -13,7 +14,7 @@ export type CronRunLogEntry = {
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
-};
+} & CronRunTelemetry;
 
 export function resolveCronRunLogPath(params: { storePath: string; jobId: string }) {
   const storePath = path.resolve(params.storePath);
@@ -95,6 +96,10 @@ export async function readCronRunLogEntries(
       if (jobId && obj.jobId !== jobId) {
         continue;
       }
+      const usage =
+        obj.usage && typeof obj.usage === "object"
+          ? (obj.usage as Record<string, unknown>)
+          : undefined;
       const entry: CronRunLogEntry = {
         ts: obj.ts,
         jobId: obj.jobId,
@@ -105,6 +110,21 @@ export async function readCronRunLogEntries(
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,
+        model: typeof obj.model === "string" && obj.model.trim() ? obj.model : undefined,
+        provider:
+          typeof obj.provider === "string" && obj.provider.trim() ? obj.provider : undefined,
+        usage: usage
+          ? {
+              input_tokens: typeof usage.input_tokens === "number" ? usage.input_tokens : undefined,
+              output_tokens:
+                typeof usage.output_tokens === "number" ? usage.output_tokens : undefined,
+              total_tokens: typeof usage.total_tokens === "number" ? usage.total_tokens : undefined,
+              cache_read_tokens:
+                typeof usage.cache_read_tokens === "number" ? usage.cache_read_tokens : undefined,
+              cache_write_tokens:
+                typeof usage.cache_write_tokens === "number" ? usage.cache_write_tokens : undefined,
+            }
+          : undefined,
       };
       if (typeof obj.sessionId === "string" && obj.sessionId.trim().length > 0) {
         entry.sessionId = obj.sessionId;

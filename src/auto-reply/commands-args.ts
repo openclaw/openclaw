@@ -90,8 +90,30 @@ const formatQueueArgs: CommandArgsFormatter = (values) => {
   return parts.length > 0 ? parts.join(" ") : undefined;
 };
 
+const formatExecArgs: CommandArgsFormatter = (values) => {
+  const host = normalizeArgValue(values.host);
+  const security = normalizeArgValue(values.security);
+  const ask = normalizeArgValue(values.ask);
+  const node = normalizeArgValue(values.node);
+  const parts: string[] = [];
+  if (host) {
+    parts.push(`host=${host}`);
+  }
+  if (security) {
+    parts.push(`security=${security}`);
+  }
+  if (ask) {
+    parts.push(`ask=${ask}`);
+  }
+  if (node) {
+    parts.push(`node=${node}`);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
+};
+
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatConfigArgs,
   debug: formatDebugArgs,
   queue: formatQueueArgs,
+  exec: formatExecArgs,
 };

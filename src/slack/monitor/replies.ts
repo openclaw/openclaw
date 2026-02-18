@@ -1,10 +1,10 @@
 import type { ChunkMode } from "../../auto-reply/chunk.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack } from "../send.js";
 

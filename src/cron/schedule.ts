@@ -1,6 +1,6 @@
 import { Cron } from "croner";
-import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import type { CronSchedule } from "./types.js";
 
 function resolveCronTimezone(tz?: string) {
   const trimmed = typeof tz === "string" ? tz.trim() : "";
@@ -49,19 +49,25 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  // Cron operates at second granularity, so floor nowMs to the start of the
-  // current second.  We ask croner for the next occurrence strictly *after*
-  // nowSecondMs so that a job whose schedule matches the current second is
-  // never re-scheduled into the same (already-elapsed) second.
-  //
-  // Previous code used `nowSecondMs - 1` which caused croner to return the
-  // current second as a valid next-run, leading to rapid duplicate fires when
-  // multiple jobs triggered simultaneously (see #14164).
-  const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
-  const next = cron.nextRun(new Date(nowSecondMs));
+  const next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
   }
   const nextMs = next.getTime();
-  return Number.isFinite(nextMs) && nextMs > nowSecondMs ? nextMs : undefined;
+  if (!Number.isFinite(nextMs)) {
+    return undefined;
+  }
+  if (nextMs > nowMs) {
+    return nextMs;
+  }
+
+  // Guard against same-second rescheduling loops: if croner returns
+  // "now" (or an earlier instant), retry from the next whole second.
+  const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+  const retry = cron.nextRun(new Date(nextSecondMs));
+  if (!retry) {
+    return undefined;
+  }
+  const retryMs = retry.getTime();
+  return Number.isFinite(retryMs) && retryMs > nowMs ? retryMs : undefined;
 }

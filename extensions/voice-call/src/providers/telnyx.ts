@@ -13,8 +13,8 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
-import type { VoiceCallProvider } from "./base.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
+import type { VoiceCallProvider } from "./base.js";
 
 /**
  * Telnyx Voice API provider implementation.

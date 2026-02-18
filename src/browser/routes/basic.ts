@@ -1,7 +1,7 @@
-import type { BrowserRouteContext } from "../server-context.js";
-import type { BrowserRouteRegistrar } from "./types.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
+import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {

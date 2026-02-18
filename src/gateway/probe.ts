@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { SystemPresence } from "../infra/system-presence.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 

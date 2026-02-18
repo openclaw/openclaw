@@ -1,4 +1,3 @@
-import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import {
   Embed,
   RequestClient,
@@ -8,10 +7,11 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
+import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIEmbed } from "discord-api-types/v10";
 import type { ChunkMode } from "../auto-reply/chunk.js";
-import type { RetryRunner } from "../infra/retry-policy.js";
 import { loadConfig } from "../config/config.js";
+import type { RetryRunner } from "../infra/retry-policy.js";
 import { normalizePollDurationHours, normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -362,7 +362,7 @@ async function sendDiscordText(
     });
     const body = stripUndefinedFields({
       ...serializePayload(payload),
-      ...(isFirst && messageReference ? { message_reference: messageReference } : {}),
+      ...(messageReference ? { message_reference: messageReference } : {}),
     });
     return (await request(
       () =>
@@ -376,10 +376,8 @@ async function sendDiscordText(
     return await sendChunk(chunks[0], true);
   }
   let last: { id: string; channel_id: string } | null = null;
-  let isFirst = true;
-  for (const chunk of chunks) {
-    last = await sendChunk(chunk, isFirst);
-    isFirst = false;
+  for (const [index, chunk] of chunks.entries()) {
+    last = await sendChunk(chunk, index === 0);
   }
   if (!last) {
     throw new Error("Discord send failed (empty chunk result)");
@@ -450,7 +448,7 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      undefined,
+      replyTo,
       request,
       maxLinesPerMessage,
       undefined,

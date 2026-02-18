@@ -7,10 +7,10 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import type { NostrProfile } from "./config-schema.js";
-import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
-import type { ProfilePublishResult } from "./nostr-profile.js";
 import { NostrConfigSchema } from "./config-schema.js";
+import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
 import {
   listNostrAccountIds,

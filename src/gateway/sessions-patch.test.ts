@@ -10,7 +10,7 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { thinkingLevel: "off" },
+      patch: { key: "agent:main:main", thinkingLevel: "off" },
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -27,7 +27,7 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { thinkingLevel: null },
+      patch: { key: "agent:main:main", thinkingLevel: null },
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -42,7 +42,7 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { elevatedLevel: "off" },
+      patch: { key: "agent:main:main", elevatedLevel: "off" },
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -57,7 +57,7 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { elevatedLevel: "on" },
+      patch: { key: "agent:main:main", elevatedLevel: "on" },
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -74,7 +74,7 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { elevatedLevel: null },
+      patch: { key: "agent:main:main", elevatedLevel: null },
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -89,7 +89,7 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { elevatedLevel: "maybe" },
+      patch: { key: "agent:main:main", elevatedLevel: "maybe" },
     });
     expect(res.ok).toBe(false);
     if (res.ok) {
@@ -114,8 +114,8 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { model: "openai/gpt-5.2" },
-      loadGatewayModelCatalog: async () => [{ provider: "openai", id: "gpt-5.2" }],
+      patch: { key: "agent:main:main", model: "openai/gpt-5.2" },
+      loadGatewayModelCatalog: async () => [{ provider: "openai", id: "gpt-5.2", name: "gpt-5.2" }],
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -134,7 +134,7 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:subagent:child",
-      patch: { spawnDepth: 2 },
+      patch: { key: "agent:main:subagent:child", spawnDepth: 2 },
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -149,12 +149,133 @@ describe("gateway sessions patch", () => {
       cfg: {} as OpenClawConfig,
       store,
       storeKey: "agent:main:main",
-      patch: { spawnDepth: 1 },
+      patch: { key: "agent:main:main", spawnDepth: 1 },
     });
     expect(res.ok).toBe(false);
     if (res.ok) {
       return;
     }
     expect(res.error.message).toContain("spawnDepth is only supported");
+  });
+
+  test("allows target agent own model for subagent session even when missing from global allowlist", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "default" },
+          },
+        },
+        list: [
+          {
+            id: "kimi",
+            model: { primary: "synthetic/hf:moonshotai/Kimi-K2.5" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:kimi:subagent:child",
+      patch: {
+        key: "agent:kimi:subagent:child",
+        model: "synthetic/hf:moonshotai/Kimi-K2.5",
+      },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    // Selected model matches the target agent default, so no override is stored.
+    expect(res.entry.providerOverride).toBeUndefined();
+    expect(res.entry.modelOverride).toBeUndefined();
+  });
+
+  test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "default" },
+          },
+        },
+        list: [
+          {
+            id: "kimi",
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            subagents: { model: "synthetic/hf:moonshotai/Kimi-K2.5" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:kimi:subagent:child",
+      patch: {
+        key: "agent:kimi:subagent:child",
+        model: "synthetic/hf:moonshotai/Kimi-K2.5",
+      },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("synthetic");
+    expect(res.entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
+  });
+
+  test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          subagents: { model: "synthetic/hf:moonshotai/Kimi-K2.5" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "default" },
+          },
+        },
+        list: [{ id: "kimi", model: { primary: "anthropic/claude-sonnet-4-6" } }],
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:kimi:subagent:child",
+      patch: {
+        key: "agent:kimi:subagent:child",
+        model: "synthetic/hf:moonshotai/Kimi-K2.5",
+      },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("synthetic");
+    expect(res.entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
   });
 });

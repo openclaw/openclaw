@@ -74,6 +74,8 @@ export type RunEmbeddedPiAgentParams = {
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  /** If true, suppress tool error warning payloads for this run (including mutating tools). */
+  suppressToolErrorWarnings?: boolean;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
@@ -95,6 +97,7 @@ export type RunEmbeddedPiAgentParams = {
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;

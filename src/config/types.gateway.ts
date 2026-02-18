@@ -312,4 +312,10 @@ export type GatewayConfig = {
   trustedProxies?: string[];
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /**
+   * Channel health monitor interval in minutes.
+   * Periodically checks channel health and restarts unhealthy channels.
+   * Set to 0 to disable. Default: 5.
+   */
+  channelHealthCheckMinutes?: number;
 };

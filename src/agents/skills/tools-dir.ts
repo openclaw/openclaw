@@ -1,8 +1,8 @@
 import path from "node:path";
-import type { SkillEntry } from "./types.js";
 import { safePathSegmentHashed } from "../../infra/install-safe-path.js";
 import { resolveConfigDir } from "../../utils.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import type { SkillEntry } from "./types.js";
 
 export function resolveSkillToolsRootDir(entry: SkillEntry): string {
   const key = resolveSkillKey(entry.skill, entry);

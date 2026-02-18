@@ -1,11 +1,11 @@
-import type { ButtonInteraction, ComponentData } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ButtonInteraction, ComponentData } from "@buape/carbon";
+import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
+import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import {
   buildExecApprovalCustomId,
   extractDiscordChannelId,
@@ -79,7 +79,7 @@ function createHandler(config: DiscordExecApprovalConfig, accountId = "default")
   });
 }
 
-type ExecApprovalHandlerInternals = DiscordExecApprovalHandler & {
+type ExecApprovalHandlerInternals = {
   pending: Map<
     string,
     { discordMessageId: string; discordChannelId: string; timeoutId: NodeJS.Timeout }

@@ -1,24 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 
 export type PluginEnableResult = {
   config: OpenClawConfig;
   enabled: boolean;
   reason?: string;
 };
-
-function ensureAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const allow = cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(pluginId)) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow: [...allow, pluginId],
-    },
-  };
-}
 
 export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): PluginEnableResult {
   if (cfg.plugins?.enabled === false) {
@@ -42,6 +29,6 @@ export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): Plu
       entries,
     },
   };
-  next = ensureAllowlisted(next, pluginId);
+  next = ensurePluginAllowlisted(next, pluginId);
   return { config: next, enabled: true };
 }

@@ -8,7 +8,7 @@ import {
   ensureAuthProfileStore,
   resolveApiKeyForProfile,
 } from "./auth-profiles.js";
-import { CHUTES_TOKEN_ENDPOINT, type ChutesStoredOAuth } from "./chutes-oauth.js";
+import { CHUTES_TOKEN_ENDPOINT } from "./chutes-oauth.js";
 
 describe("auth-profiles (chutes)", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -49,7 +49,7 @@ describe("auth-profiles (chutes)", () => {
           refresh: "rt_old",
           expires: Date.now() - 60_000,
           clientId: "cid_test",
-        } as unknown as ChutesStoredOAuth,
+        },
       },
     };
     await fs.writeFile(authProfilePath, `${JSON.stringify(store)}\n`);

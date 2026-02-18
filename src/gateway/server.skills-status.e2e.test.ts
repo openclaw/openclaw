@@ -1,27 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  connectOk,
-  installGatewayTestHooks,
-  rpcReq,
-  startServerWithClient,
-} from "./test-helpers.js";
+import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
+import { withServer } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-
-async function withServer<T>(
-  run: (ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"]) => Promise<T>,
-) {
-  const { server, ws, envSnapshot } = await startServerWithClient("secret");
-  try {
-    return await run(ws);
-  } finally {
-    ws.close();
-    await server.close();
-    envSnapshot.restore();
-  }
-}
 
 describe("gateway skills.status", () => {
   it("does not expose raw config values to operator.read clients", async () => {

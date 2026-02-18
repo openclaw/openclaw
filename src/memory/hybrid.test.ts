@@ -17,8 +17,8 @@ describe("memory hybrid helpers", () => {
     expect(bm25RankToScore(-100)).toBeCloseTo(1);
   });
 
-  it("mergeHybridResults unions by id and combines weighted scores", () => {
-    const merged = mergeHybridResults({
+  it("mergeHybridResults unions by id and combines weighted scores", async () => {
+    const merged = await mergeHybridResults({
       vectorWeight: 0.7,
       textWeight: 0.3,
       vector: [
@@ -52,8 +52,8 @@ describe("memory hybrid helpers", () => {
     expect(b?.score).toBeCloseTo(0.3 * 1.0);
   });
 
-  it("mergeHybridResults prefers keyword snippet when ids overlap", () => {
-    const merged = mergeHybridResults({
+  it("mergeHybridResults prefers keyword snippet when ids overlap", async () => {
+    const merged = await mergeHybridResults({
       vectorWeight: 0.5,
       textWeight: 0.5,
       vector: [

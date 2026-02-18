@@ -13,6 +13,7 @@ type DevicesRpcOpts = {
   password?: string;
   timeout?: string;
   json?: boolean;
+  latest?: boolean;
   device?: string;
   role?: string;
   scope?: string[];
@@ -84,6 +85,17 @@ function parseDevicePairingList(value: unknown): DevicePairingList {
     pending: Array.isArray(obj.pending) ? (obj.pending as PendingDevice[]) : [],
     paired: Array.isArray(obj.paired) ? (obj.paired as PairedDevice[]) : [],
   };
+}
+
+function selectLatestPendingRequest(pending: PendingDevice[] | undefined) {
+  if (!pending?.length) {
+    return null;
+  }
+  return pending.reduce((latest, current) => {
+    const latestTs = typeof latest.ts === "number" ? latest.ts : 0;
+    const currentTs = typeof current.ts === "number" ? current.ts : 0;
+    return currentTs > latestTs ? current : latest;
+  });
 }
 
 function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
@@ -172,15 +184,31 @@ export function registerDevicesCli(program: Command) {
     devices
       .command("approve")
       .description("Approve a pending device pairing request")
-      .argument("<requestId>", "Pending request id")
-      .action(async (requestId: string, opts: DevicesRpcOpts) => {
-        const result = await callGatewayCli("device.pair.approve", opts, { requestId });
+      .argument("[requestId]", "Pending request id")
+      .option("--latest", "Approve the most recent pending request", false)
+      .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
+        let resolvedRequestId = requestId?.trim();
+        if (!resolvedRequestId || opts.latest) {
+          const listResult = await callGatewayCli("device.pair.list", opts, {});
+          const latest = selectLatestPendingRequest(parseDevicePairingList(listResult).pending);
+          resolvedRequestId = latest?.requestId?.trim();
+        }
+        if (!resolvedRequestId) {
+          defaultRuntime.error("No pending device pairing requests to approve");
+          defaultRuntime.exit(1);
+          return;
+        }
+        const result = await callGatewayCli("device.pair.approve", opts, {
+          requestId: resolvedRequestId,
+        });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
-        defaultRuntime.log(`${theme.success("Approved")} ${theme.command(deviceId ?? "ok")}`);
+        defaultRuntime.log(
+          `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${resolvedRequestId})`)}`,
+        );
       }),
   );
 

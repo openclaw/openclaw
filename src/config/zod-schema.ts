@@ -442,6 +442,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        channelHealthCheckMinutes: z.number().int().min(0).optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
@@ -576,6 +577,16 @@ export const OpenClawSchema = z
             nodeManager: z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
+          })
+          .strict()
+          .optional(),
+        limits: z
+          .object({
+            maxCandidatesPerRoot: z.number().int().min(1).optional(),
+            maxSkillsLoadedPerSource: z.number().int().min(1).optional(),
+            maxSkillsInPrompt: z.number().int().min(0).optional(),
+            maxSkillsPromptChars: z.number().int().min(0).optional(),
+            maxSkillFileBytes: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

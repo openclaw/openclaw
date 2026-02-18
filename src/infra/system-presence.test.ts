@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
 
 describe("system-presence", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("dedupes entries across sources by case-insensitive instanceId key", () => {
     const instanceIdUpper = `AaBb-${randomUUID()}`.toUpperCase();
     const instanceIdLower = instanceIdUpper.toLowerCase();
@@ -55,5 +59,26 @@ describe("system-presence", () => {
     const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
     expect(entry?.roles).toEqual(expect.arrayContaining(["operator", "node"]));
     expect(entry?.scopes).toEqual(expect.arrayContaining(["operator.admin", "system.run"]));
+  });
+
+  it("prunes stale non-self entries after TTL", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now());
+
+    const deviceId = randomUUID();
+    upsertPresence(deviceId, {
+      deviceId,
+      host: "stale-host",
+      mode: "ui",
+      reason: "connect",
+    });
+
+    expect(listSystemPresence().some((entry) => entry.deviceId === deviceId)).toBe(true);
+
+    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+
+    const entries = listSystemPresence();
+    expect(entries.some((entry) => entry.deviceId === deviceId)).toBe(false);
+    expect(entries.some((entry) => entry.reason === "self")).toBe(true);
   });
 });

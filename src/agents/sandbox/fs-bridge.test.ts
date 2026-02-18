@@ -4,42 +4,24 @@ vi.mock("./docker.js", () => ({
   execDockerRaw: vi.fn(),
 }));
 
-import type { SandboxContext } from "./types.js";
 import { execDockerRaw } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import { createSandboxTestContext } from "./test-fixtures.js";
+import type { SandboxContext } from "./types.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
-  return {
-    enabled: true,
-    sessionKey: "sandbox:test",
-    workspaceDir: "/tmp/workspace",
-    agentWorkspaceDir: "/tmp/workspace",
-    workspaceAccess: "rw",
-    containerName: "moltbot-sbx-test",
-    containerWorkdir: "/workspace",
-    docker: {
+  return createSandboxTestContext({
+    overrides: {
+      containerName: "moltbot-sbx-test",
+      ...overrides,
+    },
+    dockerOverrides: {
       image: "moltbot-sandbox:bookworm-slim",
       containerPrefix: "moltbot-sbx-",
-      network: "none",
-      user: "1000:1000",
-      workdir: "/workspace",
-      readOnlyRoot: false,
-      tmpfs: [],
-      capDrop: [],
-      seccompProfile: "",
-      apparmorProfile: "",
-      setupCommand: "",
-      binds: [],
-      dns: [],
-      extraHosts: [],
-      pidsLimit: 0,
     },
-    tools: { allow: ["*"], deny: [] },
-    browserAllowHostControl: false,
-    ...overrides,
-  };
+  });
 }
 
 describe("sandbox fs bridge shell compatibility", () => {

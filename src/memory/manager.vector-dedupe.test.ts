@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { buildFileEntry } from "./internal.js";
 
@@ -54,14 +55,14 @@ describe("memory vector dedupe", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    };
+    } as OpenClawConfig;
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error("manager missing");
     }
-    manager = result.manager;
+    manager = result.manager as unknown as MemoryIndexManager;
 
     const db = (
       manager as unknown as {

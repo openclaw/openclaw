@@ -1,29 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
+import { createStubSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
-
 describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
-  it("does not strip thinking tags inside inline code backticks", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
+  function createPartialReplyHarness() {
+    const { session, emit } = createStubSessionHarness();
     const onPartialReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       onPartialReply,
     });
 
-    handler?.({
+    return { emit, onPartialReply };
+  }
+
+  it("does not strip thinking tags inside inline code backticks", () => {
+    const { emit, onPartialReply } = createPartialReplyHarness();
+
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -38,23 +34,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
   });
 
   it("does not strip thinking tags inside fenced code blocks", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, onPartialReply } = createPartialReplyHarness();
 
-    const onPartialReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onPartialReply,
-    });
-
-    handler?.({
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {
@@ -69,23 +51,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
   });
 
   it("still strips actual thinking tags outside code spans", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { emit, onPartialReply } = createPartialReplyHarness();
 
-    const onPartialReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onPartialReply,
-    });
-
-    handler?.({
+    emit({
       type: "message_update",
       message: { role: "assistant" },
       assistantMessageEvent: {

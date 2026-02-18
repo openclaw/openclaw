@@ -62,6 +62,16 @@ async function waitForCompletion(sessionId: string) {
   return status;
 }
 
+async function runBackgroundEchoLines(lines: string[]) {
+  const result = await execTool.execute("call1", {
+    command: echoLines(lines),
+    background: true,
+  });
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+  await waitForCompletion(sessionId);
+  return sessionId;
+}
+
 beforeEach(() => {
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
@@ -223,12 +233,7 @@ describe("exec tool backgrounding", () => {
 
   it("defaults process log to a bounded tail when no window is provided", async () => {
     const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
-    const result = await execTool.execute("call1", {
-      command: echoLines(lines),
-      background: true,
-    });
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    await waitForCompletion(sessionId);
+    const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
       action: "log",
@@ -263,12 +268,7 @@ describe("exec tool backgrounding", () => {
 
   it("keeps offset-only log requests unbounded by default tail mode", async () => {
     const lines = Array.from({ length: 260 }, (_value, index) => `line-${index + 1}`);
-    const result = await execTool.execute("call1", {
-      command: echoLines(lines),
-      background: true,
-    });
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    await waitForCompletion(sessionId);
+    const sessionId = await runBackgroundEchoLines(lines);
 
     const log = await processTool.execute("call2", {
       action: "log",
@@ -311,7 +311,38 @@ describe("exec tool backgrounding", () => {
       action: "poll",
       sessionId: sessionA,
     });
-    expect(pollB.details.status).toBe("failed");
+    const pollBDetails = pollB.details as { status?: string };
+    expect(pollBDetails.status).toBe("failed");
+  });
+});
+
+describe("exec exit codes", () => {
+  const originalShell = process.env.SHELL;
+
+  beforeEach(() => {
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
+  });
+
+  afterEach(() => {
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
+  });
+
+  it("treats non-zero exits as completed and appends exit code", async () => {
+    const command = isWin
+      ? joinCommands(["Write-Output nope", "exit 1"])
+      : joinCommands(["echo nope", "exit 1"]);
+    const result = await execTool.execute("call1", { command });
+    const resultDetails = result.details as { status?: string; exitCode?: number | null };
+    expect(resultDetails.status).toBe("completed");
+    expect(resultDetails.exitCode).toBe(1);
+
+    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    expect(text).toContain("nope");
+    expect(text).toContain("Command exited with code 1");
   });
 });
 

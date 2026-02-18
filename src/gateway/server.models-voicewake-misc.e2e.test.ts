@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -52,13 +52,16 @@ const whatsappOutbound: ChannelOutboundAdapter = {
     if (!deps?.sendWhatsApp) {
       throw new Error("Missing sendWhatsApp dep");
     }
-    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, {})) };
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { verbose: false })) };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
     if (!deps?.sendWhatsApp) {
       throw new Error("Missing sendWhatsApp dep");
     }
-    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { mediaUrl })) };
+    return {
+      channel: "whatsapp",
+      ...(await deps.sendWhatsApp(to, text, { verbose: false, mediaUrl })),
+    };
   },
 };
 
@@ -134,11 +137,10 @@ describe("gateway server models + voicewake", () => {
       expect(initial.ok).toBe(true);
       expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
 
-      const changedP = onceMessage<{
-        type: "event";
-        event: string;
-        payload?: unknown;
-      }>(ws, (o) => o.type === "event" && o.event === "voicewake.changed");
+      const changedP = onceMessage(
+        ws,
+        (o) => o.type === "event" && o.event === "voicewake.changed",
+      );
 
       const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
         triggers: ["  hi  ", "", "there"],
@@ -146,7 +148,7 @@ describe("gateway server models + voicewake", () => {
       expect(setRes.ok).toBe(true);
       expect(setRes.payload?.triggers).toEqual(["hi", "there"]);
 
-      const changed = await changedP;
+      const changed = (await changedP) as { event?: string; payload?: unknown };
       expect(changed.event).toBe("voicewake.changed");
       expect((changed.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
         "hi",
@@ -173,7 +175,7 @@ describe("gateway server models + voicewake", () => {
 
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-    const firstEventP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+    const firstEventP = onceMessage(
       nodeWs,
       (o) => o.type === "event" && o.event === "voicewake.changed",
     );
@@ -187,7 +189,7 @@ describe("gateway server models + voicewake", () => {
       },
     });
 
-    const first = await firstEventP;
+    const first = (await firstEventP) as { event?: string; payload?: unknown };
     expect(first.event).toBe("voicewake.changed");
     expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
       "openclaw",
@@ -195,7 +197,7 @@ describe("gateway server models + voicewake", () => {
       "computer",
     ]);
 
-    const broadcastP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+    const broadcastP = onceMessage(
       nodeWs,
       (o) => o.type === "event" && o.event === "voicewake.changed",
     );
@@ -204,7 +206,7 @@ describe("gateway server models + voicewake", () => {
     });
     expect(setRes.ok).toBe(true);
 
-    const broadcast = await broadcastP;
+    const broadcast = (await broadcastP) as { event?: string; payload?: unknown };
     expect(broadcast.event).toBe("voicewake.changed");
     expect((broadcast.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
       "openclaw",

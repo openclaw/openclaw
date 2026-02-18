@@ -16,21 +16,54 @@ beforeAll(async () => {
 
 installTriggerHandlingE2eTestHooks();
 
+const BASE_MESSAGE = {
+  Body: "hello",
+  From: "+1002",
+  To: "+2000",
+} as const;
+
+function mockEmbeddedOkPayload() {
+  const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+  runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: {
+      durationMs: 1,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+  return runEmbeddedPiAgentMock;
+}
+
+function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("expected session store path");
+  }
+  return storePath;
+}
+
+async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
+  await fs.writeFile(
+    requireSessionStorePath(cfg),
+    JSON.stringify({
+      [MAIN_SESSION_KEY]: {
+        sessionId: "main",
+        updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.2",
+      },
+    }),
+    "utf-8",
+  );
+}
+
 describe("trigger handling", () => {
   it("includes the error cause when the embedded agent throws", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       runEmbeddedPiAgentMock.mockRejectedValue(new Error("sandbox is not defined."));
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "+1002",
-          To: "+2000",
-        },
-        {},
-        makeCfg(home),
-      );
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe(
@@ -42,28 +75,9 @@ describe("trigger handling", () => {
 
   it("uses heartbeat model override for heartbeat runs", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-
+      const runEmbeddedPiAgentMock = mockEmbeddedOkPayload();
       const cfg = makeCfg(home);
-      await fs.writeFile(
-        cfg.session.store,
-        JSON.stringify({
-          [MAIN_SESSION_KEY]: {
-            sessionId: "main",
-            updatedAt: Date.now(),
-            providerOverride: "openai",
-            modelOverride: "gpt-5.2",
-          },
-        }),
-        "utf-8",
-      );
+      await writeStoredModelOverride(cfg);
       cfg.agents = {
         ...cfg.agents,
         defaults: {
@@ -72,15 +86,7 @@ describe("trigger handling", () => {
         },
       };
 
-      await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "+1002",
-          To: "+2000",
-        },
-        { isHeartbeat: true },
-        cfg,
-      );
+      await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
       const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
       expect(call?.provider).toBe("anthropic");
@@ -90,38 +96,10 @@ describe("trigger handling", () => {
 
   it("keeps stored model override for heartbeat runs when heartbeat model is not configured", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-
+      const runEmbeddedPiAgentMock = mockEmbeddedOkPayload();
       const cfg = makeCfg(home);
-      await fs.writeFile(
-        cfg.session.store,
-        JSON.stringify({
-          [MAIN_SESSION_KEY]: {
-            sessionId: "main",
-            updatedAt: Date.now(),
-            providerOverride: "openai",
-            modelOverride: "gpt-5.2",
-          },
-        }),
-        "utf-8",
-      );
-
-      await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "+1002",
-          To: "+2000",
-        },
-        { isHeartbeat: true },
-        cfg,
-      );
+      await writeStoredModelOverride(cfg);
+      await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
       const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
       expect(call?.provider).toBe("openai");
@@ -140,15 +118,7 @@ describe("trigger handling", () => {
         },
       });
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "+1002",
-          To: "+2000",
-        },
-        {},
-        makeCfg(home),
-      );
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
 
       expect(res).toBeUndefined();
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
@@ -166,15 +136,7 @@ describe("trigger handling", () => {
         },
       });
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "+1002",
-          To: "+2000",
-        },
-        {},
-        makeCfg(home),
-      );
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("hello");
@@ -200,7 +162,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Group activation set to always");
-      const store = JSON.parse(await fs.readFile(cfg.session.store, "utf-8")) as Record<
+      const store = JSON.parse(await fs.readFile(requireSessionStorePath(cfg), "utf-8")) as Record<
         string,
         { groupActivation?: string }
       >;

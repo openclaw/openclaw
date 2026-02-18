@@ -6,9 +6,30 @@ import {
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
+function makeAssistantMessage(
+  message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
+    Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">>,
+): AssistantMessage {
+  return {
+    api: "responses",
+    provider: "openai",
+    model: "gpt-5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    ...message,
+  };
+}
+
 describe("extractAssistantText", () => {
   it("strips Minimax tool invocation XML from text", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -20,14 +41,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("");
   });
 
   it("strips multiple tool invocations", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -39,14 +60,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Let me check that.");
   });
 
   it("keeps invoke snippets without Minimax markers", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -55,7 +76,7 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe(
@@ -64,7 +85,7 @@ describe("extractAssistantText", () => {
   });
 
   it("preserves normal text without tool invocations", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -73,27 +94,27 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("This is a normal response without any tool calls.");
   });
 
   it("sanitizes HTTP-ish error text only when stopReason is error", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       stopReason: "error",
       errorMessage: "500 Internal Server Error",
       content: [{ type: "text", text: "500 Internal Server Error" }],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("HTTP 500: Internal Server Error");
   });
 
   it("does not rewrite normal text that references billing plans", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -102,7 +123,7 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe(
@@ -111,7 +132,7 @@ describe("extractAssistantText", () => {
   });
 
   it("strips Minimax tool invocations with extra attributes", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -120,14 +141,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Before\nAfter");
   });
 
   it("strips minimax tool_call open and close tags", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -136,14 +157,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("StartInnerEnd");
   });
 
   it("ignores invoke blocks without minimax markers", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -152,14 +173,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Before<invoke>Keep</invoke>After");
   });
 
   it("strips invoke blocks when minimax markers are present elsewhere", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -168,14 +189,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("BeforeAfter");
   });
 
   it("strips invoke blocks with nested tags", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -184,14 +205,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("AB");
   });
 
   it("strips tool XML mixed with regular content", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -203,14 +224,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("I'll help you with that.\nHere are the results.");
   });
 
   it("handles multiple invoke blocks in one message", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -225,14 +246,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("First check.\nSecond check.\nDone.");
   });
 
   it("handles stray closing tags without opening tags", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -241,14 +262,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Some text here.More text.");
   });
 
   it("returns empty string when message is only tool invocations", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -260,14 +281,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("");
   });
 
   it("handles multiple text blocks", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -287,14 +308,14 @@ describe("extractAssistantText", () => {
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("First block.\nThird block.");
   });
 
   it("strips downgraded Gemini tool call text representations", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -304,14 +325,14 @@ Arguments: { "command": "git status", "timeout": 120000 }`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("");
   });
 
   it("strips multiple downgraded tool calls", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -323,14 +344,14 @@ Arguments: { "command": "ls -la" }`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("");
   });
 
   it("strips tool results for downgraded calls", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -340,14 +361,14 @@ Arguments: { "command": "ls -la" }`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("");
   });
 
   it("preserves text around downgraded tool calls", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -358,14 +379,14 @@ Arguments: { "action": "act", "request": "click button" }`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Let me check that for you.");
   });
 
   it("preserves trailing text after downgraded tool call blocks", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -379,14 +400,14 @@ Back to the user.`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Intro text.\nBack to the user.");
   });
 
   it("handles multiple text blocks with tool calls and results", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -409,14 +430,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
 
   it("strips thinking tags from text content", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -425,14 +446,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Aquí está tu respuesta.");
   });
 
   it("strips thinking tags with attributes", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -441,14 +462,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Visible");
   });
 
   it("strips thinking tags without closing tag", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -457,14 +478,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("");
   });
 
   it("strips thinking tags with various formats", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -473,14 +494,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("BeforeAfter");
   });
 
   it("strips antthinking tags", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -489,14 +510,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("The actual answer.");
   });
 
   it("strips final tags while keeping content", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -505,14 +526,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Answer");
   });
 
   it("strips thought tags", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -521,14 +542,14 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Final response.");
   });
 
   it("handles nested or multiple thinking blocks", () => {
-    const msg: AssistantMessage = {
+    const msg = makeAssistantMessage({
       role: "assistant",
       content: [
         {
@@ -537,7 +558,7 @@ File contents here`,
         },
       ],
       timestamp: Date.now(),
-    };
+    });
 
     const result = extractAssistantText(msg);
     expect(result).toBe("StartMiddleEnd");

@@ -133,10 +133,16 @@ public actor GatewayChannelActor {
     private var lastAuthSource: GatewayAuthSource = .none
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private let connectTimeoutSeconds: Double = 6
-    private let connectChallengeTimeoutSeconds: Double = 3.0
+    // Remote gateways (tailscale/wan) can take a bit longer to deliver the connect.challenge event,
+    // and we must include the nonce once the gateway requires v2 signing.
+    private let connectTimeoutSeconds: Double = 12
+    private let connectChallengeTimeoutSeconds: Double = 6.0
+    // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
+    // but NATs/proxies often require outbound traffic to keep the connection alive.
+    private let keepaliveIntervalSeconds: Double = 15.0
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
     private let connectOptions: GatewayConnectOptions?
@@ -174,6 +180,9 @@ public actor GatewayChannelActor {
 
         self.tickTask?.cancel()
         self.tickTask = nil
+
+        self.keepaliveTask?.cancel()
+        self.keepaliveTask = nil
 
         self.task?.cancel(with: .goingAway, reason: nil)
         self.task = nil
@@ -257,11 +266,35 @@ public actor GatewayChannelActor {
         self.connected = true
         self.backoffMs = 500
         self.lastSeq = nil
+        self.startKeepalive()
 
         let waiters = self.connectWaiters
         self.connectWaiters.removeAll()
         for waiter in waiters {
             waiter.resume(returning: ())
+        }
+    }
+
+    private func startKeepalive() {
+        self.keepaliveTask?.cancel()
+        self.keepaliveTask = Task { [weak self] in
+            guard let self else { return }
+            await self.keepaliveLoop()
+        }
+    }
+
+    private func keepaliveLoop() async {
+        while self.shouldReconnect {
+            try? await Task.sleep(nanoseconds: UInt64(self.keepaliveIntervalSeconds * 1_000_000_000))
+            guard self.shouldReconnect else { return }
+            guard self.connected else { continue }
+            // Best-effort outbound message to keep intermediate NAT/proxy state alive.
+            // We intentionally ignore the response.
+            do {
+                try await self.send(method: "health", params: nil)
+            } catch {
+                // Avoid spamming logs; the reconnect paths will surface meaningful errors.
+            }
         }
     }
 
@@ -458,6 +491,8 @@ public actor GatewayChannelActor {
         let wrapped = self.wrap(err, context: "gateway receive")
         self.logger.error("gateway ws receive failed \(wrapped.localizedDescription, privacy: .public)")
         self.connected = false
+        self.keepaliveTask?.cancel()
+        self.keepaliveTask = nil
         await self.disconnectHandler?("receive failed: \(wrapped.localizedDescription)")
         await self.failPending(wrapped)
         await self.scheduleReconnect()

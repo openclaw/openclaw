@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
-import { resetProcessRegistryForTests } from "./bash-process-registry";
-import { createExecTool } from "./bash-tools.exec";
+import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { createExecTool } from "./bash-tools.exec.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -14,6 +14,6 @@ test("exec supports pty output", async () => {
   });
 
   expect(result.details.status).toBe("completed");
-  const text = result.content?.[0]?.text ?? "";
+  const text = result.content?.find((item) => item.type === "text")?.text ?? "";
   expect(text).toContain("ok");
 });

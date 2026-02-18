@@ -16,6 +16,7 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeDiscordMessagingTarget,
+  normalizeDiscordOutboundTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveDiscordAccount,
   resolveDefaultDiscordAccountId,
@@ -291,6 +292,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     chunker: null,
     textChunkLimit: 2000,
     pollMaxOptions: 10,
+    resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
     sendText: async ({ to, text, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {

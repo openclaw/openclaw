@@ -21,7 +21,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} }],
-      },
+      } as unknown as AgentMessage,
       {
         role: "toolResult",
         toolCallId: "call_123|fc_123",

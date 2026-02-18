@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -8,7 +9,6 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { randomUUID } from "node:crypto";
 
 export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
 
@@ -54,6 +54,7 @@ interface OllamaChatResponse {
   message: {
     role: "assistant";
     content: string;
+    reasoning?: string;
     tool_calls?: OllamaToolCall[];
   };
   done: boolean;
@@ -191,8 +192,12 @@ export function buildAssistantMessage(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  if (response.message.content) {
-    content.push({ type: "text", text: response.message.content });
+  // Qwen 3 (and potentially other reasoning models) may return their final
+  // answer in a `reasoning` field with an empty `content`. Fall back to
+  // `reasoning` so the response isn't silently dropped.
+  const text = response.message.content || response.message.reasoning || "";
+  if (text) {
+    content.push({ type: "text", text });
   }
 
   const toolCalls = response.message.tool_calls;
@@ -347,6 +352,9 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
+          } else if (chunk.message?.reasoning) {
+            // Qwen 3 reasoning mode: content may be empty, output in reasoning
+            accumulatedContent += chunk.message.reasoning;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,

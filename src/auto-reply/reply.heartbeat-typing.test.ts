@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -63,7 +64,7 @@ describe("getReplyFromConfig typing (heartbeat)", () => {
       await getReplyFromConfig(
         { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
         { onReplyStart, isHeartbeat: false },
-        makeReplyConfig(home),
+        makeReplyConfig(home) as unknown as OpenClawConfig,
       );
 
       expect(onReplyStart).toHaveBeenCalled();
@@ -81,7 +82,7 @@ describe("getReplyFromConfig typing (heartbeat)", () => {
       await getReplyFromConfig(
         { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
         { onReplyStart, isHeartbeat: true },
-        makeReplyConfig(home),
+        makeReplyConfig(home) as unknown as OpenClawConfig,
       );
 
       expect(onReplyStart).not.toHaveBeenCalled();

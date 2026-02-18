@@ -1,4 +1,5 @@
 import {
+  isAllowedParsedChatSender,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
@@ -329,43 +330,15 @@ export function isAllowedBlueBubblesSender(params: {
   chatGuid?: string | null;
   chatIdentifier?: string | null;
 }): boolean {
-  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
-  if (allowFrom.length === 0) {
-    return true;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-
-  const senderNormalized = normalizeBlueBubblesHandle(params.sender);
-  const chatId = params.chatId ?? undefined;
-  const chatGuid = params.chatGuid?.trim();
-  const chatIdentifier = params.chatIdentifier?.trim();
-
-  for (const entry of allowFrom) {
-    if (!entry) {
-      continue;
-    }
-    const parsed = parseBlueBubblesAllowTarget(entry);
-    if (parsed.kind === "chat_id" && chatId !== undefined) {
-      if (parsed.chatId === chatId) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_guid" && chatGuid) {
-      if (parsed.chatGuid === chatGuid) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
-      if (parsed.chatIdentifier === chatIdentifier) {
-        return true;
-      }
-    } else if (parsed.kind === "handle" && senderNormalized) {
-      if (parsed.handle === senderNormalized) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return isAllowedParsedChatSender({
+    allowFrom: params.allowFrom,
+    sender: params.sender,
+    chatId: params.chatId,
+    chatGuid: params.chatGuid,
+    chatIdentifier: params.chatIdentifier,
+    normalizeSender: normalizeBlueBubblesHandle,
+    parseAllowTarget: parseBlueBubblesAllowTarget,
+  });
 }
 
 export function formatBlueBubblesChatTarget(params: {

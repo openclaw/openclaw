@@ -1,8 +1,10 @@
-import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
-import { buildBatchHeaders, normalizeBatchBaseUrl, splitBatchRequests } from "./batch-utils.js";
-import { hashText, runWithConcurrency } from "./internal.js";
+import { runEmbeddingBatchGroups } from "./batch-runner.js";
+import { uploadBatchJsonlFile } from "./batch-upload.js";
+import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
+import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 
 export type OpenAiBatchRequest = {
   custom_id: string;
@@ -43,34 +45,17 @@ async function submitOpenAiBatch(params: {
   agentId: string;
 }): Promise<OpenAiBatchStatus> {
   const baseUrl = normalizeBatchBaseUrl(params.openAi);
-  const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
-  const form = new FormData();
-  form.append("purpose", "batch");
-  form.append(
-    "file",
-    new Blob([jsonl], { type: "application/jsonl" }),
-    `memory-embeddings.${hashText(String(Date.now()))}.jsonl`,
-  );
-
-  const fileRes = await fetch(`${baseUrl}/files`, {
-    method: "POST",
-    headers: buildBatchHeaders(params.openAi, { json: false }),
-    body: form,
+  const inputFileId = await uploadBatchJsonlFile({
+    client: params.openAi,
+    requests: params.requests,
+    errorPrefix: "openai batch file upload failed",
   });
-  if (!fileRes.ok) {
-    const text = await fileRes.text();
-    throw new Error(`openai batch file upload failed: ${fileRes.status} ${text}`);
-  }
-  const filePayload = (await fileRes.json()) as { id?: string };
-  if (!filePayload.id) {
-    throw new Error("openai batch file upload failed: missing file id");
-  }
 
   return await postJsonWithRetry<OpenAiBatchStatus>({
     url: `${baseUrl}/batches`,
     headers: buildBatchHeaders(params.openAi, { json: true }),
     body: {
-      input_file_id: filePayload.id,
+      input_file_id: inputFileId,
       endpoint: OPENAI_BATCH_ENDPOINT,
       completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
       metadata: {
@@ -133,16 +118,9 @@ async function readOpenAiBatchError(params: {
       fileId: params.errorFileId,
     });
     const lines = parseOpenAiBatchOutput(content);
-    const first = lines.find((line) => line.error?.message || line.response?.body?.error);
-    const message =
-      first?.error?.message ??
-      (typeof first?.response?.body?.error?.message === "string"
-        ? first?.response?.body?.error?.message
-        : undefined);
-    return message;
+    return extractBatchErrorMessage(lines);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return message ? `error file unavailable: ${message}` : undefined;
+    return formatUnavailableBatchError(err);
   }
 }
 
@@ -203,84 +181,78 @@ export async function runOpenAiEmbeddingBatches(params: {
   concurrency: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
 }): Promise<Map<string, number[]>> {
-  if (params.requests.length === 0) {
-    return new Map();
-  }
-  const groups = splitBatchRequests(params.requests, OPENAI_BATCH_MAX_REQUESTS);
-  const byCustomId = new Map<string, number[]>();
-
-  const tasks = groups.map((group, groupIndex) => async () => {
-    const batchInfo = await submitOpenAiBatch({
-      openAi: params.openAi,
-      requests: group,
-      agentId: params.agentId,
-    });
-    if (!batchInfo.id) {
-      throw new Error("openai batch create failed: missing batch id");
-    }
-
-    params.debug?.("memory embeddings: openai batch created", {
-      batchId: batchInfo.id,
-      status: batchInfo.status,
-      group: groupIndex + 1,
-      groups: groups.length,
-      requests: group.length,
-    });
-
-    if (!params.wait && batchInfo.status !== "completed") {
-      throw new Error(
-        `openai batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
-      );
-    }
-
-    const completed =
-      batchInfo.status === "completed"
-        ? {
-            outputFileId: batchInfo.output_file_id ?? "",
-            errorFileId: batchInfo.error_file_id ?? undefined,
-          }
-        : await waitForOpenAiBatch({
-            openAi: params.openAi,
-            batchId: batchInfo.id,
-            wait: params.wait,
-            pollIntervalMs: params.pollIntervalMs,
-            timeoutMs: params.timeoutMs,
-            debug: params.debug,
-            initial: batchInfo,
-          });
-    if (!completed.outputFileId) {
-      throw new Error(`openai batch ${batchInfo.id} completed without output file`);
-    }
-
-    const content = await fetchOpenAiFileContent({
-      openAi: params.openAi,
-      fileId: completed.outputFileId,
-    });
-    const outputLines = parseOpenAiBatchOutput(content);
-    const errors: string[] = [];
-    const remaining = new Set(group.map((request) => request.custom_id));
-
-    for (const line of outputLines) {
-      applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
-    }
-
-    if (errors.length > 0) {
-      throw new Error(`openai batch ${batchInfo.id} failed: ${errors.join("; ")}`);
-    }
-    if (remaining.size > 0) {
-      throw new Error(`openai batch ${batchInfo.id} missing ${remaining.size} embedding responses`);
-    }
-  });
-
-  params.debug?.("memory embeddings: openai batch submit", {
-    requests: params.requests.length,
-    groups: groups.length,
+  return await runEmbeddingBatchGroups({
+    requests: params.requests,
+    maxRequests: OPENAI_BATCH_MAX_REQUESTS,
     wait: params.wait,
-    concurrency: params.concurrency,
     pollIntervalMs: params.pollIntervalMs,
     timeoutMs: params.timeoutMs,
-  });
+    concurrency: params.concurrency,
+    debug: params.debug,
+    debugLabel: "memory embeddings: openai batch submit",
+    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+      const batchInfo = await submitOpenAiBatch({
+        openAi: params.openAi,
+        requests: group,
+        agentId: params.agentId,
+      });
+      if (!batchInfo.id) {
+        throw new Error("openai batch create failed: missing batch id");
+      }
 
-  await runWithConcurrency(tasks, params.concurrency);
-  return byCustomId;
+      params.debug?.("memory embeddings: openai batch created", {
+        batchId: batchInfo.id,
+        status: batchInfo.status,
+        group: groupIndex + 1,
+        groups,
+        requests: group.length,
+      });
+
+      if (!params.wait && batchInfo.status !== "completed") {
+        throw new Error(
+          `openai batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
+        );
+      }
+
+      const completed =
+        batchInfo.status === "completed"
+          ? {
+              outputFileId: batchInfo.output_file_id ?? "",
+              errorFileId: batchInfo.error_file_id ?? undefined,
+            }
+          : await waitForOpenAiBatch({
+              openAi: params.openAi,
+              batchId: batchInfo.id,
+              wait: params.wait,
+              pollIntervalMs: params.pollIntervalMs,
+              timeoutMs: params.timeoutMs,
+              debug: params.debug,
+              initial: batchInfo,
+            });
+      if (!completed.outputFileId) {
+        throw new Error(`openai batch ${batchInfo.id} completed without output file`);
+      }
+
+      const content = await fetchOpenAiFileContent({
+        openAi: params.openAi,
+        fileId: completed.outputFileId,
+      });
+      const outputLines = parseOpenAiBatchOutput(content);
+      const errors: string[] = [];
+      const remaining = new Set(group.map((request) => request.custom_id));
+
+      for (const line of outputLines) {
+        applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+      }
+
+      if (errors.length > 0) {
+        throw new Error(`openai batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+      }
+      if (remaining.size > 0) {
+        throw new Error(
+          `openai batch ${batchInfo.id} missing ${remaining.size} embedding responses`,
+        );
+      }
+    },
+  });
 }

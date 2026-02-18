@@ -55,7 +55,7 @@ describe("buildMessageWithAttachments", () => {
     expect(() => buildMessageWithAttachments("x", [att], { maxBytes: 16 })).toThrow(
       /exceeds size limit/i,
     );
-    const base64Calls = fromSpy.mock.calls.filter((args) => args[1] === "base64");
+    const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
     expect(base64Calls).toHaveLength(0);
     fromSpy.mockRestore();
   });
@@ -114,7 +114,7 @@ describe("parseMessageWithAttachments", () => {
         { maxBytes: 16, log: { warn: () => {} } },
       ),
     ).rejects.toThrow(/exceeds size limit/i);
-    const base64Calls = fromSpy.mock.calls.filter((args) => args[1] === "base64");
+    const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
     expect(base64Calls).toHaveLength(0);
     fromSpy.mockRestore();
   });

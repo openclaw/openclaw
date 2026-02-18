@@ -57,7 +57,7 @@ describe("server-context hot-reload profiles", () => {
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
 
     // Verify cache is primed (without desktop)
-    expect(cfg.browser.profiles.desktop).toBeUndefined();
+    expect(cfg.browser?.profiles?.desktop).toBeUndefined();
     const state = {
       server: null,
       port: 18791,
@@ -79,7 +79,7 @@ describe("server-context hot-reload profiles", () => {
 
     // 3. Verify without clearConfigCache, loadConfig() still returns stale cached value
     const staleCfg = loadConfig();
-    expect(staleCfg.browser.profiles.desktop).toBeUndefined(); // Cache is stale!
+    expect(staleCfg.browser?.profiles?.desktop).toBeUndefined(); // Cache is stale!
 
     // 4. Hot-reload should read fresh config for the lookup (createConfigIO().loadConfig()),
     // without flushing the global loadConfig cache.
@@ -97,7 +97,7 @@ describe("server-context hot-reload profiles", () => {
     // 6. Verify GLOBAL cache was NOT cleared - subsequent simple loadConfig() still sees STALE value
     // This confirms the fix: we read fresh config for the specific profile lookup without flushing the global cache
     const stillStaleCfg = loadConfig();
-    expect(stillStaleCfg.browser.profiles.desktop).toBeUndefined();
+    expect(stillStaleCfg.browser?.profiles?.desktop).toBeUndefined();
   });
 
   it("forProfile still throws for profiles that don't exist in fresh config", async () => {

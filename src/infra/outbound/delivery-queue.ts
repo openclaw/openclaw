@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { OutboundChannel } from "./targets.js";
 import { resolveStateDir } from "../../config/paths.js";
+import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";

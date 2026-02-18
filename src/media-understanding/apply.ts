@@ -1,26 +1,12 @@
 import path from "node:path";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
-  DEFAULT_INPUT_FILE_MAX_BYTES,
-  DEFAULT_INPUT_FILE_MAX_CHARS,
-  DEFAULT_INPUT_FILE_MIMES,
-  DEFAULT_INPUT_MAX_REDIRECTS,
-  DEFAULT_INPUT_PDF_MAX_PAGES,
-  DEFAULT_INPUT_PDF_MAX_PIXELS,
-  DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
-  DEFAULT_INPUT_TIMEOUT_MS,
   extractFileContentFromSource,
-  normalizeMimeList,
   normalizeMimeType,
+  resolveInputFileLimits,
 } from "../media/input-files.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
@@ -37,6 +23,12 @@ import {
   normalizeMediaAttachments,
   runCapability,
 } from "./runner.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+} from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
@@ -107,20 +99,10 @@ function sanitizeMimeType(value?: string): string | undefined {
 
 function resolveFileLimits(cfg: OpenClawConfig) {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
-  const allowedMimesConfigured = Boolean(files?.allowedMimes && files.allowedMimes.length > 0);
+  const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
   return {
-    allowUrl: files?.allowUrl ?? true,
-    allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
+    ...resolveInputFileLimits(files),
     allowedMimesConfigured,
-    maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
-    maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
-    maxRedirects: files?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
-    timeoutMs: files?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
-    pdf: {
-      maxPages: files?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
-      maxPixels: files?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
-      minTextChars: files?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
-    },
   };
 }
 

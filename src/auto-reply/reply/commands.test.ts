@@ -2,16 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildCommandsPaginationKeyboard } from "./commands-info.js";
@@ -102,6 +102,7 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
@@ -356,6 +357,7 @@ describe("/compact command", () => {
         ...params,
         sessionEntry: {
           sessionId: "session-1",
+          updatedAt: Date.now(),
           groupId: "group-1",
           groupChannel: "#general",
           space: "workspace-1",
@@ -503,7 +505,7 @@ function buildPolicyParams(
   commandBody: string,
   cfg: OpenClawConfig,
   ctxOverrides?: Partial<MsgContext>,
-) {
+): HandleCommandsParams {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -522,7 +524,7 @@ function buildPolicyParams(
     commandAuthorized: true,
   });
 
-  return {
+  const params: HandleCommandsParams = {
     ctx,
     cfg,
     command,
@@ -531,14 +533,15 @@ function buildPolicyParams(
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
     defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off" as const,
-    resolvedReasoningLevel: "off" as const,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
     resolveDefaultThinkingLevel: async () => undefined,
     provider: "telegram",
     model: "test-model",
     contextTokens: 0,
     isGroup: false,
   };
+  return params;
 }
 
 describe("handleCommands /allowlist", () => {

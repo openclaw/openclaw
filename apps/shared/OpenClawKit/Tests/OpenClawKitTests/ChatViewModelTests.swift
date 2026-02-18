@@ -215,6 +215,103 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
 
+    @Test func acceptsCanonicalSessionKeyEventsForOwnPendingRun() async throws {
+        let history1 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "off")
+        let history2 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "from history"]],
+                    "timestamp": Date().timeIntervalSince1970 * 1000,
+                ]),
+            ],
+            thinkingLevel: "off")
+
+        let transport = TestChatTransport(historyResponses: [history1, history2])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK } }
+
+        await MainActor.run {
+            vm.input = "hi"
+            vm.send()
+        }
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        let runId = try #require(await transport.lastSentRunId())
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "agent:main:main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
+        try await waitUntil("history refresh") {
+            await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
+    }
+
+    @Test func preservesMessageIDsAcrossHistoryRefreshes() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "hello"]],
+                    "timestamp": now,
+                ]),
+            ],
+            thinkingLevel: "off")
+        let history2 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "hello"]],
+                    "timestamp": now,
+                ]),
+                AnyCodable([
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "world"]],
+                    "timestamp": now + 1,
+                ]),
+            ],
+            thinkingLevel: "off")
+
+        let transport = TestChatTransport(historyResponses: [history1, history2])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { vm.messages.count == 1 } }
+        let firstIdBefore = try #require(await MainActor.run { vm.messages.first?.id })
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: "other-run",
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        try await waitUntil("history refresh") { await MainActor.run { vm.messages.count == 2 } }
+        let firstIdAfter = try #require(await MainActor.run { vm.messages.first?.id })
+        #expect(firstIdAfter == firstIdBefore)
+    }
+
     @Test func clearsStreamingOnExternalFinalEvent() async throws {
         let sessionId = "sess-main"
         let history = OpenClawChatHistoryPayload(

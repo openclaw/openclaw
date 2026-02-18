@@ -153,7 +153,9 @@ describe("port collision prevention", () => {
     const { resolveBrowserConfig } = await import("./config.js");
 
     // Simulate what happens with raw config (empty) vs resolved config
-    const rawConfig = { browser: {} }; // Fresh config, no profiles
+    const rawConfig: { browser: { profiles?: Record<string, { cdpPort?: number }> } } = {
+      browser: {},
+    }; // Fresh config, no profiles
     const buggyUsedPorts = getUsedPorts(rawConfig.browser?.profiles);
     const buggyAllocatedPort = allocateCdpPort(buggyUsedPorts);
 
@@ -161,7 +163,9 @@ describe("port collision prevention", () => {
     expect(buggyAllocatedPort).toBe(CDP_PORT_RANGE_START);
 
     // Resolved config: includes implicit openclaw at 18800
-    const resolved = resolveBrowserConfig(rawConfig.browser);
+    const resolved = resolveBrowserConfig(
+      rawConfig.browser as Parameters<typeof resolveBrowserConfig>[0],
+    );
     const fixedUsedPorts = getUsedPorts(resolved.profiles);
     const fixedAllocatedPort = allocateCdpPort(fixedUsedPorts);
 

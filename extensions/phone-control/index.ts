@@ -1,6 +1,6 @@
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 

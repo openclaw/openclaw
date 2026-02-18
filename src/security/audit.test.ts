@@ -25,7 +25,7 @@ function stubChannelPlugin(params: {
       blurb: "test stub",
     },
     capabilities: {
-      chatTypes: ["dm", "group"],
+      chatTypes: ["direct", "group"],
     },
     security: {},
     config: {
@@ -1244,8 +1244,8 @@ describe("security audit", () => {
       },
     });
 
-    expect(res.deep?.gateway.ok).toBe(false);
-    expect(res.deep?.gateway.error).toContain("probe boom");
+    expect(res.deep?.gateway?.ok).toBe(false);
+    expect(res.deep?.gateway?.error).toContain("probe boom");
     expect(res.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ checkId: "gateway.probe_failed", severity: "warn" }),

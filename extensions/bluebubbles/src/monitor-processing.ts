@@ -6,12 +6,8 @@ import {
   logTypingFailure,
   resolveAckReaction,
   resolveControlCommandGate,
+  stripMarkdown,
 } from "openclaw/plugin-sdk";
-import type {
-  BlueBubblesCoreRuntime,
-  BlueBubblesRuntimeEnv,
-  WebhookTarget,
-} from "./monitor-shared.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
@@ -32,6 +28,11 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import type {
+  BlueBubblesCoreRuntime,
+  BlueBubblesRuntimeEnv,
+  WebhookTarget,
+} from "./monitor-shared.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -40,6 +41,135 @@ import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targe
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
 const REPLY_DIRECTIVE_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]/gi;
+const PENDING_OUTBOUND_MESSAGE_ID_TTL_MS = 2 * 60 * 1000;
+
+type PendingOutboundMessageId = {
+  id: number;
+  accountId: string;
+  sessionKey: string;
+  outboundTarget: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  snippetRaw: string;
+  snippetNorm: string;
+  isMediaSnippet: boolean;
+  createdAt: number;
+};
+
+const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
+let pendingOutboundMessageIdCounter = 0;
+
+function trimOrUndefined(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeSnippet(value: string): string {
+  return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function prunePendingOutboundMessageIds(now = Date.now()): void {
+  const cutoff = now - PENDING_OUTBOUND_MESSAGE_ID_TTL_MS;
+  for (let i = pendingOutboundMessageIds.length - 1; i >= 0; i--) {
+    if (pendingOutboundMessageIds[i].createdAt < cutoff) {
+      pendingOutboundMessageIds.splice(i, 1);
+    }
+  }
+}
+
+function rememberPendingOutboundMessageId(entry: {
+  accountId: string;
+  sessionKey: string;
+  outboundTarget: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  snippet: string;
+}): number {
+  prunePendingOutboundMessageIds();
+  pendingOutboundMessageIdCounter += 1;
+  const snippetRaw = entry.snippet.trim();
+  const snippetNorm = normalizeSnippet(snippetRaw);
+  pendingOutboundMessageIds.push({
+    id: pendingOutboundMessageIdCounter,
+    accountId: entry.accountId,
+    sessionKey: entry.sessionKey,
+    outboundTarget: entry.outboundTarget,
+    chatGuid: trimOrUndefined(entry.chatGuid),
+    chatIdentifier: trimOrUndefined(entry.chatIdentifier),
+    chatId: typeof entry.chatId === "number" ? entry.chatId : undefined,
+    snippetRaw,
+    snippetNorm,
+    isMediaSnippet: snippetRaw.toLowerCase().startsWith("<media:"),
+    createdAt: Date.now(),
+  });
+  return pendingOutboundMessageIdCounter;
+}
+
+function forgetPendingOutboundMessageId(id: number): void {
+  const index = pendingOutboundMessageIds.findIndex((entry) => entry.id === id);
+  if (index >= 0) {
+    pendingOutboundMessageIds.splice(index, 1);
+  }
+}
+
+function chatsMatch(
+  left: Pick<PendingOutboundMessageId, "chatGuid" | "chatIdentifier" | "chatId">,
+  right: { chatGuid?: string; chatIdentifier?: string; chatId?: number },
+): boolean {
+  const leftGuid = trimOrUndefined(left.chatGuid);
+  const rightGuid = trimOrUndefined(right.chatGuid);
+  if (leftGuid && rightGuid) {
+    return leftGuid === rightGuid;
+  }
+
+  const leftIdentifier = trimOrUndefined(left.chatIdentifier);
+  const rightIdentifier = trimOrUndefined(right.chatIdentifier);
+  if (leftIdentifier && rightIdentifier) {
+    return leftIdentifier === rightIdentifier;
+  }
+
+  const leftChatId = typeof left.chatId === "number" ? left.chatId : undefined;
+  const rightChatId = typeof right.chatId === "number" ? right.chatId : undefined;
+  if (leftChatId !== undefined && rightChatId !== undefined) {
+    return leftChatId === rightChatId;
+  }
+
+  return false;
+}
+
+function consumePendingOutboundMessageId(params: {
+  accountId: string;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  chatId?: number;
+  body: string;
+}): PendingOutboundMessageId | null {
+  prunePendingOutboundMessageIds();
+  const bodyNorm = normalizeSnippet(params.body);
+  const isMediaBody = params.body.trim().toLowerCase().startsWith("<media:");
+
+  for (let i = 0; i < pendingOutboundMessageIds.length; i++) {
+    const entry = pendingOutboundMessageIds[i];
+    if (entry.accountId !== params.accountId) {
+      continue;
+    }
+    if (!chatsMatch(entry, params)) {
+      continue;
+    }
+    if (entry.snippetNorm && entry.snippetNorm === bodyNorm) {
+      pendingOutboundMessageIds.splice(i, 1);
+      return entry;
+    }
+    if (entry.isMediaSnippet && isMediaBody) {
+      pendingOutboundMessageIds.splice(i, 1);
+      return entry;
+    }
+  }
+
+  return null;
+}
 
 export function logVerbose(
   core: BlueBubblesCoreRuntime,
@@ -158,6 +288,26 @@ export async function processMessage(
   if (message.fromMe) {
     // Cache from-me messages so reply context can resolve sender/body.
     cacheInboundMessage();
+    if (cacheMessageId) {
+      const pending = consumePendingOutboundMessageId({
+        accountId: account.accountId,
+        chatGuid: message.chatGuid,
+        chatIdentifier: message.chatIdentifier,
+        chatId: message.chatId,
+        body: rawBody,
+      });
+      if (pending) {
+        const displayId = getShortIdForUuid(cacheMessageId) || cacheMessageId;
+        const previewSource = pending.snippetRaw || rawBody;
+        const preview = previewSource
+          ? ` "${previewSource.slice(0, 12)}${previewSource.length > 12 ? "…" : ""}"`
+          : "";
+        core.system.enqueueSystemEvent(`Assistant sent${preview} [message_id:${displayId}]`, {
+          sessionKey: pending.sessionKey,
+          contextKey: `bluebubbles:outbound:${pending.outboundTarget}:${cacheMessageId}`,
+        });
+      }
+    }
     return;
   }
 
@@ -629,10 +779,10 @@ export async function processMessage(
       ? formatBlueBubblesChatTarget({ chatGuid: chatGuidForActions })
       : message.senderId;
 
-  const maybeEnqueueOutboundMessageId = (messageId?: string, snippet?: string) => {
+  const maybeEnqueueOutboundMessageId = (messageId?: string, snippet?: string): boolean => {
     const trimmed = messageId?.trim();
     if (!trimmed || trimmed === "ok" || trimmed === "unknown") {
-      return;
+      return false;
     }
     // Cache outbound message to get short ID
     const cacheEntry = rememberBlueBubblesReplyCache({
@@ -651,6 +801,7 @@ export async function processMessage(
       sessionKey: route.sessionKey,
       contextKey: `bluebubbles:outbound:${outboundTarget}:${trimmed}`,
     });
+    return true;
   };
   const sanitizeReplyDirectiveText = (value: string): string => {
     if (privateApiEnabled) {
@@ -768,16 +919,33 @@ export async function processMessage(
             for (const mediaUrl of mediaList) {
               const caption = first ? text : undefined;
               first = false;
-              const result = await sendBlueBubblesMedia({
-                cfg: config,
-                to: outboundTarget,
-                mediaUrl,
-                caption: caption ?? undefined,
-                replyToId: replyToMessageGuid || null,
-                accountId: account.accountId,
-              });
               const cachedBody = (caption ?? "").trim() || "<media:attachment>";
-              maybeEnqueueOutboundMessageId(result.messageId, cachedBody);
+              const pendingId = rememberPendingOutboundMessageId({
+                accountId: account.accountId,
+                sessionKey: route.sessionKey,
+                outboundTarget,
+                chatGuid: chatGuidForActions ?? chatGuid,
+                chatIdentifier,
+                chatId,
+                snippet: cachedBody,
+              });
+              let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
+              try {
+                result = await sendBlueBubblesMedia({
+                  cfg: config,
+                  to: outboundTarget,
+                  mediaUrl,
+                  caption: caption ?? undefined,
+                  replyToId: replyToMessageGuid || null,
+                  accountId: account.accountId,
+                });
+              } catch (err) {
+                forgetPendingOutboundMessageId(pendingId);
+                throw err;
+              }
+              if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
+                forgetPendingOutboundMessageId(pendingId);
+              }
               sentMessage = true;
               statusSink?.({ lastOutboundAt: Date.now() });
               if (info.kind === "block") {
@@ -811,12 +979,29 @@ export async function processMessage(
             return;
           }
           for (const chunk of chunks) {
-            const result = await sendMessageBlueBubbles(outboundTarget, chunk, {
-              cfg: config,
+            const pendingId = rememberPendingOutboundMessageId({
               accountId: account.accountId,
-              replyToMessageGuid: replyToMessageGuid || undefined,
+              sessionKey: route.sessionKey,
+              outboundTarget,
+              chatGuid: chatGuidForActions ?? chatGuid,
+              chatIdentifier,
+              chatId,
+              snippet: chunk,
             });
-            maybeEnqueueOutboundMessageId(result.messageId, chunk);
+            let result: Awaited<ReturnType<typeof sendMessageBlueBubbles>>;
+            try {
+              result = await sendMessageBlueBubbles(outboundTarget, chunk, {
+                cfg: config,
+                accountId: account.accountId,
+                replyToMessageGuid: replyToMessageGuid || undefined,
+              });
+            } catch (err) {
+              forgetPendingOutboundMessageId(pendingId);
+              throw err;
+            }
+            if (maybeEnqueueOutboundMessageId(result.messageId, chunk)) {
+              forgetPendingOutboundMessageId(pendingId);
+            }
             sentMessage = true;
             statusSink?.({ lastOutboundAt: Date.now() });
             if (info.kind === "block") {
