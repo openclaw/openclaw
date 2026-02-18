@@ -84,11 +84,20 @@ function applyJobResult(
     job.state.consecutiveErrors = 0;
   }
 
+  // Track total runs for maxRuns-based lifecycle management.
+  job.state.totalRuns = (job.state.totalRuns ?? 0) + 1;
+
+  const maxRunsReached = typeof job.maxRuns === "number" && job.state.totalRuns >= job.maxRuns;
   const shouldDelete =
-    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+    (job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok") ||
+    (maxRunsReached && job.deleteAfterRun !== false);
+  const shouldDisable = maxRunsReached && job.deleteAfterRun === false;
 
   if (!shouldDelete) {
-    if (job.schedule.kind === "at") {
+    if (shouldDisable) {
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+    } else if (job.schedule.kind === "at") {
       // One-shot jobs are always disabled after ANY terminal status
       // (ok, error, or skipped). This prevents tight-loop rescheduling
       // when computeJobNextRunAtMs returns the past atMs value (#11452).

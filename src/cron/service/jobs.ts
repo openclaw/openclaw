@@ -342,6 +342,8 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
         ? true
         : undefined;
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
+  const maxRuns =
+    typeof input.maxRuns === "number" && input.maxRuns > 0 ? Math.floor(input.maxRuns) : undefined;
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
@@ -350,6 +352,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     description: normalizeOptionalText(input.description),
     enabled,
     deleteAfterRun,
+    maxRuns,
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
@@ -379,6 +382,10 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (typeof patch.deleteAfterRun === "boolean") {
     job.deleteAfterRun = patch.deleteAfterRun;
+  }
+  if ("maxRuns" in patch) {
+    const raw = (patch as { maxRuns?: unknown }).maxRuns;
+    job.maxRuns = typeof raw === "number" && raw > 0 ? Math.floor(raw) : undefined;
   }
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {

@@ -279,6 +279,17 @@ export async function ensureLoaded(
       mutated = true;
     }
 
+    if ("maxRuns" in raw) {
+      const v = raw.maxRuns;
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 1) {
+        delete raw.maxRuns;
+        mutated = true;
+      } else if (Math.floor(v) !== v) {
+        raw.maxRuns = Math.floor(v);
+        mutated = true;
+      }
+    }
+
     const payload = raw.payload;
     if (
       (!payload || typeof payload !== "object" || Array.isArray(payload)) &&
