@@ -24,14 +24,24 @@ describe("Matrix startupGraceMs clock-skew guard", () => {
 
   it("drops genuinely old events (older than grace window)", () => {
     expect(
-      shouldDropEvent({ eventTs: now - 10_000, eventAge: undefined, startupMs: now, startupGraceMs: 5_000 }),
+      shouldDropEvent({
+        eventTs: now - 10_000,
+        eventAge: undefined,
+        startupMs: now,
+        startupGraceMs: 5_000,
+      }),
     ).toBe(true);
   });
 
   it("accepts events within the 5s grace window (clock skew tolerance)", () => {
     // Server clock is 3s behind — eventTs appears 3s before our startupMs
     expect(
-      shouldDropEvent({ eventTs: now - 3_000, eventAge: undefined, startupMs: now, startupGraceMs: 5_000 }),
+      shouldDropEvent({
+        eventTs: now - 3_000,
+        eventAge: undefined,
+        startupMs: now,
+        startupGraceMs: 5_000,
+      }),
     ).toBe(false);
   });
 
@@ -43,19 +53,34 @@ describe("Matrix startupGraceMs clock-skew guard", () => {
 
   it("accepts fresh events regardless of grace window", () => {
     expect(
-      shouldDropEvent({ eventTs: now + 500, eventAge: undefined, startupMs: now, startupGraceMs: 5_000 }),
+      shouldDropEvent({
+        eventTs: now + 500,
+        eventAge: undefined,
+        startupMs: now,
+        startupGraceMs: 5_000,
+      }),
     ).toBe(false);
   });
 
   it("drops events with no timestamp when age exceeds grace window", () => {
     expect(
-      shouldDropEvent({ eventTs: undefined, eventAge: 10_000, startupMs: now, startupGraceMs: 5_000 }),
+      shouldDropEvent({
+        eventTs: undefined,
+        eventAge: 10_000,
+        startupMs: now,
+        startupGraceMs: 5_000,
+      }),
     ).toBe(true);
   });
 
   it("accepts events with no timestamp when age is within grace window", () => {
     expect(
-      shouldDropEvent({ eventTs: undefined, eventAge: 2_000, startupMs: now, startupGraceMs: 5_000 }),
+      shouldDropEvent({
+        eventTs: undefined,
+        eventAge: 2_000,
+        startupMs: now,
+        startupGraceMs: 5_000,
+      }),
     ).toBe(false);
   });
 });
