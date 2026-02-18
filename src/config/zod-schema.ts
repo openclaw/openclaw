@@ -556,6 +556,8 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        /** When false, suppress the post-restart ping delivered to the active session. */
+        restartNotify: z.boolean().optional(),
       })
       .strict()
       .optional(),
