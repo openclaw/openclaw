@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
@@ -614,6 +614,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
     const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
+    const cfg = loadConfig();
     if (sessionKeyRaw) {
       if (classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
         respond(
@@ -626,7 +627,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resolved = resolveAgentIdFromSessionKey(sessionKeyRaw);
+      const resolved = resolveSessionAgentId({ sessionKey: sessionKeyRaw, config: cfg });
       if (agentId && resolved !== agentId) {
         respond(
           false,
@@ -640,7 +641,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       agentId = resolved;
     }
-    const cfg = loadConfig();
     const identity = resolveAssistantIdentity({ cfg, agentId });
     const avatarValue =
       resolveAssistantAvatarUrl({
