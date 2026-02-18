@@ -51,6 +51,8 @@ export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
 export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "api.botframework.com",
   "botframework.com",
+  // Bot Framework attachment service URLs (e.g. smba.trafficmanager.net)
+  "trafficmanager.net",
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",
