@@ -90,15 +90,30 @@ const isGrammyHttpError = (err: unknown): boolean => {
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
+  let activeRunner: ReturnType<typeof run> | undefined;
 
   // Register handler for Grammy HttpError unhandled rejections.
   // This catches network errors that escape the polling loop's try-catch
   // (e.g., from setMyCommands during bot setup).
   // We gate on isGrammyHttpError to avoid suppressing non-Telegram errors.
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
-    if (isGrammyHttpError(err) && isRecoverableTelegramNetworkError(err, { context: "polling" })) {
+    // If the runner's underlying fetch fails with a TypeError (undici/fetch)
+    // it often bypasses the runner's error handler but leaves the runner in a zombie state.
+    // We catch it here and force the runner to stop, triggering a restart in the main loop.
+    const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
+    if (isGrammyHttpError(err) && isNetworkError) {
       log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true; // handled - don't crash
+    }
+    // Handle fetch failures (TypeError) that kill the polling loop
+    if (isNetworkError && activeRunner && activeRunner.isRunning()) {
+      log(
+        `[telegram] Critical network error detected in unhandled rejection: ${formatErrorMessage(err)}. Restarting polling runner...`,
+      );
+      // Stopping the runner causes runner.task() to resolve/reject in the main loop,
+      // which will catch the error (or see the stop) and restart.
+      activeRunner.stop().catch(() => {});
+      return true; // handled
     }
     return false;
   });
@@ -173,6 +188,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     while (!opts.abortSignal?.aborted) {
       const runner = run(bot, createTelegramRunnerOptions(cfg));
+      activeRunner = runner;
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
           void runner.stop();
