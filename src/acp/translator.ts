@@ -40,6 +40,9 @@ import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./ses
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
+// Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
+const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
+
 type PendingPrompt = {
   sessionId: string;
   sessionKey: string;
@@ -266,6 +269,13 @@ export class AcpGatewayAgent implements Agent {
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
     const displayCwd = shortenHomePath(session.cwd);
     const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
+
+    // Guard against oversized prompts that could cause memory exhaustion (DoS)
+    if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
+      throw new Error(
+        `Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`,
+      );
+    }
 
     return new Promise<PromptResponse>((resolve, reject) => {
       this.pendingPrompts.set(params.sessionId, {
