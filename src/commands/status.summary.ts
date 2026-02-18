@@ -12,6 +12,7 @@ import {
 import { classifySessionKey, listAgentsForGateway } from "../gateway/session-utils.js";
 import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
+import { getOptimizer } from "../infra/optimizer/index.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
@@ -186,6 +187,8 @@ export async function getStatusSummary(
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 
+  const optimizerInstance = getOptimizer();
+
   const summary: StatusSummary = {
     linkChannel: linkContext
       ? {
@@ -201,6 +204,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    optimizer: optimizerInstance ? optimizerInstance.getStats() : undefined,
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,

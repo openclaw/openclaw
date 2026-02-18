@@ -4,6 +4,7 @@ import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { shutdownOptimizer } from "../infra/optimizer/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
 export function createGatewayCloseHandler(params: {
@@ -108,6 +109,7 @@ export function createGatewayCloseHandler(params: {
     if (params.browserControl) {
       await params.browserControl.stop().catch(() => {});
     }
+    await shutdownOptimizer();
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
     const servers =
       params.httpServers && params.httpServers.length > 0

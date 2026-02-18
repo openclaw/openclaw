@@ -29,6 +29,7 @@ import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { getPerformanceMonitor, initializeOptimizer } from "../infra/optimizer/index.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
@@ -228,6 +229,43 @@ export async function startGatewayServer(
   }
 
   const cfgAtStart = loadConfig();
+
+  initializeOptimizer({
+    cache: {
+      enabled: true,
+      ttl: 3600000,
+      maxSize: 1000,
+    },
+    pool: {
+      maxConnectionsPerHost: 50,
+      keepAlive: true,
+    },
+    queue: {
+      concurrency: 10,
+      maxRetries: 3,
+    },
+    monitor: {
+      enabled: true,
+      sampleInterval: 5000,
+    },
+  });
+  log.info("gateway: optimizer initialized");
+
+  const monitor = getPerformanceMonitor();
+  if (monitor) {
+    onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        const data = evt.data as { phase?: string };
+        if (data.phase === "start") {
+          monitor.recordRequest();
+          monitor.recordMessage();
+        } else if (data.phase === "error") {
+          monitor.recordError();
+        }
+      }
+    });
+  }
+
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();

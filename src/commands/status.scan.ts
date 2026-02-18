@@ -172,7 +172,16 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Reading sessions…");
-      const summary = await getStatusSummary();
+      let summary = await getStatusSummary();
+      if (gatewayReachable) {
+        const gatewayStatus = await callGateway({
+          method: "status",
+          timeoutMs: Math.min(5000, opts.timeoutMs ?? 10_000),
+        }).catch(() => null);
+        if (gatewayStatus && typeof gatewayStatus === "object") {
+          summary = gatewayStatus as Awaited<ReturnType<typeof getStatusSummary>>;
+        }
+      }
       progress.tick();
 
       progress.setLabel("Rendering…");

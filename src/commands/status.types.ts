@@ -31,6 +31,57 @@ export type HeartbeatStatus = {
   everyMs: number | null;
 };
 
+export type OptimizerStats = {
+  cache: {
+    hits: number;
+    misses: number;
+    evictions: number;
+    totalSaved: number;
+    hitRate: string;
+    size: number;
+    maxSize: number;
+  };
+  pool: {
+    httpRequestsServed: number;
+    httpConnectionsReused: number;
+    errors: number;
+    httpPools: number;
+  };
+  queue: {
+    queued: number;
+    processed: number;
+    succeeded: number;
+    failed: number;
+    retried: number;
+    active: number;
+    isPaused: boolean;
+  };
+  monitor: {
+    uptime: {
+      ms: number;
+      formatted: string;
+    };
+    memory: {
+      heapUsed: number;
+      heapTotal: number;
+      rss: number;
+      external: number;
+    };
+    counters: {
+      requests: number;
+      errors: number;
+      cacheHits: number;
+      cacheMisses: number;
+      messages: number;
+    };
+    rates: {
+      requestsPerSecond: number;
+      errorRate: number;
+      cacheHitRate: number;
+    };
+  };
+};
+
 export type StatusSummary = {
   linkChannel?: {
     id: ChannelId;
@@ -44,6 +95,7 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  optimizer?: OptimizerStats;
   sessions: {
     paths: string[];
     count: number;
