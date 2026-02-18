@@ -16,13 +16,17 @@ type OpenAIReasoningSignature = {
 const OPENAI_REPLAY_PRODUCER_TYPES = new Set(["toolCall", "toolUse", "function_call"]);
 
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
 
   let candidate: { id?: unknown; type?: unknown } | null = null;
 
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return null;
+    }
     try {
       candidate = JSON.parse(trimmed) as { id?: unknown; type?: unknown };
     } catch {
@@ -32,13 +36,19 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
     candidate = value as { id?: unknown; type?: unknown };
   }
 
-  if (!candidate) return null;
+  if (!candidate) {
+    return null;
+  }
 
   const id = typeof candidate.id === "string" ? candidate.id : "";
   const type = typeof candidate.type === "string" ? candidate.type : "";
 
-  if (!id.startsWith("rs_")) return null;
-  if (type === "reasoning" || type.startsWith("reasoning.")) return { id, type };
+  if (!id.startsWith("rs_")) {
+    return null;
+  }
+  if (type === "reasoning" || type.startsWith("reasoning.")) {
+    return { id, type };
+  }
 
   return null;
 }
@@ -50,17 +60,25 @@ function hasFollowingUserFacingBlock(blocks: Array<{ type?: unknown }>, startIdx
     const block = blocks[i];
 
     // Preserve prior behavior: non-object blocks were treated as followers.
-    if (!block || typeof block !== "object") return true;
+    if (!block || typeof block !== "object") {
+      return true;
+    }
 
     const t = (block as { type?: unknown }).type;
 
     // Preserve legacy semantics explicitly:
     // previously: (undefined !== "thinking") => treated as a valid follower.
-    if (t === undefined) return true;
+    if (t === undefined) {
+      return true;
+    }
 
     // Not user-facing followers (do NOT satisfy "required following item")
-    if (t === "thinking") continue;
-    if (typeof t === "string" && OPENAI_REPLAY_PRODUCER_TYPES.has(t)) continue;
+    if (t === "thinking") {
+      continue;
+    }
+    if (typeof t === "string" && OPENAI_REPLAY_PRODUCER_TYPES.has(t)) {
+      continue;
+    }
 
     // Anything else is user-facing
     return true;
@@ -113,19 +131,19 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
 
       // Only thinking blocks can carry OpenAI reasoning signatures.
       if (record.type !== "thinking") {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
 
       const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
       if (!signature) {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
 
       // If there is a valid user-facing follower, keep the thinking block.
       if (hasFollowingUserFacingBlock(assistantMsg.content as Array<{ type?: unknown }>, i)) {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
 
@@ -147,4 +165,3 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
 
   return out;
 }
-

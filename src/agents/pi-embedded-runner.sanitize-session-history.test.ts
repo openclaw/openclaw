@@ -113,9 +113,9 @@ describe("sanitizeSessionHistory", () => {
       mockMessages,
       "session:history",
       expect.objectContaining({
-         sanitizeMode: "images-only",
-         sanitizeToolCallIds: false,
-         preserveSignatures: false,
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: false,
+        preserveSignatures: false,
       }),
     );
   });
@@ -295,13 +295,12 @@ describe("sanitizeSessionHistory", () => {
       sessionId: "test-session",
     });
 
-    const assistant = result.find((message) => message.role === "assistant") as
-      | Extract<AgentMessage, { role: "assistant" }>
-      | undefined;
+    const assistant = result.find((message) => message.role === "assistant");
     expect(assistant).toBeDefined();
     expect(
       assistant?.content.some(
-        (block) => block && typeof block === "object" && (block as { type?: string }).type === "thinking",
+        (block) =>
+          block && typeof block === "object" && (block as { type?: string }).type === "thinking",
       ),
     ).toBe(false);
   });
