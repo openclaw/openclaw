@@ -339,6 +339,7 @@ describe("agent request events", () => {
         lastTo: "123",
       }),
       canonicalKey: "agent:main:main",
+      legacyKey: undefined,
     });
 
     await handleNodeEvent(ctx, "node-route-hit", {
