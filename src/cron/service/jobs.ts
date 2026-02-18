@@ -37,6 +37,9 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
+  if (job.sessionTarget === "session" && job.payload.kind !== "systemEvent") {
+    throw new Error('targeted session cron jobs require payload.kind="systemEvent"');
+  }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
   }
@@ -340,6 +343,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.sessionTarget) {
     job.sessionTarget = patch.sessionTarget;
   }
+  if (patch.sessionKey) {
+    job.sessionKey = patch.sessionKey;
+  }
   if (patch.wakeMode) {
     job.wakeMode = patch.wakeMode;
   }
@@ -360,7 +366,10 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
-  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
+  if (
+    (job.sessionTarget === "main" || job.sessionTarget === "session") &&
+    job.delivery?.mode !== "webhook"
+  ) {
     job.delivery = undefined;
   }
   if (patch.state) {

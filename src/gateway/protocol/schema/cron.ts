@@ -1,6 +1,18 @@
 import { Type, type TSchema } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
+const CronSessionTargetObject = Type.Object({
+  kind: Type.Literal("session"),
+  key: NonEmptyString,
+});
+
+const CronSessionTargetSchema = Type.Union([
+  Type.Literal("main"),
+  Type.Literal("isolated"),
+  Type.Literal("session"),
+  CronSessionTargetObject,
+]);
+
 function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
   return Type.Object(
     {
@@ -143,7 +155,7 @@ export const CronJobSchema = Type.Object(
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
     schedule: CronScheduleSchema,
-    sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
+    sessionTarget: CronSessionTargetSchema,
     wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
@@ -170,7 +182,7 @@ export const CronAddParamsSchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
     schedule: CronScheduleSchema,
-    sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
+    sessionTarget: CronSessionTargetSchema,
     wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
@@ -187,7 +199,7 @@ export const CronJobPatchSchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     deleteAfterRun: Type.Optional(Type.Boolean()),
     schedule: Type.Optional(CronScheduleSchema),
-    sessionTarget: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("isolated")])),
+    sessionTarget: Type.Optional(CronSessionTargetSchema),
     wakeMode: Type.Optional(Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")])),
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),

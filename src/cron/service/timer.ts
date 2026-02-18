@@ -439,7 +439,7 @@ async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
 ): Promise<CronRunOutcome & CronRunTelemetry> {
-  if (job.sessionTarget === "main") {
+  if (job.sessionTarget === "main" || job.sessionTarget === "session") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
       const kind = job.payload.kind;

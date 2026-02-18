@@ -188,13 +188,22 @@ function unwrapJob(raw: UnknownRecord) {
   return raw;
 }
 
-function normalizeSessionTarget(raw: unknown) {
-  if (typeof raw !== "string") {
+function normalizeSessionTarget(
+  raw: unknown,
+): { target: "main" | "isolated" | "session"; key?: string } | undefined {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === "main" || trimmed === "isolated" || trimmed === "session") {
+      return { target: trimmed };
+    }
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
-  if (trimmed === "main" || trimmed === "isolated") {
-    return trimmed;
+  // Object form: { kind: "session", key: "agent:main:discord:channel:..." }
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    if (obj.kind === "session" && typeof obj.key === "string" && obj.key.trim()) {
+      return { target: "session", key: obj.key.trim() };
+    }
   }
   return undefined;
 }
@@ -333,7 +342,10 @@ export function normalizeCronJobInput(
   if ("sessionTarget" in base) {
     const normalized = normalizeSessionTarget(base.sessionTarget);
     if (normalized) {
-      next.sessionTarget = normalized;
+      next.sessionTarget = normalized.target;
+      if (normalized.key) {
+        next.sessionKey = normalized.key;
+      }
     } else {
       delete next.sessionTarget;
     }

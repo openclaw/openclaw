@@ -219,7 +219,7 @@ JOB SCHEMA (for add action):
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
   "delivery": { ... },      // Optional: announce summary or webhook POST
-  "sessionTarget": "main" | "isolated",  // Required
+  "sessionTarget": "main" | "isolated" | { "kind": "session", "key": "<session-key>" },  // Required
   "enabled": true | false   // Optional, default true
 }
 
@@ -248,6 +248,7 @@ DELIVERY (top-level):
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
+- sessionTarget={ kind: "session", key: "..." } REQUIRES payload.kind="systemEvent" (targets a specific session by key)
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.

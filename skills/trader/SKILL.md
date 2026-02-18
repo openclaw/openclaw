@@ -28,8 +28,9 @@ The trading system runs as a hybrid of manual execution and automated monitoring
     - **Notification:** Sends a system event to the **Main Session** (Control Room) via Gateway API (`/api/v1/sessions/send`).
 3.  **Sentinel Operations (Monitoring):**
     - **Launch:** Must use `setsid` to break process group linkage and prevent SIGTERM on session exit.
-    - **Command:** `setsid /home/damon/qwen-venv/bin/python3 skills/trader/sentinel.py > skills/trader/sentinel.std.log 2>&1 < /dev/null &`
-    - **Logs:** `sentinel.log` (App), `sentinel.std.log` (Crash/Stderr).
+    - **Command:** `setsid /home/damon/qwen-venv/bin/python3 scripts/trader/sentinel.py > scripts/trader/sentinel.std.log 2>&1 < /dev/null &`
+    - **Logs:** `scripts/trader/sentinel.log` (App), `scripts/trader/sentinel.std.log` (Crash/Stderr).
+    - **Script Location:** `~/.openclaw/workspace/scripts/trader/` (workspace, safe from upstream updates)
     - **Schedule:** Start 16:25 EET, Stop 23:05 EET (Mon-Fri).
 
 ### Protocol: [SENTINEL ALERT]
