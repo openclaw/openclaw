@@ -1,5 +1,5 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
+import { resolveHeartbeatPrompt, stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
@@ -18,6 +18,7 @@ export type NormalizeReplyOptions = {
   stripHeartbeat?: boolean;
   silentToken?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
+  heartbeatPrompt?: string;
 };
 
 export function normalizeReplyPayload(
@@ -46,6 +47,30 @@ export function normalizeReplyPayload(
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.
     text = "";
+  }
+
+  const normalizeForCompare = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
+  const resolvedHeartbeatPrompt = normalizeForCompare(resolveHeartbeatPrompt(opts.heartbeatPrompt));
+  const isHeartbeatPollLeak = (value?: string) => {
+    const normalized = value ? normalizeForCompare(value) : "";
+    if (!normalized) {
+      return false;
+    }
+    let rest = normalized;
+    while (rest.startsWith(resolvedHeartbeatPrompt)) {
+      // Only suppress payloads that are exactly the heartbeat prompt (possibly repeated/stacked).
+      // Prefix matches with additional content are treated as real replies and must not be dropped.
+      rest = rest.slice(resolvedHeartbeatPrompt.length).trimStart();
+      if (!rest) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (isHeartbeatPollLeak(text) && !hasMedia && !hasChannelData) {
+    opts.onSkip?.("heartbeat");
+    return null;
   }
 
   const shouldStripHeartbeat = opts.stripHeartbeat ?? true;
