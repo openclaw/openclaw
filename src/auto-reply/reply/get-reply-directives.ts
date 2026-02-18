@@ -131,7 +131,6 @@ export async function resolveReplyDirectives(params: {
     agentDir,
     workspaceDir,
     sessionCtx,
-    sessionEntry,
     sessionStore,
     sessionKey,
     storePath,
@@ -149,6 +148,7 @@ export async function resolveReplyDirectives(params: {
     opts,
     skillFilter,
   } = params;
+  let sessionEntry = params.sessionEntry;
   let provider = initialProvider;
   let model = initialModel;
   let modelFallbacks: string[] | undefined;
@@ -222,6 +222,12 @@ export async function resolveReplyDirectives(params: {
           modelFallbacks = models.slice(1);
         }
 
+        if (!sessionEntry) {
+          sessionEntry = {
+            sessionId: sessionKey,
+            updatedAt: now,
+          };
+        }
         sessionEntry.lastRoutedModel = models[0];
         sessionEntry.lastRoutedAt = now;
         sessionEntry.updatedAt = now;
