@@ -10,23 +10,31 @@ function asMessages(messages: unknown[]): AgentMessage[] {
   return messages as AgentMessage[];
 }
 
-describe("validateGeminiTurns", () => {
-  it("should return empty array unchanged", () => {
-    const result = validateGeminiTurns([]);
-    expect(result).toEqual([]);
+describe("validate turn edge cases", () => {
+  it("returns empty array unchanged", () => {
+    expect(validateGeminiTurns([])).toEqual([]);
+    expect(validateAnthropicTurns([])).toEqual([]);
   });
 
-  it("should return single message unchanged", () => {
-    const msgs = asMessages([
+  it("returns single message unchanged", () => {
+    const geminiMsgs = asMessages([
       {
         role: "user",
         content: "Hello",
       },
     ]);
-    const result = validateGeminiTurns(msgs);
-    expect(result).toEqual(msgs);
+    const anthropicMsgs = asMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    ]);
+    expect(validateGeminiTurns(geminiMsgs)).toEqual(geminiMsgs);
+    expect(validateAnthropicTurns(anthropicMsgs)).toEqual(anthropicMsgs);
   });
+});
 
+describe("validateGeminiTurns", () => {
   it("should leave alternating user/assistant unchanged", () => {
     const msgs = asMessages([
       { role: "user", content: "Hello" },
@@ -123,22 +131,6 @@ describe("validateGeminiTurns", () => {
 });
 
 describe("validateAnthropicTurns", () => {
-  it("should return empty array unchanged", () => {
-    const result = validateAnthropicTurns([]);
-    expect(result).toEqual([]);
-  });
-
-  it("should return single message unchanged", () => {
-    const msgs = asMessages([
-      {
-        role: "user",
-        content: [{ type: "text", text: "Hello" }],
-      },
-    ]);
-    const result = validateAnthropicTurns(msgs);
-    expect(result).toEqual(msgs);
-  });
-
   it("should return alternating user/assistant unchanged", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Question" }] },
