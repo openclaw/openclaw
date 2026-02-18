@@ -15,13 +15,13 @@ Status: Production-ready, supports robot private chats. Uses WebSocket long conn
 Install the DingTalk plugin:
 
 ```bash
-openclaw plugins install @openclaw/ddingtalk
+openclaw plugins install @openclaw/dingtalk
 ```
 
 Local checkout (run inside the git repository):
 
 ```bash
-openclaw plugins install ./extensions/ddingtalk
+openclaw plugins install ./extensions/dingtalk
 ```
 
 ---
@@ -78,7 +78,7 @@ Visit the [DingTalk Developer Platform](https://open-dev.dingtalk.com/fe/app), l
 1. Click **Create App** in the upper right corner
 2. Fill in the app name and description, upload an image (optional)
 
-![Create App](../images/ddingtalk/ddingtalk-create-app.png)
+![Create App](../images/dingtalk/dingtalk-create-app.png)
 
 ### 3. Obtain App Credentials
 
@@ -89,27 +89,27 @@ On the app's **Credentials & Basic Information** page, copy:
 
 ❗ **Important**: Please keep the Client Secret safe and do not share it with others.
 
-![Obtain App Credentials](../images/ddingtalk/ddingtalk-credentials.png)
+![Obtain App Credentials](../images/dingtalk/dingtalk-credentials.png)
 
 ### 4. Add an App Robot
 
 On the app's **Add App Capabilities** page, select **Robot**, and click Add
 
-![Add Robot](../images/ddingtalk/ddingtalk-create-robot.png)
+![Add Robot](../images/dingtalk/dingtalk-create-robot.png)
 
 Enter the relevant robot information, select **Stream Mode** for **Message Receiving Mode**, and then save
 
-![Configure Robot](../images/ddingtalk/ddingtalk-robot-config.png)
+![Configure Robot](../images/dingtalk/dingtalk-robot-config.png)
 
-![Configure Robot Message Receiving Mode](../images/ddingtalk/ddingtalk-robot-config-stream.png)
+![Configure Robot Message Receiving Mode](../images/dingtalk/dingtalk-robot-config-stream.png)
 
 ### 5. Publish the Robot
 
 Create a robot version, fill in the version number, description, application availability scope, click save, then click confirm to publish.
 
-![Create Robot Version](../images/ddingtalk/ddingtalk-create-version.png)
+![Create Robot Version](../images/dingtalk/dingtalk-create-version.png)
 
-![Edit Version](../images/ddingtalk/ddingtalk-edit-version.png)
+![Edit Version](../images/dingtalk/dingtalk-edit-version.png)
 
 ---
 
@@ -130,7 +130,7 @@ Edit `~/.openclaw/openclaw.json`:
 ```json
 {
   "channels": {
-    "ddingtalk": {
+    "dingtalk": {
       "enabled": true,
       "clientId": "dingxxxx",
       "clientSecret": "yyyy"
@@ -153,7 +153,7 @@ openclaw gateway --verbose
 
 Find the robot you created in DingTalk, and you can start a normal conversation.
 
-![DingTalk Conversation](../images/ddingtalk/ddingtalk-chat.jpg)
+![DingTalk Conversation](../images/dingtalk/dingtalk-chat.jpg)
 
 ---
 

@@ -41,8 +41,8 @@ import {
  * 标准化钉钉发送目标
  * 支持格式：
  * - 原始用户 ID
- * - ddingtalk:user:<userId>
- * - ddingtalk:<id>
+ * - dingtalk:user:<userId>
+ * - dingtalk:<id>
  */
 function normalizeDingTalkTarget(target: string): string | undefined {
   const trimmed = target.trim();
@@ -50,7 +50,7 @@ function normalizeDingTalkTarget(target: string): string | undefined {
     return undefined;
   }
 
-  // 去除 ddingtalk: 前缀（使用动态正则）
+  // 去除 dingtalk: 前缀（使用动态正则）
   const prefixPattern = new RegExp(`^${PLUGIN_ID}:(?:user:)?`, "i");
   const withoutPrefix = trimmed.replace(prefixPattern, "");
 
@@ -235,7 +235,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
      * 解析发送目标
      * 支持以下格式：
      * - 用户 ID：直接是用户的 staffId
-     * - 带前缀格式：ddingtalk:user:<userId>
+     * - 带前缀格式：dingtalk:user:<userId>
      */
     resolveTarget: ({ to, allowFrom, mode }) => {
       const trimmed = to?.trim() ?? "";

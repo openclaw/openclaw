@@ -1,5 +1,5 @@
 import type { GroupPolicy } from "./types.base.js";
-import type { DingTalkConfig } from "./types.ddingtalk.js";
+import type { DingTalkConfig } from "./types.dingtalk.js";
 import type { DiscordConfig } from "./types.discord.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
@@ -49,7 +49,7 @@ export type ChannelsConfig = {
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;
-  ddingtalk?: DingTalkConfig;
+  dingtalk?: DingTalkConfig;
   // Extension channels use dynamic keys - use ExtensionChannelConfig in extensions
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;

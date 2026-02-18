@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/ddingtalk",
+  "name": "@openclaw/dingtalk",
   "version": "2026.2.9",
   "description": "OpenClaw DingTalk (钉钉) channel plugin (community maintained by @largezhou)",
   "type": "module",
@@ -17,18 +17,18 @@
       "./index.ts"
     ],
     "channel": {
-      "id": "ddingtalk",
+      "id": "dingtalk",
       "label": "DingTalk",
       "selectionLabel": "DingTalk (钉钉)",
-      "docsPath": "/channels/ddingtalk",
-      "docsLabel": "ddingtalk",
+      "docsPath": "/channels/dingtalk",
+      "docsLabel": "dingtalk",
       "blurb": "DingTalk enterprise robot with Stream mode for Chinese market.",
       "order": 80,
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/ddingtalk",
-      "localPath": "extensions/ddingtalk",
+      "npmSpec": "@openclaw/dingtalk",
+      "localPath": "extensions/dingtalk",
       "defaultChoice": "npm"
     }
   }

@@ -15,13 +15,13 @@ title: 钉钉
 安装钉钉插件：
 
 ```bash
-openclaw plugins install @openclaw/ddingtalk
+openclaw plugins install @openclaw/dingtalk
 ```
 
 本地 checkout（在 git 仓库内运行）：
 
 ```bash
-openclaw plugins install ./extensions/ddingtalk
+openclaw plugins install ./extensions/dingtalk
 ```
 
 ---
@@ -78,7 +78,7 @@ openclaw channels add
 1. 点击右上角 **创建应用**
 2. 填写应用名称和描述，上传图片（可选）
 
-![创建应用](../../images/ddingtalk/ddingtalk-create-app.png)
+![创建应用](../../images/dingtalk/dingtalk-create-app.png)
 
 ### 3. 获取应用凭证
 
@@ -89,27 +89,27 @@ openclaw channels add
 
 ❗ **重要**：请妥善保管 Client Secret，不要分享给他人。
 
-![获取应用凭证](../../images/ddingtalk/ddingtalk-credentials.png)
+![获取应用凭证](../../images/dingtalk/dingtalk-credentials.png)
 
 ### 4. 添加应用机器人
 
 在应用的 **添加应用能力** 页面，选择 **机器人**，点击添加
 
-![添加机器人](../../images/ddingtalk/ddingtalk-create-robot.png)
+![添加机器人](../../images/dingtalk/dingtalk-create-robot.png)
 
-输入机器人相关信息，**消息接收模式** 选择 **Stream模式**，然后保存
+输入机器人相关信息，**消息接收模式** 选择 **Stream 模式**，然后保存
 
-![配置机器人](../../images/ddingtalk/ddingtalk-robot-config.png)
+![配置机器人](../../images/dingtalk/dingtalk-robot-config.png)
 
-![配置机器人消息接收模式](../../images/ddingtalk/ddingtalk-robot-config-stream.png)
+![配置机器人消息接收模式](../../images/dingtalk/dingtalk-robot-config-stream.png)
 
 ### 5. 发布机器人
 
 创建机器人版本，填入版本号，描述，应用可用范围，点击保存，点击确认发布
 
-![创建机器人版本](../../images/ddingtalk/ddingtalk-create-version.png)
+![创建机器人版本](../../images/dingtalk/dingtalk-create-version.png)
 
-![编辑版本](../../images/ddingtalk/ddingtalk-edit-version.png)
+![编辑版本](../../images/dingtalk/dingtalk-edit-version.png)
 
 ---
 
@@ -130,7 +130,7 @@ openclaw channels add
 ```json
 {
   "channels": {
-    "ddingtalk": {
+    "dingtalk": {
       "enabled": true,
       "clientId": "dingxxxx",
       "clientSecret": "yyyy"
@@ -153,7 +153,7 @@ openclaw gateway --verbose
 
 在钉钉中找到您创建的机器人，即可正常对话。
 
-![钉钉对话](../../images/ddingtalk/ddingtalk-chat.jpg)
+![钉钉对话](../../images/dingtalk/dingtalk-chat.jpg)
 
 ---
 
@@ -166,4 +166,4 @@ openclaw gateway --verbose
 - **接收消息类型**：机器人可接收用户发送的文本、图片、图文、语音、视频、文件消息
 - **回复消息类型**：机器人可回复文本、图片、文件类型、Markdown 格式消息
 - **主动推送消息**：支持主动推送消息，可以配置提醒或定时任务
-- **支持OpenClaw命令**：支持 /new、/compact、/models 等 OpenClaw 官方命令
+- **支持 OpenClaw 命令**：支持 /new、/compact、/models 等 OpenClaw 官方命令
