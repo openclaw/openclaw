@@ -95,4 +95,32 @@ describe("gateway sessions patch", () => {
     expect(res.entry.authProfileOverrideSource).toBeUndefined();
     expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();
   });
+
+  test("accepts explicitly allowlisted models even when missing from model catalog", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/us.deepseek.r1-v1:0": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:main:main",
+      patch: { model: "amazon-bedrock/us.deepseek.r1-v1:0" },
+      loadGatewayModelCatalog: async () => [{ provider: "openai", id: "gpt-4o-mini" }],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("amazon-bedrock");
+    expect(res.entry.modelOverride).toBe("us.deepseek.r1-v1:0");
+  });
 });

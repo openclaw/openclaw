@@ -5,8 +5,10 @@ import {
   resolveModelRefFromString,
   resolveConfiguredModelRef,
   buildModelAliasIndex,
+  buildAllowedModelSet,
   normalizeProviderId,
   modelKey,
+  resolveAllowedModelRef,
 } from "./model-selection.js";
 
 describe("model-selection", () => {
@@ -146,6 +148,61 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("allowlist handling for explicit catalog-missing models", () => {
+    it("keeps explicitly allowlisted models even when they are missing from catalog", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "amazon-bedrock/us.deepseek.r1-v1:0": {},
+            },
+          },
+        },
+      };
+      const catalog = [{ provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" }];
+
+      const allowed = buildAllowedModelSet({
+        cfg,
+        catalog,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-5",
+      });
+
+      expect(allowed.allowAny).toBe(false);
+      expect(allowed.allowedKeys.has(modelKey("amazon-bedrock", "us.deepseek.r1-v1:0"))).toBe(true);
+    });
+
+    it("allows resolveAllowedModelRef for explicitly allowlisted catalog-missing models", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "amazon-bedrock/us.deepseek.r1-v1:0": {},
+            },
+          },
+        },
+      };
+      const catalog = [{ provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" }];
+
+      const resolved = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "amazon-bedrock/us.deepseek.r1-v1:0",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-5",
+      });
+
+      expect("error" in resolved).toBe(false);
+      if ("error" in resolved) {
+        return;
+      }
+      expect(resolved.ref).toEqual({
+        provider: "amazon-bedrock",
+        model: "us.deepseek.r1-v1:0",
+      });
     });
   });
 });
