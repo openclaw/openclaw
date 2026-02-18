@@ -1,15 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 
+function createReplyChunksHarness() {
+  const replyMessageLine = vi.fn(async () => ({}));
+  const pushMessageLine = vi.fn(async () => ({}));
+  const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
+  const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
+    type: "text" as const,
+    text,
+  }));
+
+  return {
+    replyMessageLine,
+    pushMessageLine,
+    pushTextMessageWithQuickReplies,
+    createTextMessageWithQuickReplies,
+  };
+}
+
 describe("sendLineReplyChunks", () => {
   it("uses reply token for all chunks when possible", async () => {
-    const replyMessageLine = vi.fn(async () => ({}));
-    const pushMessageLine = vi.fn(async () => ({}));
-    const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
-    const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
-      type: "text" as const,
-      text,
-    }));
+    const {
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+    } = createReplyChunksHarness();
 
     const result = await sendLineReplyChunks({
       to: "line:group:1",
@@ -41,9 +57,8 @@ describe("sendLineReplyChunks", () => {
   });
 
   it("attaches quick replies to a single reply chunk", async () => {
-    const replyMessageLine = vi.fn(async () => ({}));
-    const pushMessageLine = vi.fn(async () => ({}));
-    const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
+    const { replyMessageLine, pushMessageLine, pushTextMessageWithQuickReplies } =
+      createReplyChunksHarness();
     const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
       type: "text" as const,
       text,
@@ -70,13 +85,12 @@ describe("sendLineReplyChunks", () => {
   });
 
   it("replies with up to five chunks before pushing the rest", async () => {
-    const replyMessageLine = vi.fn(async () => ({}));
-    const pushMessageLine = vi.fn(async () => ({}));
-    const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
-    const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
-      type: "text" as const,
-      text,
-    }));
+    const {
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+    } = createReplyChunksHarness();
 
     const chunks = ["1", "2", "3", "4", "5", "6", "7"];
     const result = await sendLineReplyChunks({
@@ -111,5 +125,42 @@ describe("sendLineReplyChunks", () => {
       accountId: undefined,
     });
     expect(createTextMessageWithQuickReplies).not.toHaveBeenCalled();
+  });
+
+  it("falls back to push flow when replying fails", async () => {
+    const {
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+    } = createReplyChunksHarness();
+    const onReplyError = vi.fn();
+    replyMessageLine.mockRejectedValueOnce(new Error("reply failed"));
+
+    const result = await sendLineReplyChunks({
+      to: "line:group:1",
+      chunks: ["1", "2", "3"],
+      quickReplies: ["A"],
+      replyToken: "token",
+      replyTokenUsed: false,
+      accountId: "default",
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+      onReplyError,
+    });
+
+    expect(result.replyTokenUsed).toBe(true);
+    expect(onReplyError).toHaveBeenCalledWith(expect.any(Error));
+    expect(pushMessageLine).toHaveBeenNthCalledWith(1, "line:group:1", "1", {
+      accountId: "default",
+    });
+    expect(pushMessageLine).toHaveBeenNthCalledWith(2, "line:group:1", "2", {
+      accountId: "default",
+    });
+    expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith("line:group:1", "3", ["A"], {
+      accountId: "default",
+    });
   });
 });
