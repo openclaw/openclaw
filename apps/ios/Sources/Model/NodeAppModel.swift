@@ -73,26 +73,6 @@ final class NodeAppModel {
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
 
-    var mainSessionKey: String {
-        let base = SessionKey.normalizeMainKey(self.mainSessionBaseKey)
-        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
-        return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
-    }
-
-    var activeAgentName: String {
-        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedId = agentId.isEmpty ? defaultId : agentId
-        if resolvedId.isEmpty { return "Main" }
-        if let match = self.gatewayAgents.first(where: { $0.id == resolvedId }) {
-            let name = (match.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? match.id : name
-        }
-        return resolvedId
-    }
-
     // Primary "node" connection: used for device capabilities and node.invoke requests.
     private let nodeGateway = GatewayNodeSession()
     // Secondary "operator" connection: used for chat/talk/config/voicewake requests.
@@ -1615,6 +1595,26 @@ private extension NodeAppModel {
 }
 
 extension NodeAppModel {
+    var mainSessionKey: String {
+        let base = SessionKey.normalizeMainKey(self.mainSessionBaseKey)
+        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
+        return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
+    }
+
+    var activeAgentName: String {
+        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedId = agentId.isEmpty ? defaultId : agentId
+        if resolvedId.isEmpty { return "Main" }
+        if let match = self.gatewayAgents.first(where: { $0.id == resolvedId }) {
+            let name = (match.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? match.id : name
+        }
+        return resolvedId
+    }
+
     func connectToGateway(
         url: URL,
         gatewayStableID: String,
