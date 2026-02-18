@@ -60,7 +60,8 @@ export async function loadChatHistory(state: ChatState, opts?: { preserveLocalUs
             const msg = m as Record<string, unknown>;
             const content = msg.content as Array<{ text?: string }> | undefined;
             const text = content?.[0]?.text ?? "";
-            return `${msg.timestamp}:${text}`;
+            const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : 0;
+            return `${timestamp}:${text}`;
           }),
         );
 
@@ -68,7 +69,8 @@ export async function loadChatHistory(state: ChatState, opts?: { preserveLocalUs
           const msg = m as Record<string, unknown>;
           const content = msg.content as Array<{ text?: string }> | undefined;
           const text = content?.[0]?.text ?? "";
-          const signature = `${msg.timestamp}:${text}`;
+          const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : 0;
+          const signature = `${timestamp}:${text}`;
           return !serverSignatures.has(signature);
         });
 
