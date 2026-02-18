@@ -19,9 +19,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.14.1
         version: 0.14.1(zod@4.3.6)
-      '@aws-sdk/client-bedrock':
-        specifier: ^3.992.0
-        version: 3.992.0
       '@buape/carbon':
         specifier: 0.14.0
         version: 0.14.0(hono@4.11.9)
@@ -139,12 +136,6 @@ importers:
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
-      pdfjs-dist:
-        specifier: ^5.4.624
-        version: 5.4.624
-      playwright-core:
-        specifier: 1.58.2
-        version: 1.58.2
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -178,6 +169,16 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    optionalDependencies:
+      '@aws-sdk/client-bedrock':
+        specifier: ^3.992.0
+        version: 3.992.0
+      pdfjs-dist:
+        specifier: ^5.4.624
+        version: 5.4.624
+      playwright-core:
+        specifier: 1.58.2
+        version: 1.58.2
     devDependencies:
       '@grammyjs/types':
         specifier: ^3.24.0
