@@ -41,12 +41,13 @@ export async function extractAndSaveMemories(params: {
     return;
   }
 
-  // Check if memory extraction is enabled for this agent
-  if (config) {
-    const agentId = resolveSessionAgentId({ sessionKey: agentSessionKey, config });
-    if (!isMemoryExtractionEnabled(config, agentId)) {
-      return;
-    }
+  // Check if memory extraction is enabled for this agent; skip when config is absent
+  if (!config) {
+    return;
+  }
+  const agentId = resolveSessionAgentId({ sessionKey: agentSessionKey, config });
+  if (!isMemoryExtractionEnabled(config, agentId)) {
+    return;
   }
 
   const memPath = path.join(workspaceDir, MEMORY_FILE);

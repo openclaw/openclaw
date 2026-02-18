@@ -18,9 +18,6 @@ search:
     - html
     - json
 
-# 關閉 botdetection（本機直連不需要）
-server.public_instance: false
-
 enabled_plugins:
   - 'Hash plugin'
   - 'Self Information'

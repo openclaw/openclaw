@@ -12,12 +12,15 @@ import { isMemoryPath } from "../../memory/internal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+
+const MEMORY_WRITE_MODES = ["append", "write"] as const;
 
 const MemoryWriteSchema = Type.Object({
   path: Type.String(),
   content: Type.String(),
-  mode: Type.Optional(Type.Union([Type.Literal("append"), Type.Literal("write")])),
+  mode: optionalStringEnum(MEMORY_WRITE_MODES, { default: "append" }),
 });
 
 const MemorySearchSchema = Type.Object({
