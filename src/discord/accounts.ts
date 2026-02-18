@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig } from "../config/types.js";
+import { listBoundAccountIds } from "../routing/bindings.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
@@ -21,9 +22,18 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function listDiscordAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
+  const ids = Array.from(
+    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "discord")]),
+  );
   if (ids.length === 0) {
     return [DEFAULT_ACCOUNT_ID];
+  }
+  // Ensure the default account is present when a top-level discord token exists
+  if (!ids.includes(DEFAULT_ACCOUNT_ID)) {
+    const { token } = resolveDiscordToken(cfg, {});
+    if (token) {
+      ids.push(DEFAULT_ACCOUNT_ID);
+    }
   }
   return ids.toSorted((a, b) => a.localeCompare(b));
 }
