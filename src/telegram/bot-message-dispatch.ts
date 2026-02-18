@@ -31,6 +31,9 @@ import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
+/** Minimum chars before sending first streaming message (improves push notification UX) */
+const DRAFT_MIN_INITIAL_CHARS = 30;
+
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
     const catalog = await loadModelCatalog({ config: cfg });
@@ -101,6 +104,7 @@ export const dispatchTelegramMessage = async ({
         maxChars: draftMaxChars,
         thread: threadSpec,
         replyToMessageId: draftReplyToMessageId,
+        minInitialChars: DRAFT_MIN_INITIAL_CHARS,
         log: logVerbose,
         warn: logVerbose,
       })
@@ -109,6 +113,7 @@ export const dispatchTelegramMessage = async ({
     draftStream && streamMode === "block"
       ? resolveTelegramDraftStreamingChunking(cfg, route.accountId)
       : undefined;
+  const shouldSplitPreviewMessages = streamMode === "block";
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   let lastPartialText = "";
@@ -314,7 +319,7 @@ export const dispatchTelegramMessage = async ({
               finalText.length <= draftMaxChars &&
               !payload.isError;
             if (canFinalizeViaPreviewEdit) {
-              draftStream?.stop();
+              await draftStream?.stop();
               draftStoppedForPreviewEdit = true;
               if (
                 currentPreviewText &&
@@ -353,7 +358,36 @@ export const dispatchTelegramMessage = async ({
               );
             }
             if (!draftStoppedForPreviewEdit) {
-              draftStream?.stop();
+              await draftStream?.stop();
+            }
+            // Check if stop() sent a message (debounce released on isFinal)
+            // If so, edit that message instead of sending a new one
+            const messageIdAfterStop = draftStream?.messageId();
+            if (
+              !finalizedViaPreviewMessage &&
+              typeof messageIdAfterStop === "number" &&
+              typeof finalText === "string" &&
+              finalText.length > 0 &&
+              finalText.length <= draftMaxChars &&
+              !hasMedia &&
+              !payload.isError
+            ) {
+              try {
+                await editMessageTelegram(chatId, messageIdAfterStop, finalText, {
+                  api: bot.api,
+                  cfg,
+                  accountId: route.accountId,
+                  linkPreview: telegramCfg.linkPreview,
+                  buttons: previewButtons,
+                });
+                finalizedViaPreviewMessage = true;
+                deliveryState.delivered = true;
+                return;
+              } catch (err) {
+                logVerbose(
+                  `telegram: post-stop preview edit failed; falling back to standard send (${String(err)})`,
+                );
+              }
             }
           }
           const result = await deliverReplies({
@@ -391,13 +425,12 @@ export const dispatchTelegramMessage = async ({
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
           ? () => {
-              // When a new assistant message starts (e.g., after tool call),
-              // force a new Telegram message if we have previous content.
-              // Only force once per response to avoid excessive splitting.
+              // Only split preview bubbles in block mode. In partial mode, keep
+              // editing one preview message to avoid flooding the chat.
               logVerbose(
                 `telegram: onAssistantMessageStart called, hasStreamedMessage=${hasStreamedMessage}`,
               );
-              if (hasStreamedMessage) {
+              if (shouldSplitPreviewMessages && hasStreamedMessage) {
                 logVerbose(`telegram: calling forceNewMessage()`);
                 draftStream.forceNewMessage();
               }
@@ -408,23 +441,24 @@ export const dispatchTelegramMessage = async ({
           : undefined,
         onReasoningEnd: draftStream
           ? () => {
-              // When a thinking block ends, force a new Telegram message for the next text output.
-              if (hasStreamedMessage) {
+              // Same policy as assistant-message boundaries: split only in block mode.
+              if (shouldSplitPreviewMessages && hasStreamedMessage) {
                 draftStream.forceNewMessage();
-                lastPartialText = "";
-                draftText = "";
-                draftChunker?.reset();
               }
+              lastPartialText = "";
+              draftText = "";
+              draftChunker?.reset();
             }
           : undefined,
         onModelSelected,
       },
     }));
   } finally {
+    // Must stop() first to flush debounced content before clear() wipes state
+    await draftStream?.stop();
     if (!finalizedViaPreviewMessage) {
       await draftStream?.clear();
     }
-    draftStream?.stop();
   }
   let sentFallback = false;
   if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {

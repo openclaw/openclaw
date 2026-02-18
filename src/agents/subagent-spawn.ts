@@ -25,6 +25,7 @@ export type SpawnSubagentParams = {
   thinking?: string;
   runTimeoutSeconds?: number;
   cleanup?: "delete" | "keep";
+  expectsCompletionMessage?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -39,10 +40,14 @@ export type SpawnSubagentContext = {
   requesterAgentIdOverride?: string;
 };
 
+export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
+  "auto-announces on completion, do not poll/sleep. The response will be sent back as a user message.";
+
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   runId?: string;
+  note?: string;
   modelApplied?: boolean;
   warning?: string;
   error?: string;
@@ -258,6 +263,10 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
   });
+  const childTaskMessage = [
+    `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
+    `[Subagent Task]: ${task}`,
+  ].join("\n\n");
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
@@ -265,7 +274,7 @@ export async function spawnSubagentDirect(
     const response = await callGateway<{ runId: string }>({
       method: "agent",
       params: {
-        message: task,
+        message: childTaskMessage,
         sessionKey: childSessionKey,
         channel: requesterOrigin?.channel,
         to: requesterOrigin?.to ?? undefined,
@@ -310,12 +319,14 @@ export async function spawnSubagentDirect(
     label: label || undefined,
     model: resolvedModel,
     runTimeoutSeconds,
+    expectsCompletionMessage: params.expectsCompletionMessage === true,
   });
 
   return {
     status: "accepted",
     childSessionKey,
     runId: childRunId,
+    note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
     modelApplied: resolvedModel ? modelApplied : undefined,
     warning: modelWarning,
   };

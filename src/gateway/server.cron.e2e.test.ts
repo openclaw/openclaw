@@ -180,6 +180,26 @@ describe("gateway server cron", () => {
       const mergeJobId = typeof mergeJobIdValue === "string" ? mergeJobIdValue : "";
       expect(mergeJobId.length > 0).toBe(true);
 
+      const noTimeoutRes = await rpcReq(ws, "cron.add", {
+        name: "no-timeout payload",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0 },
+      });
+      expect(noTimeoutRes.ok).toBe(true);
+      const noTimeoutPayload = noTimeoutRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              timeoutSeconds?: unknown;
+            };
+          }
+        | undefined;
+      expect(noTimeoutPayload?.payload?.kind).toBe("agentTurn");
+      expect(noTimeoutPayload?.payload?.timeoutSeconds).toBe(0);
+
       const mergeUpdateRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {
@@ -503,7 +523,7 @@ describe("gateway server cron", () => {
       expect(notifyRunRes.ok).toBe(true);
 
       await waitForCondition(() => fetchMock.mock.calls.length === 1, 5000);
-      const [notifyUrl, notifyInit] = fetchMock.mock.calls[0] as [
+      const [notifyUrl, notifyInit] = fetchMock.mock.calls[0] as unknown as [
         string,
         {
           method?: string;
@@ -527,7 +547,7 @@ describe("gateway server cron", () => {
       );
       expect(legacyRunRes.ok).toBe(true);
       await waitForCondition(() => fetchMock.mock.calls.length === 2, 5000);
-      const [legacyUrl, legacyInit] = fetchMock.mock.calls[1] as [
+      const [legacyUrl, legacyInit] = fetchMock.mock.calls[1] as unknown as [
         string,
         {
           method?: string;
@@ -561,7 +581,7 @@ describe("gateway server cron", () => {
       await yieldToEventLoop();
       expect(fetchMock).toHaveBeenCalledTimes(2);
 
-      cronIsolatedRun.mockResolvedValueOnce({ status: "ok" });
+      cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryRes = await rpcReq(ws, "cron.add", {
         name: "webhook no summary",
         enabled: true,
