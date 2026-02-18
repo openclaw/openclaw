@@ -1,3 +1,5 @@
+import { lookupContextTokens } from "../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { SessionEntry } from "../config/sessions.js";
 
 export type ModelOverrideSelection = {
@@ -34,6 +36,13 @@ export function applyModelOverrideToSessionEntry(params: {
       entry.modelOverride = selection.model;
       updated = true;
     }
+  }
+
+  // Update contextTokens to match the selected model's context window
+  const modelContextTokens = lookupContextTokens(selection.model) ?? DEFAULT_CONTEXT_TOKENS;
+  if (entry.contextTokens !== modelContextTokens) {
+    entry.contextTokens = modelContextTokens;
+    updated = true;
   }
 
   if (profileOverride) {
