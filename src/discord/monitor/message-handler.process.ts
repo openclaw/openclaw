@@ -54,6 +54,7 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
     cfg,
@@ -126,6 +127,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }),
     );
   const statusReactionsEnabled = shouldAckReaction();
+  const statusReactionsIntermediateEnabled =
+    discordConfig?.statusReactions !== false && cfg.messages?.statusReactions?.enabled !== false;
   const discordAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
@@ -139,7 +142,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     },
   };
   const statusReactions = createStatusReactionController({
-    enabled: statusReactionsEnabled,
+    enabled: statusReactionsEnabled && statusReactionsIntermediateEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
     onError: (err) => {
