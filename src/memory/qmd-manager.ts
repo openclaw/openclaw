@@ -398,6 +398,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
+    // Fetch more results to allow for client-side re-ranking (weighting)
+    const fetchLimit = this.qmd.weights ? limit * 5 : limit;
+
     const collectionNames = this.listManagedCollectionNames();
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
@@ -407,9 +410,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     let parsed: QmdQueryResult[];
     try {
       if (qmdSearchCommand === "query" && collectionNames.length > 1) {
-        parsed = await this.runQueryAcrossCollections(trimmed, limit, collectionNames);
+        parsed = await this.runQueryAcrossCollections(trimmed, fetchLimit, collectionNames);
       } else {
-        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, fetchLimit);
         args.push(...this.buildCollectionFilterArgs(collectionNames));
         // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
         // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
@@ -423,9 +426,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         );
         try {
           if (collectionNames.length > 1) {
-            parsed = await this.runQueryAcrossCollections(trimmed, limit, collectionNames);
+            parsed = await this.runQueryAcrossCollections(trimmed, fetchLimit, collectionNames);
           } else {
-            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+            const fallbackArgs = this.buildSearchArgs("query", trimmed, fetchLimit);
             fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
             const fallback = await this.runQmd(fallbackArgs, {
               timeoutMs: this.qmd.limits.timeoutMs,
@@ -442,6 +445,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     }
     const results: MemorySearchResult[] = [];
+    const weights = this.qmd.weights || {};
+    const hasWeights = Object.keys(weights).length > 0;
+
     for (const entry of parsed) {
       const doc = await this.resolveDocLocation(entry.docid);
       if (!doc) {
@@ -449,7 +455,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
       const lines = this.extractSnippetLines(snippet);
-      const score = typeof entry.score === "number" ? entry.score : 0;
+      let score = typeof entry.score === "number" ? entry.score : 0;
+
+      // Apply weights
+      if (hasWeights) {
+        for (const [pattern, weight] of Object.entries(weights)) {
+          if (this.matchesPath(doc.rel, pattern)) {
+            score *= weight;
+          }
+        }
+      }
+
       const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
         continue;
@@ -463,7 +479,28 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
+
+    // Re-sort if weights were applied
+    if (hasWeights) {
+      results.sort((a, b) => b.score - a.score);
+    }
+
     return this.clampResultsByInjectedChars(results.slice(0, limit));
+  }
+
+  private matchesPath(target: string, pattern: string): boolean {
+    // Simple glob matching
+    // Handle "dir/**"
+    if (pattern.endsWith("/**")) {
+      const prefix = pattern.slice(0, -3);
+      return target.startsWith(prefix + "/") || target === prefix;
+    }
+    // Handle "*.md"
+    if (pattern.startsWith("*")) {
+      return target.endsWith(pattern.slice(1));
+    }
+    // Exact match
+    return target === pattern;
   }
 
   async sync(params?: {
