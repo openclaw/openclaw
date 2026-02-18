@@ -1146,7 +1146,7 @@ describe("createReplyDispatcher", () => {
     const deliver = vi.fn(async (_payload, info) => {
       delivered.push(info.kind);
       if (info.kind === "tool") {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await Promise.resolve();
       }
     });
     const dispatcher = createReplyDispatcher({ deliver });
@@ -1161,7 +1161,7 @@ describe("createReplyDispatcher", () => {
 
   it("fires onIdle when the queue drains", async () => {
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await Promise.resolve();
     const onIdle = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onIdle });
 
