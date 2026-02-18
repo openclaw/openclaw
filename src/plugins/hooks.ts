@@ -19,7 +19,9 @@ import type {
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -54,7 +56,9 @@ export type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
+  PluginHookLlmOutputResult,
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
@@ -278,20 +282,43 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe or modify the input payload sent to the LLM.
+   * Plugins can return `{ prompt, systemPrompt }` to transform the input,
+   * or return void/undefined for observation-only (backward compatible).
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmInputResult | undefined> {
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>(
+      "llm_input",
+      event,
+      ctx,
+      (acc, next) => ({
+        prompt: next.prompt ?? acc?.prompt,
+        systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+      }),
+    );
   }
 
   /**
    * Run llm_output hook.
-   * Allows plugins to observe the exact output payload returned by the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe or modify the output payload returned by the LLM.
+   * Plugins can return `{ assistantTexts }` to transform the output,
+   * or return void/undefined for observation-only (backward compatible).
    */
-  async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_output", event, ctx);
+  async function runLlmOutput(
+    event: PluginHookLlmOutputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmOutputResult | undefined> {
+    return runModifyingHook<"llm_output", PluginHookLlmOutputResult>(
+      "llm_output",
+      event,
+      ctx,
+      (acc, next) => ({
+        assistantTexts: next.assistantTexts ?? acc?.assistantTexts,
+      }),
+    );
   }
 
   /**

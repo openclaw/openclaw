@@ -373,6 +373,14 @@ export type PluginHookLlmInputEvent = {
   imagesCount: number;
 };
 
+// llm_input hook result (when used as a modifying hook)
+export type PluginHookLlmInputResult = {
+  /** Modified prompt text. If set, replaces the original prompt. */
+  prompt?: string;
+  /** Modified system prompt. If set, replaces the original system prompt. */
+  systemPrompt?: string;
+};
+
 // llm_output hook
 export type PluginHookLlmOutputEvent = {
   runId: string;
@@ -388,6 +396,12 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+};
+
+// llm_output hook result (when used as a modifying hook)
+export type PluginHookLlmOutputResult = {
+  /** Modified assistant response texts. If set, replaces the originals. */
+  assistantTexts?: string[];
 };
 
 // agent_end hook
@@ -579,11 +593,14 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_input: (
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookLlmInputResult | void> | PluginHookLlmInputResult | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookLlmOutputResult | void> | PluginHookLlmOutputResult | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
