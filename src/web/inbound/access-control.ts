@@ -78,6 +78,22 @@ export async function checkInboundAccessControl(params: {
       ? groupAllowFrom.filter((entry) => entry !== "*").map(normalizeE164)
       : [];
 
+  // blockFrom: reject blocked senders before any other access check.
+  const blockFrom = account.blockFrom;
+  if (blockFrom && blockFrom.length > 0) {
+    const normalizedBlockFrom = blockFrom.map(normalizeE164);
+    const senderToCheck = params.group ? params.senderE164 : params.from;
+    if (senderToCheck && normalizedBlockFrom.includes(senderToCheck)) {
+      logVerbose(`Blocked sender ${senderToCheck} (blockFrom)`);
+      return {
+        allowed: false,
+        shouldMarkRead: false,
+        isSelfChat,
+        resolvedAccountId: account.accountId,
+      };
+    }
+  }
+
   // Group policy filtering:
   // - "open": groups bypass allowFrom, only mention-gating applies
   // - "disabled": block all group messages entirely
