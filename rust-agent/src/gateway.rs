@@ -521,6 +521,12 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "send",
+                    family: MethodFamily::Message,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "chat.send",
                     family: MethodFamily::Message,
                     requires_auth: true,
@@ -632,6 +638,7 @@ pub struct RpcDispatcher {
     exec_approvals: ExecApprovalsRegistry,
     exec_approval: ExecApprovalRegistry,
     chat: ChatRegistry,
+    send: SendRegistry,
     skills: SkillsRegistry,
     cron: CronRegistry,
     config: ConfigRegistry,
@@ -679,6 +686,8 @@ const MAX_EXEC_APPROVAL_PENDING: usize = 4_096;
 const EXEC_APPROVAL_RESOLVED_GRACE_MS: u64 = 15_000;
 const MAX_CHAT_RUNS: usize = 4_096;
 const CHAT_RUN_COMPLETE_DELAY_MS: u64 = 25;
+const MAX_SEND_CACHE_ENTRIES: usize = 4_096;
+const DEFAULT_SEND_CHANNEL: &str = "whatsapp";
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CRON_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static WEB_LOGIN_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -690,6 +699,7 @@ static NODE_INVOKE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static EXEC_APPROVAL_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static EXEC_APPROVAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static CHAT_INJECT_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static SEND_MESSAGE_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
@@ -758,6 +768,7 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "exec.approval.waitDecision",
     "exec.approval.resolve",
     "chat.history",
+    "send",
     "chat.send",
     "chat.abort",
     "chat.inject",
@@ -801,6 +812,7 @@ impl RpcDispatcher {
             exec_approvals: ExecApprovalsRegistry::new(),
             exec_approval: ExecApprovalRegistry::new(),
             chat: ChatRegistry::new(),
+            send: SendRegistry::new(),
             skills: SkillsRegistry::new(),
             cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
@@ -881,6 +893,7 @@ impl RpcDispatcher {
             "exec.approval.waitdecision" => self.handle_exec_approval_wait_decision(req).await,
             "exec.approval.resolve" => self.handle_exec_approval_resolve(req).await,
             "chat.history" => self.handle_chat_history(req).await,
+            "send" => self.handle_send(req).await,
             "chat.send" => self.handle_chat_send(req).await,
             "chat.abort" => self.handle_chat_abort(req).await,
             "chat.inject" => self.handle_chat_inject(req).await,
@@ -2793,6 +2806,111 @@ impl RpcDispatcher {
             "thinkingLevel": meta.as_ref().and_then(|value| value.thinking_level.clone()),
             "verboseLevel": meta.as_ref().and_then(|value| value.verbose_level.clone())
         }))
+    }
+
+    async fn handle_send(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<GatewaySendParams>(&req.params) {
+            Ok(value) => value,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!("invalid send params: {err}"));
+            }
+        };
+        let Some(idempotency_key) = normalize_optional_text(Some(params.idempotency_key), 256)
+        else {
+            return RpcDispatchOutcome::bad_request(
+                "invalid send params: idempotencyKey is required",
+            );
+        };
+        if let Some(cached) = self.send.get(&idempotency_key).await {
+            return RpcDispatchOutcome::Handled(cached);
+        }
+        let run_id = idempotency_key;
+        let _gif_playback = params.gif_playback.unwrap_or(false);
+
+        let Some(to) = normalize_optional_text(Some(params.to), 512) else {
+            return RpcDispatchOutcome::bad_request("invalid send params: to is required");
+        };
+        let message = normalize_optional_text(params.message, 12_000);
+        let media_url = normalize_optional_text(params.media_url, 2_048);
+        let mut media_urls = params
+            .media_urls
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| normalize_optional_text(Some(value), 2_048))
+            .collect::<Vec<_>>();
+        if let Some(url) = media_url {
+            media_urls.push(url);
+        }
+        if message.is_none() && media_urls.is_empty() {
+            return RpcDispatchOutcome::bad_request(
+                "invalid send params: text or media is required",
+            );
+        }
+
+        let channel_input = normalize_optional_text(params.channel.clone(), 64);
+        if channel_input
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("webchat"))
+            .unwrap_or(false)
+        {
+            return RpcDispatchOutcome::bad_request(
+                "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+            );
+        }
+        let channel = channel_input.unwrap_or_else(|| DEFAULT_SEND_CHANNEL.to_owned());
+        let supported_channel = self
+            .channel_capabilities
+            .iter()
+            .any(|capability| capability.name.eq_ignore_ascii_case(&channel));
+        if !supported_channel {
+            let unsupported = params.channel.unwrap_or(channel.clone());
+            return RpcDispatchOutcome::bad_request(format!("unsupported channel: {unsupported}"));
+        }
+
+        let account_id = normalize_optional_text(params.account_id, 128);
+        let thread_id = normalize_optional_text(params.thread_id, 128);
+        let session_key = normalize_optional_text(params.session_key, 256)
+            .and_then(|value| {
+                let canonical = canonicalize_session_key(&value);
+                (!canonical.is_empty()).then_some(canonical)
+            })
+            .unwrap_or_else(|| derive_outbound_session_key(&channel, &to));
+        let mirrored_message = message.clone().or_else(|| {
+            (!media_urls.is_empty()).then(|| format!("[media] {}", media_urls.join(" ")))
+        });
+        let _ = self
+            .sessions
+            .record_send(SessionSend {
+                session_key,
+                request_id: Some(run_id.clone()),
+                message: mirrored_message,
+                command: None,
+                source: "send".to_owned(),
+                channel: Some(channel.clone()),
+                to: Some(to),
+                account_id: account_id.clone(),
+            })
+            .await;
+
+        let message_id = next_send_message_id();
+        let mut payload = json!({
+            "runId": run_id,
+            "messageId": message_id,
+            "channel": channel
+        });
+        if let Some(account_id) = account_id {
+            payload["accountId"] = json!(account_id);
+        }
+        if let Some(thread_id) = thread_id {
+            payload["threadId"] = json!(thread_id);
+        }
+        let cache_key = payload
+            .pointer("/runId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        self.send.set(cache_key, payload.clone()).await;
+        RpcDispatchOutcome::Handled(payload)
     }
 
     async fn handle_chat_send(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
@@ -6666,6 +6784,43 @@ fn next_chat_inject_message_id() -> String {
     format!("msg-{}-{sequence}", now_ms())
 }
 
+fn next_send_message_id() -> String {
+    let sequence = SEND_MESSAGE_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("send-{}-{sequence}", now_ms())
+}
+
+fn derive_outbound_session_key(channel: &str, to: &str) -> String {
+    let channel_key = normalize(channel);
+    let target_key = normalize_outbound_target_segment(to);
+    format!("agent:main:{channel_key}:out:{target_key}")
+}
+
+fn normalize_outbound_target_segment(target: &str) -> String {
+    let mut normalized = String::new();
+    let mut last_was_dash = false;
+    for ch in target.trim().to_ascii_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, ':' | '_' | '+' | '-') {
+            normalized.push(ch);
+            last_was_dash = false;
+            continue;
+        }
+        if !last_was_dash {
+            normalized.push('-');
+            last_was_dash = true;
+        }
+    }
+    while normalized.ends_with('-') {
+        normalized.pop();
+    }
+    if normalized.is_empty() {
+        return "target".to_owned();
+    }
+    if normalized.len() > 96 {
+        normalized.truncate(96);
+    }
+    normalized
+}
+
 struct ChatRegistry {
     state: Arc<Mutex<ChatState>>,
 }
@@ -6802,6 +6957,62 @@ fn prune_oldest_chat_runs(runs_by_id: &mut HashMap<String, ChatRunEntry>, max_ru
             break;
         };
         let _ = runs_by_id.remove(&oldest_key);
+    }
+}
+
+struct SendRegistry {
+    state: Mutex<SendState>,
+}
+
+#[derive(Default)]
+struct SendState {
+    cached_by_id: HashMap<String, SendCacheEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct SendCacheEntry {
+    payload: Value,
+    created_at_ms: u64,
+}
+
+impl SendRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(SendState::default()),
+        }
+    }
+
+    async fn get(&self, idempotency_key: &str) -> Option<Value> {
+        let guard = self.state.lock().await;
+        guard
+            .cached_by_id
+            .get(idempotency_key)
+            .map(|entry| entry.payload.clone())
+    }
+
+    async fn set(&self, idempotency_key: String, payload: Value) {
+        let mut guard = self.state.lock().await;
+        guard.cached_by_id.insert(
+            idempotency_key,
+            SendCacheEntry {
+                payload,
+                created_at_ms: now_ms(),
+            },
+        );
+        prune_oldest_send_cache(&mut guard.cached_by_id, MAX_SEND_CACHE_ENTRIES);
+    }
+}
+
+fn prune_oldest_send_cache(cached_by_id: &mut HashMap<String, SendCacheEntry>, max_entries: usize) {
+    while cached_by_id.len() > max_entries {
+        let Some(oldest_key) = cached_by_id
+            .iter()
+            .min_by_key(|(_, entry)| entry.created_at_ms)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        let _ = cached_by_id.remove(&oldest_key);
     }
 }
 
@@ -10280,6 +10491,28 @@ struct SessionsHistoryParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GatewaySendParams {
+    to: String,
+    message: Option<String>,
+    #[serde(rename = "mediaUrl", alias = "media_url")]
+    media_url: Option<String>,
+    #[serde(rename = "mediaUrls", alias = "media_urls")]
+    media_urls: Option<Vec<String>>,
+    #[serde(rename = "gifPlayback", alias = "gif_playback")]
+    gif_playback: Option<bool>,
+    channel: Option<String>,
+    #[serde(rename = "accountId", alias = "account_id")]
+    account_id: Option<String>,
+    #[serde(rename = "threadId", alias = "thread_id")]
+    thread_id: Option<String>,
+    #[serde(rename = "sessionKey", alias = "session_key")]
+    session_key: Option<String>,
+    #[serde(rename = "idempotencyKey", alias = "idempotency_key")]
+    idempotency_key: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct SessionsSendParams {
     #[serde(rename = "sessionKey", alias = "session_key")]
     session_key: String,
@@ -11748,6 +11981,162 @@ mod tests {
                 );
             }
             _ => panic!("expected handled history"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_send_method_follows_parity_contract() {
+        let dispatcher = RpcDispatcher::new();
+
+        let missing_text_or_media = RpcRequestFrame {
+            id: "req-send-empty".to_owned(),
+            method: "send".to_owned(),
+            params: serde_json::json!({
+                "to": "+15550001111",
+                "message": "   ",
+                "idempotencyKey": "send-empty"
+            }),
+        };
+        let out = dispatcher.handle_request(&missing_text_or_media).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let webchat_channel = RpcRequestFrame {
+            id: "req-send-webchat".to_owned(),
+            method: "send".to_owned(),
+            params: serde_json::json!({
+                "to": "+15550001111",
+                "message": "hello",
+                "channel": "webchat",
+                "idempotencyKey": "send-webchat"
+            }),
+        };
+        match dispatcher.handle_request(&webchat_channel).await {
+            RpcDispatchOutcome::Error { code, message, .. } => {
+                assert_eq!(code, 400);
+                assert!(message.contains("Use `chat.send`"));
+            }
+            _ => panic!("expected webchat channel rejection"),
+        }
+
+        let unsupported_channel = RpcRequestFrame {
+            id: "req-send-unsupported".to_owned(),
+            method: "send".to_owned(),
+            params: serde_json::json!({
+                "to": "+15550001111",
+                "message": "hello",
+                "channel": "unknown-channel",
+                "idempotencyKey": "send-unsupported"
+            }),
+        };
+        let out = dispatcher.handle_request(&unsupported_channel).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let send = RpcRequestFrame {
+            id: "req-send-default".to_owned(),
+            method: "send".to_owned(),
+            params: serde_json::json!({
+                "to": "+15550001111",
+                "message": "hello outbound",
+                "idempotencyKey": "send-1"
+            }),
+        };
+        let first_message_id = match dispatcher.handle_request(&send).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/runId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("send-1")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/channel")
+                        .and_then(serde_json::Value::as_str),
+                    Some("whatsapp")
+                );
+                payload
+                    .pointer("/messageId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .expect("message id")
+            }
+            _ => panic!("expected send handled response"),
+        };
+
+        match dispatcher.handle_request(&send).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/messageId")
+                        .and_then(serde_json::Value::as_str),
+                    Some(first_message_id.as_str())
+                );
+            }
+            _ => panic!("expected send idempotent replay"),
+        }
+
+        let derived_session_key = super::derive_outbound_session_key("whatsapp", "+15550001111");
+        let history = RpcRequestFrame {
+            id: "req-send-history-derived".to_owned(),
+            method: "sessions.history".to_owned(),
+            params: serde_json::json!({
+                "sessionKey": derived_session_key,
+                "limit": 1
+            }),
+        };
+        match dispatcher.handle_request(&history).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/count")
+                        .and_then(serde_json::Value::as_u64),
+                    Some(1)
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/history/0/text")
+                        .and_then(serde_json::Value::as_str),
+                    Some("hello outbound")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/history/0/source")
+                        .and_then(serde_json::Value::as_str),
+                    Some("send")
+                );
+            }
+            _ => panic!("expected derived send history"),
+        }
+
+        let send_with_context = RpcRequestFrame {
+            id: "req-send-with-context".to_owned(),
+            method: "send".to_owned(),
+            params: serde_json::json!({
+                "to": "channel:C1",
+                "message": "hello thread",
+                "channel": "slack",
+                "accountId": "work",
+                "threadId": "1710000.1",
+                "sessionKey": "main",
+                "idempotencyKey": "send-2"
+            }),
+        };
+        match dispatcher.handle_request(&send_with_context).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/accountId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("work")
+                );
+                assert_eq!(
+                    payload
+                        .pointer("/threadId")
+                        .and_then(serde_json::Value::as_str),
+                    Some("1710000.1")
+                );
+            }
+            _ => panic!("expected send with context handled"),
         }
     }
 
