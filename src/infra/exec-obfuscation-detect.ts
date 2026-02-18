@@ -137,20 +137,22 @@ const FALSE_POSITIVE_SUPPRESSIONS: Array<{
   /** Regex that identifies the legitimate usage. */
   regex: RegExp;
 }> = [
-  // Homebrew install script is a well-known curl|bash pattern
+  // Homebrew install script is a well-known curl|bash pattern.
+  // Regexes require the known-good domain to appear as the URL host (immediately
+  // after https?://) to prevent piggybacking via query parameters or path segments.
   {
     suppresses: ["curl-pipe-shell"],
-    regex: /curl\s+.*(?:raw\.githubusercontent\.com\/Homebrew|brew\.sh)/i,
+    regex: /curl\s+.*https?:\/\/(?:raw\.githubusercontent\.com\/Homebrew|brew\.sh)\b/i,
   },
   // nvm, rustup, and other common installer scripts
   {
     suppresses: ["curl-pipe-shell"],
-    regex: /curl\s+.*(?:nvm-sh\/nvm|sh\.rustup\.rs|get\.docker\.com|install\.python-poetry\.org)/i,
+    regex: /curl\s+.*https?:\/\/(?:raw\.githubusercontent\.com\/nvm-sh\/nvm|sh\.rustup\.rs|get\.docker\.com|install\.python-poetry\.org)\b/i,
   },
   // Node.js package manager install scripts
   {
     suppresses: ["curl-pipe-shell"],
-    regex: /curl\s+.*(?:get\.pnpm\.io|bun\.sh\/install)/i,
+    regex: /curl\s+.*https?:\/\/(?:get\.pnpm\.io|bun\.sh\/install)\b/i,
   },
 ];
 
@@ -174,10 +176,15 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
       continue;
     }
 
-    // Check if this match is suppressed by a known-good pattern
-    const suppressed = FALSE_POSITIVE_SUPPRESSIONS.some(
-      (exemption) => exemption.suppresses.includes(pattern.id) && exemption.regex.test(command),
-    );
+    // Check if this match is suppressed by a known-good pattern.
+    // Only allow suppression when the command contains a single URL — multiple
+    // URLs could piggyback a known-good domain alongside a malicious one.
+    const urlCount = (command.match(/https?:\/\/\S+/g) ?? []).length;
+    const suppressed =
+      urlCount <= 1 &&
+      FALSE_POSITIVE_SUPPRESSIONS.some(
+        (exemption) => exemption.suppresses.includes(pattern.id) && exemption.regex.test(command),
+      );
 
     if (suppressed) {
       continue;

