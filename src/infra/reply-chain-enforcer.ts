@@ -1,6 +1,6 @@
-import type { SessionKey } from "../sessions/session-key.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { SessionKey } from "../sessions/session-key.js";
 
 type EnforcerState = {
   status: "armed" | "disarmed";
@@ -25,6 +25,7 @@ export class ReplyChainEnforcer {
         reason: string;
         prompt: string;
         sessionKey: SessionKey;
+        noFallback?: boolean;
       }) => Promise<void>;
     },
   ) {}
@@ -123,16 +124,23 @@ export class ReplyChainEnforcer {
 
       const elapsed = now - state.lastActivityMs;
       if (elapsed > this.config.timeoutMs) {
-        this.logger.warn("Watchdog trigger!", { key, elapsed, timeout: this.config.timeoutMs });
+        this.logger.warn("Watchdog trigger!", {
+          key,
+          elapsed,
+          timeout: this.config.timeoutMs,
+          targetSession: key,
+        });
 
         // Disarm to prevent loop
         this.setState(key, "disarmed", "Watchdog Triggered");
 
-        // Fire recovery
+        // Fire recovery — noFallback prevents redirecting to main session
+        // if the target session isn't in the store (avoids spamming wrong session)
         void this.runtime.runHeartbeatOnce({
           reason: "watchdog-stall",
           prompt: this.config.prompt,
           sessionKey: key,
+          noFallback: true,
         });
       }
     }

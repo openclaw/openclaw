@@ -260,6 +260,7 @@ function resolveHeartbeatSession(
   agentId?: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
+  noFallback?: boolean,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -303,6 +304,10 @@ function resolveHeartbeatSession(
         }
         // Target session not found in store — fall back to main session
         // so the event still gets delivered somewhere useful.
+        // Unless noFallback is set (e.g. watchdog — don't spam wrong session).
+        if (noFallback) {
+          return null;
+        }
         log.warn(
           `heartbeat: forced sessionKey "${forcedCanonical}" not found in store, falling back to main session`,
         );
@@ -499,6 +504,7 @@ export async function runHeartbeatOnce(opts: {
   reason?: string;
   prompt?: string;
   deps?: HeartbeatDeps;
+  noFallback?: boolean;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
@@ -557,12 +563,20 @@ export async function runHeartbeatOnce(opts: {
     // The LLM prompt says "if it exists" so this is expected behavior.
   }
 
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(
+  const resolved = resolveHeartbeatSession(
     cfg,
     agentId,
     heartbeat,
     opts.sessionKey,
+    opts.noFallback,
   );
+  if (!resolved) {
+    log.warn("Watchdog target session not found in store, skipping (noFallback)", {
+      targetSession: opts.sessionKey,
+    });
+    return { status: "skipped", reason: "session-not-found" };
+  }
+  const { entry, sessionKey, storePath } = resolved;
 
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
