@@ -1,4 +1,4 @@
-import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
+import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 
 export type ConfigCommand =
   | { action: "show"; path?: string }
@@ -7,7 +7,7 @@ export type ConfigCommand =
   | { action: "error"; message: string };
 
 export function parseConfigCommand(raw: string): ConfigCommand | null {
-  return parseSlashCommandWithSetUnset<ConfigCommand>({
+  return parseStandardSetUnsetSlashCommand<ConfigCommand>({
     raw,
     slash: "/config",
     invalidMessage: "Invalid /config syntax.",
@@ -18,8 +18,5 @@ export function parseConfigCommand(raw: string): ConfigCommand | null {
       }
       return undefined;
     },
-    onSet: (path, value) => ({ action: "set", path, value }),
-    onUnset: (path) => ({ action: "unset", path }),
-    onError: (message) => ({ action: "error", message }),
   });
 }

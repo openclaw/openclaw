@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 import {
   parseSetUnsetCommand,
   parseSetUnsetCommandAction,
@@ -112,5 +113,30 @@ describe("parseSlashCommandWithSetUnset", () => {
       onError: (message) => ({ action: "error", message }),
     });
     expect(unknownAction).toEqual({ action: "error", message: "Usage: /config show|set|unset" });
+  });
+});
+
+describe("parseStandardSetUnsetSlashCommand", () => {
+  it("uses default set/unset/error mappings", () => {
+    const result = parseStandardSetUnsetSlashCommand<ParsedSetUnsetAction>({
+      raw: '/config set a.b={"ok":true}',
+      slash: "/config",
+      invalidMessage: "Invalid /config syntax.",
+      usageMessage: "Usage: /config show|set|unset",
+      onKnownAction: () => undefined,
+    });
+    expect(result).toEqual({ action: "set", path: "a.b", value: { ok: true } });
+  });
+
+  it("supports caller-provided mappings", () => {
+    const result = parseStandardSetUnsetSlashCommand<ParsedSetUnsetAction>({
+      raw: "/config unset a.b",
+      slash: "/config",
+      invalidMessage: "Invalid /config syntax.",
+      usageMessage: "Usage: /config show|set|unset",
+      onKnownAction: () => undefined,
+      onUnset: (path) => ({ action: "unset", path: `wrapped:${path}` }),
+    });
+    expect(result).toEqual({ action: "unset", path: "wrapped:a.b" });
   });
 });
