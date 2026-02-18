@@ -105,17 +105,20 @@ async function waitForListMatch<T>(
   timeoutMs = 2000,
   intervalMs = 50,
 ): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const value = await fetchList();
-    if (predicate(value)) {
-      return value;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error("timeout waiting for list update");
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  let latest: T | undefined;
+  await expect
+    .poll(
+      async () => {
+        latest = await fetchList();
+        return predicate(latest);
+      },
+      { timeout: timeoutMs, interval: intervalMs },
+    )
+    .toBe(true);
+  if (latest === undefined) {
+    throw new Error("expected list value");
   }
+  return latest;
 }
 
 describe("chrome extension relay server", () => {
