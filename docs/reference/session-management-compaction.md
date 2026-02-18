@@ -269,8 +269,38 @@ Notes:
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
-Pi also exposes a `session_before_compact` hook in the extension API, but OpenClaw’s
+Pi also exposes a `session_before_compact` hook in the extension API, but OpenClaw's
 flush logic lives on the Gateway side today.
+
+---
+
+## Plugin-provided compaction summary
+
+Plugins can intercept the compaction pipeline via two mechanisms:
+
+### `provide_compaction_summary` hook
+
+A **modifying hook** (sequential, awaited) that fires after `before_compaction` but before the LLM compaction call. The plugin receives:
+
+- `messageCount` — total messages in the session
+- `tokensBefore` — estimated tokens being compacted
+- `sessionFile` — path to the session JSONL (all pre-compaction messages are preserved on disk)
+- `previousSummary` — summary from the last compaction cycle, if any (for iterative compaction)
+
+The plugin can return:
+
+- `summary` (string) — a custom summary. When provided, OpenClaw writes this directly via `sessionManager.appendCompaction()` with `fromHook: true`, **skipping the LLM call entirely**.
+- `skipCompaction` (boolean) — skip compaction this cycle. A safety gate tracks consecutive skips per session and forces standard compaction after 3 consecutive plugin skips.
+
+Multiple plugins are merged sequentially: last non-undefined `summary` wins; `skipCompaction` uses OR-logic (any plugin requesting skip wins).
+
+Timeout: the hook races against `EMBEDDED_COMPACTION_TIMEOUT_MS` (300 seconds). If the plugin doesn't respond in time, standard compaction proceeds.
+
+### `requestCompaction()` on agent context
+
+The `agent_end` hook context includes a `requestCompaction(customInstructions?)` method. Calling it schedules a compaction after the current agent turn completes. This is useful for memory plugins that detect when extraction is complete and want to trigger compaction programmatically.
+
+The compaction runs as a separate lane task (deferred execution) to avoid deadlocking the current session lane.
 
 ---
 

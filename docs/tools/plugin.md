@@ -350,6 +350,39 @@ Notes:
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
 
+### Typed hooks (agent lifecycle)
+
+Plugins can also register typed hooks directly via the plugin API. These integrate deeply into the agent loop:
+
+```typescript
+export default function register(api) {
+  // Provide a custom compaction summary (bypasses the LLM compaction call)
+  api.on("provide_compaction_summary", async (event, ctx) => {
+    const summary = await myMemoryPlugin.buildSummary(event.sessionFile);
+    return { summary };
+  });
+
+  // Request compaction after agent turn completes
+  api.on("agent_end", async (event, ctx) => {
+    if (shouldCompact(event)) {
+      await ctx.requestCompaction?.("Focus on key decisions");
+    }
+  });
+}
+```
+
+Available typed hooks and their categories:
+
+- **Model/prompt phase**: `before_model_resolve`, `before_prompt_build`
+- **Agent lifecycle**: `before_agent_start`, `agent_end`
+- **Compaction**: `before_compaction`, `after_compaction`, `provide_compaction_summary`
+- **Tool lifecycle**: `before_tool_call`, `after_tool_call`, `tool_result_persist`
+- **Messages**: `message_received`, `message_sending`, `message_sent`, `before_message_write`
+- **Session**: `session_start`, `session_end`, `before_reset`
+- **Gateway**: `gateway_start`, `gateway_stop`
+
+See [Agent Loop](/concepts/agent-loop#hook-points) for when each hook fires in the pipeline.
+
 ## Provider plugins (model auth)
 
 Plugins can register **model provider auth** flows so users can run OAuth or

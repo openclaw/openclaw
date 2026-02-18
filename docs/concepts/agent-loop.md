@@ -84,8 +84,9 @@ These run inside the agent loop or gateway pipeline:
 - **`before_model_resolve`**: runs pre-session (no `messages`) to deterministically override provider/model before model resolution.
 - **`before_prompt_build`**: runs after session load (with `messages`) to inject `prependContext`/`systemPrompt` before prompt submission.
 - **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
-- **`agent_end`**: inspect the final message list and run metadata after completion.
+- **`agent_end`**: inspect the final message list and run metadata after completion. The hook context includes `requestCompaction()` to schedule a compaction after the agent turn completes.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
+- **`provide_compaction_summary`**: a modifying hook that lets a plugin return a custom compaction summary, bypassing the default LLM call. Useful for memory plugins that maintain their own context. Also supports `skipCompaction` to defer compaction (max 3 consecutive skips).
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
 - **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
