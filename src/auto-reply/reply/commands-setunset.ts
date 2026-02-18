@@ -36,3 +36,27 @@ export function parseSetUnsetCommand(params: {
   }
   return { kind: "set", path, value: parsed.value };
 }
+
+export function parseSetUnsetCommandAction<T>(params: {
+  slash: string;
+  action: string;
+  args: string;
+  onSet: (path: string, value: unknown) => T;
+  onUnset: (path: string) => T;
+  onError: (message: string) => T;
+}): T | null {
+  if (params.action !== "set" && params.action !== "unset") {
+    return null;
+  }
+  const parsed = parseSetUnsetCommand({
+    slash: params.slash,
+    action: params.action,
+    args: params.args,
+  });
+  if (parsed.kind === "error") {
+    return params.onError(parsed.message);
+  }
+  return parsed.kind === "set"
+    ? params.onSet(parsed.path, parsed.value)
+    : params.onUnset(parsed.path);
+}
