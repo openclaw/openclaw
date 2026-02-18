@@ -394,6 +394,7 @@ public struct SendParams: Codable, Sendable {
     public let gifplayback: Bool?
     public let channel: String?
     public let accountid: String?
+    public let threadid: String?
     public let sessionkey: String?
     public let idempotencykey: String
 
@@ -405,6 +406,7 @@ public struct SendParams: Codable, Sendable {
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
+        threadid: String?,
         sessionkey: String?,
         idempotencykey: String
     ) {
@@ -415,6 +417,7 @@ public struct SendParams: Codable, Sendable {
         self.gifplayback = gifplayback
         self.channel = channel
         self.accountid = accountid
+        self.threadid = threadid
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
     }
@@ -426,6 +429,7 @@ public struct SendParams: Codable, Sendable {
         case gifplayback = "gifPlayback"
         case channel
         case accountid = "accountId"
+        case threadid = "threadId"
         case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
     }
@@ -2501,6 +2505,19 @@ public struct DevicePairRejectParams: Codable, Sendable {
     }
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+    }
+}
+
+public struct DevicePairRemoveParams: Codable, Sendable {
+    public let deviceid: String
+
+    public init(
+        deviceid: String
+    ) {
+        self.deviceid = deviceid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
     }
 }
 

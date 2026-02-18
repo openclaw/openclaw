@@ -63,6 +63,25 @@ function expectFirstSlackAction(expected: Record<string, unknown>) {
   expect(params).toMatchObject(expected);
 }
 
+function expectModerationActions(actions: string[]) {
+  expect(actions).toContain("timeout");
+  expect(actions).toContain("kick");
+  expect(actions).toContain("ban");
+}
+
+async function expectSlackSendRejected(params: Record<string, unknown>, error: RegExp) {
+  const { cfg, actions } = slackHarness();
+  await expect(
+    actions.handleAction?.({
+      channel: "slack",
+      action: "send",
+      cfg,
+      params,
+    }),
+  ).rejects.toThrow(error);
+  expect(handleSlackAction).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -98,9 +117,7 @@ describe("discord message actions", () => {
     } as OpenClawConfig;
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
-    expect(actions).toContain("timeout");
-    expect(actions).toContain("kick");
-    expect(actions).toContain("ban");
+    expectModerationActions(actions);
   });
 
   it("lists moderation when one account enables and another omits", () => {
@@ -116,9 +133,7 @@ describe("discord message actions", () => {
     } as OpenClawConfig;
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
-    expect(actions).toContain("timeout");
-    expect(actions).toContain("kick");
-    expect(actions).toContain("ban");
+    expectModerationActions(actions);
   });
 
   it("omits moderation when all accounts omit it", () => {
@@ -765,58 +780,37 @@ describe("slack actions adapter", () => {
   });
 
   it("rejects invalid blocks JSON for send", async () => {
-    const { cfg, actions } = slackHarness();
-
-    await expect(
-      actions.handleAction?.({
-        channel: "slack",
-        action: "send",
-        cfg,
-        params: {
-          to: "channel:C1",
-          message: "",
-          blocks: "{bad-json",
-        },
-      }),
-    ).rejects.toThrow(/blocks must be valid JSON/i);
-    expect(handleSlackAction).not.toHaveBeenCalled();
+    await expectSlackSendRejected(
+      {
+        to: "channel:C1",
+        message: "",
+        blocks: "{bad-json",
+      },
+      /blocks must be valid JSON/i,
+    );
   });
 
   it("rejects empty blocks arrays for send", async () => {
-    const { cfg, actions } = slackHarness();
-
-    await expect(
-      actions.handleAction?.({
-        channel: "slack",
-        action: "send",
-        cfg,
-        params: {
-          to: "channel:C1",
-          message: "",
-          blocks: "[]",
-        },
-      }),
-    ).rejects.toThrow(/at least one block/i);
-    expect(handleSlackAction).not.toHaveBeenCalled();
+    await expectSlackSendRejected(
+      {
+        to: "channel:C1",
+        message: "",
+        blocks: "[]",
+      },
+      /at least one block/i,
+    );
   });
 
   it("rejects send when both blocks and media are provided", async () => {
-    const { cfg, actions } = slackHarness();
-
-    await expect(
-      actions.handleAction?.({
-        channel: "slack",
-        action: "send",
-        cfg,
-        params: {
-          to: "channel:C1",
-          message: "",
-          media: "https://example.com/image.png",
-          blocks: JSON.stringify([{ type: "divider" }]),
-        },
-      }),
-    ).rejects.toThrow(/does not support blocks with media/i);
-    expect(handleSlackAction).not.toHaveBeenCalled();
+    await expectSlackSendRejected(
+      {
+        to: "channel:C1",
+        message: "",
+        media: "https://example.com/image.png",
+        blocks: JSON.stringify([{ type: "divider" }]),
+      },
+      /does not support blocks with media/i,
+    );
   });
 
   it("forwards blocks JSON for edit", async () => {

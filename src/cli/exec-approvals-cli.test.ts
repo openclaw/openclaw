@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
   if (method.endsWith(".get")) {
@@ -13,15 +14,7 @@ const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?:
   return { method, params };
 });
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const localSnapshot = {
   path: "/tmp/local-exec-approvals.json",
@@ -71,8 +64,7 @@ describe("exec approvals CLI", () => {
   };
 
   it("routes get command to local, gateway, and node modes", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGatewayFromCli.mockClear();
 
     const localProgram = createProgram();
@@ -99,8 +91,7 @@ describe("exec approvals CLI", () => {
   });
 
   it("defaults allowlist add to wildcard agent", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGatewayFromCli.mockClear();
 
     const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
