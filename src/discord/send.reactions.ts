@@ -1,5 +1,4 @@
 import { Routes } from "discord-api-types/v10";
-
 import { loadConfig } from "../config/config.js";
 import {
   buildReactionIdentifier,

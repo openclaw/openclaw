@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-
 import type { OpenClawConfig } from "../../config/config.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
@@ -27,6 +26,17 @@ export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
   return false;
 }
 
+export function supportsChannelMessageButtonsForChannel(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+}): boolean {
+  if (!params.channel) {
+    return false;
+  }
+  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  return plugin?.actions?.supportsButtons?.({ cfg: params.cfg }) === true;
+}
+
 export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
   for (const plugin of listChannelPlugins()) {
     if (plugin.actions?.supportsCards?.({ cfg })) {
@@ -34,6 +44,17 @@ export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
     }
   }
   return false;
+}
+
+export function supportsChannelMessageCardsForChannel(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+}): boolean {
+  if (!params.channel) {
+    return false;
+  }
+  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  return plugin?.actions?.supportsCards?.({ cfg: params.cfg }) === true;
 }
 
 export async function dispatchChannelMessageAction(

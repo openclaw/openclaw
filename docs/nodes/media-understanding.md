@@ -3,6 +3,7 @@ summary: "Inbound image/audio/video understanding (optional) with provider + CLI
 read_when:
   - Designing or refactoring media understanding
   - Tuning inbound audio/video/image preprocessing
+title: "Media Understanding"
 ---
 
 # Media Understanding (Inbound) — 2026-01-17
@@ -185,7 +186,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 **Image**
 
 - Prefer your active model if it supports images.
-- Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-5`, `google/gemini-3-pro-preview`.
+- Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-6`, `google/gemini-3-pro-preview`.
 
 **Audio**
 
@@ -299,7 +300,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
         maxChars: 500,
         models: [
           { provider: "openai", model: "gpt-5.2" },
-          { provider: "anthropic", model: "claude-opus-4-5" },
+          { provider: "anthropic", model: "claude-opus-4-6" },
           {
             type: "cli",
             command: "gemini",

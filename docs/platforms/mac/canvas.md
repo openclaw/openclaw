@@ -4,6 +4,7 @@ read_when:
   - Implementing the macOS Canvas panel
   - Adding agent controls for visual workspace
   - Debugging WKWebView canvas loads
+title: "Canvas"
 ---
 
 # Canvas (macOS app)
@@ -72,7 +73,7 @@ A2UI host page on first open.
 Default A2UI host URL:
 
 ```
-http://<gateway-host>:18793/__openclaw__/a2ui/
+http://<gateway-host>:18789/__openclaw__/a2ui/
 ```
 
 ### A2UI commands (v0.8)

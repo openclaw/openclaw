@@ -1,5 +1,4 @@
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
-
 import { allowListMatches, normalizeAllowList, normalizeAllowListLower } from "./allow-list.js";
 import type { SlackMonitorContext } from "./context.js";
 

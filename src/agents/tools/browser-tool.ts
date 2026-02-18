@@ -1,3 +1,13 @@
+import crypto from "node:crypto";
+import {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserConsoleMessages,
+  browserNavigate,
+  browserPdfSave,
+  browserScreenshotAction,
+} from "../../browser/client-actions.js";
 import {
   browserCloseTab,
   browserFocusTab,
@@ -9,25 +19,40 @@ import {
   browserStop,
   browserTabs,
 } from "../../browser/client.js";
-import {
-  browserAct,
-  browserArmDialog,
-  browserArmFileChooser,
-  browserConsoleMessages,
-  browserNavigate,
-  browserPdfSave,
-  browserScreenshotAction,
-} from "../../browser/client-actions.js";
-import crypto from "node:crypto";
-
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "../../browser/paths.js";
+import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
 import { loadConfig } from "../../config/config.js";
-import { saveMediaBuffer } from "../../media/store.js";
-import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
+import { wrapExternalContent } from "../../security/external-content.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
+import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
+
+function wrapBrowserExternalJson(params: {
+  kind: "snapshot" | "console" | "tabs";
+  payload: unknown;
+  includeWarning?: boolean;
+}): { wrappedText: string; safeDetails: Record<string, unknown> } {
+  const extractedText = JSON.stringify(params.payload, null, 2);
+  const wrappedText = wrapExternalContent(extractedText, {
+    source: "browser",
+    includeWarning: params.includeWarning ?? true,
+  });
+  return {
+    wrappedText,
+    safeDetails: {
+      ok: true,
+      externalContent: {
+        untrusted: true,
+        source: "browser",
+        kind: params.kind,
+        wrapped: true,
+      },
+    },
+  };
+}
 
 type BrowserProxyFile = {
   path: string;
@@ -156,36 +181,11 @@ async function callBrowserProxy(params: {
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  if (!files || files.length === 0) {
-    return new Map<string, string>();
-  }
-  const mapping = new Map<string, string>();
-  for (const file of files) {
-    const buffer = Buffer.from(file.base64, "base64");
-    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser", buffer.byteLength);
-    mapping.set(file.path, saved.path);
-  }
-  return mapping;
+  return await persistBrowserProxyFiles(files);
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  if (!result || typeof result !== "object") {
-    return;
-  }
-  const obj = result as Record<string, unknown>;
-  if (typeof obj.path === "string" && mapping.has(obj.path)) {
-    obj.path = mapping.get(obj.path);
-  }
-  if (typeof obj.imagePath === "string" && mapping.has(obj.imagePath)) {
-    obj.imagePath = mapping.get(obj.imagePath);
-  }
-  const download = obj.download;
-  if (download && typeof download === "object") {
-    const d = download as Record<string, unknown>;
-    if (typeof d.path === "string" && mapping.has(d.path)) {
-      d.path = mapping.get(d.path);
-    }
-  }
+  applyBrowserProxyPaths(result, mapping);
 }
 
 function resolveBrowserBaseUrl(params: {
@@ -359,9 +359,28 @@ export function createBrowserTool(opts?: {
               profile,
             });
             const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
-            return jsonResult({ tabs });
+            const wrapped = wrapBrowserExternalJson({
+              kind: "tabs",
+              payload: { tabs },
+              includeWarning: false,
+            });
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: { ...wrapped.safeDetails, tabCount: tabs.length },
+            };
           }
-          return jsonResult({ tabs: await browserTabs(baseUrl, { profile }) });
+          {
+            const tabs = await browserTabs(baseUrl, { profile });
+            const wrapped = wrapBrowserExternalJson({
+              kind: "tabs",
+              payload: { tabs },
+              includeWarning: false,
+            });
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: { ...wrapped.safeDetails, tabCount: tabs.length },
+            };
+          }
         case "open": {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
@@ -496,20 +515,68 @@ export function createBrowserTool(opts?: {
                 profile,
               });
           if (snapshot.format === "ai") {
+            const extractedText = snapshot.snapshot ?? "";
+            const wrappedSnapshot = wrapExternalContent(extractedText, {
+              source: "browser",
+              includeWarning: true,
+            });
+            const safeDetails = {
+              ok: true,
+              format: snapshot.format,
+              targetId: snapshot.targetId,
+              url: snapshot.url,
+              truncated: snapshot.truncated,
+              stats: snapshot.stats,
+              refs: snapshot.refs ? Object.keys(snapshot.refs).length : undefined,
+              labels: snapshot.labels,
+              labelsCount: snapshot.labelsCount,
+              labelsSkipped: snapshot.labelsSkipped,
+              imagePath: snapshot.imagePath,
+              imageType: snapshot.imageType,
+              externalContent: {
+                untrusted: true,
+                source: "browser",
+                kind: "snapshot",
+                format: "ai",
+                wrapped: true,
+              },
+            };
             if (labels && snapshot.imagePath) {
               return await imageResultFromFile({
                 label: "browser:snapshot",
                 path: snapshot.imagePath,
-                extraText: snapshot.snapshot,
-                details: snapshot,
+                extraText: wrappedSnapshot,
+                details: safeDetails,
               });
             }
             return {
-              content: [{ type: "text", text: snapshot.snapshot }],
-              details: snapshot,
+              content: [{ type: "text", text: wrappedSnapshot }],
+              details: safeDetails,
             };
           }
-          return jsonResult(snapshot);
+          {
+            const wrapped = wrapBrowserExternalJson({
+              kind: "snapshot",
+              payload: snapshot,
+            });
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: {
+                ...wrapped.safeDetails,
+                format: "aria",
+                targetId: snapshot.targetId,
+                url: snapshot.url,
+                nodeCount: snapshot.nodes.length,
+                externalContent: {
+                  untrusted: true,
+                  source: "browser",
+                  kind: "snapshot",
+                  format: "aria",
+                  wrapped: true,
+                },
+              },
+            };
+          }
         }
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
@@ -573,7 +640,7 @@ export function createBrowserTool(opts?: {
           const level = typeof params.level === "string" ? params.level.trim() : undefined;
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           if (proxyRequest) {
-            const result = await proxyRequest({
+            const result = (await proxyRequest({
               method: "GET",
               path: "/console",
               profile,
@@ -581,10 +648,37 @@ export function createBrowserTool(opts?: {
                 level,
                 targetId,
               },
+            })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
+            const wrapped = wrapBrowserExternalJson({
+              kind: "console",
+              payload: result,
+              includeWarning: false,
             });
-            return jsonResult(result);
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: {
+                ...wrapped.safeDetails,
+                targetId: typeof result.targetId === "string" ? result.targetId : undefined,
+                messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+              },
+            };
           }
-          return jsonResult(await browserConsoleMessages(baseUrl, { level, targetId, profile }));
+          {
+            const result = await browserConsoleMessages(baseUrl, { level, targetId, profile });
+            const wrapped = wrapBrowserExternalJson({
+              kind: "console",
+              payload: result,
+              includeWarning: false,
+            });
+            return {
+              content: [{ type: "text", text: wrapped.wrappedText }],
+              details: {
+                ...wrapped.safeDetails,
+                targetId: result.targetId,
+                messageCount: result.messages.length,
+              },
+            };
+          }
         }
         case "pdf": {
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
@@ -606,6 +700,15 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
+          const uploadPathsResult = resolvePathsWithinRoot({
+            rootDir: DEFAULT_UPLOAD_DIR,
+            requestedPaths: paths,
+            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+          });
+          if (!uploadPathsResult.ok) {
+            throw new Error(uploadPathsResult.error);
+          }
+          const normalizedPaths = uploadPathsResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
@@ -620,7 +723,7 @@ export function createBrowserTool(opts?: {
               path: "/hooks/file-chooser",
               profile,
               body: {
-                paths,
+                paths: normalizedPaths,
                 ref,
                 inputRef,
                 element,
@@ -632,7 +735,7 @@ export function createBrowserTool(opts?: {
           }
           return jsonResult(
             await browserArmFileChooser(baseUrl, {
-              paths,
+              paths: normalizedPaths,
               ref,
               inputRef,
               element,

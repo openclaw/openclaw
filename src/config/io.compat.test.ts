@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { createConfigIO } from "./io.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
@@ -47,6 +46,16 @@ describe("config io paths", () => {
         homedir: () => home,
       });
       expect(io.configPath).toBe(path.join(home, ".openclaw", "openclaw.json"));
+    });
+  });
+
+  it("uses OPENCLAW_HOME for default config path", async () => {
+    await withTempHome(async (home) => {
+      const io = createConfigIO({
+        env: { OPENCLAW_HOME: path.join(home, "svc-home") } as NodeJS.ProcessEnv,
+        homedir: () => path.join(home, "ignored-home"),
+      });
+      expect(io.configPath).toBe(path.join(home, "svc-home", ".openclaw", "openclaw.json"));
     });
   });
 

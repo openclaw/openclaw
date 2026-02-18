@@ -3,6 +3,7 @@ summary: "VPS hosting hub for OpenClaw (Oracle/Fly/Hetzner/GCP/exe.dev)"
 read_when:
   - You want to run the Gateway in the cloud
   - You need a quick map of VPS/hosting guides
+title: "VPS Hosting"
 ---
 
 # VPS hosting
@@ -12,15 +13,15 @@ deployments work at a high level.
 
 ## Pick a provider
 
-- **Railway** (one‑click + browser setup): [Railway](/railway)
-- **Northflank** (one‑click + browser setup): [Northflank](/northflank)
+- **Railway** (one‑click + browser setup): [Railway](/install/railway)
+- **Northflank** (one‑click + browser setup): [Northflank](/install/northflank)
 - **Oracle Cloud (Always Free)**: [Oracle](/platforms/oracle) — $0/month (Always Free, ARM; capacity/signup can be finicky)
-- **Fly.io**: [Fly.io](/platforms/fly)
-- **Hetzner (Docker)**: [Hetzner](/platforms/hetzner)
-- **GCP (Compute Engine)**: [GCP](/platforms/gcp)
-- **exe.dev** (VM + HTTPS proxy): [exe.dev](/platforms/exe-dev)
+- **Fly.io**: [Fly.io](/install/fly)
+- **Hetzner (Docker)**: [Hetzner](/install/hetzner)
+- **GCP (Compute Engine)**: [GCP](/install/gcp)
+- **exe.dev** (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
 - **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
-  https://x.com/techfrenAJ/status/2014934471095812547
+  [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
 
 ## How cloud setups work
 

@@ -1,14 +1,14 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Mock, vi } from "vitest";
-
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
+import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -168,6 +168,7 @@ const hoisted = vi.hoisted(() => ({
     waitCalls: [] as string[],
     waitResults: new Map<string, boolean>(),
   },
+  testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
   getReplyFromConfig: vi.fn().mockResolvedValue(undefined),
   sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
@@ -197,6 +198,7 @@ export const setTestConfigRoot = (root: string) => {
 };
 
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
+export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand: Mock<() => void> = hoisted.agentCommand;
@@ -258,6 +260,15 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: () => testTailnetIPv4.value,
   pickPrimaryTailnetIPv6: () => undefined,
 }));
+
+vi.mock("../infra/tailscale.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/tailscale.js")>("../infra/tailscale.js");
+  return {
+    ...actual,
+    readTailscaleWhoisIdentity: async () => testTailscaleWhois.value,
+  };
+});
 
 vi.mock("../config/sessions.js", async () => {
   const actual =
@@ -393,7 +404,7 @@ vi.mock("../config/config.js", async () => {
           ? (fileAgents.defaults as Record<string, unknown>)
           : {};
       const defaults = {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
         ...fileDefaults,
         ...testState.agentConfig,
@@ -576,6 +587,15 @@ vi.mock("../cli/deps.js", async () => {
       sendMessageWhatsApp: (...args: unknown[]) =>
         (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
     }),
+  };
+});
+
+vi.mock("../plugins/loader.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
+  return {
+    ...actual,
+    loadOpenClawPlugins: () => pluginRegistryState.registry,
   };
 });
 

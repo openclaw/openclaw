@@ -6,10 +6,9 @@
  */
 
 import { SimplePool, verifyEvent, type Event } from "nostr-tools";
-
-import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
 import type { NostrProfile } from "./config-schema.js";
 import { validateUrlSafety } from "./nostr-profile-http.js";
+import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
 
 // ============================================================================
 // Types
@@ -131,7 +130,7 @@ export async function importProfileFromRelays(
               authors: [pubkey],
               limit: 1,
             },
-          ],
+          ] as unknown as Parameters<typeof pool.subscribeMany>[1],
           {
             onevent(event) {
               events.push({ event, relay });

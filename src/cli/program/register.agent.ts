@@ -11,10 +11,10 @@ import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { hasExplicitOptions } from "../command-options.js";
-import { formatHelpExamples } from "../help-format.js";
-import { createDefaultDeps } from "../deps.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { hasExplicitOptions } from "../command-options.js";
+import { createDefaultDeps } from "../deps.js";
+import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
 export function registerAgentCommands(program: Command, args: { agentChannelOptions: string }) {

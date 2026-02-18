@@ -3,6 +3,7 @@ summary: "Skills: managed vs workspace, gating rules, and config/env wiring"
 read_when:
   - Adding or modifying skills
   - Changing skill gating or load rules
+title: "Skills"
 ---
 
 # Skills (OpenClaw)
@@ -43,13 +44,13 @@ Plugins can ship their own skills by listing `skills` directories in
 `openclaw.plugin.json` (paths relative to the plugin root). Plugin skills load
 when the plugin is enabled and participate in the normal skill precedence rules.
 You can gate them via `metadata.openclaw.requires.config` on the plugin’s config
-entry. See [Plugins](/plugin) for discovery/config and [Tools](/tools) for the
+entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
 
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-https://clawhub.com. Use it to discover, install, update, and back up skills.
+[https://clawhub.com](https://clawhub.com). Use it to discover, install, update, and back up skills.
 Full guide: [ClawHub](/tools/clawhub).
 
 Common flows:
@@ -67,7 +68,7 @@ that up as `<workspace>/skills` on the next session.
 
 ## Security notes
 
-- Treat third-party skills as **trusted code**. Read them before enabling.
+- Treat third-party skills as **untrusted code**. Read them before enabling.
 - Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
   for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
@@ -294,6 +295,6 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse https://clawhub.com.
+Browse [https://clawhub.com](https://clawhub.com).
 
 ---

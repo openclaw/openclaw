@@ -2,6 +2,7 @@
 summary: "WebSocket gateway architecture, components, and client flows"
 read_when:
   - Working on gateway protocol, clients, or transports
+title: "Gateway Architecture"
 ---
 
 # Gateway architecture
@@ -18,7 +19,10 @@ Last updated: 2026-01-22
 - **Nodes** (macOS/iOS/Android/headless) also connect over **WebSocket**, but
   declare `role: node` with explicit caps/commands.
 - One Gateway per host; it is the only place that opens a WhatsApp session.
-- A **canvas host** (default `18793`) serves agent‑editable HTML and A2UI.
+- The **canvas host** is served by the Gateway HTTP server under:
+  - `/__openclaw__/canvas/` (agent-editable HTML/CSS/JS)
+  - `/__openclaw__/a2ui/` (A2UI host)
+    It uses the same port as the Gateway (default `18789`).
 
 ## Components and flows
 
@@ -54,21 +58,23 @@ Protocol details:
 
 ## Connection lifecycle (single client)
 
-```
-Client                    Gateway
-  |                          |
-  |---- req:connect -------->|
-  |<------ res (ok) ---------|   (or res error + close)
-  |   (payload=hello-ok carries snapshot: presence + health)
-  |                          |
-  |<------ event:presence ---|
-  |<------ event:tick -------|
-  |                          |
-  |------- req:agent ------->|
-  |<------ res:agent --------|   (ack: {runId,status:"accepted"})
-  |<------ event:agent ------|   (streaming)
-  |<------ res:agent --------|   (final: {runId,status,summary})
-  |                          |
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+
+    Client->>Gateway: req:connect
+    Gateway-->>Client: res (ok)
+    Note right of Gateway: or res error + close
+    Note left of Client: payload=hello-ok<br>snapshot: presence + health
+
+    Gateway-->>Client: event:presence
+    Gateway-->>Client: event:tick
+
+    Client->>Gateway: req:agent
+    Gateway-->>Client: res:agent<br>ack {runId, status:"accepted"}
+    Gateway-->>Client: event:agent<br>(streaming)
+    Gateway-->>Client: res:agent<br>final {runId, status, summary}
 ```
 
 ## Wire protocol (summary)
@@ -96,7 +102,7 @@ Client                    Gateway
 - Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
   remote.
 
-Details: [Gateway protocol](/gateway/protocol), [Pairing](/start/pairing),
+Details: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing),
 [Security](/gateway/security).
 
 ## Protocol typing and codegen
@@ -109,9 +115,11 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/start/pairing),
 
 - Preferred: Tailscale or VPN.
 - Alternative: SSH tunnel
+
   ```bash
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
+
 - The same handshake + auth token apply over the tunnel.
 - TLS + optional pinning can be enabled for WS in remote setups.
 

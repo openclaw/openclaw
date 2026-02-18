@@ -1,5 +1,8 @@
 import { z } from "zod";
-
+import { parseByteSize } from "../cli/parse-bytes.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
+import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
+import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
   InboundDebounceSchema,
@@ -15,6 +18,8 @@ const SessionResetConfigSchema = z
     idleMinutes: z.number().int().positive().optional(),
   })
   .strict();
+
+export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
   .object({
@@ -33,6 +38,8 @@ export const SessionSchema = z
     reset: SessionResetConfigSchema.optional(),
     resetByType: z
       .object({
+        direct: SessionResetConfigSchema.optional(),
+        /** @deprecated Use `direct` instead. Kept for backward compatibility. */
         dm: SessionResetConfigSchema.optional(),
         group: SessionResetConfigSchema.optional(),
         thread: SessionResetConfigSchema.optional(),
@@ -51,36 +58,47 @@ export const SessionSchema = z
       ])
       .optional(),
     mainKey: z.string().optional(),
-    sendPolicy: z
-      .object({
-        default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
-        rules: z
-          .array(
-            z
-              .object({
-                action: z.union([z.literal("allow"), z.literal("deny")]),
-                match: z
-                  .object({
-                    channel: z.string().optional(),
-                    chatType: z
-                      .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
-                      .optional(),
-                    keyPrefix: z.string().optional(),
-                  })
-                  .strict()
-                  .optional(),
-              })
-              .strict(),
-          )
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    sendPolicy: SessionSendPolicySchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
       })
       .strict()
+      .optional(),
+    maintenance: z
+      .object({
+        mode: z.enum(["enforce", "warn"]).optional(),
+        pruneAfter: z.union([z.string(), z.number()]).optional(),
+        /** @deprecated Use pruneAfter instead. */
+        pruneDays: z.number().int().positive().optional(),
+        maxEntries: z.number().int().positive().optional(),
+        rotateBytes: z.union([z.string(), z.number()]).optional(),
+      })
+      .strict()
+      .superRefine((val, ctx) => {
+        if (val.pruneAfter !== undefined) {
+          try {
+            parseDurationMs(String(val.pruneAfter).trim(), { defaultUnit: "d" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["pruneAfter"],
+              message: "invalid duration (use ms, s, m, h, d)",
+            });
+          }
+        }
+        if (val.rotateBytes !== undefined) {
+          try {
+            parseByteSize(String(val.rotateBytes).trim(), { defaultUnit: "b" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["rotateBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+      })
       .optional(),
   })
   .strict()
@@ -96,6 +114,7 @@ export const MessagesSchema = z
     ackReaction: z.string().optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
+    suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })
   .strict()
@@ -112,6 +131,8 @@ export const CommandsSchema = z
     debug: z.boolean().optional(),
     restart: z.boolean().optional(),
     useAccessGroups: z.boolean().optional(),
+    ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: ElevatedAllowFromSchema.optional(),
   })
   .strict()
   .optional()

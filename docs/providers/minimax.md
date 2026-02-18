@@ -3,6 +3,7 @@ summary: "Use MiniMax M2.1 in OpenClaw"
 read_when:
   - You want MiniMax models in OpenClaw
   - You need MiniMax setup guidance
+title: "MiniMax"
 ---
 
 # MiniMax
@@ -43,9 +44,9 @@ MiniMax highlights these improvements in M2.1:
 Enable the bundled OAuth plugin and authenticate:
 
 ```bash
-moltbot plugins enable minimax-portal-auth  # skip if already loaded.
-moltbot gateway restart  # restart if gateway is already running
-moltbot onboard --auth-choice minimax-portal
+openclaw plugins enable minimax-portal-auth  # skip if already loaded.
+openclaw gateway restart  # restart if gateway is already running
+openclaw onboard --auth-choice minimax-portal
 ```
 
 You will be prompted to select an endpoint:
@@ -53,7 +54,7 @@ You will be prompted to select an endpoint:
 - **Global** - International users (`api.minimax.io`)
 - **CN** - Users in China (`api.minimaxi.com`)
 
-See [MiniMax OAuth plugin README](https://github.com/moltbot/moltbot/tree/main/extensions/minimax-portal-auth) for details.
+See [MiniMax OAuth plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth) for details.
 
 ### MiniMax M2.1 (API key)
 
@@ -95,7 +96,7 @@ Configure via CLI:
 
 ### MiniMax M2.1 as fallback (Opus primary)
 
-**Best for:** keep Opus 4.5 as primary, fail over to MiniMax M2.1.
+**Best for:** keep Opus 4.6 as primary, fail over to MiniMax M2.1.
 
 ```json5
 {
@@ -103,11 +104,11 @@ Configure via CLI:
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
         "minimax/MiniMax-M2.1": { alias: "minimax" },
       },
       model: {
-        primary: "anthropic/claude-opus-4-5",
+        primary: "anthropic/claude-opus-4-6",
         fallbacks: ["minimax/MiniMax-M2.1"],
       },
     },
@@ -178,7 +179,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 - Model refs are `minimax/<model>`.
 - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
 - Update pricing values in `models.json` if you need exact cost tracking.
-- Referral link for MiniMax Coding Plan (10% off): https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link
+- Referral link for MiniMax Coding Plan (10% off): [https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
 - Use `openclaw models list` and `openclaw models set minimax/MiniMax-M2.1` to switch.
 

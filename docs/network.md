@@ -4,6 +4,7 @@ read_when:
   - You need the network architecture + security overview
   - You are debugging local vs tailnet access or pairing
   - You want the canonical list of networking docs
+title: "Network"
 ---
 
 # Network hub
@@ -20,7 +21,7 @@ devices across localhost, LAN, and tailnet.
 
 ## Pairing + identity
 
-- [Pairing overview (DM + nodes)](/start/pairing)
+- [Pairing overview (DM + nodes)](/channels/pairing)
 - [Gateway-owned node pairing](/gateway/pairing)
 - [Devices CLI (pairing + token rotation)](/cli/devices)
 - [Pairing CLI (DM approvals)](/cli/pairing)

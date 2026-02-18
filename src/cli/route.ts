@@ -1,11 +1,11 @@
-import { defaultRuntime } from "../runtime.js";
-import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { emitCliBanner } from "./banner.js";
+import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { getCommandPath, hasHelpOrVersion } from "./argv.js";
+import { emitCliBanner } from "./banner.js";
+import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 import { ensureConfigReady } from "./program/config-guard.js";
-import { findRoutedCommand } from "./program/command-registry.js";
+import { findRoutedCommand } from "./program/routes.js";
 
 async function prepareRoutedCommand(params: {
   argv: string[];

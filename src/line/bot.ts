@@ -7,8 +7,8 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
-import { startLineWebhook } from "./webhook.js";
 import type { ResolvedLineAccount } from "./types.js";
+import { startLineWebhook } from "./webhook.js";
 
 export interface LineBotOptions {
   channelAccessToken: string;

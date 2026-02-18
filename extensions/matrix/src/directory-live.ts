@@ -1,5 +1,4 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk";
-
 import { resolveMatrixAuth } from "./matrix/client.js";
 
 type MatrixUserResult = {
@@ -51,6 +50,7 @@ function normalizeQuery(value?: string | null): string {
 
 export async function listMatrixDirectoryPeersLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
@@ -58,7 +58,7 @@ export async function listMatrixDirectoryPeersLive(params: {
   if (!query) {
     return [];
   }
-  const auth = await resolveMatrixAuth({ cfg: params.cfg as never });
+  const auth = await resolveMatrixAuth({ cfg: params.cfg as never, accountId: params.accountId });
   const res = await fetchMatrixJson<MatrixUserDirectoryResponse>({
     homeserver: auth.homeserver,
     accessToken: auth.accessToken,
@@ -123,6 +123,7 @@ async function fetchMatrixRoomName(
 
 export async function listMatrixDirectoryGroupsLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
@@ -130,7 +131,7 @@ export async function listMatrixDirectoryGroupsLive(params: {
   if (!query) {
     return [];
   }
-  const auth = await resolveMatrixAuth({ cfg: params.cfg as never });
+  const auth = await resolveMatrixAuth({ cfg: params.cfg as never, accountId: params.accountId });
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
 
   if (query.startsWith("#")) {

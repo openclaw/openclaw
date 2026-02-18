@@ -9,13 +9,15 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
+  chunkTextForOutbound,
+  formatAllowFromLowercase,
   formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
+  resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk";
-
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -25,8 +27,8 @@ import {
 import { zaloMessageActions } from "./actions.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import { zaloOnboardingAdapter } from "./onboarding.js";
-import { resolveZaloProxyFetch } from "./proxy.js";
 import { probeZalo } from "./probe.js";
+import { resolveZaloProxyFetch } from "./proxy.js";
 import { sendMessageZalo } from "./send.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
@@ -64,11 +66,7 @@ export const zaloDock: ChannelDock = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.replace(/^(zalo|zl):/i, ""))
-        .map((entry) => entry.toLowerCase()),
+      formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
   },
   groups: {
     resolveRequireMention: () => true,
@@ -125,19 +123,16 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         String(entry),
       ),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.replace(/^(zalo|zl):/i, ""))
-        .map((entry) => entry.toLowerCase()),
+      formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalo|zl):/i }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.zalo?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.zalo.accounts.${resolvedAccountId}.`
-        : "channels.zalo.";
+      const basePath = resolveChannelAccountConfigBasePath({
+        cfg,
+        channelKey: "zalo",
+        accountId: resolvedAccountId,
+      });
       return {
         policy: account.config.dmPolicy ?? "pairing",
         allowFrom: account.config.allowFrom ?? [],
@@ -276,37 +271,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => {
-      if (!text) {
-        return [];
-      }
-      if (limit <= 0 || text.length <= limit) {
-        return [text];
-      }
-      const chunks: string[] = [];
-      let remaining = text;
-      while (remaining.length > limit) {
-        const window = remaining.slice(0, limit);
-        const lastNewline = window.lastIndexOf("\n");
-        const lastSpace = window.lastIndexOf(" ");
-        let breakIdx = lastNewline > 0 ? lastNewline : lastSpace;
-        if (breakIdx <= 0) {
-          breakIdx = limit;
-        }
-        const rawChunk = remaining.slice(0, breakIdx);
-        const chunk = rawChunk.trimEnd();
-        if (chunk.length > 0) {
-          chunks.push(chunk);
-        }
-        const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
-        const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
-        remaining = remaining.slice(nextStart).trimStart();
-      }
-      if (remaining.length) {
-        chunks.push(remaining);
-      }
-      return chunks;
-    },
+    chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 2000,
     sendText: async ({ to, text, accountId, cfg }) => {

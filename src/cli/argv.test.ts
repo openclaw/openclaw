@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   buildParseArgv,
   getFlagValue,
@@ -145,6 +144,10 @@ describe("argv helpers", () => {
     expect(shouldMigrateState(["node", "openclaw", "status"])).toBe(false);
     expect(shouldMigrateState(["node", "openclaw", "health"])).toBe(false);
     expect(shouldMigrateState(["node", "openclaw", "sessions"])).toBe(false);
+    expect(shouldMigrateState(["node", "openclaw", "config", "get", "update"])).toBe(false);
+    expect(shouldMigrateState(["node", "openclaw", "config", "unset", "update"])).toBe(false);
+    expect(shouldMigrateState(["node", "openclaw", "models", "list"])).toBe(false);
+    expect(shouldMigrateState(["node", "openclaw", "models", "status"])).toBe(false);
     expect(shouldMigrateState(["node", "openclaw", "memory", "status"])).toBe(false);
     expect(shouldMigrateState(["node", "openclaw", "agent", "--message", "hi"])).toBe(false);
     expect(shouldMigrateState(["node", "openclaw", "agents", "list"])).toBe(true);
@@ -153,6 +156,8 @@ describe("argv helpers", () => {
 
   it("reuses command path for migrate state decisions", () => {
     expect(shouldMigrateStateFromPath(["status"])).toBe(false);
+    expect(shouldMigrateStateFromPath(["config", "get"])).toBe(false);
+    expect(shouldMigrateStateFromPath(["models", "status"])).toBe(false);
     expect(shouldMigrateStateFromPath(["agents", "list"])).toBe(true);
   });
 });

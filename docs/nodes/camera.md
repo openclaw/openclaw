@@ -3,6 +3,7 @@ summary: "Camera capture (iOS node + macOS app) for agent use: photos (jpg) and 
 read_when:
   - Adding or modifying camera capture on iOS nodes or macOS
   - Extending agent-accessible MEDIA temp-file workflows
+title: "Camera Capture"
 ---
 
 # Camera capture (agent)
@@ -80,7 +81,7 @@ Notes:
 
 ## Android node
 
-### User setting (default on)
+### Android user setting (default on)
 
 - Android Settings sheet → **Camera** → **Allow Camera** (`camera.enabled`)
   - Default: **on** (missing key is treated as enabled).
@@ -95,7 +96,7 @@ Notes:
 If permissions are missing, the app will prompt when possible; if denied, `camera.*` requests fail with a
 `*_PERMISSION_REQUIRED` error.
 
-### Foreground requirement
+### Android foreground requirement
 
 Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 

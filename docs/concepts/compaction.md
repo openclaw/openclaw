@@ -3,6 +3,7 @@ summary: "Context window + compaction: how OpenClaw keeps sessions under model l
 read_when:
   - You want to understand auto-compaction and /compact
   - You are debugging long sessions hitting context limits
+title: "Compaction"
 ---
 
 # Context Window & Compaction
@@ -20,7 +21,7 @@ Compaction **persists** in the session’s JSONL history.
 
 ## Configuration
 
-See [Compaction config & modes](/concepts/compaction) for the `agents.defaults.compaction` settings.
+Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
 
 ## Auto-compaction (default on)
 

@@ -1,7 +1,15 @@
-import { getChannelDock } from "../../channels/dock.js";
+import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
+import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  listReservedChatSlashCommandNames,
+  listSkillCommandsForWorkspace,
+  resolveSkillCommandInvocation,
+} from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -12,10 +20,29 @@ import { isDirectiveOnly } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
-import { listSkillCommandsForWorkspace, resolveSkillCommandInvocation } from "../skill-commands.js";
-import { logVerbose } from "../../globals.js";
-import { createOpenClawTools } from "../../agents/openclaw-tools.js";
-import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+
+const builtinSlashCommands = (() => {
+  return listReservedChatSlashCommandNames([
+    "think",
+    "verbose",
+    "reasoning",
+    "elevated",
+    "exec",
+    "model",
+    "status",
+    "queue",
+  ]);
+})();
+
+function resolveSlashCommandName(commandBodyNormalized: string): string | null {
+  const trimmed = commandBodyNormalized.trim();
+  if (!trimmed.startsWith("/")) {
+    return null;
+  }
+  const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
+  const name = match?.[1]?.trim().toLowerCase() ?? "";
+  return name ? name : null;
+}
 
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -25,6 +52,7 @@ export type InlineActionResult =
       abortedLastRun: boolean;
     };
 
+// oxlint-disable-next-line typescript/no-explicit-any
 function extractTextFromToolResult(result: any): string | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -134,7 +162,12 @@ export async function handleInlineActions(params: {
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
 
-  const shouldLoadSkillCommands = command.commandBodyNormalized.startsWith("/");
+  const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
+  const shouldLoadSkillCommands =
+    allowTextCommands &&
+    slashCommandName !== null &&
+    // `/skill …` needs the full skill command list.
+    (slashCommandName === "skill" || !builtinSlashCommands.has(slashCommandName));
   const skillCommands =
     shouldLoadSkillCommands && params.skillCommands
       ? params.skillCommands
@@ -193,6 +226,7 @@ export async function handleInlineActions(params: {
           command: rawArgs,
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
+          // oxlint-disable-next-line typescript/no-explicit-any
         } as any);
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
@@ -270,16 +304,11 @@ export async function handleInlineActions(params: {
     directives = { ...directives, hasStatusDirective: false };
   }
 
-  if (inlineCommand) {
-    const inlineCommandContext = {
-      ...command,
-      rawBodyNormalized: inlineCommand.command,
-      commandBodyNormalized: inlineCommand.command,
-    };
-    const inlineResult = await handleCommands({
+  const runCommands = (commandInput: typeof command) =>
+    handleCommands({
       ctx,
       cfg,
-      command: inlineCommandContext,
+      command: commandInput,
       agentId,
       directives,
       elevated: {
@@ -306,6 +335,14 @@ export async function handleInlineActions(params: {
       isGroup,
       skillCommands,
     });
+
+  if (inlineCommand) {
+    const inlineCommandContext = {
+      ...command,
+      rawBodyNormalized: inlineCommand.command,
+      commandBodyNormalized: inlineCommand.command,
+    };
+    const inlineResult = await runCommands(inlineCommandContext);
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
@@ -339,36 +376,7 @@ export async function handleInlineActions(params: {
     abortedLastRun = getAbortMemory(command.abortKey) ?? false;
   }
 
-  const commandResult = await handleCommands({
-    ctx,
-    cfg,
-    command,
-    agentId,
-    directives,
-    elevated: {
-      enabled: elevatedEnabled,
-      allowed: elevatedAllowed,
-      failures: elevatedFailures,
-    },
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    workspaceDir,
-    defaultGroupActivation: defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    resolveDefaultThinkingLevel,
-    provider,
-    model,
-    contextTokens,
-    isGroup,
-    skillCommands,
-  });
+  const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: commandResult.reply };

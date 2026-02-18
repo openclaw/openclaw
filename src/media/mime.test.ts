@@ -1,7 +1,13 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
-
-import { detectMime, extensionForMime, imageMimeFromFormat } from "./mime.js";
+import { mediaKindFromMime } from "./constants.js";
+import {
+  detectMime,
+  extensionForMime,
+  imageMimeFromFormat,
+  isAudioFileName,
+  normalizeMimeType,
+} from "./mime.js";
 
 async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
   const zip = new JSZip();
@@ -95,5 +101,43 @@ describe("extensionForMime", () => {
   it("returns undefined for null or undefined input", () => {
     expect(extensionForMime(null)).toBeUndefined();
     expect(extensionForMime(undefined)).toBeUndefined();
+  });
+});
+
+describe("isAudioFileName", () => {
+  it("matches known audio extensions", () => {
+    const cases = [
+      { fileName: "voice.mp3", expected: true },
+      { fileName: "voice.caf", expected: true },
+      { fileName: "voice.bin", expected: false },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(isAudioFileName(testCase.fileName)).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("normalizeMimeType", () => {
+  it("normalizes case and strips parameters", () => {
+    expect(normalizeMimeType("Audio/MP4; codecs=mp4a.40.2")).toBe("audio/mp4");
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(normalizeMimeType("   ")).toBeUndefined();
+    expect(normalizeMimeType(null)).toBeUndefined();
+    expect(normalizeMimeType(undefined)).toBeUndefined();
+  });
+});
+
+describe("mediaKindFromMime", () => {
+  it("classifies text mimes as document", () => {
+    expect(mediaKindFromMime("text/plain")).toBe("document");
+    expect(mediaKindFromMime("text/csv")).toBe("document");
+    expect(mediaKindFromMime("text/html; charset=utf-8")).toBe("document");
+  });
+
+  it("keeps unknown mimes as unknown", () => {
+    expect(mediaKindFromMime("model/gltf+json")).toBe("unknown");
   });
 });

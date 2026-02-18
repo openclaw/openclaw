@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-
 import { isTruthyEnvValue } from "./env.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -10,6 +9,21 @@ let cachedShellPath: string | null | undefined;
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
   return shell && shell.length > 0 ? shell : "/bin/sh";
+}
+
+function execLoginShellEnvZero(params: {
+  shell: string;
+  env: NodeJS.ProcessEnv;
+  exec: typeof execFileSync;
+  timeoutMs: number;
+}): Buffer {
+  return params.exec(params.shell, ["-l", "-c", "env -0"], {
+    encoding: "buffer",
+    timeout: params.timeoutMs,
+    maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
+    env: params.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function parseShellEnv(stdout: Buffer): Map<string, string> {
@@ -71,13 +85,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
 
   let stdout: Buffer;
   try {
-    stdout = exec(shell, ["-l", "-c", "env -0"], {
-      encoding: "buffer",
-      timeout: timeoutMs,
-      maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
-      env: opts.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    stdout = execLoginShellEnvZero({ shell, env: opts.env, exec, timeoutMs });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`[openclaw] shell env fallback failed: ${msg}`);
@@ -146,13 +154,7 @@ export function getShellPathFromLoginShell(opts: {
 
   let stdout: Buffer;
   try {
-    stdout = exec(shell, ["-l", "-c", "env -0"], {
-      encoding: "buffer",
-      timeout: timeoutMs,
-      maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
-      env: opts.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    stdout = execLoginShellEnvZero({ shell, env: opts.env, exec, timeoutMs });
   } catch {
     cachedShellPath = null;
     return cachedShellPath;

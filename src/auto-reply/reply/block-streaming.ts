@@ -7,7 +7,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   listDeliverableMessageChannels,
 } from "../../utils/message-channel.js";
-import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
+import { resolveChunkMode, resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
@@ -54,6 +54,8 @@ export type BlockStreamingCoalescing = {
   maxChars: number;
   idleMs: number;
   joiner: string;
+  /** When true, the coalescer flushes the buffer on each enqueue (paragraph-boundary flush). */
+  flushOnEnqueue?: boolean;
 };
 
 export function resolveBlockStreamingChunking(
@@ -64,22 +66,23 @@ export function resolveBlockStreamingChunking(
   minChars: number;
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
+  flushOnParagraph?: boolean;
 } {
   const providerKey = normalizeChunkProvider(provider);
+  const providerConfigKey = providerKey;
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
     ? getChannelDock(providerId)?.outbound?.textChunkLimit
     : undefined;
-  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
+  const textLimit = resolveTextChunkLimit(cfg, providerConfigKey, accountId, {
     fallbackLimit: providerChunkLimit,
   });
   const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
 
-  // Note: chunkMode="newline" used to imply splitting on each newline, but outbound
-  // delivery now treats it as paragraph-aware chunking (only split on blank lines).
-  // Block streaming should follow the same rule, so we do NOT special-case newline
-  // mode here.
-  // (chunkMode no longer alters block streaming behavior)
+  // When chunkMode="newline", the outbound delivery splits on paragraph boundaries.
+  // The block chunker should flush eagerly on \n\n boundaries during streaming,
+  // regardless of minChars, so each paragraph is sent as its own message.
+  const chunkMode = resolveChunkMode(cfg, providerConfigKey, accountId);
 
   const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX));
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
@@ -90,7 +93,12 @@ export function resolveBlockStreamingChunking(
     chunkCfg?.breakPreference === "newline" || chunkCfg?.breakPreference === "sentence"
       ? chunkCfg.breakPreference
       : "paragraph";
-  return { minChars, maxChars, breakPreference };
+  return {
+    minChars,
+    maxChars,
+    breakPreference,
+    flushOnParagraph: chunkMode === "newline",
+  };
 }
 
 export function resolveBlockStreamingCoalescing(
@@ -102,17 +110,20 @@ export function resolveBlockStreamingCoalescing(
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
   },
+  opts?: { chunkMode?: "length" | "newline" },
 ): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
+  const providerConfigKey = providerKey;
 
-  // Note: chunkMode="newline" is paragraph-aware in outbound delivery (blank-line splits),
-  // so block streaming should not disable coalescing or flush per single newline.
+  // Resolve the outbound chunkMode so the coalescer can flush on paragraph boundaries
+  // when chunkMode="newline", matching the delivery-time splitting behavior.
+  const chunkMode = opts?.chunkMode ?? resolveChunkMode(cfg, providerConfigKey, accountId);
 
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
     ? getChannelDock(providerId)?.outbound?.textChunkLimit
     : undefined;
-  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId, {
+  const textLimit = resolveTextChunkLimit(cfg, providerConfigKey, accountId, {
     fallbackLimit: providerChunkLimit,
   });
   const providerDefaults = providerId
@@ -149,5 +160,6 @@ export function resolveBlockStreamingCoalescing(
     maxChars,
     idleMs,
     joiner,
+    flushOnEnqueue: chunkMode === "newline",
   };
 }

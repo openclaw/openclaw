@@ -4,6 +4,7 @@ read_when:
   - You want Firecrawl-backed web extraction
   - You need a Firecrawl API key
   - You want anti-bot extraction for web_fetch
+title: "Firecrawl"
 ---
 
 # Firecrawl

@@ -1,3 +1,4 @@
+import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   fetchAntigravityUsage,
@@ -20,7 +21,6 @@ import type {
   UsageProviderId,
   UsageSummary,
 } from "./provider-usage.types.js";
-import { resolveFetch } from "./fetch.js";
 
 type UsageSummaryOptions = {
   now?: number;

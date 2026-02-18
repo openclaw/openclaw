@@ -1,5 +1,4 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
 import {
   EventType,
   type MatrixMessageSummary,
@@ -64,7 +63,7 @@ export async function fetchEventSummary(
   eventId: string,
 ): Promise<MatrixMessageSummary | null> {
   try {
-    const raw = (await client.getEvent(roomId, eventId)) as MatrixRawEvent;
+    const raw = (await client.getEvent(roomId, eventId)) as unknown as MatrixRawEvent;
     if (raw.unsigned?.redacted_because) {
       return null;
     }

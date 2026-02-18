@@ -54,6 +54,33 @@
   opacity: 0.7;
 }
 
+/* Chat divider (e.g., compaction marker) */
+.chat-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.chat-divider__line {
+  flex: 1 1 0;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.9;
+}
+
+.chat-divider__label {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
 /* Avatar Styles */
 .chat-avatar {
   width: 40px;

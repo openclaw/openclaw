@@ -1,8 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { pathExists } from "../utils.js";
 
 const FALLBACK_TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -11,15 +10,6 @@ const FALLBACK_TEMPLATE_DIR = path.resolve(
 
 let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
-
-async function pathExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.access(candidate);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export async function resolveWorkspaceTemplateDir(opts?: {
   cwd?: string;

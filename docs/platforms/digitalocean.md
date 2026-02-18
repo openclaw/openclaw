@@ -3,6 +3,7 @@ summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
 read_when:
   - Setting up OpenClaw on DigitalOcean
   - Looking for cheap VPS hosting for OpenClaw
+title: "DigitalOcean"
 ---
 
 # OpenClaw on DigitalOcean
@@ -26,7 +27,7 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 **Picking a provider:**
 
 - DigitalOcean: simplest UX + predictable setup (this guide)
-- Hetzner: good price/perf (see [Hetzner guide](/platforms/hetzner))
+- Hetzner: good price/perf (see [Hetzner guide](/install/hetzner))
 - Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
 
 ---
@@ -66,7 +67,7 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt install -y nodejs
 
 # Install OpenClaw
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 
 # Verify
 openclaw --version
@@ -255,7 +256,7 @@ free -h
 
 ## See Also
 
-- [Hetzner guide](/platforms/hetzner) — cheaper, more powerful
+- [Hetzner guide](/install/hetzner) — cheaper, more powerful
 - [Docker install](/install/docker) — containerized setup
 - [Tailscale](/gateway/tailscale) — secure remote access
 - [Configuration](/gateway/configuration) — full config reference

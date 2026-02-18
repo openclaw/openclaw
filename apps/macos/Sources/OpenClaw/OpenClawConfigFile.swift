@@ -1,8 +1,9 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 
 enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
+    private static let configAuditFileName = "config-audit.jsonl"
 
     static func url() -> URL {
         OpenClawPaths.configURL
@@ -35,15 +36,61 @@ enum OpenClawConfigFile {
     static func saveDict(_ dict: [String: Any]) {
         // Nix mode disables config writes in production, but tests rely on saving temp configs.
         if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests { return }
+        let url = self.url()
+        let previousData = try? Data(contentsOf: url)
+        let previousRoot = previousData.flatMap { self.parseConfigData($0) }
+        let previousBytes = previousData?.count
+        let hadMetaBefore = self.hasMeta(previousRoot)
+        let gatewayModeBefore = self.gatewayMode(previousRoot)
+
+        var output = dict
+        self.stampMeta(&output)
+
         do {
-            let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
-            let url = self.url()
+            let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
             try FileManager().createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic])
+            let nextBytes = data.count
+            let gatewayModeAfter = self.gatewayMode(output)
+            let suspicious = self.configWriteSuspiciousReasons(
+                existsBefore: previousData != nil,
+                previousBytes: previousBytes,
+                nextBytes: nextBytes,
+                hadMetaBefore: hadMetaBefore,
+                gatewayModeBefore: gatewayModeBefore,
+                gatewayModeAfter: gatewayModeAfter)
+            if !suspicious.isEmpty {
+                self.logger.warning("config write anomaly (\(suspicious.joined(separator: ", "))) at \(url.path)")
+            }
+            self.appendConfigWriteAudit([
+                "result": "success",
+                "configPath": url.path,
+                "existsBefore": previousData != nil,
+                "previousBytes": previousBytes ?? NSNull(),
+                "nextBytes": nextBytes,
+                "hasMetaBefore": hadMetaBefore,
+                "hasMetaAfter": self.hasMeta(output),
+                "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
+                "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
+                "suspicious": suspicious,
+            ])
         } catch {
             self.logger.error("config save failed: \(error.localizedDescription)")
+            self.appendConfigWriteAudit([
+                "result": "failed",
+                "configPath": url.path,
+                "existsBefore": previousData != nil,
+                "previousBytes": previousBytes ?? NSNull(),
+                "nextBytes": NSNull(),
+                "hasMetaBefore": hadMetaBefore,
+                "hasMetaAfter": self.hasMeta(output),
+                "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
+                "gatewayModeAfter": self.gatewayMode(output) ?? NSNull(),
+                "suspicious": [],
+                "error": error.localizedDescription,
+            ])
         }
     }
 
@@ -213,5 +260,101 @@ enum OpenClawConfigFile {
             return decoded.mapValues { $0.foundationValue }
         }
         return nil
+    }
+
+    private static func stampMeta(_ root: inout [String: Any]) {
+        var meta = root["meta"] as? [String: Any] ?? [:]
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "macos-app"
+        meta["lastTouchedVersion"] = version
+        meta["lastTouchedAt"] = ISO8601DateFormatter().string(from: Date())
+        root["meta"] = meta
+    }
+
+    private static func hasMeta(_ root: [String: Any]?) -> Bool {
+        guard let root else { return false }
+        return root["meta"] is [String: Any]
+    }
+
+    private static func hasMeta(_ root: [String: Any]) -> Bool {
+        root["meta"] is [String: Any]
+    }
+
+    private static func gatewayMode(_ root: [String: Any]?) -> String? {
+        guard let root else { return nil }
+        return self.gatewayMode(root)
+    }
+
+    private static func gatewayMode(_ root: [String: Any]) -> String? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let mode = gateway["mode"] as? String
+        else { return nil }
+        let trimmed = mode.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func configWriteSuspiciousReasons(
+        existsBefore: Bool,
+        previousBytes: Int?,
+        nextBytes: Int,
+        hadMetaBefore: Bool,
+        gatewayModeBefore: String?,
+        gatewayModeAfter: String?) -> [String]
+    {
+        var reasons: [String] = []
+        if !existsBefore {
+            return reasons
+        }
+        if let previousBytes, previousBytes >= 512, nextBytes < max(1, previousBytes / 2) {
+            reasons.append("size-drop:\(previousBytes)->\(nextBytes)")
+        }
+        if !hadMetaBefore {
+            reasons.append("missing-meta-before-write")
+        }
+        if gatewayModeBefore != nil, gatewayModeAfter == nil {
+            reasons.append("gateway-mode-removed")
+        }
+        return reasons
+    }
+
+    private static func configAuditLogURL() -> URL {
+        self.stateDirURL()
+            .appendingPathComponent("logs", isDirectory: true)
+            .appendingPathComponent(self.configAuditFileName, isDirectory: false)
+    }
+
+    private static func appendConfigWriteAudit(_ fields: [String: Any]) {
+        var record: [String: Any] = [
+            "ts": ISO8601DateFormatter().string(from: Date()),
+            "source": "macos-openclaw-config-file",
+            "event": "config.write",
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "argv": Array(ProcessInfo.processInfo.arguments.prefix(8)),
+        ]
+        for (key, value) in fields {
+            record[key] = value is NSNull ? NSNull() : value
+        }
+        guard JSONSerialization.isValidJSONObject(record),
+              let data = try? JSONSerialization.data(withJSONObject: record)
+        else {
+            return
+        }
+        var line = Data()
+        line.append(data)
+        line.append(0x0A)
+        let logURL = self.configAuditLogURL()
+        do {
+            try FileManager().createDirectory(
+                at: logURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            if !FileManager().fileExists(atPath: logURL.path) {
+                FileManager().createFile(atPath: logURL.path, contents: nil)
+            }
+            let handle = try FileHandle(forWritingTo: logURL)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+        } catch {
+            // best-effort
+        }
     }
 }

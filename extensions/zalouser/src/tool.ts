@@ -1,8 +1,12 @@
 import { Type } from "@sinclair/typebox";
-
 import { runZca, parseJsonOutput } from "./zca.js";
 
 const ACTIONS = ["send", "image", "link", "friends", "groups", "me", "status"] as const;
+
+type AgentToolResult = {
+  content: Array<{ type: string; text: string }>;
+  details?: unknown;
+};
 
 function stringEnum<T extends readonly string[]>(
   values: T,
@@ -39,12 +43,7 @@ type ToolParams = {
   url?: string;
 };
 
-type ToolResult = {
-  content: Array<{ type: string; text: string }>;
-  details: unknown;
-};
-
-function json(payload: unknown): ToolResult {
+function json(payload: unknown): AgentToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     details: payload,
@@ -54,7 +53,9 @@ function json(payload: unknown): ToolResult {
 export async function executeZalouserTool(
   _toolCallId: string,
   params: ToolParams,
-): Promise<ToolResult> {
+  _signal?: AbortSignal,
+  _onUpdate?: unknown,
+): Promise<AgentToolResult> {
   try {
     switch (params.action) {
       case "send": {

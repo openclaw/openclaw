@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import { getMSTeamsRuntime } from "./runtime.js";
 
 export type MSTeamsStorePathOptions = {

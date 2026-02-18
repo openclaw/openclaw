@@ -1,5 +1,4 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
@@ -14,6 +13,7 @@ import { isModernModelRef } from "./live-model-filter.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
+import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -21,7 +21,7 @@ const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.OPENCLAW_LIVE_REQUIRE_
 
 const describeLive = LIVE ? describe : describe.skip;
 
-function parseProviderFilter(raw?: string): Set<string> | null {
+function parseCsvFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "all") {
     return null;
@@ -33,16 +33,12 @@ function parseProviderFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
+function parseProviderFilter(raw?: string): Set<string> | null {
+  return parseCsvFilter(raw);
+}
+
 function parseModelFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return ids.length ? new Set(ids) : null;
+  return parseCsvFilter(raw);
 }
 
 function logProgress(message: string): void {
@@ -141,7 +137,7 @@ async function completeOkWithRetry(params: {
   apiKey: string;
   timeoutMs: number;
 }) {
-  const runOnce = async () => {
+  const runOnce = async (maxTokens: number) => {
     const res = await completeSimpleWithTimeout(
       params.model,
       {
@@ -156,7 +152,7 @@ async function completeOkWithRetry(params: {
       {
         apiKey: params.apiKey,
         reasoning: resolveTestReasoning(params.model),
-        maxTokens: 64,
+        maxTokens,
       },
       params.timeoutMs,
     );
@@ -167,11 +163,13 @@ async function completeOkWithRetry(params: {
     return { res, text };
   };
 
-  const first = await runOnce();
+  const first = await runOnce(64);
   if (first.text.length > 0) {
     return first;
   }
-  return await runOnce();
+  // Some providers (for example Moonshot Kimi and MiniMax M2.5) may emit
+  // reasoning blocks first and only return text once token budget is higher.
+  return await runOnce(256);
 }
 
 describeLive("live models (profile keys)", () => {

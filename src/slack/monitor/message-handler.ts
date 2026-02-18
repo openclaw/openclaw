@@ -5,6 +5,7 @@ import {
 } from "../../auto-reply/inbound-debounce.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
+import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import { dispatchPreparedSlackMessage } from "./message-handler/dispatch.js";
 import { prepareSlackMessage } from "./message-handler/prepare.js";
@@ -50,7 +51,8 @@ export function createSlackMessageHandler(params: {
       if (entry.message.files && entry.message.files.length > 0) {
         return false;
       }
-      return !hasControlCommand(text, ctx.cfg);
+      const textForCommandDetection = stripSlackMentionsForCommandDetection(text);
+      return !hasControlCommand(textForCommandDetection, ctx.cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);

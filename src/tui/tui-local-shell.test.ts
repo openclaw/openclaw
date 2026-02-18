@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
 const createSelector = () => {
@@ -41,7 +40,8 @@ describe("createLocalShellRunner", () => {
 
     const firstRun = runLocalShellLine("!ls");
     expect(openOverlay).toHaveBeenCalledTimes(1);
-    lastSelector?.onSelect?.({ value: "no", label: "No" });
+    const selector = lastSelector as ReturnType<typeof createSelector> | null;
+    selector?.onSelect?.({ value: "no", label: "No" });
     await firstRun;
 
     await runLocalShellLine("!pwd");

@@ -1,5 +1,4 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
 import { EventType, type MatrixDirectAccountData } from "./types.js";
 
 function normalizeTarget(raw: string): string {
@@ -18,7 +17,18 @@ export function normalizeThreadId(raw?: string | number | null): string | null {
   return trimmed ? trimmed : null;
 }
 
+// Size-capped to prevent unbounded growth (#4948)
+const MAX_DIRECT_ROOM_CACHE_SIZE = 1024;
 const directRoomCache = new Map<string, string>();
+function setDirectRoomCached(key: string, value: string): void {
+  directRoomCache.set(key, value);
+  if (directRoomCache.size > MAX_DIRECT_ROOM_CACHE_SIZE) {
+    const oldest = directRoomCache.keys().next().value;
+    if (oldest !== undefined) {
+      directRoomCache.delete(oldest);
+    }
+  }
+}
 
 async function persistDirectRoom(
   client: MatrixClient,
@@ -60,10 +70,13 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
 
   // 1) Fast path: use account data (m.direct) for *this* logged-in user (the bot).
   try {
-    const directContent = await client.getAccountData(EventType.Direct);
+    const directContent = (await client.getAccountData(EventType.Direct)) as Record<
+      string,
+      string[] | undefined
+    >;
     const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
-    if (list.length > 0) {
-      directRoomCache.set(trimmed, list[0]);
+    if (list && list.length > 0) {
+      setDirectRoomCached(trimmed, list[0]);
       return list[0];
     }
   } catch {
@@ -87,7 +100,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
       }
       // Prefer classic 1:1 rooms, but allow larger rooms if requested.
       if (members.length === 2) {
-        directRoomCache.set(trimmed, roomId);
+        setDirectRoomCached(trimmed, roomId);
         await persistDirectRoom(client, trimmed, roomId);
         return roomId;
       }
@@ -100,7 +113,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
   }
 
   if (fallbackRoom) {
-    directRoomCache.set(trimmed, fallbackRoom);
+    setDirectRoomCached(trimmed, fallbackRoom);
     await persistDirectRoom(client, trimmed, fallbackRoom);
     return fallbackRoom;
   }

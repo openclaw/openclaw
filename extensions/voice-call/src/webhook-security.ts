@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-
 import type { WebhookContext } from "./types.js";
 
 /**
@@ -59,7 +58,117 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /**
+ * Configuration for secure URL reconstruction.
+ */
+export interface WebhookUrlOptions {
+  /**
+   * Whitelist of allowed hostnames. If provided, only these hosts will be
+   * accepted from forwarding headers. This prevents host header injection attacks.
+   *
+   * SECURITY: You must provide this OR set trustForwardingHeaders=true to use
+   * X-Forwarded-Host headers. Without either, forwarding headers are ignored.
+   */
+  allowedHosts?: string[];
+  /**
+   * Explicitly trust X-Forwarded-* headers without a whitelist.
+   * WARNING: Only set this to true if you trust your proxy configuration
+   * and understand the security implications.
+   *
+   * @default false
+   */
+  trustForwardingHeaders?: boolean;
+  /**
+   * List of trusted proxy IP addresses. X-Forwarded-* headers will only be
+   * trusted if the request comes from one of these IPs.
+   * Requires remoteIP to be set for validation.
+   */
+  trustedProxyIPs?: string[];
+  /**
+   * The IP address of the incoming request (for proxy validation).
+   */
+  remoteIP?: string;
+}
+
+/**
+ * Validate that a hostname matches RFC 1123 format.
+ * Prevents injection of malformed hostnames.
+ */
+function isValidHostname(hostname: string): boolean {
+  if (!hostname || hostname.length > 253) {
+    return false;
+  }
+  // RFC 1123 hostname: alphanumeric, hyphens, dots
+  // Also allow ngrok/tunnel subdomains
+  const hostnameRegex =
+    /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+  return hostnameRegex.test(hostname);
+}
+
+/**
+ * Safely extract hostname from a host header value.
+ * Handles IPv6 addresses and prevents injection via malformed values.
+ */
+function extractHostname(hostHeader: string): string | null {
+  if (!hostHeader) {
+    return null;
+  }
+
+  let hostname: string;
+
+  // Handle IPv6 addresses: [::1]:8080
+  if (hostHeader.startsWith("[")) {
+    const endBracket = hostHeader.indexOf("]");
+    if (endBracket === -1) {
+      return null; // Malformed IPv6
+    }
+    hostname = hostHeader.substring(1, endBracket);
+    return hostname.toLowerCase();
+  }
+
+  // Handle IPv4/domain with optional port
+  // Check for @ which could indicate user info injection attempt
+  if (hostHeader.includes("@")) {
+    return null; // Reject potential injection: attacker.com:80@legitimate.com
+  }
+
+  hostname = hostHeader.split(":")[0];
+
+  // Validate the extracted hostname
+  if (!isValidHostname(hostname)) {
+    return null;
+  }
+
+  return hostname.toLowerCase();
+}
+
+function extractHostnameFromHeader(headerValue: string): string | null {
+  const first = headerValue.split(",")[0]?.trim();
+  if (!first) {
+    return null;
+  }
+  return extractHostname(first);
+}
+
+function normalizeAllowedHosts(allowedHosts?: string[]): Set<string> | null {
+  if (!allowedHosts || allowedHosts.length === 0) {
+    return null;
+  }
+  const normalized = new Set<string>();
+  for (const host of allowedHosts) {
+    const extracted = extractHostname(host.trim());
+    if (extracted) {
+      normalized.add(extracted);
+    }
+  }
+  return normalized.size > 0 ? normalized : null;
+}
+
+/**
  * Reconstruct the public webhook URL from request headers.
+ *
+ * SECURITY: This function validates host headers to prevent host header
+ * injection attacks. When using forwarding headers (X-Forwarded-Host, etc.),
+ * always provide allowedHosts to whitelist valid hostnames.
  *
  * When behind a reverse proxy (Tailscale, nginx, ngrok), the original URL
  * used by Twilio differs from the local request URL. We use standard
@@ -71,17 +180,84 @@ function timingSafeEqual(a: string, b: string): boolean {
  * 3. Ngrok-Forwarded-Host (ngrok specific)
  * 4. Host header (direct connection)
  */
-export function reconstructWebhookUrl(ctx: WebhookContext): string {
+export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlOptions): string {
   const { headers } = ctx;
 
-  const proto = getHeader(headers, "x-forwarded-proto") || "https";
+  // SECURITY: Only trust forwarding headers if explicitly configured.
+  // Either allowedHosts must be set (for whitelist validation) or
+  // trustForwardingHeaders must be true (explicit opt-in to trust).
+  const allowedHosts = normalizeAllowedHosts(options?.allowedHosts);
+  const hasAllowedHosts = allowedHosts !== null;
+  const explicitlyTrusted = options?.trustForwardingHeaders === true;
 
-  const forwardedHost =
-    getHeader(headers, "x-forwarded-host") ||
-    getHeader(headers, "x-original-host") ||
-    getHeader(headers, "ngrok-forwarded-host") ||
-    getHeader(headers, "host") ||
-    "";
+  // Also check trusted proxy IPs if configured
+  const trustedProxyIPs = options?.trustedProxyIPs?.filter(Boolean) ?? [];
+  const hasTrustedProxyIPs = trustedProxyIPs.length > 0;
+  const remoteIP = options?.remoteIP ?? ctx.remoteAddress;
+  const fromTrustedProxy =
+    !hasTrustedProxyIPs || (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
+
+  // Only trust forwarding headers if: (has whitelist OR explicitly trusted) AND from trusted proxy
+  const shouldTrustForwardingHeaders = (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;
+
+  const isAllowedForwardedHost = (host: string): boolean => !allowedHosts || allowedHosts.has(host);
+
+  // Determine protocol - only trust X-Forwarded-Proto from trusted proxies
+  let proto = "https";
+  if (shouldTrustForwardingHeaders) {
+    const forwardedProto = getHeader(headers, "x-forwarded-proto");
+    if (forwardedProto === "http" || forwardedProto === "https") {
+      proto = forwardedProto;
+    }
+  }
+
+  // Determine host - with security validation
+  let host: string | null = null;
+
+  if (shouldTrustForwardingHeaders) {
+    // Try forwarding headers in priority order
+    const forwardingHeaders = ["x-forwarded-host", "x-original-host", "ngrok-forwarded-host"];
+
+    for (const headerName of forwardingHeaders) {
+      const headerValue = getHeader(headers, headerName);
+      if (headerValue) {
+        const extracted = extractHostnameFromHeader(headerValue);
+        if (extracted && isAllowedForwardedHost(extracted)) {
+          host = extracted;
+          break;
+        }
+      }
+    }
+  }
+
+  // Fallback to Host header if no valid forwarding header found
+  if (!host) {
+    const hostHeader = getHeader(headers, "host");
+    if (hostHeader) {
+      const extracted = extractHostnameFromHeader(hostHeader);
+      if (extracted) {
+        host = extracted;
+      }
+    }
+  }
+
+  // Last resort: try to extract from ctx.url
+  if (!host) {
+    try {
+      const parsed = new URL(ctx.url);
+      const extracted = extractHostname(parsed.host);
+      if (extracted) {
+        host = extracted;
+      }
+    } catch {
+      // URL parsing failed - use empty string (will result in invalid URL)
+      host = "";
+    }
+  }
+
+  if (!host) {
+    host = "";
+  }
 
   // Extract path from the context URL (fallback to "/" on parse failure)
   let path = "/";
@@ -92,15 +268,16 @@ export function reconstructWebhookUrl(ctx: WebhookContext): string {
     // URL parsing failed
   }
 
-  // Remove port from host (ngrok URLs don't have ports)
-  const host = forwardedHost.split(":")[0] || forwardedHost;
-
   return `${proto}://${host}${path}`;
 }
 
-function buildTwilioVerificationUrl(ctx: WebhookContext, publicUrl?: string): string {
+function buildTwilioVerificationUrl(
+  ctx: WebhookContext,
+  publicUrl?: string,
+  urlOptions?: WebhookUrlOptions,
+): string {
   if (!publicUrl) {
-    return reconstructWebhookUrl(ctx);
+    return reconstructWebhookUrl(ctx, urlOptions);
   }
 
   try {
@@ -153,11 +330,113 @@ export interface TwilioVerificationResult {
   isNgrokFreeTier?: boolean;
 }
 
+export interface TelnyxVerificationResult {
+  ok: boolean;
+  reason?: string;
+}
+
+function decodeBase64OrBase64Url(input: string): Buffer {
+  // Telnyx docs say Base64; some tooling emits Base64URL. Accept both.
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padLen = (4 - (normalized.length % 4)) % 4;
+  const padded = normalized + "=".repeat(padLen);
+  return Buffer.from(padded, "base64");
+}
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function importEd25519PublicKey(publicKey: string): crypto.KeyObject | string {
+  const trimmed = publicKey.trim();
+
+  // PEM (spki) support.
+  if (trimmed.startsWith("-----BEGIN")) {
+    return trimmed;
+  }
+
+  // Base64-encoded raw Ed25519 key (32 bytes) or Base64-encoded DER SPKI key.
+  const decoded = decodeBase64OrBase64Url(trimmed);
+  if (decoded.length === 32) {
+    // JWK is the easiest portable way to import raw Ed25519 keys in Node crypto.
+    return crypto.createPublicKey({
+      key: { kty: "OKP", crv: "Ed25519", x: base64UrlEncode(decoded) },
+      format: "jwk",
+    });
+  }
+
+  return crypto.createPublicKey({
+    key: decoded,
+    format: "der",
+    type: "spki",
+  });
+}
+
+/**
+ * Verify Telnyx webhook signature using Ed25519.
+ *
+ * Telnyx signs `timestamp|payload` and provides:
+ * - `telnyx-signature-ed25519` (Base64 signature)
+ * - `telnyx-timestamp` (Unix seconds)
+ */
+export function verifyTelnyxWebhook(
+  ctx: WebhookContext,
+  publicKey: string | undefined,
+  options?: {
+    /** Skip verification entirely (only for development) */
+    skipVerification?: boolean;
+    /** Maximum allowed clock skew (ms). Defaults to 5 minutes. */
+    maxSkewMs?: number;
+  },
+): TelnyxVerificationResult {
+  if (options?.skipVerification) {
+    return { ok: true, reason: "verification skipped (dev mode)" };
+  }
+
+  if (!publicKey) {
+    return { ok: false, reason: "Missing telnyx.publicKey (configure to verify webhooks)" };
+  }
+
+  const signature = getHeader(ctx.headers, "telnyx-signature-ed25519");
+  const timestamp = getHeader(ctx.headers, "telnyx-timestamp");
+
+  if (!signature || !timestamp) {
+    return { ok: false, reason: "Missing signature or timestamp header" };
+  }
+
+  const eventTimeSec = parseInt(timestamp, 10);
+  if (!Number.isFinite(eventTimeSec)) {
+    return { ok: false, reason: "Invalid timestamp header" };
+  }
+
+  try {
+    const signedPayload = `${timestamp}|${ctx.rawBody}`;
+    const signatureBuffer = decodeBase64OrBase64Url(signature);
+    const key = importEd25519PublicKey(publicKey);
+
+    const isValid = crypto.verify(null, Buffer.from(signedPayload), key, signatureBuffer);
+    if (!isValid) {
+      return { ok: false, reason: "Invalid signature" };
+    }
+
+    const maxSkewMs = options?.maxSkewMs ?? 5 * 60 * 1000;
+    const eventTimeMs = eventTimeSec * 1000;
+    const now = Date.now();
+    if (Math.abs(now - eventTimeMs) > maxSkewMs) {
+      return { ok: false, reason: "Timestamp too old" };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `Verification error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 /**
  * Verify Twilio webhook with full context and detailed result.
- *
- * Handles the special case of ngrok free tier where signature validation
- * may fail due to URL discrepancies (ngrok adds interstitial page handling).
  */
 export function verifyTwilioWebhook(
   ctx: WebhookContext,
@@ -165,10 +444,36 @@ export function verifyTwilioWebhook(
   options?: {
     /** Override the public URL (e.g., from config) */
     publicUrl?: string;
-    /** Allow ngrok free tier compatibility mode (loopback only, less secure) */
+    /**
+     * Allow ngrok free tier compatibility mode (loopback only).
+     *
+     * IMPORTANT: This does NOT bypass signature verification.
+     * It only enables trusting forwarded headers on loopback so we can
+     * reconstruct the public ngrok URL that Twilio used for signing.
+     */
     allowNgrokFreeTierLoopbackBypass?: boolean;
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
+    /**
+     * Whitelist of allowed hostnames for host header validation.
+     * Prevents host header injection attacks.
+     */
+    allowedHosts?: string[];
+    /**
+     * Explicitly trust X-Forwarded-* headers without a whitelist.
+     * WARNING: Only enable if you trust your proxy configuration.
+     * @default false
+     */
+    trustForwardingHeaders?: boolean;
+    /**
+     * List of trusted proxy IP addresses. X-Forwarded-* headers will only
+     * be trusted from these IPs.
+     */
+    trustedProxyIPs?: string[];
+    /**
+     * The remote IP address of the request (for proxy validation).
+     */
+    remoteIP?: string;
   },
 ): TwilioVerificationResult {
   // Allow skipping verification for development/testing
@@ -182,8 +487,16 @@ export function verifyTwilioWebhook(
     return { ok: false, reason: "Missing X-Twilio-Signature header" };
   }
 
+  const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
+  const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
+
   // Reconstruct the URL Twilio used
-  const verificationUrl = buildTwilioVerificationUrl(ctx, options?.publicUrl);
+  const verificationUrl = buildTwilioVerificationUrl(ctx, options?.publicUrl, {
+    allowedHosts: options?.allowedHosts,
+    trustForwardingHeaders: options?.trustForwardingHeaders || allowLoopbackForwarding,
+    trustedProxyIPs: options?.trustedProxyIPs,
+    remoteIP: options?.remoteIP,
+  });
 
   // Parse the body as URL-encoded params
   const params = new URLSearchParams(ctx.rawBody);
@@ -198,22 +511,6 @@ export function verifyTwilioWebhook(
   // Check if this is ngrok free tier - the URL might have different format
   const isNgrokFreeTier =
     verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
-
-  if (
-    isNgrokFreeTier &&
-    options?.allowNgrokFreeTierLoopbackBypass &&
-    isLoopbackAddress(ctx.remoteAddress)
-  ) {
-    console.warn(
-      "[voice-call] Twilio signature validation failed (ngrok free tier compatibility, loopback only)",
-    );
-    return {
-      ok: true,
-      reason: "ngrok free tier compatibility mode (loopback only)",
-      verificationUrl,
-      isNgrokFreeTier: true,
-    };
-  }
 
   return {
     ok: false,
@@ -385,6 +682,26 @@ export function verifyPlivoWebhook(
     publicUrl?: string;
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
+    /**
+     * Whitelist of allowed hostnames for host header validation.
+     * Prevents host header injection attacks.
+     */
+    allowedHosts?: string[];
+    /**
+     * Explicitly trust X-Forwarded-* headers without a whitelist.
+     * WARNING: Only enable if you trust your proxy configuration.
+     * @default false
+     */
+    trustForwardingHeaders?: boolean;
+    /**
+     * List of trusted proxy IP addresses. X-Forwarded-* headers will only
+     * be trusted from these IPs.
+     */
+    trustedProxyIPs?: string[];
+    /**
+     * The remote IP address of the request (for proxy validation).
+     */
+    remoteIP?: string;
   },
 ): PlivoVerificationResult {
   if (options?.skipVerification) {
@@ -396,7 +713,12 @@ export function verifyPlivoWebhook(
   const signatureV2 = getHeader(ctx.headers, "x-plivo-signature-v2");
   const nonceV2 = getHeader(ctx.headers, "x-plivo-signature-v2-nonce");
 
-  const reconstructed = reconstructWebhookUrl(ctx);
+  const reconstructed = reconstructWebhookUrl(ctx, {
+    allowedHosts: options?.allowedHosts,
+    trustForwardingHeaders: options?.trustForwardingHeaders,
+    trustedProxyIPs: options?.trustedProxyIPs,
+    remoteIP: options?.remoteIP,
+  });
   let verificationUrl = reconstructed;
   if (options?.publicUrl) {
     try {

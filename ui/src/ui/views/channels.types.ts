@@ -11,8 +11,8 @@ import type {
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
-} from "../types";
-import type { NostrProfileFormState } from "./channels.nostr-profile-form";
+} from "../types.ts";
+import type { NostrProfileFormState } from "./channels.nostr-profile-form.ts";
 
 export type ChannelKey = string;
 
@@ -26,7 +26,7 @@ export type ChannelsProps = {
   whatsappQrDataUrl: string | null;
   whatsappConnected: boolean | null;
   whatsappBusy: boolean;
-  configSchema: unknown | null;
+  configSchema: unknown;
   configSchemaLoading: boolean;
   configForm: Record<string, unknown> | null;
   configUiHints: ConfigUiHints;

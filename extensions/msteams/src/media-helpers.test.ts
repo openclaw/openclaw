@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 
 describe("msteams media-helpers", () => {
@@ -144,6 +143,15 @@ describe("msteams media-helpers", () => {
 
     it("returns true for tilde paths", () => {
       expect(isLocalPath("~/Downloads/image.png")).toBe(true);
+    });
+
+    it("returns true for Windows absolute drive paths", () => {
+      expect(isLocalPath("C:\\Users\\test\\image.png")).toBe(true);
+      expect(isLocalPath("D:/data/photo.jpg")).toBe(true);
+    });
+
+    it("returns true for Windows UNC paths", () => {
+      expect(isLocalPath("\\\\server\\share\\image.png")).toBe(true);
     });
 
     it("returns false for http URLs", () => {

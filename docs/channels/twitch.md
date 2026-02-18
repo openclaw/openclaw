@@ -2,6 +2,7 @@
 summary: "Twitch chat bot configuration and setup"
 read_when:
   - Setting up Twitch chat integration for OpenClaw
+title: "Twitch"
 ---
 
 # Twitch (plugin)
@@ -24,7 +25,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/twitch
 ```
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
@@ -33,7 +34,7 @@ Details: [Plugins](/plugin)
    - Select **Bot Token**
    - Verify scopes `chat:read` and `chat:write` are selected
    - Copy the **Client ID** and **Access Token**
-3. Find your Twitch user ID: https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/
+3. Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
 4. Configure the token:
    - Env: `OPENCLAW_TWITCH_ACCESS_TOKEN=...` (default account only)
    - Or config: `channels.twitch.accessToken`
@@ -111,17 +112,18 @@ If both env and config are set, config takes precedence.
   channels: {
     twitch: {
       allowFrom: ["123456789"], // (recommended) Your Twitch user ID only
-      allowedRoles: ["moderator"], // Or restrict to roles
     },
   },
 }
 ```
 
+Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want role-based access.
+
 **Available roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
 **Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
 
-Find your Twitch user ID: https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/ (Convert your Twitch username to ID)
+Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (Convert your Twitch username to ID)
 
 ## Token refresh (optional)
 
@@ -207,9 +209,10 @@ Example (one bot account in two channels):
 }
 ```
 
-### Combined allowlist + roles
+### Role-based access (alternative)
 
-Users in `allowFrom` bypass role checks:
+`allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+If you want role-based access, leave `allowFrom` unset and configure `allowedRoles` instead:
 
 ```json5
 {
@@ -217,7 +220,6 @@ Users in `allowFrom` bypass role checks:
     twitch: {
       accounts: {
         default: {
-          allowFrom: ["123456789"],
           allowedRoles: ["moderator"],
         },
       },
@@ -255,7 +257,8 @@ openclaw channels status --probe
 
 ### Bot doesn't respond to messages
 
-**Check access control:** Temporarily set `allowedRoles: ["all"]` to test.
+**Check access control:** Ensure your user ID is in `allowFrom`, or temporarily remove
+`allowFrom` and set `allowedRoles: ["all"]` to test.
 
 **Check the bot is in the channel:** The bot must join the channel specified in `channel`.
 

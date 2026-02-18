@@ -1,5 +1,6 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
 import { verifyEvent, getPublicKey } from "nostr-tools";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { NostrProfile } from "./config-schema.js";
 import {
   createProfileEvent,
   profileToContent,
@@ -8,7 +9,6 @@ import {
   sanitizeProfileForDisplay,
   type ProfileContent,
 } from "./nostr-profile.js";
-import type { NostrProfile } from "./config-schema.js";
 
 // Test private key (DO NOT use in production - this is a known test key)
 const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

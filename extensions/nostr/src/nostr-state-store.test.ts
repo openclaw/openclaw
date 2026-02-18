@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { describe, expect, it } from "vitest";
 import type { PluginRuntime } from "openclaw/plugin-sdk";
-
+import { describe, expect, it } from "vitest";
 import {
   readNostrBusState,
   writeNostrBusState,
@@ -19,11 +17,13 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   setNostrRuntime({
     state: {
       resolveStateDir: (env, homedir) => {
-        const override = env.OPENCLAW_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
+        const stateEnv = env ?? process.env;
+        const override = stateEnv.OPENCLAW_STATE_DIR?.trim() || stateEnv.CLAWDBOT_STATE_DIR?.trim();
         if (override) {
           return override;
         }
-        return path.join(homedir(), ".openclaw");
+        const resolveHome = homedir ?? os.homedir;
+        return path.join(resolveHome(), ".openclaw");
       },
     },
   } as PluginRuntime);
@@ -92,7 +92,7 @@ describe("computeSinceTimestamp", () => {
   });
 
   it("uses lastProcessedAt when available", () => {
-    const state = {
+    const state: Parameters<typeof computeSinceTimestamp>[0] = {
       version: 2,
       lastProcessedAt: 1699999000,
       gatewayStartedAt: null,
@@ -102,7 +102,7 @@ describe("computeSinceTimestamp", () => {
   });
 
   it("uses gatewayStartedAt when lastProcessedAt is null", () => {
-    const state = {
+    const state: Parameters<typeof computeSinceTimestamp>[0] = {
       version: 2,
       lastProcessedAt: null,
       gatewayStartedAt: 1699998000,
@@ -112,7 +112,7 @@ describe("computeSinceTimestamp", () => {
   });
 
   it("uses the max of both timestamps", () => {
-    const state = {
+    const state: Parameters<typeof computeSinceTimestamp>[0] = {
       version: 2,
       lastProcessedAt: 1699999000,
       gatewayStartedAt: 1699998000,
@@ -122,7 +122,7 @@ describe("computeSinceTimestamp", () => {
   });
 
   it("falls back to now if both are null", () => {
-    const state = {
+    const state: Parameters<typeof computeSinceTimestamp>[0] = {
       version: 2,
       lastProcessedAt: null,
       gatewayStartedAt: null,

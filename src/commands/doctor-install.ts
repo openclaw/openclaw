@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { note } from "../terminal/note.js";
 
 export function noteSourceInstallIssues(root: string | null) {

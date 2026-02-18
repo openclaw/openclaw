@@ -3,6 +3,7 @@ summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
 read_when:
   - Implementing macOS app features
   - Changing gateway lifecycle or node bridging on macOS
+title: "macOS App"
 ---
 
 # OpenClaw macOS Companion (menu bar + gateway broker)
@@ -129,6 +130,7 @@ Query parameters:
 Safety:
 
 - Without `key`, the app prompts for confirmation.
+- Without `key`, the app enforces a short message limit for the confirmation prompt and ignores `deliver` / `to` / `channel`.
 - With a valid `key`, the run is unattended (intended for personal automations).
 
 ## Onboarding flow (typical)

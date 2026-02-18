@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -42,18 +42,6 @@ export class GatewayLockError extends Error {
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
-
-function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function normalizeProcArg(arg: string): string {
   return arg.replaceAll("\\", "/").toLowerCase();
@@ -117,7 +105,7 @@ function resolveGatewayOwnerStatus(
   payload: LockPayload | null,
   platform: NodeJS.Platform,
 ): LockOwnerStatus {
-  if (!isAlive(pid)) {
+  if (!isPidAlive(pid)) {
     return "dead";
   }
   if (platform !== "linux") {

@@ -28,15 +28,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
-  if (!isRecord(payload)) return null;
+  if (!isRecord(payload)) {
+    return null;
+  }
   const id = typeof payload.id === "string" ? payload.id.trim() : "";
   const request = payload.request;
-  if (!id || !isRecord(request)) return null;
+  if (!id || !isRecord(request)) {
+    return null;
+  }
   const command = typeof request.command === "string" ? request.command.trim() : "";
-  if (!command) return null;
+  if (!command) {
+    return null;
+  }
   const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
   const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
-  if (!createdAtMs || !expiresAtMs) return null;
+  if (!createdAtMs || !expiresAtMs) {
+    return null;
+  }
   return {
     id,
     request: {
@@ -55,9 +63,13 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
 }
 
 export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolved | null {
-  if (!isRecord(payload)) return null;
+  if (!isRecord(payload)) {
+    return null;
+  }
   const id = typeof payload.id === "string" ? payload.id.trim() : "";
-  if (!id) return null;
+  if (!id) {
+    return null;
+  }
   return {
     id,
     decision: typeof payload.decision === "string" ? payload.decision : null,

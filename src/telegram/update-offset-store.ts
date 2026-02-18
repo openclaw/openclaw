@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { resolveStateDir } from "../config/paths.js";
 
 const STORE_VERSION = 1;
@@ -80,4 +79,20 @@ export async function writeTelegramUpdateOffset(params: {
   });
   await fs.chmod(tmp, 0o600);
   await fs.rename(tmp, filePath);
+}
+
+export async function deleteTelegramUpdateOffset(params: {
+  accountId?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
+  try {
+    await fs.unlink(filePath);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
 }

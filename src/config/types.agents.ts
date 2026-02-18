@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
@@ -24,6 +25,8 @@ export type AgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
+  /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
+  skills?: string[];
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
@@ -72,8 +75,10 @@ export type AgentBinding = {
   match: {
     channel: string;
     accountId?: string;
-    peer?: { kind: "dm" | "group" | "channel"; id: string };
+    peer?: { kind: ChatType; id: string };
     guildId?: string;
     teamId?: string;
+    /** Discord role IDs used for role-based routing. */
+    roles?: string[];
   };
 };

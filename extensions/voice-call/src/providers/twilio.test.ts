@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 
@@ -25,13 +24,14 @@ function createContext(rawBody: string, query?: WebhookContext["query"]): Webhoo
 describe("TwilioProvider", () => {
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
     const provider = createProvider();
-    const ctx = createContext("CallStatus=initiated&Direction=outbound-api", {
+    const ctx = createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA123", {
       callId: "call-1",
     });
 
     const result = provider.parseWebhookEvent(ctx);
 
     expect(result.providerResponseBody).toContain(STREAM_URL);
+    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
     expect(result.providerResponseBody).toContain("<Connect>");
   });
 
@@ -51,11 +51,12 @@ describe("TwilioProvider", () => {
 
   it("returns streaming TwiML for inbound calls", () => {
     const provider = createProvider();
-    const ctx = createContext("CallStatus=ringing&Direction=inbound");
+    const ctx = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA456");
 
     const result = provider.parseWebhookEvent(ctx);
 
     expect(result.providerResponseBody).toContain(STREAM_URL);
+    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
     expect(result.providerResponseBody).toContain("<Connect>");
   });
 });

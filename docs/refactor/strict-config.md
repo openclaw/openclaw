@@ -4,13 +4,14 @@ read_when:
   - Designing or implementing config validation behavior
   - Working on config migrations or doctor workflows
   - Handling plugin config schemas or plugin load gating
+title: "Strict Config Validation"
 ---
 
 # Strict config validation (doctor-only migrations)
 
 ## Goals
 
-- **Reject unknown config keys everywhere** (root + nested).
+- **Reject unknown config keys everywhere** (root + nested), except root `$schema` metadata.
 - **Reject plugin config without a schema**; don’t load that plugin.
 - **Remove legacy auto-migration on load**; migrations run via doctor only.
 - **Auto-run doctor (dry-run) on startup**; if invalid, block non-diagnostic commands.
@@ -23,7 +24,7 @@ read_when:
 ## Strict validation rules
 
 - Config must match the schema exactly at every level.
-- Unknown keys are validation errors (no passthrough at root or nested).
+- Unknown keys are validation errors (no passthrough at root or nested), except root `$schema` when it is a string.
 - `plugins.entries.<id>.config` must be validated by the plugin’s schema.
   - If a plugin lacks a schema, **reject plugin load** and surface a clear error.
 - Unknown `channels.<id>` keys are errors unless a plugin manifest declares the channel id.

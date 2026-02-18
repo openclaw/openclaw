@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -28,6 +27,23 @@ export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] 
     dirs.add(resolveDefaultAgentWorkspaceDir());
   }
   return [...dirs];
+}
+
+export function buildCleanupPlan(params: {
+  cfg: OpenClawConfig | undefined;
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+}): {
+  configInsideState: boolean;
+  oauthInsideState: boolean;
+  workspaceDirs: string[];
+} {
+  return {
+    configInsideState: isPathWithin(params.configPath, params.stateDir),
+    oauthInsideState: isPathWithin(params.oauthDir, params.stateDir),
+    workspaceDirs: collectWorkspaceDirs(params.cfg),
+  };
 }
 
 export function isPathWithin(child: string, parent: string): boolean {

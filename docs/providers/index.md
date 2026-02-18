@@ -3,6 +3,7 @@ summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
+title: "Model Providers"
 ---
 
 # Model Providers
@@ -12,9 +13,9 @@ default model as `provider/model`.
 
 Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.)? See [Channels](/channels).
 
-## Highlight: Venius (Venice AI)
+## Highlight: Venice (Venice AI)
 
-Venius is our recommended Venice AI setup for privacy-first inference with an option to use Opus for hard tasks.
+Venice is our recommended Venice AI setup for privacy-first inference with an option to use Opus for hard tasks.
 
 - Default: `venice/llama-3.3-70b`
 - Best overall: `venice/claude-opus-45` (Opus remains the strongest)
@@ -28,7 +29,7 @@ See [Venice AI](/providers/venice).
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
@@ -38,16 +39,23 @@ See [Venice AI](/providers/venice).
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [Qwen (OAuth)](/providers/qwen)
 - [OpenRouter](/providers/openrouter)
+- [LiteLLM (unified gateway)](/providers/litellm)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [Together AI](/providers/together)
+- [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)
-- [Amazon Bedrock](/bedrock)
+- [Amazon Bedrock](/providers/bedrock)
 - [Z.AI](/providers/zai)
 - [Xiaomi](/providers/xiaomi)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
-- [Venius (Venice AI, privacy-focused)](/providers/venice)
+- [Venice (Venice AI, privacy-focused)](/providers/venice)
+- [Hugging Face (Inference)](/providers/huggingface)
 - [Ollama (local models)](/providers/ollama)
+- [vLLM (local models)](/providers/vllm)
+- [Qianfan](/providers/qianfan)
+- [NVIDIA](/providers/nvidia)
 
 ## Transcription providers
 

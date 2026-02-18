@@ -3,6 +3,7 @@ summary: "Manual logins for browser automation + X/Twitter posting"
 read_when:
   - You need to log into sites for browser automation
   - You want to post updates to X/Twitter
+title: "Browser Login"
 ---
 
 # Browser login + X/Twitter posting
@@ -33,8 +34,7 @@ If you have multiple profiles, pass `--browser-profile <name>` (the default is `
 
 ## X/Twitter: recommended flow
 
-- **Read/search/threads:** use the **bird** CLI skill (no browser, stable).
-  - Repo: https://github.com/steipete/bird
+- **Read/search/threads:** use the **host** browser (manual login).
 - **Post updates:** use the **host** browser (manual login).
 
 ## Sandboxing + host browser access

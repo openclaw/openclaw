@@ -1,10 +1,9 @@
 import type { Command } from "commander";
-
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
-import { shortenHomePath } from "../utils.js";
 
 function runBrowserDebug(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -180,7 +179,10 @@ export function registerBrowserDebugCommands(
   trace
     .command("stop")
     .description("Stop trace recording and write a .zip")
-    .option("--out <path>", "Output path for the trace zip")
+    .option(
+      "--out <path>",
+      "Output path within openclaw temp dir (e.g. trace.zip or /tmp/openclaw/trace.zip)",
+    )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);

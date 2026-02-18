@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -51,6 +50,16 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
     return [];
   }
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function resolveContainedDir(baseDir: string, targetDir: string): string | null {
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(baseDir, targetDir);
+  const relative = path.relative(base, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return null;
+  }
+  return resolved;
 }
 
 function loadHookFromDir(params: {
@@ -130,7 +139,13 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
 
     if (packageHooks.length > 0) {
       for (const hookPath of packageHooks) {
-        const resolvedHookDir = path.resolve(hookDir, hookPath);
+        const resolvedHookDir = resolveContainedDir(hookDir, hookPath);
+        if (!resolvedHookDir) {
+          console.warn(
+            `[hooks] Ignoring out-of-package hook path "${hookPath}" in ${hookDir} (must be within package directory)`,
+          );
+          continue;
+        }
         const hook = loadHookFromDir({
           hookDir: resolvedHookDir,
           source,

@@ -1,0 +1,14 @@
+[
+  { "source": "OpenClaw", "target": "OpenClaw" },
+  { "source": "Gateway", "target": "Gateway" },
+  { "source": "Pi", "target": "Pi" },
+  { "source": "Skills", "target": "Skills" },
+  { "source": "local loopback", "target": "local loopback" },
+  { "source": "Tailscale", "target": "Tailscale" },
+  { "source": "Getting Started", "target": "はじめに" },
+  { "source": "Getting started", "target": "はじめに" },
+  { "source": "Quick start", "target": "クイックスタート" },
+  { "source": "Quick Start", "target": "クイックスタート" },
+  { "source": "Onboarding", "target": "オンボーディング" },
+  { "source": "wizard", "target": "ウィザード" }
+]

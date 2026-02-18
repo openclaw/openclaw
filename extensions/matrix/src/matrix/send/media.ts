@@ -6,9 +6,8 @@ import type {
   TimedFileInfo,
   VideoFileInfo,
 } from "@vector-im/matrix-bot-sdk";
-import { parseBuffer, type IFileInfo } from "music-metadata";
-
 import { getMatrixRuntime } from "../../runtime.js";
+import { applyMatrixFormatting } from "./formatting.js";
 import {
   type MatrixMediaContent,
   type MatrixMediaInfo,
@@ -16,9 +15,9 @@ import {
   type MatrixRelation,
   type MediaKind,
 } from "./types.js";
-import { applyMatrixFormatting } from "./formatting.js";
 
 const getCore = () => getMatrixRuntime();
+type IFileInfo = import("music-metadata").IFileInfo;
 
 export function buildMatrixMediaInfo(params: {
   size: number;
@@ -165,6 +164,7 @@ export async function resolveMediaDurationMs(params: {
     return undefined;
   }
   try {
+    const { parseBuffer } = await import("music-metadata");
     const fileInfo: IFileInfo | string | undefined =
       params.contentType || params.fileName
         ? {

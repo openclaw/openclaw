@@ -1,6 +1,9 @@
 import {
   applyAccountNameToChannelSection,
+  buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
+  collectStatusIssuesFromLastError,
+  createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -22,14 +25,19 @@ import {
   type ChannelPlugin,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk";
-
 import { getSignalRuntime } from "./runtime.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions.listActions(ctx),
-  supportsAction: (ctx) => getSignalRuntime().channel.signal.messageActions.supportsAction?.(ctx),
-  handleAction: async (ctx) =>
-    await getSignalRuntime().channel.signal.messageActions.handleAction(ctx),
+  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
+  supportsAction: (ctx) =>
+    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
+  handleAction: async (ctx) => {
+    const ma = getSignalRuntime().channel.signal.messageActions;
+    if (!ma?.handleAction) {
+      throw new Error("Signal message actions not available");
+    }
+    return ma.handleAction(ctx);
+  },
 };
 
 const meta = getChatChannelMeta("signal");
@@ -244,35 +252,11 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     },
   },
   status: {
-    defaultRuntime: {
-      accountId: DEFAULT_ACCOUNT_ID,
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "signal",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
+    defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+    collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("signal", accounts),
     buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
+      ...buildBaseChannelStatusSummary(snapshot),
       baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),

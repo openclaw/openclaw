@@ -80,6 +80,7 @@ export type ZalouserAccountConfig = {
     { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
   >;
   messagePrefix?: string;
+  responsePrefix?: string;
 };
 
 export type ZalouserConfig = {
@@ -95,6 +96,7 @@ export type ZalouserConfig = {
     { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
   >;
   messagePrefix?: string;
+  responsePrefix?: string;
   accounts?: Record<string, ZalouserAccountConfig>;
 };
 

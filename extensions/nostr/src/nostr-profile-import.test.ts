@@ -3,9 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-
-import { mergeProfiles } from "./nostr-profile-import.js";
 import type { NostrProfile } from "./config-schema.js";
+import { mergeProfiles } from "./nostr-profile-import.js";
 
 // Note: importProfileFromRelays requires real network calls or complex mocking
 // of nostr-tools SimplePool, so we focus on unit testing mergeProfiles

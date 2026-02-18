@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type {
   ChannelAccountSnapshot,
@@ -75,11 +76,14 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
+  silent?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
@@ -105,7 +109,7 @@ export type ChannelOutboundAdapter = {
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };
 
-export type ChannelStatusAdapter<ResolvedAccount> = {
+export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
   buildChannelSummary?: (params: {
     account: ResolvedAccount;
@@ -117,19 +121,19 @@ export type ChannelStatusAdapter<ResolvedAccount> = {
     account: ResolvedAccount;
     timeoutMs: number;
     cfg: OpenClawConfig;
-  }) => Promise<unknown>;
+  }) => Promise<Probe>;
   auditAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;
     cfg: OpenClawConfig;
-    probe?: unknown;
-  }) => Promise<unknown>;
+    probe?: Probe;
+  }) => Promise<Audit>;
   buildAccountSnapshot?: (params: {
     account: ResolvedAccount;
     cfg: OpenClawConfig;
     runtime?: ChannelAccountSnapshot;
-    probe?: unknown;
-    audit?: unknown;
+    probe?: Probe;
+    audit?: Audit;
   }) => ChannelAccountSnapshot | Promise<ChannelAccountSnapshot>;
   logSelfId?: (params: {
     account: ResolvedAccount;

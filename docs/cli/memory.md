@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw memory` (status/index/search)"
 read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
+title: "memory"
 ---
 
 # `openclaw memory`
@@ -13,7 +14,7 @@ Provided by the active memory plugin (default: `memory-core`; set `plugins.slots
 Related:
 
 - Memory concept: [Memory](/concepts/memory)
-- Plugins: [Plugins](/plugins)
+- Plugins: [Plugins](/tools/plugin)
 
 ## Examples
 

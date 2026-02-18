@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import type { Server } from "node:http";
 import express, { type Express } from "express";
 import { danger } from "../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { detectMime } from "./mime.js";
 import { cleanOldMedia, getMediaDir, MEDIA_MAX_BYTES } from "./store.js";
 
@@ -63,9 +63,15 @@ export function attachMediaRoutes(
       res.send(data);
       // best-effort single-use cleanup after response ends
       res.on("finish", () => {
-        setTimeout(() => {
-          fs.rm(realPath).catch(() => {});
-        }, 50);
+        const cleanup = () => {
+          void fs.rm(realPath).catch(() => {});
+        };
+        // Tests should not pay for time-based cleanup delays.
+        if (process.env.VITEST || process.env.NODE_ENV === "test") {
+          queueMicrotask(cleanup);
+          return;
+        }
+        setTimeout(cleanup, 50);
       });
     } catch (err) {
       if (err instanceof SafeOpenError) {
@@ -96,7 +102,7 @@ export async function startMediaServer(
   const app = express();
   attachMediaRoutes(app, ttlMs, runtime);
   return await new Promise((resolve, reject) => {
-    const server = app.listen(port);
+    const server = app.listen(port, "127.0.0.1");
     server.once("listening", () => resolve(server));
     server.once("error", (err) => {
       runtime.error(danger(`Media server failed: ${String(err)}`));

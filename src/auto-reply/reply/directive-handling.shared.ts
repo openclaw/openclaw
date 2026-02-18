@@ -40,6 +40,29 @@ export const formatReasoningEvent = (level: ReasoningLevel) => {
   return "Reasoning OFF — hide <think>.";
 };
 
+export function enqueueModeSwitchEvents(params: {
+  enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
+  sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
+  sessionKey: string;
+  elevatedChanged?: boolean;
+  reasoningChanged?: boolean;
+}): void {
+  if (params.elevatedChanged) {
+    const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+    params.enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:elevated",
+    });
+  }
+  if (params.reasoningChanged) {
+    const nextReasoning = (params.sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+    params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:reasoning",
+    });
+  }
+}
+
 export function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;
   failures?: Array<{ gate: string; key: string }>;

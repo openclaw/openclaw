@@ -4,10 +4,10 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
-import { saveMediaBuffer } from "../media/store.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { normalizeE164 } from "../utils.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
+import { saveMediaBuffer } from "../media/store.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { spawnSignalDaemon } from "./daemon.js";
@@ -57,15 +57,7 @@ export type MonitorSignalOpts = {
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
-  return (
-    opts.runtime ?? {
-      log: console.log,
-      error: console.error,
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    }
-  );
+  return opts.runtime ?? createNonExitingRuntime();
 }
 
 function normalizeAllowList(raw?: Array<string | number>): string[] {

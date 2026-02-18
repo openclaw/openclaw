@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { defaultSlotIdForKey } from "./slots.js";
 import type { PluginRecord } from "./registry.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -13,7 +13,11 @@ export type NormalizedPluginsConfig = {
   entries: Record<string, { enabled?: boolean; config?: unknown }>;
 };
 
-export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>();
+export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "device-pair",
+  "phone-control",
+  "talk-voice",
+]);
 
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {

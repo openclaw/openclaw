@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -6,7 +7,11 @@ import type {
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
+import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
+import { registerPluginCommand } from "./commands.js";
+import { normalizePluginHttpPath } from "./http-path.js";
+import type { PluginRuntime } from "./runtime/types.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
@@ -28,11 +33,6 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
-import { registerPluginCommand } from "./commands.js";
-import type { PluginRuntime } from "./runtime/types.js";
-import type { HookEntry } from "../hooks/types.js";
-import path from "node:path";
-import { normalizePluginHttpPath } from "./http-path.js";
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -143,8 +143,8 @@ export type PluginRegistryParams = {
   runtime: PluginRuntime;
 };
 
-export function createPluginRegistry(registryParams: PluginRegistryParams) {
-  const registry: PluginRegistry = {
+export function createEmptyPluginRegistry(): PluginRegistry {
+  return {
     plugins: [],
     tools: [],
     hooks: [],
@@ -159,6 +159,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     commands: [],
     diagnostics: [],
   };
+}
+
+export function createPluginRegistry(registryParams: PluginRegistryParams) {
+  const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {

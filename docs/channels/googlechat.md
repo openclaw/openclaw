@@ -2,6 +2,7 @@
 summary: "Google Chat app support status, capabilities, and configuration"
 read_when:
   - Working on Google Chat channel features
+title: "Google Chat"
 ---
 
 # Google Chat (Chat API)
@@ -100,6 +101,7 @@ Use Tailscale Serve for the private dashboard and Funnel for the public webhook 
    If prompted, visit the authorization URL shown in the output to enable Funnel for this node in your tailnet policy.
 
 5. **Verify the configuration:**
+
    ```bash
    tailscale serve status
    tailscale funnel status
@@ -151,7 +153,8 @@ Configure your tunnel's ingress rules to only route the webhook path:
 
 Use these identifiers for delivery and allowlists:
 
-- Direct messages: `users/<userId>` or `users/<email>` (email addresses are accepted).
+- Direct messages: `users/<userId>` (recommended) or raw email `name@example.com` (mutable principal).
+- Deprecated: `users/<email>` is treated as a user id, not an email allowlist.
 - Spaces: `spaces/<spaceId>`.
 
 ## Config highlights
@@ -224,6 +227,7 @@ This means the webhook handler isn't registered. Common causes:
    If it shows "disabled", add `plugins.entries.googlechat.enabled: true` to your config.
 
 3. **Gateway not restarted**: After adding config, restart the gateway:
+
    ```bash
    openclaw gateway restart
    ```

@@ -1,96 +1,16 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk";
-
-import { GRAPH_ROOT } from "./attachments/shared.js";
-import { loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { resolveMSTeamsCredentials } from "./token.js";
-
-type GraphUser = {
-  id?: string;
-  displayName?: string;
-  userPrincipalName?: string;
-  mail?: string;
-};
-
-type GraphGroup = {
-  id?: string;
-  displayName?: string;
-};
-
-type GraphChannel = {
-  id?: string;
-  displayName?: string;
-};
-
-type GraphResponse<T> = { value?: T[] };
-
-function readAccessToken(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value && typeof value === "object") {
-    const token =
-      (value as { accessToken?: unknown }).accessToken ?? (value as { token?: unknown }).token;
-    return typeof token === "string" ? token : null;
-  }
-  return null;
-}
-
-function normalizeQuery(value?: string | null): string {
-  return value?.trim() ?? "";
-}
-
-function escapeOData(value: string): string {
-  return value.replace(/'/g, "''");
-}
-
-async function fetchGraphJson<T>(params: {
-  token: string;
-  path: string;
-  headers?: Record<string, string>;
-}): Promise<T> {
-  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
-    headers: {
-      Authorization: `Bearer ${params.token}`,
-      ...params.headers,
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Graph ${params.path} failed (${res.status}): ${text || "unknown error"}`);
-  }
-  return (await res.json()) as T;
-}
-
-async function resolveGraphToken(cfg: unknown): Promise<string> {
-  const creds = resolveMSTeamsCredentials(
-    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams,
-  );
-  if (!creds) {
-    throw new Error("MS Teams credentials missing");
-  }
-  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const tokenProvider = new sdk.MsalTokenProvider(authConfig);
-  const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
-  const accessToken = readAccessToken(token);
-  if (!accessToken) {
-    throw new Error("MS Teams graph token unavailable");
-  }
-  return accessToken;
-}
-
-async function listTeamsByName(token: string, query: string): Promise<GraphGroup[]> {
-  const escaped = escapeOData(query);
-  const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
-  const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const res = await fetchGraphJson<GraphResponse<GraphGroup>>({ token, path });
-  return res.value ?? [];
-}
-
-async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
-  const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
-  const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
-  return res.value ?? [];
-}
+import {
+  escapeOData,
+  fetchGraphJson,
+  type GraphChannel,
+  type GraphGroup,
+  type GraphResponse,
+  type GraphUser,
+  listChannelsForTeam,
+  listTeamsByName,
+  normalizeQuery,
+  resolveGraphToken,
+} from "./graph.js";
 
 export async function listMSTeamsDirectoryPeersLive(params: {
   cfg: unknown;

@@ -4,6 +4,7 @@ read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
   - You need the safest local model guidance
+title: "Local Models"
 ---
 
 # Local models
@@ -20,7 +21,7 @@ Best current local stack. Load MiniMax M2.1 in LM Studio, enable the local serve
     defaults: {
       model: { primary: "lmstudio/minimax-m2.1-gs32" },
       models: {
-        "anthropic/claude-opus-4-5": { alias: "Opus" },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
         "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" },
       },
     },
@@ -51,7 +52,7 @@ Best current local stack. Load MiniMax M2.1 in LM Studio, enable the local serve
 
 **Setup checklist**
 
-- Install LM Studio: https://lmstudio.ai
+- Install LM Studio: [https://lmstudio.ai](https://lmstudio.ai)
 - In LM Studio, download the **largest MiniMax M2.1 build available** (avoid “small”/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
 - Keep the model loaded; cold-load adds startup latency.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
@@ -67,12 +68,12 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
     defaults: {
       model: {
         primary: "anthropic/claude-sonnet-4-5",
-        fallbacks: ["lmstudio/minimax-m2.1-gs32", "anthropic/claude-opus-4-5"],
+        fallbacks: ["lmstudio/minimax-m2.1-gs32", "anthropic/claude-opus-4-6"],
       },
       models: {
         "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
         "lmstudio/minimax-m2.1-gs32": { alias: "MiniMax Local" },
-        "anthropic/claude-opus-4-5": { alias: "Opus" },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
       },
     },
   },

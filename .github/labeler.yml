@@ -9,6 +9,17 @@
           - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+"channel: irc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/irc/**"
+          - "docs/channels/irc.md"
+"channel: feishu":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/feishu/**"
+          - "extensions/feishu/**"
+          - "docs/channels/feishu.md"
 "channel: googlechat":
   - changed-files:
       - any-glob-to-any-file:
@@ -73,6 +84,11 @@
       - any-glob-to-any-file:
           - "extensions/tlon/**"
           - "docs/channels/tlon.md"
+"channel: twitch":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/twitch/**"
+          - "docs/channels/twitch.md"
 "channel: voice-call":
   - changed-files:
       - any-glob-to-any-file:
@@ -220,3 +236,19 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qwen-portal-auth/**"
+"extensions: device-pair":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/device-pair/**"
+"extensions: minimax-portal-auth":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/minimax-portal-auth/**"
+"extensions: phone-control":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/phone-control/**"
+"extensions: talk-voice":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/talk-voice/**"

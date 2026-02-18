@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {

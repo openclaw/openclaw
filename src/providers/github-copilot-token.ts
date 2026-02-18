@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 
@@ -83,6 +82,9 @@ export async function resolveCopilotApiToken(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  cachePath?: string;
+  loadJsonFileImpl?: (path: string) => unknown;
+  saveJsonFileImpl?: (path: string, value: CachedCopilotToken) => void;
 }): Promise<{
   token: string;
   expiresAt: number;
@@ -90,8 +92,10 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
-  const cachePath = resolveCopilotTokenCachePath(env);
-  const cached = loadJsonFile(cachePath) as CachedCopilotToken | undefined;
+  const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
+  const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
+  const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
+  const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
     if (isTokenUsable(cached)) {
       return {
@@ -122,7 +126,7 @@ export async function resolveCopilotApiToken(params: {
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
   };
-  saveJsonFile(cachePath, payload);
+  saveJsonFileFn(cachePath, payload);
 
   return {
     token: payload.token,

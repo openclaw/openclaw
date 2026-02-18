@@ -4,6 +4,7 @@ read_when:
   - You need to debug session ids, transcript JSONL, or sessions.json fields
   - You are changing auto-compaction behavior or adding “pre-compaction” housekeeping
   - You want to implement memory flushes or silent system turns
+title: "Session Management Deep Dive"
 ---
 
 # Session Management & Compaction (Deep Dive)
@@ -153,7 +154,7 @@ If you’re tuning limits:
 - The context window comes from the model catalog (and can be overridden via config).
 - `contextTokens` in the store is a runtime estimate/reporting value; don’t treat it as a strict guarantee.
 
-For more, see [/token-use](/token-use).
+For more, see [/token-use](/reference/token-use).
 
 ---
 

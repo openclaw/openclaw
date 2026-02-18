@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
 import {
@@ -20,8 +19,8 @@ import {
   requirePwAi,
   resolveProfileContext,
 } from "./agent.shared.js";
-import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 import type { BrowserRouteRegistrar } from "./types.js";
+import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,

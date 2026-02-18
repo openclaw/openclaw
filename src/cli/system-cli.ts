@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";

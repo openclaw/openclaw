@@ -1,7 +1,7 @@
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
@@ -13,7 +13,7 @@ import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
-import { clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
@@ -46,6 +46,7 @@ export type ReplyDirectiveContinuation = {
     minChars: number;
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
+    flushOnParagraph?: boolean;
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   provider: string;
@@ -105,6 +106,7 @@ export async function resolveReplyDirectives(params: {
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+  hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
   skillFilter?: string[];
@@ -130,6 +132,7 @@ export async function resolveReplyDirectives(params: {
     defaultModel,
     provider: initialProvider,
     model: initialModel,
+    hasResolvedHeartbeatModelOverride,
     typing,
     opts,
     skillFilter,
@@ -166,27 +169,34 @@ export async function resolveReplyDirectives(params: {
     surface: command.surface,
     commandSource: ctx.CommandSource,
   });
-  const shouldResolveSkillCommands =
-    allowTextCommands && command.commandBodyNormalized.includes("/");
-  const skillCommands = shouldResolveSkillCommands
-    ? listSkillCommandsForWorkspace({
-        workspaceDir,
-        cfg,
-        skillFilter,
-      })
-    : [];
   const reservedCommands = new Set(
     listChatCommands().flatMap((cmd) =>
       cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
     ),
   );
-  for (const command of skillCommands) {
-    reservedCommands.add(command.name.toLowerCase());
-  }
-  const configuredAliases = Object.values(cfg.agents?.defaults?.models ?? {})
+
+  const rawAliases = Object.values(cfg.agents?.defaults?.models ?? {})
     .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
+
+  // Only load workspace skill commands when we actually need them to filter aliases.
+  // This avoids scanning skills for messages that only use inline directives like /think:/verbose:.
+  const skillCommands =
+    allowTextCommands && rawAliases.length > 0
+      ? listSkillCommandsForWorkspace({
+          workspaceDir,
+          cfg,
+          skillFilter,
+        })
+      : [];
+  for (const command of skillCommands) {
+    reservedCommands.add(command.name.toLowerCase());
+  }
+
+  const configuredAliases = rawAliases.filter(
+    (alias) => !reservedCommands.has(alias.toLowerCase()),
+  );
   const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
   let parsedDirectives = parseInlineDirectives(commandText, {
     modelAliases: configuredAliases,
@@ -212,23 +222,7 @@ export async function resolveReplyDirectives(params: {
   }
   if (isGroup && ctx.WasMentioned !== true && parsedDirectives.hasExecDirective) {
     if (parsedDirectives.execSecurity !== "deny") {
-      parsedDirectives = {
-        ...parsedDirectives,
-        hasExecDirective: false,
-        execHost: undefined,
-        execSecurity: undefined,
-        execAsk: undefined,
-        execNode: undefined,
-        rawExecHost: undefined,
-        rawExecSecurity: undefined,
-        rawExecAsk: undefined,
-        rawExecNode: undefined,
-        hasExecOptions: false,
-        invalidExecHost: false,
-        invalidExecSecurity: false,
-        invalidExecAsk: false,
-        invalidExecNode: false,
-      };
+      parsedDirectives = clearExecInlineDirectives(parsedDirectives);
     }
   }
   const hasInlineDirective =
@@ -390,6 +384,7 @@ export async function resolveReplyDirectives(params: {
     provider,
     model,
     hasModelDirective: directives.hasModelDirective,
+    hasResolvedHeartbeatModelOverride,
   });
   provider = modelState.provider;
   model = modelState.model;

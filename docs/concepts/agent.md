@@ -2,6 +2,7 @@
 summary: "Agent runtime (embedded pi-mono), workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
+title: "Agent Runtime"
 ---
 
 # Agent Runtime 🤖
@@ -119,4 +120,4 @@ At minimum, set:
 
 ---
 
-_Next: [Group Chats](/concepts/group-messages)_ 🦞
+_Next: [Group Chats](/channels/group-messages)_ 🦞

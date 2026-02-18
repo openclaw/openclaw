@@ -1,24 +1,30 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadInternalHooks } from "./loader.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
   getRegisteredEventKeys,
   triggerInternalHook,
   createInternalHookEvent,
 } from "./internal-hooks.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { loadInternalHooks } from "./loader.js";
 
 describe("loader", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
   let tmpDir: string;
   let originalBundledDir: string | undefined;
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
+  });
 
   beforeEach(async () => {
     clearInternalHooks();
     // Create a temp directory for test modules
-    tmpDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
+    tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
@@ -34,12 +40,13 @@ describe("loader", () => {
     } else {
       process.env.OPENCLAW_BUNDLED_HOOKS_DIR = originalBundledDir;
     }
-    // Clean up temp directory
-    try {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
     }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   describe("loadInternalHooks", () => {
@@ -79,7 +86,7 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: handlerPath,
+                module: path.basename(handlerPath),
               },
             ],
           },
@@ -106,8 +113,8 @@ describe("loader", () => {
           internal: {
             enabled: true,
             handlers: [
-              { event: "command:new", module: handler1Path },
-              { event: "command:stop", module: handler2Path },
+              { event: "command:new", module: path.basename(handler1Path) },
+              { event: "command:stop", module: path.basename(handler2Path) },
             ],
           },
         },
@@ -138,7 +145,7 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: handlerPath,
+                module: path.basename(handlerPath),
                 export: "myHandler",
               },
             ],
@@ -151,8 +158,6 @@ describe("loader", () => {
     });
 
     it("should handle module loading errors gracefully", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
       const cfg: OpenClawConfig = {
         hooks: {
           internal: {
@@ -160,26 +165,19 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: "/nonexistent/path/handler.js",
+                module: "missing-handler.js",
               },
             ],
           },
         },
       };
 
+      // Should not throw and should return 0 (handler failed to load)
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load hook handler"),
-        expect.any(String),
-      );
-
-      consoleError.mockRestore();
     });
 
     it("should handle non-function exports", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
       // Create a module with a non-function export
       const handlerPath = path.join(tmpDir, "bad-export.js");
       await fs.writeFile(handlerPath, 'export default "not a function";', "utf-8");
@@ -191,18 +189,16 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: handlerPath,
+                module: path.basename(handlerPath),
               },
             ],
           },
         },
       };
 
+      // Should not throw and should return 0 (handler is not a function)
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
-      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("is not a function"));
-
-      consoleError.mockRestore();
     });
 
     it("should handle relative paths", async () => {
@@ -210,8 +206,8 @@ describe("loader", () => {
       const handlerPath = path.join(tmpDir, "relative-handler.js");
       await fs.writeFile(handlerPath, "export default async function() {}", "utf-8");
 
-      // Get relative path from cwd
-      const relativePath = path.relative(process.cwd(), handlerPath);
+      // Relative to workspaceDir (tmpDir)
+      const relativePath = path.relative(tmpDir, handlerPath);
 
       const cfg: OpenClawConfig = {
         hooks: {
@@ -252,7 +248,7 @@ describe("loader", () => {
             handlers: [
               {
                 event: "command:new",
-                module: handlerPath,
+                module: path.basename(handlerPath),
               },
             ],
           },

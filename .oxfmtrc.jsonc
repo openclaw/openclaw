@@ -1,5 +1,8 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "experimentalSortImports": {
+    "newlinesBetween": false,
+  },
   "experimentalSortPackageJson": {
     "sortScripts": true,
   },
@@ -11,6 +14,7 @@
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml/",
+    "src/auto-reply/reply/export-html/",
     "Swabble/",
     "vendor/",
   ],

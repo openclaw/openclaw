@@ -1,6 +1,5 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import process from "node:process";
-
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
@@ -17,10 +16,11 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   beforeEach(() => {
     exitCalls = [];
 
-    vi.spyOn(process, "exit").mockImplementation((code: string | number | null | undefined) => {
+    vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
         exitCalls.push(code);
       }
+      return undefined as never;
     });
 
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

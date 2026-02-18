@@ -33,6 +33,7 @@ export function buildCommandContext(params: {
     channel,
     channelId: auth.providerId,
     ownerList: auth.ownerList,
+    senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
     abortKey,

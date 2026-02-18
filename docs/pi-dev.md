@@ -1,3 +1,7 @@
+---
+title: "Pi Development Workflow"
+---
+
 # Pi Development Workflow
 
 This guide summarizes a sane workflow for working on the pi integration in OpenClaw.
@@ -62,5 +66,5 @@ If you only want to reset sessions, delete `agents/<agentId>/sessions/` and `age
 
 ## References
 
-- https://docs.openclaw.ai/testing
-- https://docs.openclaw.ai/start/getting-started
+- [https://docs.openclaw.ai/testing](https://docs.openclaw.ai/testing)
+- [https://docs.openclaw.ai/start/getting-started](https://docs.openclaw.ai/start/getting-started)

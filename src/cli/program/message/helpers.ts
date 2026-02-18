@@ -2,9 +2,10 @@ import type { Command } from "commander";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
+import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../../runtime.js";
-import { createDefaultDeps } from "../../deps.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
+import { createDefaultDeps } from "../../deps.js";
 import { ensurePluginRegistryLoaded } from "../../plugin-registry.js";
 
 export type MessageCliHelpers = {
@@ -13,6 +14,22 @@ export type MessageCliHelpers = {
   withRequiredMessageTarget: (command: Command) => Command;
   runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
+
+function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
+  const { account, ...rest } = opts;
+  return {
+    ...rest,
+    accountId: typeof account === "string" ? account : undefined,
+  };
+}
+
+async function runPluginStopHooks(): Promise<void> {
+  await runGlobalGatewayStopSafely({
+    event: { reason: "cli message action complete" },
+    ctx: {},
+    onError: (err) => defaultRuntime.error(danger(`gateway_stop hook failed: ${String(err)}`)),
+  });
+}
 
 export function createMessageCliHelpers(
   message: Command,
@@ -35,18 +52,13 @@ export function createMessageCliHelpers(
     setVerbose(Boolean(opts.verbose));
     ensurePluginRegistryLoaded();
     const deps = createDefaultDeps();
+    let failed = false;
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
         await messageCommand(
           {
-            ...(() => {
-              const { account, ...rest } = opts;
-              return {
-                ...rest,
-                accountId: typeof account === "string" ? account : undefined,
-              };
-            })(),
+            ...normalizeMessageOptions(opts),
             action,
           },
           deps,
@@ -54,10 +66,12 @@ export function createMessageCliHelpers(
         );
       },
       (err) => {
+        failed = true;
         defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
       },
     );
+    await runPluginStopHooks();
+    defaultRuntime.exit(failed ? 1 : 0);
   };
 
   // `message` is only used for `message.help({ error: true })`, keep the

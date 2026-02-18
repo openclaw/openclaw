@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
@@ -7,8 +6,9 @@ import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { renderTable } from "../terminal/table.js";
+import { theme } from "../terminal/theme.js";
+import { formatHelpExamples } from "./help-format.js";
 
 function parseLimit(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -38,14 +38,49 @@ function buildRows(entries: Array<{ id: string; name?: string | undefined }>) {
   }));
 }
 
+function printDirectoryList(params: {
+  title: string;
+  emptyMessage: string;
+  entries: Array<{ id: string; name?: string | undefined }>;
+}): void {
+  if (params.entries.length === 0) {
+    defaultRuntime.log(theme.muted(params.emptyMessage));
+    return;
+  }
+
+  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
+  defaultRuntime.log(
+    renderTable({
+      width: tableWidth,
+      columns: [
+        { key: "ID", header: "ID", minWidth: 16, flex: true },
+        { key: "Name", header: "Name", minWidth: 18, flex: true },
+      ],
+      rows: buildRows(params.entries),
+    }).trimEnd(),
+  );
+}
+
 export function registerDirectoryCli(program: Command) {
   const directory = program
     .command("directory")
-    .description("Directory lookups (self, peers, groups) for channels that support it")
+    .description("Lookup contact and group IDs (self, peers, groups) for supported chat channels")
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw directory self --channel slack", "Show the connected account identity."],
+          [
+            'openclaw directory peers list --channel slack --query "alice"',
+            "Search contact/user IDs by name.",
+          ],
+          ["openclaw directory groups list --channel discord", "List available groups/channels."],
+          [
+            "openclaw directory groups members --channel discord --group-id <id>",
+            "List members for a specific group.",
+          ],
+        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/directory",
           "docs.openclaw.ai/cli/directory",
         )}\n`,
@@ -96,7 +131,7 @@ export function registerDirectoryCli(program: Command) {
           return;
         }
         const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-        defaultRuntime.log(`${theme.heading("Self")}`);
+        defaultRuntime.log(theme.heading("Self"));
         defaultRuntime.log(
           renderTable({
             width: tableWidth,
@@ -139,22 +174,7 @@ export function registerDirectoryCli(program: Command) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        if (result.length === 0) {
-          defaultRuntime.log(theme.muted("No peers found."));
-          return;
-        }
-        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-        defaultRuntime.log(`${theme.heading("Peers")} ${theme.muted(`(${result.length})`)}`);
-        defaultRuntime.log(
-          renderTable({
-            width: tableWidth,
-            columns: [
-              { key: "ID", header: "ID", minWidth: 16, flex: true },
-              { key: "Name", header: "Name", minWidth: 18, flex: true },
-            ],
-            rows: buildRows(result),
-          }).trimEnd(),
-        );
+        printDirectoryList({ title: "Peers", emptyMessage: "No peers found.", entries: result });
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -186,22 +206,7 @@ export function registerDirectoryCli(program: Command) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        if (result.length === 0) {
-          defaultRuntime.log(theme.muted("No groups found."));
-          return;
-        }
-        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-        defaultRuntime.log(`${theme.heading("Groups")} ${theme.muted(`(${result.length})`)}`);
-        defaultRuntime.log(
-          renderTable({
-            width: tableWidth,
-            columns: [
-              { key: "ID", header: "ID", minWidth: 16, flex: true },
-              { key: "Name", header: "Name", minWidth: 18, flex: true },
-            ],
-            rows: buildRows(result),
-          }).trimEnd(),
-        );
+        printDirectoryList({ title: "Groups", emptyMessage: "No groups found.", entries: result });
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -240,24 +245,11 @@ export function registerDirectoryCli(program: Command) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        if (result.length === 0) {
-          defaultRuntime.log(theme.muted("No group members found."));
-          return;
-        }
-        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-        defaultRuntime.log(
-          `${theme.heading("Group Members")} ${theme.muted(`(${result.length})`)}`,
-        );
-        defaultRuntime.log(
-          renderTable({
-            width: tableWidth,
-            columns: [
-              { key: "ID", header: "ID", minWidth: 16, flex: true },
-              { key: "Name", header: "Name", minWidth: 18, flex: true },
-            ],
-            rows: buildRows(result),
-          }).trimEnd(),
-        );
+        printDirectoryList({
+          title: "Group Members",
+          emptyMessage: "No group members found.",
+          entries: result,
+        });
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

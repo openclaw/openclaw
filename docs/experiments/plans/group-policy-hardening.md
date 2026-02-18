@@ -2,6 +2,7 @@
 summary: "Telegram allowlist hardening: prefix + whitespace normalization"
 read_when:
   - Reviewing historical Telegram allowlist changes
+title: "Telegram Allowlist Hardening"
 ---
 
 # Telegram Allowlist Hardening
@@ -35,5 +36,5 @@ false negatives when deciding whether to respond in DMs or groups.
 
 ## Related docs
 
-- [Group Chats](/concepts/groups)
+- [Group Chats](/channels/groups)
 - [Telegram Provider](/channels/telegram)

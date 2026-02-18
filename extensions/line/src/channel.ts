@@ -10,7 +10,6 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "openclaw/plugin-sdk";
-
 import { getLineRuntime } from "./runtime.js";
 
 // LINE channel metadata
@@ -61,7 +60,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   config: {
     listAccountIds: (cfg) => getLineRuntime().channel.line.listLineAccountIds(cfg),
     resolveAccount: (cfg, accountId) =>
-      getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId }),
+      getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
     defaultAccountId: (cfg) => getLineRuntime().channel.line.resolveDefaultLineAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
@@ -120,17 +119,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         },
       };
     },
-    isConfigured: (account) => Boolean(account.channelAccessToken?.trim()),
+    isConfigured: (account) =>
+      Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim()),
-      tokenSource: account.tokenSource,
+      configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
+      tokenSource: account.tokenSource ?? undefined,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       (
-        getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId }).config.allowFrom ?? []
+        getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined })
+          .config.allowFrom ?? []
       ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
@@ -173,9 +174,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   },
   groups: {
     resolveRequireMention: ({ cfg, accountId, groupId }) => {
-      const account = getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId });
+      const account = getLineRuntime().channel.line.resolveLineAccount({
+        cfg,
+        accountId: accountId ?? undefined,
+      });
       const groups = account.config.groups;
-      if (!groups) {
+      if (!groups || !groupId) {
         return false;
       }
       const groupConfig = groups[groupId] ?? groups["*"];
@@ -186,7 +190,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     normalizeTarget: (target) => {
       const trimmed = target.trim();
       if (!trimmed) {
-        return null;
+        return undefined;
       }
       return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
     },
@@ -348,17 +352,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const createQuickReplyItems = runtime.channel.line.createQuickReplyItems;
 
       let lastResult: { messageId: string; chatId: string } | null = null;
-      const hasQuickReplies = Boolean(lineData.quickReplies?.length);
-      const quickReply = hasQuickReplies
-        ? createQuickReplyItems(lineData.quickReplies!)
-        : undefined;
+      const quickReplies = lineData.quickReplies ?? [];
+      const hasQuickReplies = quickReplies.length > 0;
+      const quickReply = hasQuickReplies ? createQuickReplyItems(quickReplies) : undefined;
 
+      // oxlint-disable-next-line typescript/no-explicit-any
       const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
         if (messages.length === 0) {
           return;
         }
         for (let i = 0; i < messages.length; i += 5) {
-          const result = await sendBatch(to, messages.slice(i, i + 5), {
+          // LINE SDK expects Message[] but we build dynamically
+          const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
+          const result = await sendBatch(to, batch, {
             verbose: false,
             accountId: accountId ?? undefined,
           });
@@ -383,15 +389,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
       if (!shouldSendQuickRepliesInline) {
         if (lineData.flexMessage) {
-          lastResult = await sendFlex(
-            to,
-            lineData.flexMessage.altText,
-            lineData.flexMessage.contents,
-            {
-              verbose: false,
-              accountId: accountId ?? undefined,
-            },
-          );
+          // LINE SDK expects FlexContainer but we receive contents as unknown
+          const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
+          lastResult = await sendFlex(to, lineData.flexMessage.altText, flexContents, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+          });
         }
 
         if (lineData.templateMessage) {
@@ -412,7 +415,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         }
 
         for (const flexMsg of processed.flexMessages) {
-          lastResult = await sendFlex(to, flexMsg.altText, flexMsg.contents, {
+          // LINE SDK expects FlexContainer but we receive contents as unknown
+          const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+          lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
             verbose: false,
             accountId: accountId ?? undefined,
           });
@@ -434,7 +439,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         for (let i = 0; i < chunks.length; i += 1) {
           const isLast = i === chunks.length - 1;
           if (isLast && hasQuickReplies) {
-            lastResult = await sendQuickReplies(to, chunks[i], lineData.quickReplies!, {
+            lastResult = await sendQuickReplies(to, chunks[i], quickReplies, {
               verbose: false,
               accountId: accountId ?? undefined,
             });
@@ -534,7 +539,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
       // Send flex messages for tables/code blocks
       for (const flexMsg of processed.flexMessages) {
-        await sendFlex(to, flexMsg.altText, flexMsg.contents, {
+        // LINE SDK expects FlexContainer but we receive contents as unknown
+        const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+        await sendFlex(to, flexMsg.altText, flexContents, {
           verbose: false,
           accountId: accountId ?? undefined,
         });
@@ -597,7 +604,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.channelAccessToken?.trim());
+      const configured = Boolean(
+        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+      );
       return {
         accountId: account.accountId,
         name: account.name,
@@ -620,6 +629,16 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const account = ctx.account;
       const token = account.channelAccessToken.trim();
       const secret = account.channelSecret.trim();
+      if (!token) {
+        throw new Error(
+          `LINE webhook mode requires a non-empty channel access token for account "${account.accountId}".`,
+        );
+      }
+      if (!secret) {
+        throw new Error(
+          `LINE webhook mode requires a non-empty channel secret for account "${account.accountId}".`,
+        );
+      }
 
       let lineBotLabel = "";
       try {

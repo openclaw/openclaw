@@ -2,6 +2,7 @@
 summary: "Elevated exec mode and /elevated directives"
 read_when:
   - Adjusting elevated mode defaults, allowlists, or slash command behavior
+title: "Elevated Mode"
 ---
 
 # Elevated Mode (/elevated directives)
@@ -47,7 +48,7 @@ read_when:
 - Sender allowlist: `tools.elevated.allowFrom` with per-provider allowlists (e.g. `discord`, `whatsapp`).
 - Per-agent gate: `agents.list[].tools.elevated.enabled` (optional; can only further restrict).
 - Per-agent allowlist: `agents.list[].tools.elevated.allowFrom` (optional; when set, the sender must match **both** global + per-agent allowlists).
-- Discord fallback: if `tools.elevated.allowFrom.discord` is omitted, the `channels.discord.dm.allowFrom` list is used as a fallback. Set `tools.elevated.allowFrom.discord` (even `[]`) to override. Per-agent allowlists do **not** use the fallback.
+- Discord fallback: if `tools.elevated.allowFrom.discord` is omitted, the `channels.discord.allowFrom` list is used as a fallback (legacy: `channels.discord.dm.allowFrom`). Set `tools.elevated.allowFrom.discord` (even `[]`) to override. Per-agent allowlists do **not** use the fallback.
 - All gates must pass; otherwise elevated is treated as unavailable.
 
 ## Logging + status

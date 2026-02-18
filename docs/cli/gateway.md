@@ -4,6 +4,7 @@ read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (LAN + tailnet)
+title: "gateway"
 ---
 
 # Gateway CLI
@@ -76,6 +77,9 @@ Shared options (where supported):
 - `--password <password>`: Gateway password.
 - `--timeout <ms>`: timeout/budget (varies per command).
 - `--expect-final`: wait for a “final” response (agent calls).
+
+Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ### `gateway health`
 

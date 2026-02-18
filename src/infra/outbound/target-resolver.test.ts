@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetDirectoryCache, resolveMessagingTarget } from "./target-resolver.js";
@@ -32,7 +31,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
   });
 
   it("uses live directory fallback and caches the result", async () => {
-    const entry: ChannelDirectoryEntry = { id: "123456789", name: "support" };
+    const entry: ChannelDirectoryEntry = { kind: "group", id: "123456789", name: "support" };
     mocks.listGroups.mockResolvedValue([]);
     mocks.listGroupsLive.mockResolvedValue([entry]);
 

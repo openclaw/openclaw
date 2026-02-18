@@ -8,10 +8,10 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readJsonBodyWithLimit, requestBodyErrorToText } from "openclaw/plugin-sdk";
 import { z } from "zod";
-
-import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
+import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 
 // ============================================================================
@@ -230,38 +230,102 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-
-    req.on("data", (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > maxBytes) {
-        reject(new Error("Request body too large"));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on("end", () => {
-      try {
-        const body = Buffer.concat(chunks).toString("utf-8");
-        resolve(body ? JSON.parse(body) : {});
-      } catch {
-        reject(new Error("Invalid JSON"));
-      }
-    });
-
-    req.on("error", reject);
+async function readJsonBody(
+  req: IncomingMessage,
+  maxBytes = 64 * 1024,
+  timeoutMs = 30_000,
+): Promise<unknown> {
+  const result = await readJsonBodyWithLimit(req, {
+    maxBytes,
+    timeoutMs,
+    emptyObjectOnEmpty: true,
   });
+  if (result.ok) {
+    return result.value;
+  }
+  if (result.code === "PAYLOAD_TOO_LARGE") {
+    throw new Error("Request body too large");
+  }
+  if (result.code === "REQUEST_BODY_TIMEOUT") {
+    throw new Error(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+  }
+  if (result.code === "CONNECTION_CLOSED") {
+    throw new Error(requestBodyErrorToText("CONNECTION_CLOSED"));
+  }
+  throw new Error(result.code === "INVALID_JSON" ? "Invalid JSON" : result.error);
 }
 
 function parseAccountIdFromPath(pathname: string): string | null {
   // Match: /api/channels/nostr/:accountId/profile
   const match = pathname.match(/^\/api\/channels\/nostr\/([^/]+)\/profile/);
   return match?.[1] ?? null;
+}
+
+function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
+  if (!remoteAddress) {
+    return false;
+  }
+
+  const ipLower = remoteAddress.toLowerCase().replace(/^\[|\]$/g, "");
+
+  // IPv6 loopback
+  if (ipLower === "::1") {
+    return true;
+  }
+
+  // IPv4 loopback (127.0.0.0/8)
+  if (ipLower === "127.0.0.1" || ipLower.startsWith("127.")) {
+    return true;
+  }
+
+  // IPv4-mapped IPv6
+  const v4Mapped = ipLower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4Mapped) {
+    return isLoopbackRemoteAddress(v4Mapped[1]);
+  }
+
+  return false;
+}
+
+function isLoopbackOriginLike(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function enforceLoopbackMutationGuards(
+  ctx: NostrProfileHttpContext,
+  req: IncomingMessage,
+  res: ServerResponse,
+): boolean {
+  // Mutation endpoints are local-control-plane only.
+  const remoteAddress = req.socket.remoteAddress;
+  if (!isLoopbackRemoteAddress(remoteAddress)) {
+    ctx.log?.warn?.(`Rejected mutation from non-loopback remoteAddress=${String(remoteAddress)}`);
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
+  // CSRF guard: browsers send Origin/Referer on cross-site requests.
+  const origin = req.headers.origin;
+  if (typeof origin === "string" && !isLoopbackOriginLike(origin)) {
+    ctx.log?.warn?.(`Rejected mutation with non-loopback origin=${origin}`);
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
+  const referer = req.headers.referer ?? req.headers.referrer;
+  if (typeof referer === "string" && !isLoopbackOriginLike(referer)) {
+    ctx.log?.warn?.(`Rejected mutation with non-loopback referer=${referer}`);
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
+  return true;
 }
 
 // ============================================================================
@@ -346,6 +410,10 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceLoopbackMutationGuards(ctx, req, res)) {
+    return true;
+  }
+
   // Rate limiting
   if (!checkRateLimit(accountId)) {
     sendJson(res, 429, { ok: false, error: "Rate limit exceeded (5 requests/minute)" });
@@ -445,6 +513,10 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceLoopbackMutationGuards(ctx, req, res)) {
+    return true;
+  }
+
   // Get account info
   const accountInfo = ctx.getAccountInfo(accountId);
   if (!accountInfo) {

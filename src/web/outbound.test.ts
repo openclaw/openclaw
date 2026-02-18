@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { setActiveWebListener } from "./active-listener.js";
 
@@ -131,7 +130,9 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/file.pdf",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf");
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
+      fileName: "file.pdf",
+    });
   });
 
   it("sends polls via active listener", async () => {
@@ -148,6 +149,7 @@ describe("web outbound", () => {
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
       maxSelections: 2,
+      durationSeconds: undefined,
       durationHours: undefined,
     });
   });

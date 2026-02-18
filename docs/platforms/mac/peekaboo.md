@@ -4,6 +4,7 @@ read_when:
   - Hosting PeekabooBridge in OpenClaw.app
   - Integrating Peekaboo via Swift Package Manager
   - Changing PeekabooBridge protocol/paths
+title: "Peekaboo Bridge"
 ---
 
 # Peekaboo Bridge (macOS UI automation)

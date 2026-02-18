@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import {
   enableConsoleCapture,
   resetLogger,
@@ -88,7 +86,10 @@ describe("enableConsoleCapture", () => {
     console.warn("[EventQueue] Slow listener detected");
     expect(warn).toHaveBeenCalledTimes(1);
     const firstArg = String(warn.mock.calls[0]?.[0] ?? "");
-    expect(firstArg.startsWith("2026-01-17T18:01:02.000Z [EventQueue]")).toBe(true);
+    // Timestamp uses local time with timezone offset instead of UTC "Z" suffix
+    expect(firstArg).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \[EventQueue\]/,
+    );
     vi.useRealTimers();
   });
 
@@ -122,6 +123,30 @@ describe("enableConsoleCapture", () => {
     const payload = JSON.stringify({ ok: true });
     console.log(payload);
     expect(log).toHaveBeenCalledWith(payload);
+  });
+
+  it("swallows async EPIPE on stdout", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    enableConsoleCapture();
+    const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+    epipe.code = "EPIPE";
+    expect(() => process.stdout.emit("error", epipe)).not.toThrow();
+  });
+
+  it("swallows async EPIPE on stderr", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    enableConsoleCapture();
+    const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+    epipe.code = "EPIPE";
+    expect(() => process.stderr.emit("error", epipe)).not.toThrow();
+  });
+
+  it("rethrows non-EPIPE errors on stdout", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    enableConsoleCapture();
+    const other = new Error("EACCES") as NodeJS.ErrnoException;
+    other.code = "EACCES";
+    expect(() => process.stdout.emit("error", other)).toThrow("EACCES");
   });
 });
 

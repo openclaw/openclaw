@@ -3,6 +3,7 @@ summary: "Bun workflow (experimental): installs and gotchas vs pnpm"
 read_when:
   - You want the fastest local dev loop (bun + watch)
   - You hit Bun install/patch/lifecycle script issues
+title: "Bun (Experimental)"
 ---
 
 # Bun (experimental)

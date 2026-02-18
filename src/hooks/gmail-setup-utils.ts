@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { hasBinary } from "../agents/skills.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
@@ -8,6 +7,10 @@ import { normalizeServePath } from "./gmail.js";
 
 let cachedPythonPath: string | null | undefined;
 const MAX_OUTPUT_CHARS = 800;
+
+export function resetGmailSetupUtilsCachesForTest(): void {
+  cachedPythonPath = undefined;
+}
 
 function trimOutput(value: string): string {
   const trimmed = value.trim();

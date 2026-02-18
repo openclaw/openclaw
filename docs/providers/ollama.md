@@ -3,19 +3,22 @@ summary: "Run OpenClaw with Ollama (local LLM runtime)"
 read_when:
   - You want to run OpenClaw with local models via Ollama
   - You need Ollama setup and configuration guidance
+title: "Ollama"
 ---
 
 # Ollama
 
-Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's native API (`/api/chat`), supporting streaming and tool calling, and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## Quick start
 
-1. Install Ollama: https://ollama.ai
+1. Install Ollama: [https://ollama.ai](https://ollama.ai)
 
 2. Pull a model:
 
 ```bash
+ollama pull gpt-oss:20b
+# or
 ollama pull llama3.3
 # or
 ollama pull qwen2.5-coder:32b
@@ -39,7 +42,7 @@ openclaw config set models.providers.ollama.apiKey "ollama-local"
 {
   agents: {
     defaults: {
-      model: { primary: "ollama/llama3.3" },
+      model: { primary: "ollama/gpt-oss:20b" },
     },
   },
 }
@@ -98,14 +101,13 @@ Use explicit config when:
   models: {
     providers: {
       ollama: {
-        // Use a host that includes /v1 for OpenAI-compatible APIs
-        baseUrl: "http://ollama-host:11434/v1",
+        baseUrl: "http://ollama-host:11434",
         apiKey: "ollama-local",
-        api: "openai-completions",
+        api: "ollama",
         models: [
           {
-            id: "llama3.3",
-            name: "Llama 3.3",
+            id: "gpt-oss:20b",
+            name: "GPT-OSS 20B",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -131,7 +133,7 @@ If Ollama is running on a different host or port (explicit config disables auto-
     providers: {
       ollama: {
         apiKey: "ollama-local",
-        baseUrl: "http://ollama-host:11434/v1",
+        baseUrl: "http://ollama-host:11434",
       },
     },
   },
@@ -147,8 +149,8 @@ Once configured, all your Ollama models are available:
   agents: {
     defaults: {
       model: {
-        primary: "ollama/llama3.3",
-        fallback: ["ollama/qwen2.5-coder:32b"],
+        primary: "ollama/gpt-oss:20b",
+        fallbacks: ["ollama/llama3.3", "ollama/qwen2.5-coder:32b"],
       },
     },
   },
@@ -168,6 +170,31 @@ ollama pull deepseek-r1:32b
 ### Model Costs
 
 Ollama is free and runs locally, so all model costs are set to $0.
+
+### Streaming Configuration
+
+OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by default, which fully supports streaming and tool calling simultaneously. No special configuration is needed.
+
+#### Legacy OpenAI-Compatible Mode
+
+If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy that only supports OpenAI format), set `api: "openai-completions"` explicitly:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://ollama-host:11434/v1",
+        api: "openai-completions",
+        apiKey: "ollama-local",
+        models: [...]
+      }
+    }
+  }
+}
+```
+
+Note: The OpenAI-compatible endpoint may not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
 
 ### Context windows
 
@@ -200,7 +227,8 @@ To add models:
 
 ```bash
 ollama list  # See what's installed
-ollama pull llama3.3  # Pull a model
+ollama pull gpt-oss:20b  # Pull a tool-capable model
+ollama pull llama3.3     # Or another model
 ```
 
 ### Connection refused
