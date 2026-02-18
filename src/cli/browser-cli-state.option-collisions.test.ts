@@ -5,7 +5,7 @@ import { registerBrowserStateCommands } from "./browser-cli-state.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
-  runBrowserResizeWithOutput: vi.fn(async (_params?: unknown) => {}),
+  runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -14,11 +14,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./browser-cli-shared.js", () => ({
-  callBrowserRequest: (...args: unknown[]) => mocks.callBrowserRequest(...args),
+  callBrowserRequest: mocks.callBrowserRequest,
 }));
 
 vi.mock("./browser-cli-resize.js", () => ({
-  runBrowserResizeWithOutput: (params: unknown) => mocks.runBrowserResizeWithOutput(params),
+  runBrowserResizeWithOutput: mocks.runBrowserResizeWithOutput,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -61,7 +61,10 @@ describe("browser state option collisions", () => {
 
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
     expect(call).toBeDefined();
-    const request = call?.[1] as { body?: { targetId?: string } };
+    if (!call) {
+      throw new Error("expected browser request call");
+    }
+    const request = call[1] as { body?: { targetId?: string } };
     expect(request.body?.targetId).toBe("tab-1");
   });
 
@@ -81,7 +84,10 @@ describe("browser state option collisions", () => {
 
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
     expect(call).toBeDefined();
-    const request = call?.[1] as { body?: { headers?: Record<string, string> } };
+    if (!call) {
+      throw new Error("expected browser request call");
+    }
+    const request = call[1] as { body?: { headers?: Record<string, string> } };
     expect(request.body?.headers).toEqual({ "x-auth": "ok" });
   });
 });

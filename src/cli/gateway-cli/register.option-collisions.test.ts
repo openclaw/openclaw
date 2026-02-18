@@ -1,10 +1,10 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const callGatewayCli = vi.fn(async (_method?: string, _opts?: unknown, _params?: unknown) => ({
+const callGatewayCli = vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
   ok: true,
 }));
-const gatewayStatusCommand = vi.fn(async (_opts?: unknown, _runtime?: unknown) => {});
+const gatewayStatusCommand = vi.fn(async (_opts: unknown, _runtime: unknown) => {});
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];

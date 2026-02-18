@@ -235,4 +235,22 @@ describe("gateway send mirroring", () => {
       }),
     );
   });
+
+  it("forwards threadId to outbound delivery when provided", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-thread", channel: "slack" }]);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      threadId: "1710000000.9999",
+      idempotencyKey: "idem-thread",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "1710000000.9999",
+      }),
+    );
+  });
 });

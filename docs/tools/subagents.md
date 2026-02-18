@@ -30,6 +30,10 @@ Use `/subagents` to inspect or control sub-agent runs for the **current session*
 
 - The spawn command is non-blocking; it returns a run id immediately.
 - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
+- For manual spawns, delivery is resilient:
+  - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
+  - If direct delivery fails, it falls back to queue routing.
+  - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
 - The completion message is a system message and includes:
   - `Result` (`assistant` reply text, or latest `toolResult` if the assistant reply is empty)
   - `Status` (`completed successfully` / `failed` / `timed out`)

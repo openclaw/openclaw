@@ -1,12 +1,12 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const startGatewayServer = vi.fn(async (_port?: number, _opts?: unknown) => ({
+const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
   close: vi.fn(async () => {}),
 }));
-const setGatewayWsLogStyle = vi.fn((_style?: string) => undefined);
-const setVerbose = vi.fn((_enabled?: boolean) => undefined);
-const forceFreePortAndWait = vi.fn(async (_port?: number, _opts?: unknown) => ({
+const setGatewayWsLogStyle = vi.fn((_style: string) => undefined);
+const setVerbose = vi.fn((_enabled: boolean) => undefined);
+const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   killed: [],
   waitedMs: 0,
   escalatedToSigkill: false,
