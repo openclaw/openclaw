@@ -715,6 +715,7 @@ static CHAT_INJECT_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static SEND_MESSAGE_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static POLL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
+    "connect",
     "health",
     "status",
     "usage.status",
@@ -842,6 +843,7 @@ impl RpcDispatcher {
 
     pub async fn handle_request(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
         match normalize(&req.method).as_str() {
+            "connect" => self.handle_connect().await,
             "health" => self.handle_health().await,
             "status" => self.handle_status().await,
             "usage.status" => self.handle_usage_status().await,
@@ -968,6 +970,10 @@ impl RpcDispatcher {
             }
             _ => {}
         }
+    }
+
+    async fn handle_connect(&self) -> RpcDispatchOutcome {
+        RpcDispatchOutcome::bad_request("connect is only valid as the first request")
     }
 
     async fn handle_health(&self) -> RpcDispatchOutcome {
@@ -11949,6 +11955,12 @@ mod tests {
         let spec = resolved.spec.expect("spec");
         assert_eq!(spec.family, MethodFamily::Sessions);
         assert!(spec.requires_auth);
+
+        let connect = registry.resolve("connect");
+        assert!(connect.known);
+        let connect_spec = connect.spec.expect("connect spec");
+        assert_eq!(connect_spec.family, MethodFamily::Connect);
+        assert!(connect_spec.requires_auth);
     }
 
     #[test]
@@ -11958,6 +11970,28 @@ mod tests {
             let resolved = registry.resolve(method);
             assert!(!resolved.known);
             assert!(resolved.spec.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_rejects_connect_method_after_handshake() {
+        let dispatcher = RpcDispatcher::new();
+        let req = RpcRequestFrame {
+            id: "req-connect-after-handshake".to_owned(),
+            method: "connect".to_owned(),
+            params: serde_json::json!({
+                "client": {
+                    "id": "openclaw-cli",
+                    "mode": "cli"
+                }
+            }),
+        };
+        match dispatcher.handle_request(&req).await {
+            RpcDispatchOutcome::Error { code, message, .. } => {
+                assert_eq!(code, 400);
+                assert_eq!(message, "connect is only valid as the first request");
+            }
+            _ => panic!("expected connect rejection after handshake"),
         }
     }
 
