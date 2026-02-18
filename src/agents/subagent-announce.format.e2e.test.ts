@@ -8,6 +8,7 @@ type RequesterResolution = {
 } | null;
 
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const readLatestAssistantReplyMock = vi.fn(
   async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
@@ -64,6 +65,9 @@ vi.mock("../gateway/call.js", () => ({
     if (typed.method === "agent") {
       return await agentSpy(typed);
     }
+    if (typed.method === "send") {
+      return await sendSpy(typed);
+    }
     if (typed.method === "agent.wait") {
       return { status: "error", startedAt: 10, endedAt: 20, error: "boom" };
     }
@@ -109,6 +113,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 describe("subagent announce formatting", () => {
   beforeEach(() => {
     agentSpy.mockClear();
+    sendSpy.mockClear();
     sessionsDeleteSpy.mockClear();
     embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
@@ -327,6 +332,85 @@ describe("subagent announce formatting", () => {
     );
     expect(msg).toContain("step-0");
     expect(msg).toContain("step-139");
+  });
+
+  it("sends deterministic completion message directly for manual spawn completion", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct",
+        inputTokens: 12,
+        outputTokens: 34,
+        totalTokens: 46,
+      },
+      "agent:main:main": {
+        sessionId: "requester-session",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: 2" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const rawMessage = call?.params?.message;
+    const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.sessionKey).toBe("agent:main:main");
+    expect(msg).toContain("[System Message]");
+    expect(msg).toContain('subagent task "do thing"');
+    expect(msg).toContain("Result:");
+    expect(msg).toContain("final answer: 2");
+    expect(msg).toContain("Stats:");
+    expect(msg).not.toContain("Convert the result above into your normal assistant voice");
+  });
+
+  it("ignores stale session thread hints for manual completion direct-send", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-thread",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-thread",
+        lastChannel: "discord",
+        lastTo: "channel:stale",
+        lastThreadId: 42,
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-stale-thread",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("discord");
+    expect(call?.params?.to).toBe("channel:12345");
   });
 
   it("steers announcements into an active run when queue mode is steer", async () => {
