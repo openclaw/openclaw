@@ -51,6 +51,15 @@ describe("profile CRUD endpoints", () => {
     state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
 
+    // Clear gateway auth env vars so the browser control server starts without
+    // auth requirements. Without this, ambient OPENCLAW_GATEWAY_TOKEN /
+    // OPENCLAW_GATEWAY_PASSWORD cause the server to return 401 instead of the
+    // expected 400/validation errors. Pattern mirrors installBrowserControlServerHooks.
+    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -70,6 +79,16 @@ describe("profile CRUD endpoints", () => {
       delete process.env.OPENCLAW_GATEWAY_PORT;
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
+    }
+    if (state.prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
+    }
+    if (state.prevGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = state.prevGatewayPassword;
     }
     await stopBrowserControlServer();
   });

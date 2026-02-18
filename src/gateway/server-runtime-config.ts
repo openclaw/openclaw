@@ -88,6 +88,21 @@ export async function resolveGatewayRuntimeConfig(params: {
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
 
   assertGatewayAuthConfigured(resolvedAuth);
+
+  // Explicit validation: if a specific credential-bearing auth mode is requested,
+  // the corresponding secret must be present regardless of bind host.
+  // This catches misconfiguration early and gives a clear error message.
+  if (authMode === "token" && !hasToken) {
+    throw new Error(
+      "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+    );
+  }
+  if (authMode === "password" && !hasPassword) {
+    throw new Error(
+      "gateway auth mode is password, but no password was configured (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
+    );
+  }
+
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",

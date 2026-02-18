@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 describe("resolveGatewayRuntimeConfig", () => {
@@ -78,6 +78,29 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("token/password auth modes", () => {
+    // Clear ambient gateway auth env vars so these tests exercise config-only
+    // credential paths, independent of any token/password set in the shell.
+    let prevToken: string | undefined;
+    let prevPassword: string | undefined;
+    beforeEach(() => {
+      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    });
+    afterEach(() => {
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+      if (prevPassword === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
+      }
+    });
+
     it("should reject token mode without token configured", async () => {
       const cfg = {
         gateway: {
