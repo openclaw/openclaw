@@ -1,6 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ChannelManager } from "./server-channels.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ChannelManager } from "./server-channels.js";
 
 const log = createSubsystemLogger("gateway/health-monitor");
 
@@ -64,6 +64,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   const restartRecords = new Map<string, RestartRecord>();
   const startedAt = Date.now();
   let stopped = false;
+  let checkInFlight = false;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
@@ -73,74 +74,81 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   }
 
   async function runCheck() {
-    if (stopped) {
+    if (stopped || checkInFlight) {
       return;
     }
+    checkInFlight = true;
 
-    const now = Date.now();
-    if (now - startedAt < startupGraceMs) {
-      return;
-    }
-
-    const snapshot = channelManager.getRuntimeSnapshot();
-
-    for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
-      if (!accounts) {
-        continue;
+    try {
+      const now = Date.now();
+      if (now - startedAt < startupGraceMs) {
+        return;
       }
-      for (const [accountId, status] of Object.entries(accounts)) {
-        if (!status) {
+
+      const snapshot = channelManager.getRuntimeSnapshot();
+
+      for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
+        if (!accounts) {
           continue;
         }
-        if (!isManagedAccount(status)) {
-          continue;
-        }
-        if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
-          continue;
-        }
-        if (isChannelHealthy(status)) {
-          continue;
-        }
-
-        const key = rKey(channelId, accountId);
-        const record = restartRecords.get(key) ?? {
-          lastRestartAt: 0,
-          restartsThisHour: [],
-        };
-
-        if (now - record.lastRestartAt <= cooldownMs) {
-          continue;
-        }
-
-        pruneOldRestarts(record, now);
-        if (record.restartsThisHour.length >= maxRestartsPerHour) {
-          log.warn?.(
-            `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
-          );
-          continue;
-        }
-
-        const reason = !status.running
-          ? status.reconnectAttempts && status.reconnectAttempts >= 10
-            ? "gave-up"
-            : "stopped"
-          : "stuck";
-
-        log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
-
-        try {
-          if (status.running) {
-            await channelManager.stopChannel(channelId as ChannelId, accountId);
+        for (const [accountId, status] of Object.entries(accounts)) {
+          if (!status) {
+            continue;
           }
-          channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
-          await channelManager.startChannel(channelId as ChannelId, accountId);
-          record.lastRestartAt = now;
-          record.restartsThisHour.push({ at: now });
-          restartRecords.set(key, record);
-        } catch (err) {
-          log.error?.(`[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`);
+          if (!isManagedAccount(status)) {
+            continue;
+          }
+          if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
+            continue;
+          }
+          if (isChannelHealthy(status)) {
+            continue;
+          }
+
+          const key = rKey(channelId, accountId);
+          const record = restartRecords.get(key) ?? {
+            lastRestartAt: 0,
+            restartsThisHour: [],
+          };
+
+          if (now - record.lastRestartAt <= cooldownMs) {
+            continue;
+          }
+
+          pruneOldRestarts(record, now);
+          if (record.restartsThisHour.length >= maxRestartsPerHour) {
+            log.warn?.(
+              `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
+            );
+            continue;
+          }
+
+          const reason = !status.running
+            ? status.reconnectAttempts && status.reconnectAttempts >= 10
+              ? "gave-up"
+              : "stopped"
+            : "stuck";
+
+          log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
+
+          try {
+            if (status.running) {
+              await channelManager.stopChannel(channelId as ChannelId, accountId);
+            }
+            channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
+            await channelManager.startChannel(channelId as ChannelId, accountId);
+            record.lastRestartAt = now;
+            record.restartsThisHour.push({ at: now });
+            restartRecords.set(key, record);
+          } catch (err) {
+            log.error?.(
+              `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,
+            );
+          }
         }
       }
+    } finally {
+      checkInFlight = false;
     }
   }
 

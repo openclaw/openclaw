@@ -1,13 +1,12 @@
-import type { ZodIssue } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
+import type { ZodIssue } from "zod";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
 } from "../channels/telegram/allow-from.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   OpenClawSchema,
   CONFIG_PATH,
@@ -19,6 +18,7 @@ import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/acco
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {
@@ -145,6 +145,30 @@ function noteOpencodeProviderOverrides(cfg: OpenClawConfig) {
   );
 
   note(lines.join("\n"), "OpenCode Zen");
+}
+
+function noteIncludeConfinementWarning(snapshot: {
+  path?: string | null;
+  issues?: Array<{ message: string }>;
+}): void {
+  const issues = snapshot.issues ?? [];
+  const includeIssue = issues.find(
+    (issue) =>
+      issue.message.includes("Include path escapes config directory") ||
+      issue.message.includes("Include path resolves outside config directory"),
+  );
+  if (!includeIssue) {
+    return;
+  }
+  const configRoot = path.dirname(snapshot.path ?? CONFIG_PATH);
+  note(
+    [
+      `- $include paths must stay under: ${configRoot}`,
+      '- Move shared include files under that directory and update to relative paths like "./shared/common.json".',
+      `- Error: ${includeIssue.message}`,
+    ].join("\n"),
+    "Doctor warnings",
+  );
 }
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
@@ -758,6 +782,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const fixHints: string[] = [];
   if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
     note("Config invalid; doctor will run with best-effort config.", "Config");
+    noteIncludeConfinementWarning(snapshot);
   }
   const warnings = snapshot.warnings ?? [];
   if (warnings.length > 0) {

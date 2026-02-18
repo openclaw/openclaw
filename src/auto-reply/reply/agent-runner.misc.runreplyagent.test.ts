@@ -642,10 +642,11 @@ describe("runReplyAgent claude-cli routing", () => {
   }
 
   it("uses claude-cli runner for claude-cli provider", async () => {
-    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue("run-1");
+    const runId = "00000000-0000-0000-0000-000000000001";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
     const lifecyclePhases: string[] = [];
     const unsubscribe = onAgentEvent((evt) => {
-      if (evt.runId !== "run-1") {
+      if (evt.runId !== runId) {
         return;
       }
       if (evt.stream !== "lifecycle") {

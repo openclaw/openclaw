@@ -63,7 +63,8 @@ describe("runCommandWithTimeout", () => {
       },
     );
 
-    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.code ?? 0).toBe(0);
     expect(result.termination).toBe("exit");
     expect(result.noOutputTimedOut).toBe(false);
     expect(result.stdout.length).toBeGreaterThanOrEqual(2);

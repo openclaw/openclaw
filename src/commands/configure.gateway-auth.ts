@@ -30,6 +30,7 @@ function sanitizeTokenValue(value: string | undefined): string | undefined {
 
 const ANTHROPIC_OAUTH_MODEL_KEYS = [
   "anthropic/claude-opus-4-6",
+  "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-haiku-4-5",
