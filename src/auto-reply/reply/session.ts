@@ -144,6 +144,7 @@ export async function initSessionState(params: {
   let persistedVerbose: string | undefined;
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
+  let persistedResponseUsage: "on" | "off" | "tokens" | "full" | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
@@ -241,6 +242,7 @@ export async function initSessionState(params: {
     persistedVerbose = entry.verboseLevel;
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
+    persistedResponseUsage = entry.responseUsage;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
   } else {
@@ -249,13 +251,14 @@ export async function initSessionState(params: {
     systemSent = false;
     abortedLastRun = false;
     // When a reset trigger (/new, /reset) starts a new session, carry over
-    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
+    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto, responseUsage)
     // so the user doesn't have to re-enable them every time.
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedResponseUsage = entry.responseUsage;
     }
   }
 
@@ -291,7 +294,7 @@ export async function initSessionState(params: {
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
-    responseUsage: baseEntry?.responseUsage,
+    responseUsage: persistedResponseUsage ?? baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     sendPolicy: baseEntry?.sendPolicy,
