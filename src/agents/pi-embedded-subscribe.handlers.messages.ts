@@ -279,7 +279,12 @@ export function handleMessageEnd(
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  ctx.finalizeAssistantTexts({
+    text,
+    addedDuringMessage,
+    chunkerHasBuffered,
+    stopReason: (assistantMessage as { stopReason?: string }).stopReason,
+  });
 
   const onBlockReply = ctx.params.onBlockReply;
   const shouldEmitReasoning = Boolean(
@@ -337,14 +342,19 @@ export function handleMessageEnd(
           } = splitResult;
           // Emit if there's content OR audioAsVoice flag (to propagate the flag).
           if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-            void onBlockReply({
+            const payload = {
               text: cleanedText,
               mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
               audioAsVoice,
               replyToId,
               replyToTag,
               replyToCurrent,
-            });
+            };
+            if (ctx.state.suppressPreToolText) {
+              ctx.state.pendingBlockReplies.push(payload);
+            } else {
+              void onBlockReply(payload);
+            }
           }
         }
       }
@@ -370,14 +380,19 @@ export function handleMessageEnd(
         replyToCurrent,
       } = tailResult;
       if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-        void onBlockReply({
+        const payload = {
           text: cleanedText,
           mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
           audioAsVoice,
           replyToId,
           replyToTag,
           replyToCurrent,
-        });
+        };
+        if (ctx.state.suppressPreToolText) {
+          ctx.state.pendingBlockReplies.push(payload);
+        } else {
+          void onBlockReply(payload);
+        }
       }
     }
   }
@@ -390,4 +405,21 @@ export function handleMessageEnd(
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
+
+  // Flush or discard pending block replies (suppressPreToolText buffering).
+  // Must be AFTER all drains (chunker, blockBuffer, tail directives).
+  if (ctx.state.pendingBlockReplies.length > 0) {
+    const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
+    const isVerbose = ctx.params.verboseLevel && ctx.params.verboseLevel !== "off";
+    if (stopReason === "toolUse" && ctx.state.suppressPreToolText && !isVerbose) {
+      // Discard — this was intermediate narration
+      ctx.state.pendingBlockReplies.length = 0;
+    } else {
+      // Flush — this is a final answer, send all buffered replies
+      for (const payload of ctx.state.pendingBlockReplies) {
+        void ctx.params.onBlockReply?.(payload);
+      }
+      ctx.state.pendingBlockReplies.length = 0;
+    }
+  }
 }

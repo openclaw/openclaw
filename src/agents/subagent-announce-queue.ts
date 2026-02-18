@@ -80,7 +80,7 @@ function getAnnounceQueue(
     draining: false,
     lastEnqueuedAt: 0,
     mode: settings.mode,
-    debounceMs: typeof settings.debounceMs === "number" ? Math.max(0, settings.debounceMs) : 1000,
+    debounceMs: typeof settings.debounceMs === "number" ? Math.max(0, settings.debounceMs) : 3000,
     cap: typeof settings.cap === "number" && settings.cap > 0 ? Math.floor(settings.cap) : 20,
     dropPolicy: settings.dropPolicy ?? "summarize",
     droppedCount: 0,

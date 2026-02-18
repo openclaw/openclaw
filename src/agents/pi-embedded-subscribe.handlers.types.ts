@@ -57,7 +57,16 @@ export type EmbeddedPiSubscribeState = {
   lastAssistantTextNormalized?: string;
   lastAssistantTextTrimmed?: string;
   assistantTextBaseline: number;
+  suppressPreToolText: boolean;
   suppressBlockChunks: boolean;
+  pendingBlockReplies: Array<{
+    text?: string;
+    mediaUrls?: string[];
+    audioAsVoice?: boolean;
+    replyToId?: string;
+    replyToTag?: boolean;
+    replyToCurrent?: boolean;
+  }>;
   lastReasoningSent?: string;
 
   compactionInFlight: boolean;
@@ -112,6 +121,7 @@ export type EmbeddedPiSubscribeContext = {
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
+    stopReason?: string;
   }) => void;
   trimMessagingToolSent: () => void;
   ensureCompactionPromise: () => void;

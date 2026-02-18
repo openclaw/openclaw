@@ -776,6 +776,7 @@ export async function runEmbeddedAttempt(
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: params.sessionKey ?? params.sessionId,
+        suppressPreToolText: params.suppressPreToolText,
       });
 
       const {

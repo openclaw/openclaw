@@ -60,7 +60,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastAssistantTextNormalized: undefined,
     lastAssistantTextTrimmed: undefined,
     assistantTextBaseline: 0,
+    suppressPreToolText: params.suppressPreToolText ?? false,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
+    pendingBlockReplies: [],
     lastReasoningSent: undefined,
     compactionInFlight: false,
     pendingCompactionRetry: 0,
@@ -118,6 +120,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
     state.suppressBlockChunks = false;
+    state.pendingBlockReplies.length = 0;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -162,6 +165,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
+    stopReason?: string;
   }) => {
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
 
@@ -183,6 +187,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       // Non-streaming models (no text_delta): ensure assistantTexts gets the final
       // text when the chunker has nothing buffered to drain.
       pushAssistantText(text);
+    }
+
+    // When the message ended with a tool call, the texts produced before the
+    // tool call were intermediate narration (e.g. "Lass mich nachschauen...").
+    // Discard them so only the final answer turn's texts are delivered.
+    // In verbose mode, keep everything for debugging.
+    const isVerbose = params.verboseLevel && params.verboseLevel !== "off";
+    if (args.stopReason === "toolUse" && state.suppressPreToolText && !isVerbose) {
+      assistantTexts.splice(state.assistantTextBaseline);
     }
 
     state.assistantTextBaseline = assistantTexts.length;
@@ -514,14 +527,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
-    void params.onBlockReply({
+    const payload = {
       text: cleanedText,
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       audioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
-    });
+    };
+    if (state.suppressPreToolText) {
+      state.pendingBlockReplies.push(payload);
+    } else {
+      void params.onBlockReply(payload);
+    }
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>

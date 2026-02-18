@@ -134,6 +134,7 @@ export async function runMemoryFlushIfNeeded(params: {
           extraSystemPrompt: flushSystemPrompt,
           ownerNumbers: params.followupRun.run.ownerNumbers,
           enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
+          suppressPreToolText: params.followupRun.run.suppressPreToolText,
           provider,
           model,
           ...authProfile,
