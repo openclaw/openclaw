@@ -75,7 +75,7 @@ export async function handlePrivateChatMessage(params: HandlePrivateChatParams):
 
   if (verbose) {
     getInfoflowBotLog().debug?.(
-      `[infoflow] private chat: fromuser=${fromuser}, senderName=${senderName}`,
+      `[infoflow] private chat: fromuser=${fromuser}, senderName=${senderName}, raw msgData: ${JSON.stringify(msgData)}`,
     );
   }
 
@@ -125,6 +125,12 @@ export async function handleGroupChatMessage(params: HandleGroupChatParams): Pro
   // Extract timestamp (time is in milliseconds)
   const rawTime = msgData.time ?? header?.servertime;
   const timestamp = rawTime != null ? Number(rawTime) : Date.now();
+
+  if (verbose) {
+    getInfoflowBotLog().debug?.(
+      `[infoflow] group chat: fromuser=${fromuser}, groupid=${groupid}, raw msgData: ${JSON.stringify(msgData)}`,
+    );
+  }
 
   if (!fromuser) {
     return;
