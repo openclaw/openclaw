@@ -454,6 +454,7 @@ export async function runCronIsolatedAgentTurn(params: {
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (resolvedDelivery.error) {
       if (!deliveryBestEffort) {
+        clearAgentRunContext(cronSession.sessionEntry.sessionId);
         return {
           status: "error",
           error: resolvedDelivery.error.message,
@@ -468,6 +469,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (!resolvedDelivery.to) {
       const message = "cron delivery target is missing";
       if (!deliveryBestEffort) {
+        clearAgentRunContext(cronSession.sessionEntry.sessionId);
         return {
           status: "error",
           error: message,

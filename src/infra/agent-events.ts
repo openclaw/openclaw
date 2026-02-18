@@ -53,6 +53,7 @@ export function clearAgentRunContext(runId: string) {
 
 export function resetAgentRunContextForTest() {
   runContextById.clear();
+  seqByRun.clear();
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
