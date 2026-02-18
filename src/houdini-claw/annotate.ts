@@ -11,6 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import type { ParsedNodeDoc } from "./crawl.js";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -19,6 +20,8 @@ interface AnnotationRequest {
   system: string;
   rawDoc: string;
   sourceUrl: string;
+  /** Structured parameter data from DOM parsing (when available). */
+  parsedDoc?: ParsedNodeDoc;
 }
 
 interface AnnotationResult {
@@ -89,11 +92,36 @@ interface ErrorPatternData {
 // ── Annotation Prompt ──────────────────────────────────────
 
 function buildAnnotationPrompt(request: AnnotationRequest): string {
+  // Build structured parameter list if parsedDoc is available
+  let parameterSection = "";
+  if (request.parsedDoc && request.parsedDoc.parameters.length > 0) {
+    const paramLines = request.parsedDoc.parameters.map(
+      (p) => `- **${p.label}** (${p.folder}): ${p.description || "No description"}`,
+    );
+    parameterSection = `
+## Extracted Parameters (${request.parsedDoc.parameters.length} found):
+${paramLines.join("\n")}
+
+IMPORTANT: The above parameter list was extracted via DOM parsing. Use it as a complete
+reference for which parameters exist on this node. Annotate ALL important parameters
+from this list, not just those mentioned in the raw text.
+`;
+  }
+
+  // Include related nodes if available
+  let relatedSection = "";
+  if (request.parsedDoc && request.parsedDoc.relatedNodes.length > 0) {
+    relatedSection = `
+## Related Nodes (from page links):
+${request.parsedDoc.relatedNodes.join(", ")}
+`;
+  }
+
   return `You are a senior Houdini Technical Director. Based on the following official documentation, generate a comprehensive structured annotation for the "${request.nodeName}" node.
 
 System category: ${request.system}
 Source URL: ${request.sourceUrl}
-
+${parameterSection}${relatedSection}
 ## Raw Documentation:
 ${request.rawDoc}
 
@@ -273,7 +301,7 @@ export async function annotateAll(options: {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  const files = fs.readdirSync(inputDir).filter((f) => f.endsWith(".json"));
+  const files = fs.readdirSync(inputDir).filter((f: string) => f.endsWith(".json"));
   let annotated = 0;
   let errors = 0;
   let skipped = 0;
@@ -296,6 +324,7 @@ export async function annotateAll(options: {
         nodeName: string;
         url: string;
         content: string;
+        parsedDoc?: ParsedNodeDoc;
       };
 
       // Extract system from filename (format: system--nodename.json)
@@ -307,6 +336,7 @@ export async function annotateAll(options: {
           system,
           rawDoc: rawData.content,
           sourceUrl: rawData.url,
+          parsedDoc: rawData.parsedDoc,
         },
         {
           model: options.model,

@@ -6,15 +6,17 @@
  *
  * Usage:
  *   bun src/houdini-claw/crawl.ts --mode full|incremental --output /tmp/houdini-raw/
+ *   bun src/houdini-claw/crawl.ts --mode full --discover --output /tmp/houdini-raw/
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { parseHTML } from "linkedom";
 
 // ── Types ──────────────────────────────────────────────────
 
-interface CrawlSource {
+export interface CrawlSource {
   id: string;
   type: "sidefx_docs" | "sidefx_forum" | "odforce" | "tutorial" | "hip_file";
   baseUrl: string;
@@ -22,7 +24,25 @@ interface CrawlSource {
   enabled: boolean;
 }
 
-interface CrawledPage {
+/** A parameter extracted from a SideFX documentation page. */
+export interface DocParameter {
+  name: string;
+  label: string;
+  description: string;
+  folder: string;
+}
+
+/** Structured result from parsing a SideFX node documentation page. */
+export interface ParsedNodeDoc {
+  title: string;
+  summary: string;
+  parameters: DocParameter[];
+  sections: Array<{ heading: string; content: string }>;
+  relatedNodes: string[];
+  rawText: string;
+}
+
+export interface CrawledPage {
   url: string;
   sourceType: string;
   nodeName?: string;
@@ -30,6 +50,16 @@ interface CrawledPage {
   content: string;
   contentHash: string;
   crawledAt: string;
+  /** Structured parameter data extracted via DOM parsing (sidefx_docs only). */
+  parsedDoc?: ParsedNodeDoc;
+}
+
+/** A node discovered from the SideFX docs sitemap. */
+export interface DiscoveredNode {
+  path: string;
+  category: string;
+  nodeType: string;
+  lastmod?: string;
 }
 
 // ── Source Configuration ───────────────────────────────────
@@ -59,7 +89,7 @@ const CRAWL_SOURCES: CrawlSource[] = [
 ];
 
 // ── Known Houdini Node Paths ───────────────────────────────
-// These are the documentation URL paths for key nodes on the SideFX docs site.
+// Priority whitelist: these nodes are always crawled first.
 
 const PYRO_NODES = [
   "nodes/dop/pyrosolver",
@@ -155,10 +185,238 @@ export const ALL_NODE_PATHS: Record<string, string[]> = {
   sop: CORE_SOP_NODES,
 };
 
+// ── Structured HTML Parsing ──────────────────────────────────
+
+const FETCH_HEADERS = {
+  "User-Agent": "HoudiniClaw/1.0 (knowledge-base-builder)",
+  Accept: "text/html",
+};
+
+/**
+ * Parse a SideFX documentation HTML page into structured data
+ * using linkedom for proper DOM traversal.
+ *
+ * SideFX docs use: <h2> for section headings (tabs/folders),
+ * <h3> for parameter labels, <p> for descriptions.
+ */
+export function parseSideFxNodeDoc(html: string): ParsedNodeDoc {
+  const { document } = parseHTML(html);
+
+  // Remove noise
+  for (const tag of ["script", "style", "nav", "footer", "header"]) {
+    for (const el of document.querySelectorAll(tag)) {
+      el.remove();
+    }
+  }
+
+  const title = document.querySelector("h1")?.textContent?.trim() ?? "";
+  const summaryEl =
+    document.querySelector(".summary") ??
+    document.querySelector("#content > .content > p");
+  const summary = summaryEl?.textContent?.trim() ?? "";
+
+  // ── Extract parameters ──
+  const parameters: DocParameter[] = [];
+  const parmContainer =
+    document.querySelector("#parmpane") ??
+    document.querySelector(".parmpane") ??
+    document.querySelector(".parms") ??
+    document.querySelector("#content .content");
+
+  if (parmContainer) {
+    let currentFolder = "General";
+    let lastParam: DocParameter | null = null;
+
+    const walk = (node: ChildNode) => {
+      if (node.nodeType !== 1) return; // ELEMENT_NODE only
+      const el = node as unknown as Element;
+      const tag = el.tagName?.toUpperCase();
+
+      if (tag === "H2") {
+        currentFolder = el.textContent?.trim() ?? currentFolder;
+        lastParam = null;
+      } else if (tag === "H3") {
+        const label = el.textContent?.trim() ?? "";
+        if (label) {
+          lastParam = {
+            name: el.id || label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
+            label,
+            description: "",
+            folder: currentFolder,
+          };
+          parameters.push(lastParam);
+        }
+      } else if (tag === "P" && lastParam && !lastParam.description) {
+        const text = el.textContent?.trim() ?? "";
+        if (text) lastParam.description = text;
+      }
+
+      // Recurse into children
+      for (const child of el.childNodes) {
+        walk(child);
+      }
+    };
+
+    for (const child of parmContainer.childNodes) {
+      walk(child);
+    }
+  }
+
+  // ── Extract sections ──
+  const sections: Array<{ heading: string; content: string }> = [];
+  const allH2 = document.querySelectorAll("h2");
+  for (const h2 of allH2) {
+    const heading = h2.textContent?.trim() ?? "";
+    if (!heading) continue;
+
+    const parts: string[] = [];
+    let sibling = h2.nextElementSibling;
+    while (sibling && sibling.tagName?.toUpperCase() !== "H2") {
+      const text = sibling.textContent?.trim();
+      if (text) parts.push(text);
+      sibling = sibling.nextElementSibling;
+    }
+    if (parts.length > 0) {
+      sections.push({ heading, content: parts.join("\n") });
+    }
+  }
+
+  // ── Related nodes ──
+  const relatedSet = new Set<string>();
+  for (const link of document.querySelectorAll('a[href*="/nodes/"]')) {
+    const href = link.getAttribute("href");
+    if (!href) continue;
+    const m = href.match(/\/nodes\/(\w+)\/([\w-]+)/);
+    if (m) relatedSet.add(`nodes/${m[1]}/${m[2]}`);
+  }
+
+  // ── Raw text fallback ──
+  const contentEl = document.querySelector("#content") ?? document.body;
+  const rawText = (contentEl?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+  return {
+    title,
+    summary,
+    parameters,
+    sections,
+    relatedNodes: [...relatedSet],
+    rawText,
+  };
+}
+
+// ── Sitemap Discovery ────────────────────────────────────────
+
+/**
+ * Discover all node documentation pages from the SideFX docs sitemap.
+ */
+export async function discoverNodesFromSitemap(
+  baseUrl: string = "https://www.sidefx.com/docs/houdini/",
+): Promise<DiscoveredNode[]> {
+  const sitemapUrl = `${baseUrl}sitemap.xml`;
+
+  try {
+    const resp = await fetch(sitemapUrl, { headers: FETCH_HEADERS });
+    if (!resp.ok) {
+      console.warn(`[crawl] Sitemap fetch failed: HTTP ${resp.status}`);
+      return [];
+    }
+
+    const xml = await resp.text();
+    const nodes: DiscoveredNode[] = [];
+
+    const urlBlockPattern = /<url>([\s\S]*?)<\/url>/g;
+    let block: RegExpExecArray | null;
+
+    while ((block = urlBlockPattern.exec(xml)) !== null) {
+      const entry = block[1];
+      const loc = entry.match(/<loc>(.*?)<\/loc>/)?.[1] ?? "";
+      const lastmod = entry.match(/<lastmod>(.*?)<\/lastmod>/)?.[1];
+
+      const nodeMatch = loc.match(/\/nodes\/(\w+)\/([\w-]+?)(?:\.html)?$/);
+      if (nodeMatch) {
+        nodes.push({
+          path: `nodes/${nodeMatch[1]}/${nodeMatch[2]}`,
+          category: nodeMatch[1].toUpperCase(),
+          nodeType: nodeMatch[2],
+          lastmod: lastmod ?? undefined,
+        });
+      }
+    }
+
+    console.log(`[crawl] Sitemap: discovered ${nodes.length} node pages`);
+    return nodes;
+  } catch (err) {
+    console.error("[crawl] Sitemap discovery failed:", (err as Error).message);
+    return [];
+  }
+}
+
+/**
+ * Categorize a node path into a simulation system.
+ */
+function categorizeNodePath(nodePath: string): string {
+  const lower = nodePath.toLowerCase();
+
+  if (/pyro|smoke|fire|combustion|gas(?!sand)/.test(lower)) return "pyro";
+  if (/flip|ocean|whitewater|particlefluid|narrowband/.test(lower)) return "flip";
+  if (/rbd|bullet|voronoi|fracture|constraint|glue|spring|cone.*twist/.test(lower)) return "rbd";
+  if (/vellum/.test(lower)) return "vellum";
+
+  const category = nodePath.match(/^nodes\/(\w+)\//)?.[1];
+  return category ?? "other";
+}
+
+/**
+ * Resolve node paths by merging the priority whitelist with sitemap discovery.
+ *
+ * - "whitelist": only hardcoded ALL_NODE_PATHS
+ * - "discover": only sitemap results
+ * - "both": whitelist nodes first, then discovered nodes not in the whitelist
+ */
+export async function resolveNodePaths(
+  mode: "whitelist" | "discover" | "both" = "whitelist",
+  baseUrl?: string,
+): Promise<Record<string, string[]>> {
+  if (mode === "whitelist") {
+    return ALL_NODE_PATHS;
+  }
+
+  const discovered = await discoverNodesFromSitemap(baseUrl);
+  const discoveredMap: Record<string, string[]> = {};
+
+  for (const node of discovered) {
+    const system = categorizeNodePath(node.path);
+    if (!discoveredMap[system]) discoveredMap[system] = [];
+    discoveredMap[system].push(node.path);
+  }
+
+  if (mode === "discover") {
+    return discoveredMap;
+  }
+
+  // mode === "both": merge whitelist + discovered
+  const whitelistSet = new Set(Object.values(ALL_NODE_PATHS).flat());
+  const merged: Record<string, string[]> = {};
+
+  for (const [system, paths] of Object.entries(ALL_NODE_PATHS)) {
+    merged[system] = [...paths];
+  }
+  for (const [system, paths] of Object.entries(discoveredMap)) {
+    if (!merged[system]) merged[system] = [];
+    for (const p of paths) {
+      if (!whitelistSet.has(p)) {
+        merged[system].push(p);
+      }
+    }
+  }
+
+  return merged;
+}
+
 // ── Crawler Functions ──────────────────────────────────────
 
 /**
- * Crawl a single SideFX documentation page and extract content.
+ * Crawl a single SideFX documentation page and extract structured content.
  */
 export async function crawlSideFxDoc(
   nodePath: string,
@@ -168,12 +426,7 @@ export async function crawlSideFxDoc(
   const nodeName = nodePath.split("/").pop() ?? nodePath;
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "HoudiniClaw/1.0 (knowledge-base-builder)",
-        Accept: "text/html",
-      },
-    });
+    const response = await fetch(url, { headers: FETCH_HEADERS });
 
     if (!response.ok) {
       console.warn(`[crawl] HTTP ${response.status} for ${url}`);
@@ -181,63 +434,41 @@ export async function crawlSideFxDoc(
     }
 
     const html = await response.text();
-    const content = extractDocContent(html);
+    const parsedDoc = parseSideFxNodeDoc(html);
+
+    // Build structured content string for hashing and backward compat
+    const contentParts = [parsedDoc.title, parsedDoc.summary];
+
+    if (parsedDoc.parameters.length > 0) {
+      contentParts.push("## Parameters");
+      for (const p of parsedDoc.parameters) {
+        contentParts.push(`### ${p.label} (${p.folder})`);
+        if (p.description) contentParts.push(p.description);
+      }
+    }
+
+    for (const s of parsedDoc.sections) {
+      contentParts.push(`## ${s.heading}`);
+      contentParts.push(s.content);
+    }
+
+    const content = contentParts.filter(Boolean).join("\n\n");
     const contentHash = crypto.createHash("sha256").update(content).digest("hex");
 
     return {
       url,
       sourceType: "sidefx_docs",
       nodeName,
-      title: extractTitle(html) ?? nodeName,
+      title: parsedDoc.title || nodeName,
       content,
       contentHash,
       crawledAt: new Date().toISOString(),
+      parsedDoc,
     };
   } catch (err) {
     console.error(`[crawl] Failed to fetch ${url}:`, (err as Error).message);
     return null;
   }
-}
-
-/**
- * Extract the main content from a SideFX documentation HTML page.
- * Strips navigation, headers, footers, and scripts.
- */
-function extractDocContent(html: string): string {
-  // Remove script and style tags
-  let content = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
-  content = content.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
-
-  // Try to extract the main content area
-  const mainMatch = content.match(
-    /<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/i,
-  );
-  if (mainMatch) {
-    content = mainMatch[1];
-  }
-
-  // Strip HTML tags but keep text
-  content = content.replace(/<[^>]+>/g, " ");
-
-  // Clean up whitespace
-  content = content
-    .replace(/&nbsp;/g, " ")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return content;
-}
-
-/**
- * Extract the page title from HTML.
- */
-function extractTitle(html: string): string | undefined {
-  const match = html.match(/<title[^>]*>(.*?)<\/title>/i);
-  return match?.[1]?.trim();
 }
 
 /**
@@ -247,21 +478,22 @@ export async function runCrawl(options: {
   mode: "full" | "incremental";
   outputDir: string;
   systems?: string[];
+  /** How to resolve node paths: whitelist, discover (sitemap), or both. */
+  nodeDiscovery?: "whitelist" | "discover" | "both";
   onProgress?: (fetched: number, total: number, nodeName: string) => void;
 }): Promise<CrawledPage[]> {
-  const { mode, outputDir, systems } = options;
+  const { mode, outputDir, systems, nodeDiscovery = "whitelist" } = options;
 
-  // Ensure output directory exists
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  // Determine which nodes to crawl
-  const targetSystems = systems ?? Object.keys(ALL_NODE_PATHS);
+  const resolvedPaths = await resolveNodePaths(nodeDiscovery);
+  const targetSystems = systems ?? Object.keys(resolvedPaths);
   const allPaths: Array<{ system: string; path: string }> = [];
 
   for (const system of targetSystems) {
-    const paths = ALL_NODE_PATHS[system];
+    const paths = resolvedPaths[system];
     if (paths) {
       for (const p of paths) {
         allPaths.push({ system, path: p });
@@ -276,7 +508,6 @@ export async function runCrawl(options: {
   for (const { system, path: nodePath } of allPaths) {
     const nodeName = nodePath.split("/").pop() ?? nodePath;
 
-    // In incremental mode, skip if we already have this page and it hasn't changed
     if (mode === "incremental") {
       const outputFile = path.join(outputDir, `${system}--${nodeName}.json`);
       if (fs.existsSync(outputFile)) {
@@ -288,7 +519,6 @@ export async function runCrawl(options: {
 
     const page = await crawlSideFxDoc(nodePath);
     if (page) {
-      // Save to output directory
       const outputFile = path.join(outputDir, `${system}--${nodeName}.json`);
       fs.writeFileSync(outputFile, JSON.stringify(page, null, 2));
       results.push(page);
@@ -297,7 +527,7 @@ export async function runCrawl(options: {
     fetched++;
     options.onProgress?.(fetched, total, nodeName);
 
-    // Rate limit: wait 500ms between requests
+    // Rate limit
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
@@ -311,12 +541,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const modeIdx = args.indexOf("--mode");
   const outputIdx = args.indexOf("--output");
   const systemIdx = args.indexOf("--system");
+  const hasDiscover = args.includes("--discover");
+  const discoverOnly = args.includes("--discover-only");
 
   const mode = (modeIdx !== -1 ? args[modeIdx + 1] : "full") as "full" | "incremental";
   const outputDir = outputIdx !== -1 ? args[outputIdx + 1] : "/tmp/houdini-raw";
   const systems = systemIdx !== -1 ? args[systemIdx + 1].split(",") : undefined;
 
-  console.log(`[crawl] Starting ${mode} crawl → ${outputDir}`);
+  let nodeDiscovery: "whitelist" | "discover" | "both" = "whitelist";
+  if (discoverOnly) nodeDiscovery = "discover";
+  else if (hasDiscover) nodeDiscovery = "both";
+
+  console.log(`[crawl] Starting ${mode} crawl -> ${outputDir} (discovery: ${nodeDiscovery})`);
   if (systems) {
     console.log(`[crawl] Systems: ${systems.join(", ")}`);
   }
@@ -325,6 +561,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     mode,
     outputDir,
     systems,
+    nodeDiscovery,
     onProgress: (fetched, total, nodeName) => {
       console.log(`[crawl] ${fetched}/${total}: ${nodeName}`);
     },

@@ -29,7 +29,20 @@ export {
   chunkParameterAnnotation,
 } from "./vector-search.js";
 export type { SearchResult } from "./vector-search.js";
-export { runCrawl, crawlSideFxDoc, ALL_NODE_PATHS } from "./crawl.js";
+export {
+  runCrawl,
+  crawlSideFxDoc,
+  parseSideFxNodeDoc,
+  discoverNodesFromSitemap,
+  resolveNodePaths,
+  ALL_NODE_PATHS,
+} from "./crawl.js";
+export type {
+  CrawledPage,
+  ParsedNodeDoc,
+  DocParameter,
+  DiscoveredNode,
+} from "./crawl.js";
 export { annotateNode, annotateAll } from "./annotate.js";
 export { ingestAll } from "./ingest.js";
 export { seedDatabase } from "./seed.js";
