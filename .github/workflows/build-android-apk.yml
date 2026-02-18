@@ -31,6 +31,7 @@ jobs:
         run: |
           # Copy our Dart source
           rm -rf /tmp/build/lib
+          rm -rf /tmp/build/test
           cp -r android/lib /tmp/build/
           cp android/pubspec.yaml /tmp/build/
           

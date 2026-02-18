@@ -37,7 +37,7 @@ class LocationService {
   Future<void> _sendOnce() async {
     try {
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+        desiredAccuracy: LocationAccuracy.medium,
       );
       _gateway.sendContext({
         'location': {
