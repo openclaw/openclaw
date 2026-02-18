@@ -256,7 +256,7 @@ function loadSkillEntries(
       // Log any diagnostics from skill loading (e.g., YAML parsing errors)
       for (const diagnostic of loaded.diagnostics ?? []) {
         // Extract skill name from path (e.g., /path/to/skills/my-skill/SKILL.md -> my-skill)
-        const skillName = diagnostic.path ? diagnostic.path.split("/").slice(-2)[0] : "unknown";
+        const skillName = diagnostic.path ? path.basename(path.dirname(diagnostic.path)) : "unknown";
         skillsLogger.warn(`Skill "${skillName}": ${diagnostic.message}`, {
           path: diagnostic.path,
           type: diagnostic.type,
@@ -316,7 +316,7 @@ function loadSkillEntries(
       // Log any diagnostics from skill loading (e.g., YAML parsing errors)
       for (const diagnostic of loaded.diagnostics ?? []) {
         // Extract skill name from path (e.g., /path/to/skills/my-skill/SKILL.md -> my-skill)
-        const skillName = diagnostic.path ? diagnostic.path.split("/").slice(-2)[0] : "unknown";
+        const skillName = diagnostic.path ? path.basename(path.dirname(diagnostic.path)) : "unknown";
         skillsLogger.warn(`Skill "${skillName}": ${diagnostic.message}`, {
           path: diagnostic.path,
           type: diagnostic.type,
