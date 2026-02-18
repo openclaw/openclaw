@@ -24,7 +24,7 @@ const emptyCfg: OpenClawConfig = {};
 describe("Kilo Gateway provider config", () => {
   describe("constants", () => {
     it("KILOCODE_BASE_URL points to kilo openrouter endpoint", () => {
-      expect(KILOCODE_BASE_URL).toBe("https://api.kilo.ai/api/openrouter/");
+      expect(KILOCODE_BASE_URL).toBe("https://api.kilo.ai/api/gateway/");
     });
 
     it("KILOCODE_DEFAULT_MODEL_REF includes provider prefix", () => {

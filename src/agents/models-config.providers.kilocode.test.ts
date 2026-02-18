@@ -35,7 +35,7 @@ describe("Kilo Gateway implicit provider", () => {
 
   it("should build kilocode provider with correct configuration", () => {
     const provider = buildKilocodeProvider();
-    expect(provider.baseUrl).toBe("https://api.kilo.ai/api/openrouter/");
+    expect(provider.baseUrl).toBe("https://api.kilo.ai/api/gateway/");
     expect(provider.api).toBe("openai-completions");
     expect(provider.models).toBeDefined();
     expect(provider.models.length).toBeGreaterThan(0);

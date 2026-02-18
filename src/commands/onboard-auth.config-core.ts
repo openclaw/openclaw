@@ -403,7 +403,7 @@ export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   return applyAgentDefaultModelPrimary(next, XAI_DEFAULT_MODEL_REF);
 }
 
-export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/openrouter/";
+export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 
 /**
  * Apply Kilo Gateway provider configuration without changing the default model.
