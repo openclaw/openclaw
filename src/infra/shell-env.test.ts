@@ -87,6 +87,13 @@ describe("shell env fallback", () => {
       exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
     });
 
+    if (process.platform === "win32") {
+      expect(first).toBeNull();
+      expect(second).toBeNull();
+      expect(exec).not.toHaveBeenCalled();
+      return;
+    }
+
     expect(first).toBe("/usr/local/bin:/usr/bin");
     expect(second).toBe("/usr/local/bin:/usr/bin");
     expect(exec).toHaveBeenCalledOnce();
@@ -109,6 +116,10 @@ describe("shell env fallback", () => {
 
     expect(first).toBeNull();
     expect(second).toBeNull();
+    if (process.platform === "win32") {
+      expect(exec).not.toHaveBeenCalled();
+      return;
+    }
     expect(exec).toHaveBeenCalledOnce();
   });
 });
