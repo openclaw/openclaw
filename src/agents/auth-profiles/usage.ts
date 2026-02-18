@@ -287,7 +287,8 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
-  } else {
+  } else if (params.reason !== "timeout" && params.reason !== "format") {
+    // timeout/format aren't auth failures — skip cooldown
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
     updatedStats.cooldownUntil = params.now + backoffMs;
   }
