@@ -113,6 +113,11 @@ export type TelegramAccountConfig = {
   /** Network transport overrides for Telegram. */
   network?: TelegramNetworkConfig;
   proxy?: string;
+  /**
+   * Custom Telegram Bot API server URL.
+   * Default: https://api.telegram.org
+   */
+  apiRoot?: string;
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;

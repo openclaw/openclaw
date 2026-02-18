@@ -45,12 +45,14 @@ async function noteTelegramTokenHelp(prompter: WizardPrompter): Promise<void> {
   );
 }
 
-async function noteTelegramUserIdHelp(prompter: WizardPrompter): Promise<void> {
+async function noteTelegramUserIdHelp(prompter: WizardPrompter, apiRoot: string): Promise<void> {
+  const isCustomApi = apiRoot !== "https://api.telegram.org";
   await prompter.note(
     [
       `1) DM your bot, then read from.id in \`${formatCliCommand("openclaw logs --follow")}\` (safest)`,
-      "2) Or call https://api.telegram.org/bot<bot_token>/getUpdates and read message.from.id",
-      "3) Third-party: DM @userinfobot or @getidsbot",
+      `2) Or call ${apiRoot}/bot<bot_token>/getUpdates and read message.from.id`,
+      "3) Third-party: DM @userinfobot or @getidsbot" +
+        (isCustomApi ? " (only works on official Telegram)" : ""),
       `Docs: ${formatDocsLink("/telegram")}`,
       "Website: https://openclaw.ai",
     ].join("\n"),
@@ -66,7 +68,7 @@ async function promptTelegramAllowFrom(params: {
   const { cfg, prompter, accountId } = params;
   const resolved = resolveTelegramAccount({ cfg, accountId });
   const existingAllowFrom = resolved.config.allowFrom ?? [];
-  await noteTelegramUserIdHelp(prompter);
+  await noteTelegramUserIdHelp(prompter, resolved.apiRoot);
 
   const token = resolved.token;
   if (!token) {
@@ -86,7 +88,11 @@ async function promptTelegramAllowFrom(params: {
       return null;
     }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    return await fetchTelegramChatId({ token, chatId: username });
+    return await fetchTelegramChatId({
+      token,
+      chatId: username,
+      apiRoot: resolved.apiRoot,
+    });
   };
 
   const parseInput = (value: string) =>
