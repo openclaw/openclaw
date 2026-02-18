@@ -1,4 +1,5 @@
 import path from "node:path";
+import { z } from "zod"; // Explicit Zod import
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
@@ -13,6 +14,7 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import { ModelProviderSchema } from "./zod-schema.core.js"; // Correct import for ModelProviderSchema
 import { OpenClawSchema } from "./zod-schema.js";
 
 const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
@@ -86,62 +88,124 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
+ *
+ * Returns success with warnings if only provider-specific issues are found (graceful degradation).
+ * Returns error only for critical validation failures.
  */
 export function validateConfigObjectRaw(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] } {
+  const allIssues: ConfigValidationIssue[] = [];
+  const allWarnings: ConfigValidationIssue[] = [];
+  const providersToDisable = new Set<string>(); // Tracks keys of providers with validation errors
+
   const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
-    return {
-      ok: false,
-      issues: legacyIssues.map((iss) => ({
+    allIssues.push(
+      ...legacyIssues.map((iss) => ({
         path: iss.path,
         message: iss.message,
       })),
-    };
+    );
   }
-  const validated = OpenClawSchema.safeParse(raw);
-  if (!validated.success) {
-    return {
-      ok: false,
-      issues: validated.error.issues.map((iss) => ({
-        path: iss.path.join("."),
-        message: iss.message,
-      })),
-    };
+
+  const validatedResult = OpenClawSchema.safeParse(raw);
+
+  let finalConfig: OpenClawConfig;
+
+  if (!validatedResult.success) {
+    // If the overall schema validation failed, process its detailed errors.
+    // We start with a deep clone of the raw config to filter from.
+    finalConfig = JSON.parse(JSON.stringify(raw)) as OpenClawConfig;
+
+    for (const issue of validatedResult.error.issues) {
+      const issuePath = issue.path.join(".");
+
+      // If the issue is specifically within `models.providers.<providerKey>`,
+      // mark that provider for disabling. This is the key for graceful degradation.
+      if (
+        issue.path.length >= 3 &&
+        issue.path[0] === "models" &&
+        issue.path[1] === "providers" &&
+        typeof issue.path[2] === "string"
+      ) {
+        providersToDisable.add(issue.path[2]);
+        // Log a warning here to inform the user about the disabled provider
+        console.warn(
+          `[Config Warning] Provider '${issue.path[2]}' failed Zod validation: ${issue.message}. This provider will be disabled.`,
+        );
+        // Add to warnings, not issues - provider errors are degradable
+        allWarnings.push({ path: issuePath, message: issue.message });
+      } else {
+        // Non-provider issues are critical and prevent startup
+        allIssues.push({ path: issuePath, message: issue.message });
+      }
+    }
+  } else {
+    // If overall schema validation passed, we use the validated data directly.
+    finalConfig = validatedResult.data;
   }
-  const duplicates = findDuplicateAgentDirs(validated.data as OpenClawConfig);
+
+  // Construct the OpenClawConfig object, filtering out invalid providers identified above.
+  // This ensures the returned config *only* contains valid providers.
+  if (providersToDisable.size > 0 && finalConfig.models?.providers) {
+    const originalProviders = finalConfig.models.providers;
+    const filteredProviders: Record<string, z.infer<typeof ModelProviderSchema>> = {};
+
+    for (const [providerKey, providerConfig] of Object.entries(originalProviders)) {
+      if (!providersToDisable.has(providerKey)) {
+        // Only include providers that did NOT have validation errors
+        filteredProviders[providerKey] = providerConfig as z.infer<typeof ModelProviderSchema>;
+      } else {
+        // This provider was explicitly marked for disabling due to errors.
+        // Its error has already been added to `allWarnings` and a console warning logged.
+      }
+    }
+    // Replace the original providers object with the filtered, valid one.
+    finalConfig.models.providers = filteredProviders;
+  }
+
+  const duplicates = findDuplicateAgentDirs(finalConfig);
   if (duplicates.length > 0) {
-    return {
-      ok: false,
-      issues: [
-        {
-          path: "agents.list",
-          message: formatDuplicateAgentDirError(duplicates),
-        },
-      ],
-    };
+    allIssues.push({
+      path: "agents.list",
+      message: formatDuplicateAgentDirError(duplicates),
+    });
   }
-  const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
+  const avatarIssues = validateIdentityAvatar(finalConfig);
   if (avatarIssues.length > 0) {
-    return { ok: false, issues: avatarIssues };
+    allIssues.push(...avatarIssues);
   }
-  return {
-    ok: true,
-    config: validated.data as OpenClawConfig,
-  };
+
+  // Return error only if there are critical issues (non-provider)
+  if (allIssues.length > 0) {
+    return { ok: false, issues: allIssues, warnings: allWarnings };
+  }
+
+  // Success path: either no issues at all, or only provider-level warnings
+  return { ok: true, config: finalConfig, warnings: allWarnings };
 }
 
+/**
+ * Validates config and applies runtime defaults.
+ * Returns success with warnings if only provider-specific issues are found.
+ * Returns error for critical validation failures.
+ */
 export function validateConfigObject(
   raw: unknown,
-): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+):
+  | { ok: true; config: OpenClawConfig; warnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[]; warnings: ConfigValidationIssue[] } {
   const result = validateConfigObjectRaw(raw);
   if (!result.ok) {
-    return result;
+    return { ok: false, issues: result.issues, warnings: result.warnings };
   }
   return {
     ok: true,
     config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
+    warnings: result.warnings,
   };
 }
 
@@ -189,12 +253,12 @@ function validateConfigObjectWithPluginsBase(
     } {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+    return { ok: false, issues: base.issues, warnings: base.warnings };
   }
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = [...base.warnings]; // Start with base warnings (provider-related)
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 

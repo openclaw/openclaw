@@ -75,10 +75,10 @@ export const formatResponseUsageLine = (params: {
   usage?: NormalizedUsage;
   showCost: boolean;
   costConfig?: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
   };
 }): string | null => {
   const usage = params.usage;

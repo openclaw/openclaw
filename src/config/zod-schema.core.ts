@@ -37,8 +37,8 @@ export const ModelDefinitionSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
-    reasoning: z.boolean().optional(),
-    input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
+    reasoning: z.boolean().default(false),
+    input: z.array(z.union([z.literal("text"), z.literal("image")])).default(["text"]),
     cost: z
       .object({
         input: z.number().optional(),
@@ -450,8 +450,7 @@ export const MediaUnderstandingModelSchema = z
     profile: z.string().optional(),
     preferredProfile: z.string().optional(),
   })
-  .strict()
-  .optional();
+  .strict();
 
 export const ToolsMediaUnderstandingSchema = z
   .object({

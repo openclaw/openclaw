@@ -45,11 +45,11 @@ function resolveModelCost(
   raw?: Partial<ModelDefinitionConfig["cost"]>,
 ): ModelDefinitionConfig["cost"] {
   return {
-    input: typeof raw?.input === "number" ? raw.input : DEFAULT_MODEL_COST.input,
-    output: typeof raw?.output === "number" ? raw.output : DEFAULT_MODEL_COST.output,
-    cacheRead: typeof raw?.cacheRead === "number" ? raw.cacheRead : DEFAULT_MODEL_COST.cacheRead,
+    input: typeof raw?.input === "number" ? raw.input : DEFAULT_MODEL_COST!.input,
+    output: typeof raw?.output === "number" ? raw.output : DEFAULT_MODEL_COST!.output,
+    cacheRead: typeof raw?.cacheRead === "number" ? raw.cacheRead : DEFAULT_MODEL_COST!.cacheRead,
     cacheWrite:
-      typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
+      typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST!.cacheWrite,
   };
 }
 
@@ -199,10 +199,10 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
         const cost = resolveModelCost(raw.cost);
         const costMutated =
           !raw.cost ||
-          raw.cost.input !== cost.input ||
-          raw.cost.output !== cost.output ||
-          raw.cost.cacheRead !== cost.cacheRead ||
-          raw.cost.cacheWrite !== cost.cacheWrite;
+          raw.cost?.input !== cost!.input ||
+          raw.cost?.output !== cost!.output ||
+          raw.cost?.cacheRead !== cost!.cacheRead ||
+          raw.cost?.cacheWrite !== cost!.cacheWrite;
         if (costMutated) {
           modelMutated = true;
         }
