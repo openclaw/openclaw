@@ -335,10 +335,12 @@ describe("agent request events", () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("agent:main:main", {
         sessionId: "sid-current",
+        updatedAt: 0,
         lastChannel: "telegram",
         lastTo: "123",
       }),
       canonicalKey: "agent:main:main",
+      legacyKey: undefined,
     });
 
     await handleNodeEvent(ctx, "node-route-hit", {

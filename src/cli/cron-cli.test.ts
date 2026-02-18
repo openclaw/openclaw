@@ -6,7 +6,7 @@ const defaultGatewayMock = async (
   _opts: unknown,
   params?: unknown,
   _timeoutMs?: number,
-) => {
+): Promise<Record<string, unknown>> => {
   if (method === "cron.status") {
     return { enabled: true };
   }
