@@ -38,6 +38,8 @@ export type OutboundSendContext = {
   };
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** Allowed local media roots for the active agent. */
+  mediaLocalRoots?: readonly string[];
 };
 
 export async function executeSendAction(params: {
@@ -67,6 +69,7 @@ export async function executeSendAction(params: {
       gateway: params.ctx.gateway,
       toolContext: params.ctx.toolContext,
       dryRun: params.ctx.dryRun,
+      mediaLocalRoots: params.ctx.mediaLocalRoots,
     });
     if (handled) {
       if (params.ctx.mirror) {
