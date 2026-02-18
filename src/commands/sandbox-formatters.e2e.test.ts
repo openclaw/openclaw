@@ -91,10 +91,6 @@ describe("sandbox-formatters", () => {
       expect(countRunning(items)).toBe(2);
     });
 
-    it("should return 0 for empty array", () => {
-      expect(countRunning([])).toBe(0);
-    });
-
     it("should return 0 when no items running", () => {
       const items = [
         { running: false, name: "a" },
@@ -128,10 +124,6 @@ describe("sandbox-formatters", () => {
       expect(countMismatches(items)).toBe(3);
     });
 
-    it("should return 0 for empty array", () => {
-      expect(countMismatches([])).toBe(0);
-    });
-
     it("should return 0 when all match", () => {
       const items = [
         { imageMatch: true, name: "a" },
@@ -149,6 +141,15 @@ describe("sandbox-formatters", () => {
       ];
 
       expect(countMismatches(items)).toBe(3);
+    });
+  });
+
+  describe("counter empty inputs", () => {
+    it.each([
+      { fn: countRunning as (items: unknown[]) => number },
+      { fn: countMismatches as (items: unknown[]) => number },
+    ])("should return 0 for empty array", ({ fn }) => {
+      expect(fn([])).toBe(0);
     });
   });
 });
