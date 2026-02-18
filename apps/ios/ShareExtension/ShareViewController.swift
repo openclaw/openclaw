@@ -203,8 +203,7 @@ final class ShareViewController: UIViewController {
                             message: "share extension does not support node invoke"))
                 })
         } catch {
-            let text = error.localizedDescription.lowercased()
-            let expectsLegacyClientId = text.contains("invalid connect params") && text.contains("/client/id")
+            let expectsLegacyClientId = self.shouldRetryWithLegacyClientId(error)
             guard expectsLegacyClientId else { throw error }
             try await gateway.connect(
                 url: url,
@@ -238,16 +237,20 @@ final class ShareViewController: UIViewController {
             var key: String?
         }
 
+        let deliveryChannel = config.deliveryChannel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let deliveryTo = config.deliveryTo?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canDeliverToRoute = (deliveryChannel?.isEmpty == false) && (deliveryTo?.isEmpty == false)
+
         let params = AgentRequestPayload(
             message: message,
             sessionKey: config.sessionKey,
             thinking: "low",
-            deliver: true,
+            deliver: canDeliverToRoute,
             attachments: attachments.isEmpty ? nil : attachments,
-            receipt: true,
-            receiptText: "Just received your iOS share + request, working on it.",
-            to: config.deliveryTo,
-            channel: config.deliveryChannel,
+            receipt: canDeliverToRoute,
+            receiptText: canDeliverToRoute ? "Just received your iOS share + request, working on it." : nil,
+            to: canDeliverToRoute ? deliveryTo : nil,
+            channel: canDeliverToRoute ? deliveryChannel : nil,
             timeoutSeconds: nil,
             key: UUID().uuidString)
         let data = try JSONEncoder().encode(params)
@@ -269,6 +272,27 @@ final class ShareViewController: UIViewController {
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode node event payload."])
         }
         _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
+    }
+
+    private func shouldRetryWithLegacyClientId(_ error: Error) -> Bool {
+        if let gatewayError = error as? GatewayResponseError {
+            let code = gatewayError.code.lowercased()
+            let message = gatewayError.message.lowercased()
+            let pathValue = (gatewayError.details["path"]?.value as? String)?.lowercased() ?? ""
+            let mentionsClientIdPath =
+                message.contains("/client/id") || message.contains("client id")
+                || pathValue.contains("/client/id")
+            let isInvalidConnectParams =
+                (code.contains("invalid") && code.contains("connect"))
+                || message.contains("invalid connect params")
+            if isInvalidConnectParams && mentionsClientIdPath {
+                return true
+            }
+        }
+
+        let text = error.localizedDescription.lowercased()
+        return text.contains("invalid connect params")
+            && (text.contains("/client/id") || text.contains("client id"))
     }
 
     private func showStatus(_ text: String) {
