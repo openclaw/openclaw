@@ -15,19 +15,19 @@ export function isSilentReplyText(
     return true;
   }
   const escaped = escapeRegExp(token);
-  // Token at start, NOT followed by a word char, and rest is ASCII-only
+  // Token at start, followed only by ASCII (allows "NO_REPLY -- explanation" but not CJK)
   const prefixRe = new RegExp(`^\\s*${escaped}(?![a-zA-Z0-9_])`);
   if (prefixRe.test(text)) {
     const rest = text.replace(new RegExp(`^\\s*${escaped}`), "");
-    if (/^[\x00-\x7f]*$/.test(rest)) {
+    if (/^[\t\n\r\x20-\x7e]*$/.test(rest)) {
       return true;
     }
   }
-  // Token at end, NOT preceded by a word char, and prefix is ASCII-only
+  // Token at end, preceded only by ASCII
   const suffixRe = new RegExp(`(?<![a-zA-Z0-9_])${escaped}\\s*$`);
   if (suffixRe.test(text)) {
     const before = text.replace(new RegExp(`${escaped}\\s*$`), "");
-    if (/^[\x00-\x7f]*$/.test(before)) {
+    if (/^[\t\n\r\x20-\x7e]*$/.test(before)) {
       return true;
     }
   }
