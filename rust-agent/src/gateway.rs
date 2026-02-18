@@ -459,6 +459,18 @@ impl MethodRegistry {
                     min_role: "client",
                 },
                 MethodSpec {
+                    name: "node.invoke.result",
+                    family: MethodFamily::Node,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
+                    name: "node.event",
+                    family: MethodFamily::Node,
+                    requires_auth: true,
+                    min_role: "client",
+                },
+                MethodSpec {
                     name: "cron.add",
                     family: MethodFamily::Cron,
                     requires_auth: true,
@@ -560,6 +572,7 @@ pub struct RpcDispatcher {
     agents: AgentRegistry,
     agent_runs: AgentRunRegistry,
     nodes: NodePairRegistry,
+    node_runtime: NodeRuntimeRegistry,
     skills: SkillsRegistry,
     cron: CronRegistry,
     config: ConfigRegistry,
@@ -606,6 +619,7 @@ static WIZARD_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static DEVICE_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_PAIR_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NODE_TOKEN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static NODE_INVOKE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SUPPORTED_RPC_METHODS: &[&str] = &[
     "health",
     "status",
@@ -662,6 +676,9 @@ const SUPPORTED_RPC_METHODS: &[&str] = &[
     "node.rename",
     "node.list",
     "node.describe",
+    "node.invoke",
+    "node.invoke.result",
+    "node.event",
     "browser.request",
     "config.get",
     "config.set",
@@ -699,6 +716,7 @@ impl RpcDispatcher {
             agents: AgentRegistry::new(),
             agent_runs: AgentRunRegistry::new(),
             nodes: NodePairRegistry::new(),
+            node_runtime: NodeRuntimeRegistry::new(),
             skills: SkillsRegistry::new(),
             cron: CronRegistry::new(),
             config: ConfigRegistry::new(),
@@ -767,6 +785,9 @@ impl RpcDispatcher {
             "node.rename" => self.handle_node_rename(req).await,
             "node.list" => self.handle_node_list(req).await,
             "node.describe" => self.handle_node_describe(req).await,
+            "node.invoke" => self.handle_node_invoke(req).await,
+            "node.invoke.result" => self.handle_node_invoke_result(req).await,
+            "node.event" => self.handle_node_event(req).await,
             "browser.request" => self.handle_browser_request(req).await,
             "config.get" => self.handle_config_get(req).await,
             "config.set" => self.handle_config_set(req).await,
@@ -2228,6 +2249,136 @@ impl RpcDispatcher {
             "connectedAtMs": node.connected_at_ms,
             "paired": node.paired,
             "connected": node.connected
+        }))
+    }
+
+    async fn handle_node_invoke(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<NodeInvokeParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid node.invoke params: {err}"
+                ));
+            }
+        };
+        let Some(node_id) = normalize_optional_text(Some(params.node_id), 128) else {
+            return RpcDispatchOutcome::bad_request("nodeId and command required");
+        };
+        let Some(command) = normalize_optional_text(Some(params.command), 160) else {
+            return RpcDispatchOutcome::bad_request("nodeId and command required");
+        };
+        let Some(idempotency_key) = normalize_optional_text(Some(params.idempotency_key), 256)
+        else {
+            return RpcDispatchOutcome::bad_request(
+                "invalid node.invoke params: idempotencyKey required",
+            );
+        };
+        if command == "system.execApprovals.get" || command == "system.execApprovals.set" {
+            return RpcDispatchOutcome::bad_request(
+                "node.invoke does not allow system.execApprovals.*; use exec.approvals.node.*",
+            );
+        }
+        let Some(node) = self.nodes.paired_node(&node_id).await else {
+            return RpcDispatchOutcome::Error {
+                code: 503,
+                message: "node not connected".to_owned(),
+                details: Some(json!({
+                    "code": "NOT_CONNECTED"
+                })),
+            };
+        };
+        if !node_command_allowed(&node, &command) {
+            return RpcDispatchOutcome::Error {
+                code: 400,
+                message: "node command not allowed".to_owned(),
+                details: Some(json!({
+                    "reason": "command-not-declared",
+                    "command": command
+                })),
+            };
+        }
+
+        let invoke_id = self
+            .node_runtime
+            .begin_invoke(&node_id, &command, params.timeout_ms, &idempotency_key)
+            .await;
+        self.system
+            .log_line(format!(
+                "node.invoke node={} command={} id={}",
+                node_id, command, invoke_id
+            ))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true,
+            "nodeId": node_id,
+            "command": command,
+            "payload": {
+                "status": "queued",
+                "invokeId": invoke_id,
+                "idempotencyKey": idempotency_key,
+                "mode": "rust-parity",
+                "params": params.params,
+                "timeoutMs": params.timeout_ms
+            },
+            "payloadJSON": Value::Null
+        }))
+    }
+
+    async fn handle_node_invoke_result(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let normalized = normalize_node_invoke_result_params(req.params.clone());
+        let params = match decode_params::<NodeInvokeResultParams>(&normalized) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid node.invoke.result params: {err}"
+                ));
+            }
+        };
+        let result = self.node_runtime.complete_invoke(params).await;
+        match result {
+            NodeInvokeCompleteResult::Completed => RpcDispatchOutcome::Handled(json!({
+                "ok": true
+            })),
+            NodeInvokeCompleteResult::Ignored => RpcDispatchOutcome::Handled(json!({
+                "ok": true,
+                "ignored": true
+            })),
+            NodeInvokeCompleteResult::NodeMismatch => {
+                RpcDispatchOutcome::bad_request("nodeId mismatch")
+            }
+        }
+    }
+
+    async fn handle_node_event(&self, req: &RpcRequestFrame) -> RpcDispatchOutcome {
+        let params = match decode_params::<NodeEventParams>(&req.params) {
+            Ok(v) => v,
+            Err(err) => {
+                return RpcDispatchOutcome::bad_request(format!(
+                    "invalid node.event params: {err}"
+                ));
+            }
+        };
+        let Some(event) = normalize_optional_text(Some(params.event), 160) else {
+            return RpcDispatchOutcome::bad_request("invalid node.event params: event required");
+        };
+        let payload_json = params.payload_json.or_else(|| {
+            params
+                .payload
+                .as_ref()
+                .and_then(|value| serde_json::to_string(value).ok())
+        });
+        self.node_runtime
+            .record_event(event.clone(), payload_json.clone())
+            .await;
+        self.system
+            .log_line(format!(
+                "node.event event={} payloadBytes={}",
+                event,
+                payload_json.as_ref().map_or(0, |value| value.len())
+            ))
+            .await;
+        RpcDispatchOutcome::Handled(json!({
+            "ok": true
         }))
     }
 
@@ -5249,6 +5400,15 @@ impl NodePairRegistry {
         Some(node_inventory_from_paired(node))
     }
 
+    async fn paired_node(&self, node_id: &str) -> Option<PairedNodeEntry> {
+        let normalized_node_id = node_id.trim();
+        if normalized_node_id.is_empty() {
+            return None;
+        }
+        let guard = self.state.lock().await;
+        guard.paired_by_node_id.get(normalized_node_id).cloned()
+    }
+
     async fn ingest_pair_requested(&self, payload: Value) {
         let Ok(event) = serde_json::from_value::<NodePairRequestedEventPayload>(payload) else {
             return;
@@ -5369,6 +5529,148 @@ fn next_node_pair_token(node_id: &str) -> String {
     hasher.update(sequence.to_le_bytes());
     let digest = format!("{:x}", hasher.finalize());
     format!("ntk_{}", &digest[..48])
+}
+
+fn node_command_allowed(node: &PairedNodeEntry, command: &str) -> bool {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+    let Some(commands) = &node.commands else {
+        return true;
+    };
+    if commands.is_empty() {
+        return true;
+    }
+    commands
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(normalized))
+}
+
+struct NodeRuntimeRegistry {
+    state: Mutex<NodeRuntimeState>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct NodeRuntimeState {
+    pending_invokes: HashMap<String, NodeInvokePendingEntry>,
+    recent_results: VecDeque<Value>,
+    recent_events: VecDeque<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct NodeInvokePendingEntry {
+    id: String,
+    node_id: String,
+    command: String,
+    idempotency_key: String,
+    created_at_ms: u64,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NodeInvokeCompleteResult {
+    Completed,
+    Ignored,
+    NodeMismatch,
+}
+
+impl NodeRuntimeRegistry {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(NodeRuntimeState::default()),
+        }
+    }
+
+    async fn begin_invoke(
+        &self,
+        node_id: &str,
+        command: &str,
+        timeout_ms: Option<u64>,
+        idempotency_key: &str,
+    ) -> String {
+        let now = now_ms();
+        let invoke_id = next_node_invoke_id();
+        let entry = NodeInvokePendingEntry {
+            id: invoke_id.clone(),
+            node_id: node_id.to_owned(),
+            command: command.to_owned(),
+            idempotency_key: idempotency_key.to_owned(),
+            created_at_ms: now,
+            timeout_ms,
+        };
+        let mut guard = self.state.lock().await;
+        guard.pending_invokes.insert(invoke_id.clone(), entry);
+        prune_oldest_node_invoke_pending(&mut guard.pending_invokes, 4_096);
+        invoke_id
+    }
+
+    async fn complete_invoke(&self, params: NodeInvokeResultParams) -> NodeInvokeCompleteResult {
+        let mut guard = self.state.lock().await;
+        let Some(pending) = guard.pending_invokes.remove(&params.id) else {
+            return NodeInvokeCompleteResult::Ignored;
+        };
+        if !pending.node_id.eq_ignore_ascii_case(&params.node_id) {
+            guard.pending_invokes.insert(pending.id.clone(), pending);
+            return NodeInvokeCompleteResult::NodeMismatch;
+        }
+        let payload_json = params.payload_json.or_else(|| {
+            params
+                .payload
+                .as_ref()
+                .and_then(|value| serde_json::to_string(value).ok())
+        });
+        guard.recent_results.push_back(json!({
+            "id": params.id,
+            "nodeId": params.node_id,
+            "ok": params.ok,
+            "payloadJSON": payload_json,
+            "errorCode": params.error.as_ref().and_then(|value| value.code.clone()),
+            "errorMessage": params.error.as_ref().and_then(|value| value.message.clone()),
+            "ts": now_ms(),
+            "command": pending.command,
+            "idempotencyKey": pending.idempotency_key,
+            "invokeCreatedAtMs": pending.created_at_ms,
+            "timeoutMs": pending.timeout_ms
+        }));
+        while guard.recent_results.len() > 1_024 {
+            let _ = guard.recent_results.pop_front();
+        }
+        NodeInvokeCompleteResult::Completed
+    }
+
+    async fn record_event(&self, event: String, payload_json: Option<String>) {
+        let mut guard = self.state.lock().await;
+        guard.recent_events.push_back(json!({
+            "event": event,
+            "payloadJSON": payload_json,
+            "ts": now_ms()
+        }));
+        while guard.recent_events.len() > 1_024 {
+            let _ = guard.recent_events.pop_front();
+        }
+    }
+}
+
+fn prune_oldest_node_invoke_pending(
+    pending_invokes: &mut HashMap<String, NodeInvokePendingEntry>,
+    max_pending: usize,
+) {
+    while pending_invokes.len() > max_pending {
+        let Some(oldest_key) = pending_invokes
+            .iter()
+            .min_by_key(|(_, entry)| entry.created_at_ms)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        let _ = pending_invokes.remove(&oldest_key);
+    }
+}
+
+fn next_node_invoke_id() -> String {
+    let sequence = NODE_INVOKE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("node-invoke-{}-{sequence}", now_ms())
 }
 
 struct DeviceRegistry {
@@ -6393,6 +6695,36 @@ fn json_value_as_timeout_ms(value: &Value) -> Option<u64> {
         return None;
     }
     Some(value.floor().max(1.0) as u64)
+}
+
+fn normalize_node_invoke_result_params(params: Value) -> Value {
+    let Some(mut map) = params.as_object().cloned() else {
+        return params;
+    };
+    if matches!(map.get("payloadJSON"), Some(Value::Null)) {
+        map.remove("payloadJSON");
+    } else if matches!(map.get("payload_json"), Some(Value::Null)) {
+        map.remove("payload_json");
+    }
+
+    let payload_json_value = map
+        .get("payloadJSON")
+        .cloned()
+        .or_else(|| map.get("payload_json").cloned());
+    if let Some(payload_json_value) = payload_json_value {
+        if !payload_json_value.is_string() {
+            if !map.contains_key("payload") {
+                map.insert("payload".to_owned(), payload_json_value);
+            }
+            map.remove("payloadJSON");
+            map.remove("payload_json");
+        }
+    }
+
+    if matches!(map.get("error"), Some(Value::Null)) {
+        map.remove("error");
+    }
+    Value::Object(map)
 }
 
 fn discover_skills(
@@ -8426,6 +8758,48 @@ struct NodeListParams {}
 struct NodeDescribeParams {
     #[serde(rename = "nodeId", alias = "node_id")]
     node_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeInvokeParams {
+    #[serde(rename = "nodeId", alias = "node_id")]
+    node_id: String,
+    command: String,
+    params: Option<Value>,
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    timeout_ms: Option<u64>,
+    #[serde(rename = "idempotencyKey", alias = "idempotency_key")]
+    idempotency_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeInvokeResultParams {
+    id: String,
+    #[serde(rename = "nodeId", alias = "node_id")]
+    node_id: String,
+    ok: bool,
+    payload: Option<Value>,
+    #[serde(rename = "payloadJSON", alias = "payload_json")]
+    payload_json: Option<String>,
+    error: Option<NodeInvokeResultError>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct NodeInvokeResultError {
+    code: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeEventParams {
+    event: String,
+    payload: Option<Value>,
+    #[serde(rename = "payloadJSON", alias = "payload_json")]
+    payload_json: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -13477,6 +13851,204 @@ mod tests {
                 );
             }
             _ => panic!("expected node.pair.reject handled"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_node_invoke_and_event_methods_follow_parity_contract() {
+        let dispatcher = RpcDispatcher::new();
+
+        let pair_request = RpcRequestFrame {
+            id: "req-node-invoke-pair-request".to_owned(),
+            method: "node.pair.request".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-invoke-1",
+                "commands": ["browser.proxy"]
+            }),
+        };
+        let request_id = match dispatcher.handle_request(&pair_request).await {
+            RpcDispatchOutcome::Handled(payload) => payload
+                .pointer("/request/requestId")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .expect("request id"),
+            _ => panic!("expected node.pair.request handled"),
+        };
+        let pair_approve = RpcRequestFrame {
+            id: "req-node-invoke-pair-approve".to_owned(),
+            method: "node.pair.approve".to_owned(),
+            params: serde_json::json!({
+                "requestId": request_id
+            }),
+        };
+        let out = dispatcher.handle_request(&pair_approve).await;
+        assert!(matches!(out, RpcDispatchOutcome::Handled(_)));
+
+        let invoke_invalid = RpcRequestFrame {
+            id: "req-node-invoke-invalid".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-invoke-1",
+                "command": "browser.proxy"
+            }),
+        };
+        let out = dispatcher.handle_request(&invoke_invalid).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let invoke_restricted = RpcRequestFrame {
+            id: "req-node-invoke-restricted".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-invoke-1",
+                "command": "system.execApprovals.get",
+                "idempotencyKey": "idem-1"
+            }),
+        };
+        let out = dispatcher.handle_request(&invoke_restricted).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let invoke_unknown = RpcRequestFrame {
+            id: "req-node-invoke-unknown".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-missing",
+                "command": "browser.proxy",
+                "idempotencyKey": "idem-2"
+            }),
+        };
+        match dispatcher.handle_request(&invoke_unknown).await {
+            RpcDispatchOutcome::Error { code, details, .. } => {
+                assert_eq!(code, 503);
+                assert_eq!(
+                    details
+                        .as_ref()
+                        .and_then(|value| value.pointer("/code"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("NOT_CONNECTED")
+                );
+            }
+            _ => panic!("expected node.invoke unavailable"),
+        }
+
+        let invoke_disallowed = RpcRequestFrame {
+            id: "req-node-invoke-disallowed".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-invoke-1",
+                "command": "camera.capture",
+                "idempotencyKey": "idem-3"
+            }),
+        };
+        let out = dispatcher.handle_request(&invoke_disallowed).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let invoke = RpcRequestFrame {
+            id: "req-node-invoke".to_owned(),
+            method: "node.invoke".to_owned(),
+            params: serde_json::json!({
+                "nodeId": "node-invoke-1",
+                "command": "browser.proxy",
+                "params": { "path": "/tabs" },
+                "timeoutMs": 1500,
+                "idempotencyKey": "idem-4"
+            }),
+        };
+        let invoke_id = match dispatcher.handle_request(&invoke).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                payload
+                    .pointer("/payload/invokeId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .expect("invoke id")
+            }
+            _ => panic!("expected node.invoke handled"),
+        };
+
+        let invoke_result_unknown = RpcRequestFrame {
+            id: "req-node-invoke-result-unknown".to_owned(),
+            method: "node.invoke.result".to_owned(),
+            params: serde_json::json!({
+                "id": "node-invoke-missing",
+                "nodeId": "node-invoke-1",
+                "ok": true
+            }),
+        };
+        match dispatcher.handle_request(&invoke_result_unknown).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload
+                        .pointer("/ignored")
+                        .and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected ignored node.invoke.result"),
+        }
+
+        let invoke_result_mismatch = RpcRequestFrame {
+            id: "req-node-invoke-result-mismatch".to_owned(),
+            method: "node.invoke.result".to_owned(),
+            params: serde_json::json!({
+                "id": invoke_id.clone(),
+                "nodeId": "node-other",
+                "ok": true
+            }),
+        };
+        let out = dispatcher.handle_request(&invoke_result_mismatch).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let invoke_result = RpcRequestFrame {
+            id: "req-node-invoke-result".to_owned(),
+            method: "node.invoke.result".to_owned(),
+            params: serde_json::json!({
+                "id": invoke_id,
+                "nodeId": "node-invoke-1",
+                "ok": true,
+                "payloadJSON": { "status": "ok" }
+            }),
+        };
+        match dispatcher.handle_request(&invoke_result).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+                assert!(payload.pointer("/ignored").is_none());
+            }
+            _ => panic!("expected node.invoke.result handled"),
+        }
+
+        let node_event_invalid = RpcRequestFrame {
+            id: "req-node-event-invalid".to_owned(),
+            method: "node.event".to_owned(),
+            params: serde_json::json!({
+                "event": "node.heartbeat",
+                "payloadJSON": { "bad": true }
+            }),
+        };
+        let out = dispatcher.handle_request(&node_event_invalid).await;
+        assert!(matches!(out, RpcDispatchOutcome::Error { code: 400, .. }));
+
+        let node_event = RpcRequestFrame {
+            id: "req-node-event".to_owned(),
+            method: "node.event".to_owned(),
+            params: serde_json::json!({
+                "event": "node.heartbeat",
+                "payload": { "ok": true }
+            }),
+        };
+        match dispatcher.handle_request(&node_event).await {
+            RpcDispatchOutcome::Handled(payload) => {
+                assert_eq!(
+                    payload.pointer("/ok").and_then(serde_json::Value::as_bool),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected node.event handled"),
         }
     }
 
