@@ -19,6 +19,70 @@ export type GroupHistoryEntry = {
   senderJid?: string;
 };
 
+const DEFAULT_FOLLOW_UP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Tracks recent bot replies per group so follow-up messages from the same
+ * sender can be treated as implicit mentions.
+ *
+ * Outer key: group conversation ID.
+ * Inner key: sender E.164. Value: timestamp (ms) of the bot's reply.
+ */
+const groupFollowUpTracker = new Map<string, Map<string, number>>();
+
+/**
+ * Record that the bot just replied to `senderE164` in `conversationId`.
+ * Call this after every successful auto-reply in a group.
+ */
+export function recordGroupReply(conversationId: string, senderE164: string): void {
+  let senders = groupFollowUpTracker.get(conversationId);
+  if (!senders) {
+    senders = new Map();
+    groupFollowUpTracker.set(conversationId, senders);
+  }
+  senders.set(senderE164, Date.now());
+}
+
+/**
+ * Returns true if `senderE164` sent a message to `conversationId` within
+ * `windowMs` milliseconds of the bot's last reply to them.
+ * Returns false immediately when `windowMs` is 0 (feature disabled).
+ */
+function isFollowUp(
+  conversationId: string,
+  senderE164: string | undefined,
+  windowMs: number,
+): boolean {
+  if (!senderE164 || windowMs === 0) {
+    return false;
+  }
+  const senders = groupFollowUpTracker.get(conversationId);
+  if (!senders) {
+    return false;
+  }
+  const repliedAt = senders.get(senderE164);
+  if (repliedAt === undefined) {
+    return false;
+  }
+  if (Date.now() - repliedAt > windowMs) {
+    senders.delete(senderE164);
+    if (senders.size === 0) {
+      groupFollowUpTracker.delete(conversationId);
+    }
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Test helper: exposes internal follow-up logic for unit tests.
+ * @internal
+ */
+export const isFollowUpForTest = {
+  check: isFollowUp,
+  reset: () => groupFollowUpTracker.clear(),
+};
+
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
   const sender = normalizeE164(msg.senderE164 ?? "");
   if (!sender) {
@@ -124,10 +188,22 @@ export function applyGroupGating(params: {
   const replySenderE164 = params.msg.replyToSenderE164
     ? normalizeE164(params.msg.replyToSenderE164)
     : null;
-  const implicitMention = Boolean(
+  const isSwipeReply = Boolean(
     (selfJid && replySenderJid && selfJid === replySenderJid) ||
     (selfE164 && replySenderE164 && selfE164 === replySenderE164),
   );
+  const followUpWindowMs =
+    groupPolicy.groupConfig?.followUpWindowMs ??
+    groupPolicy.defaultConfig?.followUpWindowMs ??
+    params.cfg.messages?.groupChat?.followUpWindowMs ??
+    DEFAULT_FOLLOW_UP_WINDOW_MS;
+  const senderNorm = params.msg.senderE164 ? normalizeE164(params.msg.senderE164) : undefined;
+  const isConversationFollowUp = isFollowUp(
+    params.conversationId,
+    senderNorm ?? undefined,
+    followUpWindowMs,
+  );
+  const implicitMention = isSwipeReply || isConversationFollowUp;
   const mentionGate = resolveMentionGating({
     requireMention,
     canDetectMention: true,
