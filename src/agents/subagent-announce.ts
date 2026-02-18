@@ -404,26 +404,68 @@ function queueOutcomeToDeliveryResult(
 async function sendSubagentAnnounceDirectly(params: {
   targetRequesterSessionKey: string;
   triggerMessage: string;
+  completionMessage?: string;
+  expectsCompletionMessage: boolean;
   directIdempotencyKey: string;
+  completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterIsSubagent: boolean;
 }): Promise<SubagentAnnounceDeliveryResult> {
   try {
+    const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
+    const completionChannel =
+      typeof completionDirectOrigin?.channel === "string"
+        ? completionDirectOrigin.channel.trim()
+        : "";
+    const completionTo =
+      typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
+    const completionHasThreadHint =
+      completionDirectOrigin?.threadId != null &&
+      String(completionDirectOrigin.threadId).trim() !== "";
+    const hasCompletionDirectTarget =
+      !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
+
+    if (
+      params.expectsCompletionMessage &&
+      hasCompletionDirectTarget &&
+      !completionHasThreadHint &&
+      params.completionMessage?.trim()
+    ) {
+      await callGateway({
+        method: "send",
+        params: {
+          channel: completionChannel,
+          to: completionTo,
+          accountId: completionDirectOrigin?.accountId,
+          sessionKey: params.targetRequesterSessionKey,
+          message: params.completionMessage,
+          idempotencyKey: params.directIdempotencyKey,
+        },
+        timeoutMs: 15_000,
+      });
+
+      return {
+        delivered: true,
+        path: "direct",
+      };
+    }
+
+    const directOrigin = normalizeDeliveryContext(params.directOrigin);
+    const threadId =
+      directOrigin?.threadId != null && directOrigin.threadId !== ""
+        ? String(directOrigin.threadId)
+        : undefined;
+
     await callGateway({
       method: "agent",
       params: {
         sessionKey: params.targetRequesterSessionKey,
         message: params.triggerMessage,
         deliver: !params.requesterIsSubagent,
-        channel: params.requesterIsSubagent ? undefined : params.directOrigin?.channel,
-        accountId: params.requesterIsSubagent ? undefined : params.directOrigin?.accountId,
-        to: params.requesterIsSubagent ? undefined : params.directOrigin?.to,
-        threadId:
-          !params.requesterIsSubagent &&
-          params.directOrigin?.threadId != null &&
-          params.directOrigin.threadId !== ""
-            ? String(params.directOrigin.threadId)
-            : undefined,
+        channel: params.requesterIsSubagent ? undefined : directOrigin?.channel,
+        accountId: params.requesterIsSubagent ? undefined : directOrigin?.accountId,
+        to: params.requesterIsSubagent ? undefined : directOrigin?.to,
+        threadId: params.requesterIsSubagent ? undefined : threadId,
         idempotencyKey: params.directIdempotencyKey,
       },
       expectFinal: true,
@@ -443,12 +485,14 @@ async function sendSubagentAnnounceDirectly(params: {
   }
 }
 
-async function deliverSubagentCompletionAnnouncement(params: {
+async function deliverSubagentAnnouncement(params: {
   requesterSessionKey: string;
   announceId?: string;
   triggerMessage: string;
+  completionMessage?: string;
   summaryLine?: string;
   requesterOrigin?: DeliveryContext;
+  completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
@@ -476,7 +520,10 @@ async function deliverSubagentCompletionAnnouncement(params: {
   const direct = await sendSubagentAnnounceDirectly({
     targetRequesterSessionKey: params.targetRequesterSessionKey,
     triggerMessage: params.triggerMessage,
+    completionMessage: params.completionMessage,
+    expectsCompletionMessage: params.expectsCompletionMessage,
     directIdempotencyKey: params.directIdempotencyKey,
+    completionDirectOrigin: params.completionDirectOrigin,
     directOrigin: params.directOrigin,
     requesterIsSubagent: params.requesterIsSubagent,
   });
@@ -761,6 +808,7 @@ export async function runSubagentAnnounceFlow(params: {
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
     const findings = reply || "(no output)";
+    let completionMessage = "";
     let triggerMessage = "";
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
@@ -824,39 +872,20 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
-    triggerMessage = [
+    completionMessage = [
       `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
       "Result:",
       findings,
       "",
       statsLine,
-      "",
-      replyInstruction,
     ].join("\n");
+    triggerMessage = [completionMessage, "", replyInstruction].join("\n");
 
     const announceId = buildAnnounceIdFromChildRun({
       childSessionKey: params.childSessionKey,
       childRunId: params.childRunId,
     });
-    if (!expectsCompletionMessage) {
-      const queued = await maybeQueueSubagentAnnounce({
-        requesterSessionKey: targetRequesterSessionKey,
-        announceId,
-        triggerMessage,
-        summaryLine: taskLabel,
-        requesterOrigin: targetRequesterOrigin,
-      });
-      if (queued === "steered") {
-        didAnnounce = true;
-        return true;
-      }
-      if (queued === "queued") {
-        didAnnounce = true;
-        return true;
-      }
-    }
-
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
@@ -868,12 +897,14 @@ export async function runSubagentAnnounceFlow(params: {
     // catches duplicates if this announce is also queued by the gateway-
     // level message queue while the main session is busy (#17122).
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
-    const delivery = await deliverSubagentCompletionAnnouncement({
+    const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
       triggerMessage,
+      completionMessage,
       summaryLine: taskLabel,
       requesterOrigin: targetRequesterOrigin,
+      completionDirectOrigin: targetRequesterOrigin,
       directOrigin,
       targetRequesterSessionKey,
       requesterIsSubagent,
