@@ -68,6 +68,7 @@ import {
 import {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
+  DevicePairRemoveParamsSchema,
   DevicePairRejectParamsSchema,
   DevicePairRequestedEventSchema,
   DevicePairResolvedEventSchema,
@@ -103,14 +104,6 @@ import {
   LogsTailParamsSchema,
   LogsTailResultSchema,
 } from "./logs-chat.js";
-import {
-  MeshPlanAutoParamsSchema,
-  MeshPlanParamsSchema,
-  MeshRetryParamsSchema,
-  MeshRunParamsSchema,
-  MeshStatusParamsSchema,
-  MeshWorkflowPlanSchema,
-} from "./mesh.js";
 import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
@@ -253,6 +246,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,
+  DevicePairRemoveParams: DevicePairRemoveParamsSchema,
   DeviceTokenRotateParams: DeviceTokenRotateParamsSchema,
   DeviceTokenRevokeParams: DeviceTokenRevokeParamsSchema,
   DevicePairRequestedEvent: DevicePairRequestedEventSchema,
@@ -262,12 +256,6 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,
   ChatEvent: ChatEventSchema,
-  MeshPlanParams: MeshPlanParamsSchema,
-  MeshPlanAutoParams: MeshPlanAutoParamsSchema,
-  MeshWorkflowPlan: MeshWorkflowPlanSchema,
-  MeshRunParams: MeshRunParamsSchema,
-  MeshStatusParams: MeshStatusParamsSchema,
-  MeshRetryParams: MeshRetryParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,

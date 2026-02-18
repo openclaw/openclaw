@@ -1,8 +1,8 @@
-import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_SETUP_TOKEN_PREFIX,
@@ -155,6 +155,28 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   }
   return models[0] ?? null;
 }
+
+function buildTestModel(id: string, provider = "anthropic"): Model<Api> {
+  return { id, provider } as Model<Api>;
+}
+
+describe("pickModel", () => {
+  it("resolves sonnet-4.6 aliases to claude-sonnet-4-6", () => {
+    const model = pickModel(
+      [buildTestModel("claude-opus-4-6"), buildTestModel("claude-sonnet-4-6")],
+      "sonnet-4.6",
+    );
+    expect(model?.id).toBe("claude-sonnet-4-6");
+  });
+
+  it("resolves opus-4.6 aliases to claude-opus-4-6", () => {
+    const model = pickModel(
+      [buildTestModel("claude-sonnet-4-6"), buildTestModel("claude-opus-4-6")],
+      "opus-4.6",
+    );
+    expect(model?.id).toBe("claude-opus-4-6");
+  });
+});
 
 describeLive("live anthropic setup-token", () => {
   it(

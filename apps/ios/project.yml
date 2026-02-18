@@ -37,6 +37,7 @@ targets:
     dependencies:
       - target: OpenClawShareExtension
         embed: true
+      - target: OpenClawWatchApp
       - package: OpenClawKit
       - package: OpenClawKit
         product: OpenClawChatUI
@@ -90,8 +91,8 @@ targets:
           - CFBundleURLName: ai.openclaw.ios
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.2.17"
-        CFBundleVersion: "20260217"
+        CFBundleShortVersionString: "2026.2.18"
+        CFBundleVersion: "20260218"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -140,6 +141,55 @@ targets:
     info:
       path: ShareExtension/Info.plist
 
+  OpenClawWatchApp:
+    type: application.watchapp2
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: WatchApp
+    dependencies:
+      - target: OpenClawWatchExtension
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.watchkitapp
+    info:
+      path: WatchApp/Info.plist
+      properties:
+        CFBundleDisplayName: OpenClaw
+        CFBundleShortVersionString: "2026.2.16"
+        CFBundleVersion: "20260216"
+        WKCompanionAppBundleIdentifier: ai.openclaw.ios
+        WKWatchKitApp: true
+
+  OpenClawWatchExtension:
+    type: watchkit2-extension
+    platform: watchOS
+    deploymentTarget: "11.0"
+    sources:
+      - path: WatchExtension/Sources
+    dependencies:
+      - sdk: WatchConnectivity.framework
+      - sdk: UserNotifications.framework
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.watchkitapp.extension
+    info:
+      path: WatchExtension/Info.plist
+      properties:
+        CFBundleDisplayName: OpenClaw
+        CFBundleShortVersionString: "2026.2.16"
+        CFBundleVersion: "20260216"
+        NSExtension:
+          NSExtensionAttributes:
+            WKAppBundleIdentifier: ai.openclaw.ios.watchkitapp
+          NSExtensionPointIdentifier: com.apple.watchkit
+
   OpenClawTests:
     type: bundle.unit-test
     platform: iOS
@@ -161,5 +211,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.2.17"
-        CFBundleVersion: "20260217"
+        CFBundleShortVersionString: "2026.2.18"
+        CFBundleVersion: "20260218"
