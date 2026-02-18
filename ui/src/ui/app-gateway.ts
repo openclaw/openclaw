@@ -224,6 +224,17 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
           void loadSessions(host as unknown as OpenClawApp, {
             activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
           });
+          // After /new, reset to the main session so subsequent messages
+          // don't go into a previously-selected sidebar session.
+          const defaults = (
+            host.hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined
+          )?.sessionDefaults;
+          const mainSessionKey = defaults?.mainSessionKey?.trim() || "agent:main:main";
+          host.sessionKey = mainSessionKey;
+          setLastActiveSessionKey(
+            host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
+            mainSessionKey,
+          );
         }
       }
     }
