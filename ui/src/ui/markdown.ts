@@ -205,8 +205,11 @@ export function toSanitizedMarkdownHtml(
         }
         return key;
       })
-      // Inline math ($...$)
+      // Inline math ($...$) — skip currency like $50
       .replace(/(?<!\$)\$(?!\$)([^$\n]+)\$(?!\$)/g, (_match, latex) => {
+        if (!/[\\^_{}]/.test(latex)) {
+          return _match;
+        }
         const key = `%%KATEX_I${placeholderIdx++}%%`;
         try {
           latexMap.set(
