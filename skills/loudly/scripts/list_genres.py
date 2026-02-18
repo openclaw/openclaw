@@ -2,17 +2,16 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "requests>=2.31.0",
+#     "requests>=2.31.0,<3",
 # ]
 # ///
 """
 List available genres from the Loudly Music API.
 
 Usage:
-    uv run list_genres.py [--api-key KEY]
+    uv run list_genres.py
 """
 
-import argparse
 import os
 import sys
 
@@ -21,13 +20,9 @@ API_BASE = "https://soundtracks.loudly.com/api"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="List available Loudly music genres")
-    parser.add_argument("--api-key", "-k", help="Loudly API key (overrides LOUDLY_API_KEY env var)")
-    args = parser.parse_args()
-
-    api_key = args.api_key or os.environ.get("LOUDLY_API_KEY")
+    api_key = os.environ.get("LOUDLY_API_KEY")
     if not api_key:
-        print("Error: No API key. Set LOUDLY_API_KEY or pass --api-key.", file=sys.stderr)
+        print("Error: LOUDLY_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
 
     import requests
@@ -35,21 +30,24 @@ def main():
     response = requests.get(
         f"{API_BASE}/ai/genres",
         headers={"API-KEY": api_key, "Accept": "application/json"},
+        timeout=(10, 30),
     )
 
     if response.status_code != 200:
-        print(f"Error: API returned status {response.status_code}", file=sys.stderr)
-        print(f"Response: {response.text}", file=sys.stderr)
+        print(f"Error: API returned status {response.status_code}.", file=sys.stderr)
         sys.exit(1)
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        print("Error: API returned non-JSON response.", file=sys.stderr)
+        sys.exit(1)
 
     # Handle different response shapes
     genres = data if isinstance(data, list) else data.get("genres", data.get("data", []))
 
     if not genres:
-        print("No genres found. Raw response:")
-        print(data)
+        print("No genres found.")
         return
 
     print("Available Loudly Genres:")
