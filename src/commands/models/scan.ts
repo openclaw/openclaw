@@ -10,6 +10,7 @@ import {
   stylePromptMessage,
   stylePromptTitle,
 } from "../../terminal/prompt-style.js";
+import { pad, truncate } from "./list.format.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
@@ -32,18 +33,6 @@ function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   }
   return value;
 }
-
-const pad = (value: string, size: number) => value.padEnd(size);
-
-const truncate = (value: string, max: number) => {
-  if (value.length <= max) {
-    return value;
-  }
-  if (max <= 3) {
-    return value.slice(0, max);
-  }
-  return `${value.slice(0, max - 3)}...`;
-};
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.slice().toSorted((a, b) => {
