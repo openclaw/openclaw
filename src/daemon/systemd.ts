@@ -6,7 +6,7 @@ import {
   resolveGatewaySystemdServiceName,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
-import { formatLine, toPosixPath } from "./output.js";
+import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -227,8 +227,16 @@ export async function installSystemdService({
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
-  stdout.write("\n");
-  stdout.write(`${formatLine("Installed systemd service", unitPath)}\n`);
+  writeFormattedLines(
+    stdout,
+    [
+      {
+        label: "Installed systemd service",
+        value: unitPath,
+      },
+    ],
+    { leadingBlankLine: true },
+  );
   return { unitPath };
 }
 
