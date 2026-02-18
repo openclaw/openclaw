@@ -13,7 +13,7 @@ import {
   formatDirectCommandDeliveryMessage,
   resolveDirectCommandDeliveryBestEffort,
 } from "../cron/direct-command-delivery.js";
-import { runCronDirectCommand } from "../cron/direct-command.js";
+import { formatDirectCommandResult, runCronDirectCommand } from "../cron/direct-command.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
@@ -39,6 +39,22 @@ export type GatewayCronState = {
 };
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
+
+function withDirectCommandDeliveryError(
+  result: Awaited<ReturnType<typeof runCronDirectCommand>>,
+  error: string,
+): Awaited<ReturnType<typeof runCronDirectCommand>> {
+  const normalizedResult = result.result
+    ? { ...result.result, status: "error" as const }
+    : undefined;
+  return {
+    ...result,
+    status: "error",
+    error,
+    result: normalizedResult,
+    summary: normalizedResult ? formatDirectCommandResult(normalizedResult) : result.summary,
+  };
+}
 
 function redactWebhookUrl(url: string): string {
   try {
@@ -253,11 +269,7 @@ export function buildGatewayCronService(params: {
           );
           return directCommandResult;
         }
-        return {
-          ...directCommandResult,
-          status: "error",
-          error: resolvedDelivery.error.message,
-        };
+        return withDirectCommandDeliveryError(directCommandResult, resolvedDelivery.error.message);
       }
 
       if (!resolvedDelivery.to) {
@@ -266,11 +278,7 @@ export function buildGatewayCronService(params: {
           cronLogger.warn({ jobId: job.id }, message);
           return directCommandResult;
         }
-        return {
-          ...directCommandResult,
-          status: "error",
-          error: message,
-        };
+        return withDirectCommandDeliveryError(directCommandResult, message);
       }
 
       try {
@@ -295,11 +303,7 @@ export function buildGatewayCronService(params: {
         });
       } catch (err) {
         if (!bestEffort) {
-          return {
-            ...directCommandResult,
-            status: "error",
-            error: String(err),
-          };
+          return withDirectCommandDeliveryError(directCommandResult, String(err));
         }
       }
 

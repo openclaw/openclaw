@@ -194,4 +194,58 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("marks direct-command summary result status as error when announce delivery fails", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-${Date.now()}`);
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: { store: path.join(tmpDir, "cron.json") },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+    deliverOutboundPayloadsMock.mockRejectedValue(new Error("send failed"));
+
+    const broadcastMock = vi.fn();
+    const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: broadcastMock });
+    try {
+      const job = await state.cron.add({
+        name: "direct-delivery-fail",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+        payload: {
+          kind: "directCommand",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('hi')"],
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      const finishedEvent = broadcastMock.mock.calls
+        .map(
+          (call) =>
+            call[1] as {
+              action?: string;
+              status?: string;
+              summary?: string;
+              error?: string;
+            },
+        )
+        .find((evt) => evt?.action === "finished");
+      expect(finishedEvent).toBeDefined();
+      expect(finishedEvent?.status).toBe("error");
+      expect(finishedEvent?.error).toContain("send failed");
+
+      const parsed = JSON.parse(finishedEvent?.summary ?? "{}") as {
+        status: string;
+        captured?: { stdout?: string };
+      };
+      expect(parsed.status).toBe("error");
+      expect(parsed.captured?.stdout).toContain("hi");
+    } finally {
+      state.cron.stop();
+    }
+  });
 });
