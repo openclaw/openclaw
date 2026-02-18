@@ -18,6 +18,7 @@ export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
   token?: string;
+  systemdKillMode?: string;
   force?: boolean;
   json?: boolean;
 };

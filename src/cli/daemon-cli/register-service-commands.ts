@@ -16,11 +16,13 @@ function resolveInstallOptions(
 ): DaemonInstallOptions {
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   const parentPort = inheritOptionFromParent<string>(command, "port");
+  const parentSystemdKillMode = inheritOptionFromParent<string>(command, "systemdKillMode");
   const parentToken = inheritOptionFromParent<string>(command, "token");
   return {
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
+    systemdKillMode: cmdOpts.systemdKillMode ?? parentSystemdKillMode,
     token: cmdOpts.token ?? parentToken,
   };
 }
@@ -60,6 +62,10 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .description("Install the Gateway service (launchd/systemd/schtasks)")
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
+    .option(
+      "--systemd-kill-mode <mode>",
+      'Linux/systemd only: KillMode ("process"|"mixed"|"control-group").',
+    )
     .option("--token <token>", "Gateway token (token auth)")
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)

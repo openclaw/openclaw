@@ -1,4 +1,5 @@
 export type GatewayServiceEnv = Record<string, string | undefined>;
+export type SystemdKillMode = "process" | "mixed" | "control-group";
 
 export type GatewayServiceInstallArgs = {
   env: GatewayServiceEnv;
@@ -7,6 +8,7 @@ export type GatewayServiceInstallArgs = {
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
   description?: string;
+  systemdKillMode?: SystemdKillMode;
 };
 
 export type GatewayServiceManageArgs = {
@@ -35,4 +37,5 @@ export type GatewayServiceRenderArgs = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
+  killMode?: SystemdKillMode;
 };

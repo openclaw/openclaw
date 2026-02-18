@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { SYSTEMD_KILL_MODES, type SystemdKillMode } from "../../daemon/systemd-unit.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -22,6 +23,22 @@ import {
 } from "./response.js";
 import { parsePort } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+function parseSystemdKillMode(
+  value: DaemonInstallOptions["systemdKillMode"],
+): SystemdKillMode | undefined | null {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SYSTEMD_KILL_MODES as readonly string[]).includes(normalized)) {
+    return normalized as SystemdKillMode;
+  }
+  return null;
+}
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);
@@ -47,6 +64,19 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
+  }
+  const parsedSystemdKillMode = parseSystemdKillMode(opts.systemdKillMode);
+  if (parsedSystemdKillMode === null) {
+    fail('Invalid --systemd-kill-mode (use "process", "mixed", or "control-group")');
+    return;
+  }
+  if (parsedSystemdKillMode && process.platform !== "linux") {
+    const warning = "--systemd-kill-mode is ignored on non-Linux platforms.";
+    if (json) {
+      warnings.push(warning);
+    } else {
+      defaultRuntime.log(warning);
+    }
   }
 
   const service = resolveGatewayService();
@@ -171,6 +201,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        systemdKillMode: process.platform === "linux" ? parsedSystemdKillMode : undefined,
       });
     },
   });
