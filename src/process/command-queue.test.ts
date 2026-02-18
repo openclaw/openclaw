@@ -52,28 +52,21 @@ describe("command queue", () => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push(id);
-      await new Promise((resolve) => setTimeout(resolve, 2));
+      await Promise.resolve();
       active -= 1;
       return id;
     };
 
-    vi.useFakeTimers();
-    try {
-      const resultsPromise = Promise.all([
-        enqueueCommand(makeTask(1)),
-        enqueueCommand(makeTask(2)),
-        enqueueCommand(makeTask(3)),
-      ]);
-      await vi.advanceTimersByTimeAsync(20);
-      const results = await resultsPromise;
+    const results = await Promise.all([
+      enqueueCommand(makeTask(1)),
+      enqueueCommand(makeTask(2)),
+      enqueueCommand(makeTask(3)),
+    ]);
 
-      expect(results).toEqual([1, 2, 3]);
-      expect(calls).toEqual([1, 2, 3]);
-      expect(maxActive).toBe(1);
-      expect(getQueueSize()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(results).toEqual([1, 2, 3]);
+    expect(calls).toEqual([1, 2, 3]);
+    expect(maxActive).toBe(1);
+    expect(getQueueSize()).toBe(0);
   });
 
   it("logs enqueue depth after push", async () => {
