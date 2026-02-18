@@ -6,6 +6,14 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 
 const REMOTE_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_REMOTE_SHELL = "/bin/sh";
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const ANSI_CSI_REGEX = new RegExp(`${escapeRegExp(ESC)}\\[[0-?]*[ -/]*[@-~]`, "g");
+const ANSI_OSC_REGEX = new RegExp(
+  `${escapeRegExp(ESC)}\\][^${escapeRegExp(BEL)}]*(?:${escapeRegExp(BEL)}|${escapeRegExp(ESC)}\\\\)`,
+  "g",
+);
+const BRACKETED_PASTE_MODE_REGEX = new RegExp(`${escapeRegExp(ESC)}\\[\\?2004[hl]`, "g");
 
 export type RemoteExecHost = "remote-ssh" | "remote-container" | "remote-k8s-pod";
 
@@ -61,6 +69,57 @@ type RemoteSession = {
 };
 
 const remoteSessions = new Map<string, RemoteSession>();
+
+function normalizeTerminalLine(line: string): string {
+  return line.replace(ANSI_OSC_REGEX, "").replace(ANSI_CSI_REGEX, "");
+}
+
+function isPromptEchoLine(line: string, command: string): boolean {
+  if (line === command) {
+    return true;
+  }
+  const commandRegex = new RegExp(`(?:^|.*(?:[$#>])\\s+)${escapeRegExp(command)}$`);
+  return commandRegex.test(line);
+}
+
+export function sanitizeRemoteShellOutput(params: {
+  rawOutput: string;
+  command: string;
+  marker: string;
+}): string {
+  const lines = params.rawOutput.replace(/\r/g, "").split("\n");
+  const markerPrintLine = `printf '\\n${params.marker}:%s\\n' "$?"`;
+  const isCommandEchoLine = (line: string) =>
+    isPromptEchoLine(line, params.command) || isPromptEchoLine(line, markerPrintLine);
+  const isMarkerEchoLine = (line: string) => isPromptEchoLine(line, markerPrintLine);
+
+  let start = 0;
+  while (start < lines.length) {
+    const normalized = normalizeTerminalLine(lines[start] ?? "").trim();
+    if (!normalized || isCommandEchoLine(normalized)) {
+      start += 1;
+      continue;
+    }
+    break;
+  }
+
+  let end = lines.length;
+  while (end > start) {
+    const normalized = normalizeTerminalLine(lines[end - 1] ?? "").trim();
+    if (!normalized || isMarkerEchoLine(normalized)) {
+      end -= 1;
+      continue;
+    }
+    break;
+  }
+
+  return lines
+    .slice(start, end)
+    .join("\n")
+    .replace(ANSI_OSC_REGEX, "")
+    .replace(BRACKETED_PASTE_MODE_REGEX, "")
+    .trimEnd();
+}
 
 function shellEscapeArg(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -138,6 +197,7 @@ function buildConnectCommand(target: RemoteExecTarget): string {
 
   if (target.host === "remote-container") {
     const shellTokens = parseShellTokens(target.containerShell);
+    const dockerExec = ["docker", "exec", "-it", target.containerName, ...shellTokens];
     if (target.containerContext?.trim()) {
       return quoteCommandArgs([
         "docker",
@@ -150,7 +210,6 @@ function buildConnectCommand(target: RemoteExecTarget): string {
       ]);
     }
     if (target.containerSshTarget?.trim()) {
-      const dockerExec = ["docker", "exec", "-it", target.containerName, ...shellTokens];
       return quoteCommandArgs(
         buildSshConnectArgs({
           sshTarget: target.containerSshTarget.trim(),
@@ -379,7 +438,11 @@ export async function runRemoteExec(params: RemoteExecRunParams): Promise<Remote
       const match = markerRegex.exec(captured);
       if (match) {
         const exitCode = Number.parseInt(match[1] ?? "", 10);
-        const output = captured.slice(0, match.index).replace(/\r/g, "").trimEnd();
+        const output = sanitizeRemoteShellOutput({
+          rawOutput: captured.slice(0, match.index),
+          command: params.command,
+          marker,
+        });
         const success = Number.isFinite(exitCode) ? exitCode === 0 : false;
         return {
           success,
