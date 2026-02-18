@@ -1,5 +1,12 @@
 import { defineConfig } from "tsdown";
 
+// Optional dependencies: mark as external so tsdown doesn't try to bundle them.
+const optionalExternal: (string | RegExp)[] = [
+  "@aws-sdk/client-bedrock",
+  /^pdfjs-dist/,
+  "playwright-core",
+];
+
 const env = {
   NODE_ENV: "production",
 };
@@ -9,12 +16,14 @@ export default defineConfig([
     entry: "src/index.ts",
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
   {
     entry: "src/entry.ts",
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
   {
@@ -22,12 +31,14 @@ export default defineConfig([
     entry: "src/cli/daemon-cli.ts",
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
   {
     entry: "src/infra/warning-filter.ts",
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
   {
@@ -35,6 +46,7 @@ export default defineConfig([
     outDir: "dist/plugin-sdk",
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
   {
@@ -42,18 +54,21 @@ export default defineConfig([
     outDir: "dist/plugin-sdk",
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
   {
     entry: "src/extensionAPI.ts",
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
   {
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
     env,
     fixedExtension: false,
+    external: optionalExternal,
     platform: "node",
   },
 ]);

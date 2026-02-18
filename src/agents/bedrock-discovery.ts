@@ -1,13 +1,8 @@
-import type { BedrockClient, ListFoundationModelsCommandOutput } from "@aws-sdk/client-bedrock";
-
-async function importAwsSdkBedrock() {
-  return import("@aws-sdk/client-bedrock").catch(() => {
-    throw new Error(
-      "Optional dependency @aws-sdk/client-bedrock is not installed. " +
-        "Install it to enable Bedrock model discovery: npm install @aws-sdk/client-bedrock",
-    );
-  });
-}
+import {
+  BedrockClient,
+  ListFoundationModelsCommand,
+  type ListFoundationModelsCommandOutput,
+} from "@aws-sdk/client-bedrock";
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
@@ -179,13 +174,11 @@ export async function discoverBedrockModels(params: {
     }
   }
 
-  const awsSdk = await importAwsSdkBedrock();
-  const clientFactory =
-    params.clientFactory ?? ((region: string) => new awsSdk.BedrockClient({ region }));
+  const clientFactory = params.clientFactory ?? ((region: string) => new BedrockClient({ region }));
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    const response = await client.send(new awsSdk.ListFoundationModelsCommand({}));
+    const response = await client.send(new ListFoundationModelsCommand({}));
     const discovered: ModelDefinitionConfig[] = [];
     for (const summary of response.modelSummaries ?? []) {
       if (!shouldIncludeSummary(summary, providerFilter)) {

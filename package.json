@@ -126,6 +126,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
+    "@aws-sdk/client-bedrock": "^3.992.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.1",
     "@grammyjs/runner": "^2.0.3",
@@ -203,7 +204,6 @@
     "node-llama-cpp": "3.15.1"
   },
   "optionalDependencies": {
-    "@aws-sdk/client-bedrock": "^3.992.0",
     "pdfjs-dist": "^5.4.624",
     "playwright-core": "1.58.2"
   },

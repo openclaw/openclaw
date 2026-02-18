@@ -169,10 +169,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
-    optionalDependencies:
       '@aws-sdk/client-bedrock':
         specifier: ^3.992.0
         version: 3.992.0
+    optionalDependencies:
       pdfjs-dist:
         specifier: ^5.4.624
         version: 5.4.624
