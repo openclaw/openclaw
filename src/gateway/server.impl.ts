@@ -550,10 +550,9 @@ export async function startGatewayServer(
             source: "agent",
             text: SILENT_REPLY_TOKEN,
           });
-          replyEnforcer.onAgentLifecycle({ sessionKey, phase: evt.data.phase });
-        } else if (evt.data.phase === "error") {
-          replyEnforcer.onAgentLifecycle({ sessionKey, phase: "error" });
         }
+        // Always notify enforcer of lifecycle end/error so watchdog disarms
+        replyEnforcer.onAgentLifecycle({ sessionKey, phase: evt.data.phase });
       }
     }
   });
