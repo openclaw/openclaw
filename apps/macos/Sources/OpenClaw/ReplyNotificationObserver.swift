@@ -13,7 +13,7 @@ final class ReplyNotificationObserver {
     private let logger = Logger(subsystem: "ai.openclaw", category: "reply-notifications")
     private var observeTask: Task<Void, Never>?
     private var panelVisible = false
-    private var notifiedRunIds: Set<String> = []
+    private var notifiedRunIds: [String] = []
 
     private let notificationManager = NotificationManager()
 
@@ -82,9 +82,9 @@ final class ReplyNotificationObserver {
         if self.panelVisible { return }
         guard AppStateStore.shared.replyNotificationsEnabled else { return }
         let body = self.extractPreview(from: chat.message?.foundationValue) ?? "Reply ready"
-        self.notifiedRunIds.insert(runId)
+        self.notifiedRunIds.append(runId)
         if self.notifiedRunIds.count > 200 {
-            self.notifiedRunIds = Set(Array(self.notifiedRunIds).suffix(100))
+            self.notifiedRunIds = Array(self.notifiedRunIds.suffix(100))
         }
         self.sendReplyNotification(body: body)
     }
