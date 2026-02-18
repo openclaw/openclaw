@@ -386,6 +386,11 @@ export class AcpGatewayAgent implements Agent {
     }
 
     if (state === "final") {
+      // Flush any text that fell inside the 150ms throttle window and was never
+      // emitted as a delta — the final event carries the complete buffered text.
+      if (messageData) {
+        await this.handleDeltaEvent(pending.sessionId, messageData);
+      }
       this.finishPrompt(pending.sessionId, pending, "end_turn");
       return;
     }

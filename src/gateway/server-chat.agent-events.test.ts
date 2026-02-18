@@ -252,4 +252,92 @@ describe("agent event handler", () => {
     expect(payload.data?.result).toEqual(result);
     resetAgentRunContextForTest();
   });
+
+  it("accumulates assistant text across segment resets signalled by message_start", () => {
+    // Fix regression: after a tool-call the gateway resets evt.data.text to only
+    // the new segment's text. emitChatDelta must prefix the earlier accumulated
+    // text so that the buffer — and therefore the final message — always contains
+    // the full conversation text across all segments.
+    const timestamps = [1000, 1200, 1400, 1600, 1800];
+    let callIndex = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => timestamps[callIndex++] ?? 9999);
+
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const nodeSendToSession = vi.fn();
+    const agentRunSeq = new Map<string, number>();
+    const chatRunState = createChatRunState();
+    const toolEventRecipients = createToolEventRecipientRegistry();
+
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds,
+      nodeSendToSession,
+      agentRunSeq,
+      chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients,
+    });
+
+    chatRunState.registry.add("run-seg", { sessionKey: "session-seg", clientRunId: "client-seg" });
+
+    // seq 1 — first segment begins: "Hello"
+    handler({
+      runId: "run-seg",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello" },
+    });
+
+    // seq 2 — same segment grows: "Hello world"
+    handler({
+      runId: "run-seg",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+
+    // seq 3 — new segment after tool-call: gateway resets text to only "After tool"
+    handler({
+      runId: "run-seg",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "After tool" },
+    });
+
+    // seq 4 — lifecycle end triggers emitChatFinal
+    handler({
+      runId: "run-seg",
+      seq: 4,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    const chatCalls = broadcast.mock.calls.filter(([event]) => event === "chat");
+    // Expect 3 delta broadcasts (seq 1, 2, 3) + 1 final = 4 total
+    expect(chatCalls).toHaveLength(4);
+
+    // The third delta (after segment reset) must include the prior text as prefix
+    const thirdDelta = chatCalls[2]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(thirdDelta.state).toBe("delta");
+    expect(thirdDelta.message?.content?.[0]?.text).toBe("Hello world\n\nAfter tool");
+
+    // The final must carry the full accumulated text
+    const finalCall = chatCalls[3]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalCall.state).toBe("final");
+    expect(finalCall.message?.content?.[0]?.text).toBe("Hello world\n\nAfter tool");
+
+    nowSpy.mockRestore();
+  });
 });

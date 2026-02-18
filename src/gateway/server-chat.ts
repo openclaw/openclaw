@@ -228,11 +228,50 @@ export function createAgentEventHandler({
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
+  // Tracks accumulated assistant text across tool-call segment boundaries.
+  // Keyed by clientRunId; reset on lifecycle end/abort.
+  const assistantTextAccum = new Map<string, string>();
+  // Tracks the length of the previous segment's final text so we can detect
+  // when a new segment starts. A new segment is signalled by the incoming
+  // cumulative text being shorter than the last segment's length.
+  //
+  // NOTE: This heuristic fails when the first chunk of a new segment is
+  // longer than or equal to the previous segment (e.g. the model outputs a
+  // long opening sentence right away). In that case the chunk falls into the
+  // "continuation" branch, and the segment boundary is missed — resulting in
+  // the previous segment text being silently replaced. This is an acceptable
+  // trade-off given the absence of an explicit "message_start" lifecycle
+  // event on the AgentEventPayload stream (lifecycle phases only carry
+  // "start" / "end" / "error" today; the pi-embedded "message_start" event
+  // is internal and never forwarded to emitAgentEvent).
+  const prevSegmentLength = new Map<string, number>();
+
   const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
     if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, text);
+
+    // Accumulate text across tool-call segment boundaries so that ACP's
+    // sentTextLength offset (which keeps growing) stays valid after resets.
+    let accumulatedText: string;
+    const prev = assistantTextAccum.get(clientRunId) ?? "";
+    const lastSegLen = prevSegmentLength.get(clientRunId) ?? 0;
+
+    if (prev && text.length < lastSegLen) {
+      // Heuristic: incoming cumulative text shrank → new segment started.
+      const separator = prev.endsWith("\n") || text.startsWith("\n") ? "" : "\n\n";
+      accumulatedText = `${prev}${separator}${text}`;
+    } else {
+      // Continuation within the same segment: replace the current segment's
+      // suffix while keeping any earlier segments intact.
+      const segmentBase = prev.length - lastSegLen;
+      accumulatedText = segmentBase > 0 ? prev.slice(0, segmentBase) + text : text;
+    }
+
+    prevSegmentLength.set(clientRunId, text.length);
+    assistantTextAccum.set(clientRunId, accumulatedText);
+    chatRunState.buffers.set(clientRunId, accumulatedText);
+
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
@@ -246,7 +285,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: accumulatedText }],
         timestamp: now,
       },
     };
@@ -268,6 +307,8 @@ export function createAgentEventHandler({
     const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    assistantTextAccum.delete(clientRunId);
+    prevSegmentLength.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -410,6 +451,10 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        assistantTextAccum.delete(clientRunId);
+        assistantTextAccum.delete(evt.runId);
+        prevSegmentLength.delete(clientRunId);
+        prevSegmentLength.delete(evt.runId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }
