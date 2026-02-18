@@ -86,6 +86,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .option("--force", "Force-kill the gateway process if it does not exit gracefully", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonStop(cmdOpts);
@@ -94,6 +95,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--force", "Force-kill the gateway process if it does not exit gracefully", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonRestart(cmdOpts);

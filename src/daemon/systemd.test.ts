@@ -7,7 +7,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { parseSystemdExecStart } from "./systemd-unit.js";
+import { parseSystemdExecStart, buildSystemdUnit } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
@@ -149,5 +149,38 @@ describe("parseSystemdExecStart", () => {
       "--name",
       "My Bot",
     ]);
+  });
+});
+
+describe("buildSystemdUnit", () => {
+  it("includes TimeoutStopSec for graceful shutdown", () => {
+    const unit = buildSystemdUnit({
+      description: "Test Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+    });
+    expect(unit).toContain("TimeoutStopSec=15");
+  });
+
+  it("includes StartLimitIntervalSec and StartLimitBurst to prevent restart loops", () => {
+    const unit = buildSystemdUnit({
+      description: "Test Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+    });
+    expect(unit).toContain("StartLimitIntervalSec=300");
+    expect(unit).toContain("StartLimitBurst=10");
+  });
+
+  it("generates valid unit file structure", () => {
+    const unit = buildSystemdUnit({
+      description: "Test Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "start"],
+      workingDirectory: "/home/user",
+    });
+    expect(unit).toContain("[Unit]");
+    expect(unit).toContain("[Service]");
+    expect(unit).toContain("[Install]");
+    expect(unit).toContain("Restart=always");
+    expect(unit).toContain("KillMode=process");
+    expect(unit).toMatch(/WorkingDirectory=.*\/home\/user/);
   });
 });

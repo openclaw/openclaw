@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -6,6 +7,7 @@ import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
+import { forceFreePortAndWait } from "../ports.js";
 import {
   buildDaemonServiceSnapshot,
   createNullWriter,
@@ -15,6 +17,7 @@ import {
 
 type DaemonLifecycleOptions = {
   json?: boolean;
+  force?: boolean;
 };
 
 async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
@@ -211,14 +214,41 @@ export async function runServiceStop(params: {
     }
     return;
   }
+
   try {
     await params.service.stop({ env: process.env, stdout });
   } catch (err) {
     fail(`${params.serviceNoun} stop failed: ${String(err)}`);
     return;
   }
-
+  // When --force is set, ensure the gateway process is truly dead by
+  // checking the port and escalating to SIGKILL if needed.
+  let forceKilled = false;
+  if (params.opts?.force) {
+    try {
+      const port = resolveGatewayPort(loadConfig());
+      const { killed, escalatedToSigkill } = await forceFreePortAndWait(port, {
+        timeoutMs: 2000,
+        intervalMs: 100,
+        sigtermTimeoutMs: 700,
+      });
+      if (killed.length > 0) {
+        forceKilled = true;
+        const pids = killed.map((p) => p.pid).join(", ");
+        if (!json) {
+          defaultRuntime.log(
+            `Force: killed pid ${pids} on port ${port}${escalatedToSigkill ? " (escalated to SIGKILL)" : ""}`,
+          );
+        }
+      }
+    } catch (err) {
+      if (!json) {
+        defaultRuntime.error(`Force cleanup failed: ${String(err)}`);
+      }
+    }
+  }
   let stopped = false;
+
   try {
     stopped = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -226,7 +256,7 @@ export async function runServiceStop(params: {
   }
   emit({
     ok: true,
-    result: "stopped",
+    result: forceKilled ? "force-stopped" : "stopped",
     service: buildDaemonServiceSnapshot(params.service, stopped),
   });
 }
@@ -258,6 +288,32 @@ export async function runServiceRestart(params: {
       emit,
     });
     return false;
+  }
+  // When --force is set, kill the old process before restarting to
+  // guarantee the port is freed even if the process ignores SIGTERM.
+  let forceKilled = false;
+  if (params.opts?.force) {
+    try {
+      const port = resolveGatewayPort(loadConfig());
+      const { killed, escalatedToSigkill } = await forceFreePortAndWait(port, {
+        timeoutMs: 2000,
+        intervalMs: 100,
+        sigtermTimeoutMs: 700,
+      });
+      if (killed.length > 0) {
+        forceKilled = true;
+        const pids = killed.map((p) => p.pid).join(", ");
+        if (!json) {
+          defaultRuntime.log(
+            `Force: killed pid ${pids} on port ${port}${escalatedToSigkill ? " (escalated to SIGKILL)" : ""}`,
+          );
+        }
+      }
+    } catch (err) {
+      if (!json) {
+        defaultRuntime.error(`Force cleanup failed: ${String(err)}`);
+      }
+    }
   }
 
   const warnings: string[] = [];
@@ -299,7 +355,7 @@ export async function runServiceRestart(params: {
     }
     emit({
       ok: true,
-      result: "restarted",
+      result: forceKilled ? "force-restarted" : "restarted",
       service: buildDaemonServiceSnapshot(params.service, restarted),
       warnings: warnings.length ? warnings : undefined,
     });
