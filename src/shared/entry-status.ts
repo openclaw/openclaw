@@ -2,6 +2,7 @@ import { resolveEmojiAndHomepage } from "./entry-metadata.js";
 import {
   evaluateRequirementsFromMetadataWithRemote,
   type RequirementConfigCheck,
+  type RequirementRemote,
   type Requirements,
   type RequirementsMetadata,
 } from "./requirements.js";
@@ -17,11 +18,7 @@ export function evaluateEntryMetadataRequirements(params: {
   } | null;
   hasLocalBin: (bin: string) => boolean;
   localPlatform: string;
-  remote?: {
-    hasBin?: (bin: string) => boolean;
-    hasAnyBin?: (bins: string[]) => boolean;
-    platforms?: string[];
-  };
+  remote?: RequirementRemote;
   isEnvSatisfied: (envName: string) => boolean;
   isConfigSatisfied: (pathStr: string) => boolean;
 }): {
