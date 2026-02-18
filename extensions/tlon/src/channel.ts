@@ -1,25 +1,72 @@
 import type {
-  ChannelAccountSnapshot,
   ChannelOutboundAdapter,
   ChannelPlugin,
   ChannelSetupInput,
   OpenClawConfig,
 } from "openclaw/plugin-sdk";
+// NOTE: configureClient not available in current @tloncorp/api-beta version
+// import { configureClient } from "@tloncorp/api";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "openclaw/plugin-sdk";
-import { buildTlonAccountFields } from "./account-fields.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonOnboardingAdapter } from "./onboarding.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
-import { UrbitChannelClient } from "./urbit/channel-client.js";
-import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
-import { buildMediaText, sendDm, sendGroupMessage } from "./urbit/send.js";
+import { ensureUrbitConnectPatched, Urbit } from "./urbit/http-api.js";
+import {
+  buildMediaStory,
+  sendDm,
+  sendGroupMessage,
+  sendDmWithStory,
+  sendGroupMessageWithStory,
+} from "./urbit/send.js";
+import { uploadImageFromUrl } from "./urbit/upload.js";
+
+// Simple HTTP-only poke that doesn't open an EventSource (avoids conflict with monitor's SSE)
+async function createHttpPokeApi(params: { url: string; code: string; ship: string }) {
+  const cookie = await authenticate(params.url, params.code);
+  const channelId = `${Math.floor(Date.now() / 1000)}-${Math.random().toString(36).substring(2, 8)}`;
+  const channelUrl = `${params.url}/~/channel/${channelId}`;
+  const shipName = params.ship.replace(/^~/, "");
+
+  return {
+    poke: async (pokeParams: { app: string; mark: string; json: unknown }) => {
+      const pokeId = Date.now();
+      const pokeData = {
+        id: pokeId,
+        action: "poke",
+        ship: shipName,
+        app: pokeParams.app,
+        mark: pokeParams.mark,
+        json: pokeParams.json,
+      };
+
+      const response = await fetch(channelUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie.split(";")[0],
+        },
+        body: JSON.stringify([pokeData]),
+      });
+
+      if (!response.ok && response.status !== 204) {
+        const errorText = await response.text();
+        throw new Error(`Poke failed: ${response.status} - ${errorText}`);
+      }
+
+      return pokeId;
+    },
+    delete: async () => {
+      // No-op for HTTP-only client
+    },
+  };
+}
 
 const TLON_CHANNEL_ID = "tlon" as const;
 
@@ -27,7 +74,6 @@ type TlonSetupInput = ChannelSetupInput & {
   ship?: string;
   url?: string;
   code?: string;
-  allowPrivateNetwork?: boolean;
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
@@ -48,7 +94,16 @@ function applyTlonSetupConfig(params: {
   });
   const base = namedConfig.channels?.tlon ?? {};
 
-  const payload = buildTlonAccountFields(input);
+  const payload = {
+    ...(input.ship ? { ship: input.ship } : {}),
+    ...(input.url ? { url: input.url } : {}),
+    ...(input.code ? { code: input.code } : {}),
+    ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
+    ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),
+    ...(typeof input.autoDiscoverChannels === "boolean"
+      ? { autoDiscoverChannels: input.autoDiscoverChannels }
+      : {}),
+  };
 
   if (useDefault) {
     return {
@@ -97,7 +152,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
         error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
       };
     }
-    if (parsed.kind === "direct") {
+    if (parsed.kind === "dm") {
       return { ok: true, to: parsed.ship };
     }
     return { ok: true, to: parsed.nest };
@@ -113,16 +168,16 @@ const tlonOutbound: ChannelOutboundAdapter = {
       throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
     }
 
-    const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
-    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-    const api = new UrbitChannelClient(account.url, cookie, {
-      ship: account.ship.replace(/^~/, ""),
-      ssrfPolicy,
+    // Use HTTP-only poke (no EventSource) to avoid conflicts with monitor's SSE connection
+    const api = await createHttpPokeApi({
+      url: account.url,
+      ship: account.ship,
+      code: account.code,
     });
 
     try {
       const fromShip = normalizeShip(account.ship);
-      if (parsed.kind === "direct") {
+      if (parsed.kind === "dm") {
         return await sendDm({
           api,
           fromShip,
@@ -140,19 +195,68 @@ const tlonOutbound: ChannelOutboundAdapter = {
         replyToId: replyId,
       });
     } finally {
-      await api.close();
+      try {
+        await api.delete();
+      } catch {
+        // ignore cleanup errors
+      }
     }
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
-    const mergedText = buildMediaText(text, mediaUrl);
-    return await tlonOutbound.sendText!({
-      cfg,
-      to,
-      text: mergedText,
-      accountId,
-      replyToId,
-      threadId,
+    const account = resolveTlonAccount(cfg, accountId ?? undefined);
+    if (!account.configured || !account.ship || !account.url || !account.code) {
+      throw new Error("Tlon account not configured");
+    }
+
+    const parsed = parseTlonTarget(to);
+    if (!parsed) {
+      throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
+    }
+
+    // NOTE: configureClient not available in current @tloncorp/api-beta version
+    // configureClient({
+    //   shipUrl: account.url,
+    //   shipName: account.ship.replace(/^~/, ""),
+    //   verbose: false,
+    //   getCode: async () => account.code!,
+    // });
+
+    const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;
+
+    const api = await createHttpPokeApi({
+      url: account.url,
+      ship: account.ship,
+      code: account.code,
     });
+
+    try {
+      const fromShip = normalizeShip(account.ship);
+      const story = buildMediaStory(text, uploadedUrl);
+
+      if (parsed.kind === "dm") {
+        return await sendDmWithStory({
+          api,
+          fromShip,
+          toShip: parsed.ship,
+          story,
+        });
+      }
+      const replyId = (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
+      return await sendGroupMessageWithStory({
+        api,
+        fromShip,
+        hostShip: parsed.hostShip,
+        channelName: parsed.channelName,
+        story,
+        replyToId: replyId,
+      });
+    } finally {
+      try {
+        await api.delete();
+      } catch {
+        // ignore cleanup errors
+      }
+    }
   },
 };
 
@@ -170,7 +274,7 @@ export const tlonPlugin: ChannelPlugin = {
   },
   capabilities: {
     chatTypes: ["direct", "group", "thread"],
-    media: false,
+    media: true,
     reply: true,
     threads: true,
   },
@@ -189,7 +293,7 @@ export const tlonPlugin: ChannelPlugin = {
           channels: {
             ...cfg.channels,
             tlon: {
-              ...(cfg.channels?.tlon as Record<string, unknown>),
+              ...cfg.channels?.tlon,
               enabled,
             },
           },
@@ -200,7 +304,7 @@ export const tlonPlugin: ChannelPlugin = {
         channels: {
           ...cfg.channels,
           tlon: {
-            ...(cfg.channels?.tlon as Record<string, unknown>),
+            ...cfg.channels?.tlon,
             accounts: {
               ...cfg.channels?.tlon?.accounts,
               [accountId]: {
@@ -215,11 +319,13 @@ export const tlonPlugin: ChannelPlugin = {
     deleteAccount: ({ cfg, accountId }) => {
       const useDefault = !accountId || accountId === "default";
       if (useDefault) {
-        // oxlint-disable-next-line no-unused-vars
-        const { ship, code, url, name, ...rest } = (cfg.channels?.tlon ?? {}) as Record<
-          string,
-          unknown
-        >;
+        const {
+          ship: _ship,
+          code: _code,
+          url: _url,
+          name: _name,
+          ...rest
+        } = cfg.channels?.tlon ?? {};
         return {
           ...cfg,
           channels: {
@@ -228,15 +334,13 @@ export const tlonPlugin: ChannelPlugin = {
           },
         } as OpenClawConfig;
       }
-      // oxlint-disable-next-line no-unused-vars
-      const { [accountId]: removed, ...remainingAccounts } = (cfg.channels?.tlon?.accounts ??
-        {}) as Record<string, unknown>;
+      const { [accountId]: _removed, ...remainingAccounts } = cfg.channels?.tlon?.accounts ?? {};
       return {
         ...cfg,
         channels: {
           ...cfg.channels,
           tlon: {
-            ...(cfg.channels?.tlon as Record<string, unknown>),
+            ...cfg.channels?.tlon,
             accounts: remainingAccounts,
           },
         },
@@ -291,7 +395,7 @@ export const tlonPlugin: ChannelPlugin = {
       if (!parsed) {
         return target.trim();
       }
-      if (parsed.kind === "direct") {
+      if (parsed.kind === "dm") {
         return parsed.ship;
       }
       return parsed.nest;
@@ -325,45 +429,53 @@ export const tlonPlugin: ChannelPlugin = {
         return [];
       });
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      ship: (snapshot as { ship?: string | null }).ship ?? null,
-      url: (snapshot as { url?: string | null }).url ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => {
+      const s = snapshot as { configured?: boolean; ship?: string; url?: string };
+      return {
+        configured: s.configured ?? false,
+        ship: s.ship ?? null,
+        url: s.url ?? null,
+      };
+    },
     probeAccount: async ({ account }) => {
       if (!account.configured || !account.ship || !account.url || !account.code) {
         return { ok: false, error: "Not configured" };
       }
       try {
-        const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
-        const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-        const api = new UrbitChannelClient(account.url, cookie, {
+        ensureUrbitConnectPatched();
+        const api = await Urbit.authenticate({
           ship: account.ship.replace(/^~/, ""),
-          ssrfPolicy,
+          url: account.url,
+          code: account.code,
+          verbose: false,
         });
         try {
           await api.getOurName();
           return { ok: true };
         } finally {
-          await api.close();
+          await api.delete();
         }
-      } catch (error) {
-        return { ok: false, error: (error as { message?: string })?.message ?? String(error) };
+      } catch (error: any) {
+        return { ok: false, error: error?.message ?? String(error) };
       }
     },
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      ship: account.ship,
-      url: account.url,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) => {
+      // Tlon-specific snapshot with ship/url for status display
+      const snapshot = {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        ship: account.ship,
+        url: account.url,
+        running: runtime?.running ?? false,
+        lastStartAt: runtime?.lastStartAt ?? null,
+        lastStopAt: runtime?.lastStopAt ?? null,
+        lastError: runtime?.lastError ?? null,
+        probe,
+      };
+      return snapshot as import("openclaw/plugin-sdk").ChannelAccountSnapshot;
+    },
   },
   gateway: {
     startAccount: async (ctx) => {
@@ -372,7 +484,7 @@ export const tlonPlugin: ChannelPlugin = {
         accountId: account.accountId,
         ship: account.ship,
         url: account.url,
-      } as ChannelAccountSnapshot);
+      } as import("openclaw/plugin-sdk").ChannelAccountSnapshot);
       ctx.log?.info(`[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`);
       return monitorTlonProvider({
         runtime: ctx.runtime,
