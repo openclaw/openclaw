@@ -224,7 +224,9 @@ export async function resolveApiKeyForProvider(params: {
 
   const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+    const entry = resolveProviderConfig(cfg, provider);
+    const source = entry?.apiKeyFile ? "apiKeyFile" : "models.json";
+    return { apiKey: customKey, source, mode: "api-key" };
   }
 
   const normalized = normalizeProviderId(provider);
