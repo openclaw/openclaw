@@ -77,6 +77,20 @@ async function applyAbortTarget(params: {
   }
 }
 
+async function persistSessionEntry(params: Parameters<CommandHandler>[0]): Promise<boolean> {
+  if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
+    return false;
+  }
+  params.sessionEntry.updatedAt = Date.now();
+  params.sessionStore[params.sessionKey] = params.sessionEntry;
+  if (params.storePath) {
+    await updateSessionStore(params.storePath, (store) => {
+      store[params.sessionKey] = params.sessionEntry as SessionEntry;
+    });
+  }
+  return true;
+}
+
 export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -106,13 +120,7 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     params.sessionEntry.groupActivation = activationCommand.mode;
     params.sessionEntry.groupActivationNeedsSystemIntro = true;
-    params.sessionEntry.updatedAt = Date.now();
-    params.sessionStore[params.sessionKey] = params.sessionEntry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[params.sessionKey] = params.sessionEntry as SessionEntry;
-      });
-    }
+    await persistSessionEntry(params);
   }
   return {
     shouldContinue: false,
@@ -148,13 +156,7 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
     } else {
       params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
     }
-    params.sessionEntry.updatedAt = Date.now();
-    params.sessionStore[params.sessionKey] = params.sessionEntry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[params.sessionKey] = params.sessionEntry as SessionEntry;
-      });
-    }
+    await persistSessionEntry(params);
   }
   const label =
     sendPolicyCommand.mode === "inherit"
@@ -243,13 +245,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     } else {
       params.sessionEntry.responseUsage = next;
     }
-    params.sessionEntry.updatedAt = Date.now();
-    params.sessionStore[params.sessionKey] = params.sessionEntry;
-    if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[params.sessionKey] = params.sessionEntry as SessionEntry;
-      });
-    }
+    await persistSessionEntry(params);
   }
 
   return {
