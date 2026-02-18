@@ -309,17 +309,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Estimate output tokens: use reserveTokens as minimum, but allow up to 16K for summary output
       const estimatedOutputTokens = Math.max(reserveTokens, 16000);
 
-      // Check if messages + reserve + output exceed context window (common when falling back to smaller-context models)
+      // Check if messages + output exceed context window (common when falling back to smaller-context models)
       // If so, prune more aggressively before attempting summarization
       let inputTokens = estimateMessagesTokens(messagesToSummarize);
-      let totalNeededTokens = inputTokens + reserveTokens + estimatedOutputTokens;
+      let totalNeededTokens = inputTokens + estimatedOutputTokens; // FIX: Don't double-count reserveTokens
+
+      let aggressivelyPrunedSummary: string | undefined;
 
       if (totalNeededTokens > contextWindowTokens) {
         // Use more aggressive pruning when falling back to smaller context models
-        // Reduce maxHistoryShare to ensure we fit within the fallback model's context window
         const aggressiveMaxHistoryShare = Math.min(maxHistoryShare, 0.3);
 
-        // Prune iteratively until we fit within the available context
         let pruned = pruneHistoryForContextShare({
           messages: messagesToSummarize,
           maxContextTokens: contextWindowTokens,
@@ -328,7 +328,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         });
         messagesToSummarize = pruned.messages;
         inputTokens = estimateMessagesTokens(messagesToSummarize);
-        totalNeededTokens = inputTokens + reserveTokens + estimatedOutputTokens;
+        totalNeededTokens = inputTokens + estimatedOutputTokens;
 
         // If still too large after first pruning pass, prune more aggressively
         if (totalNeededTokens > contextWindowTokens && pruned.droppedChunks > 0) {
@@ -342,11 +342,42 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           if (pruned.droppedChunks > 0) {
             messagesToSummarize = pruned.messages;
             inputTokens = estimateMessagesTokens(messagesToSummarize);
-            totalNeededTokens = inputTokens + reserveTokens + estimatedOutputTokens;
+            totalNeededTokens = inputTokens + estimatedOutputTokens;
             console.warn(
               `Compaction safeguard: aggressive pruning for fallback model ` +
                 `(contextWindow=${contextWindowTokens}, needed=${totalNeededTokens}); ` +
                 `dropped ${pruned.droppedMessages} messages to fit.`,
+            );
+          }
+        }
+
+        // FIX: Summarize aggressively pruned messages so context isn't lost
+        if (pruned.droppedMessagesList.length > 0) {
+          try {
+            const prunedChunkRatio = computeAdaptiveChunkRatio(
+              pruned.droppedMessagesList,
+              contextWindowTokens,
+            );
+            const prunedMaxChunkTokens = Math.max(
+              1,
+              Math.floor(contextWindowTokens * prunedChunkRatio),
+            );
+            aggressivelyPrunedSummary = await summarizeInStages({
+              messages: pruned.droppedMessagesList,
+              model,
+              apiKey,
+              signal,
+              reserveTokens,
+              maxChunkTokens: prunedMaxChunkTokens,
+              contextWindow: contextWindowTokens,
+              customInstructions,
+              previousSummary: droppedSummary ?? preparation.previousSummary,
+            });
+          } catch (prunedError) {
+            console.warn(
+              `Compaction safeguard: failed to summarize aggressively pruned messages: ${
+                prunedError instanceof Error ? prunedError.message : String(prunedError)
+              }`,
             );
           }
         }
@@ -355,16 +386,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Use adaptive chunk ratio based on message sizes
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
-      // Ensure maxChunkTokens accounts for reserve + output tokens
-      const availableForChunks = Math.max(
-        1,
-        contextWindowTokens - reserveTokens - estimatedOutputTokens,
-      );
+      // Ensure maxChunkTokens accounts for output tokens
+      const availableForChunks = Math.max(1, contextWindowTokens - estimatedOutputTokens);
       const maxChunkTokens = Math.max(1, Math.floor(availableForChunks * adaptiveRatio));
 
-      // Feed dropped-messages summary as previousSummary so the main summarization
-      // incorporates context from pruned messages instead of losing it entirely.
-      const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
+      // Feed both dropped-messages summaries as previousSummary
+      const effectivePreviousSummary =
+        aggressivelyPrunedSummary ?? droppedSummary ?? preparation.previousSummary;
 
       const historySummary = await summarizeInStages({
         messages: messagesToSummarize,
