@@ -109,7 +109,7 @@ describe("hooks", () => {
 
     it("should handle async handlers", async () => {
       const handler = vi.fn(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await Promise.resolve();
       });
 
       registerInternalHook("command:new", handler);
