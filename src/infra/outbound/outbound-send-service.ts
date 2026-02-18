@@ -40,6 +40,41 @@ export type OutboundSendContext = {
   silent?: boolean;
 };
 
+type PluginHandledResult = {
+  handledBy: "plugin";
+  payload: unknown;
+  toolResult: AgentToolResult<unknown>;
+};
+
+async function tryHandleWithPluginAction(params: {
+  ctx: OutboundSendContext;
+  action: "send" | "poll";
+  onHandled?: () => Promise<void> | void;
+}): Promise<PluginHandledResult | null> {
+  if (params.ctx.dryRun) {
+    return null;
+  }
+  const handled = await dispatchChannelMessageAction({
+    channel: params.ctx.channel,
+    action: params.action,
+    cfg: params.ctx.cfg,
+    params: params.ctx.params,
+    accountId: params.ctx.accountId ?? undefined,
+    gateway: params.ctx.gateway,
+    toolContext: params.ctx.toolContext,
+    dryRun: params.ctx.dryRun,
+  });
+  if (!handled) {
+    return null;
+  }
+  await params.onHandled?.();
+  return {
+    handledBy: "plugin",
+    payload: extractToolPayload(handled),
+    toolResult: handled,
+  };
+}
+
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
   to: string;
@@ -57,37 +92,28 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
-  if (!params.ctx.dryRun) {
-    const handled = await dispatchChannelMessageAction({
-      channel: params.ctx.channel,
-      action: "send",
-      cfg: params.ctx.cfg,
-      params: params.ctx.params,
-      accountId: params.ctx.accountId ?? undefined,
-      gateway: params.ctx.gateway,
-      toolContext: params.ctx.toolContext,
-      dryRun: params.ctx.dryRun,
-    });
-    if (handled) {
-      if (params.ctx.mirror) {
-        const mirrorText = params.ctx.mirror.text ?? params.message;
-        const mirrorMediaUrls =
-          params.ctx.mirror.mediaUrls ??
-          params.mediaUrls ??
-          (params.mediaUrl ? [params.mediaUrl] : undefined);
-        await appendAssistantMessageToSessionTranscript({
-          agentId: params.ctx.mirror.agentId,
-          sessionKey: params.ctx.mirror.sessionKey,
-          text: mirrorText,
-          mediaUrls: mirrorMediaUrls,
-        });
+  const pluginHandled = await tryHandleWithPluginAction({
+    ctx: params.ctx,
+    action: "send",
+    onHandled: async () => {
+      if (!params.ctx.mirror) {
+        return;
       }
-      return {
-        handledBy: "plugin",
-        payload: extractToolPayload(handled),
-        toolResult: handled,
-      };
-    }
+      const mirrorText = params.ctx.mirror.text ?? params.message;
+      const mirrorMediaUrls =
+        params.ctx.mirror.mediaUrls ??
+        params.mediaUrls ??
+        (params.mediaUrl ? [params.mediaUrl] : undefined);
+      await appendAssistantMessageToSessionTranscript({
+        agentId: params.ctx.mirror.agentId,
+        sessionKey: params.ctx.mirror.sessionKey,
+        text: mirrorText,
+        mediaUrls: mirrorMediaUrls,
+      });
+    },
+  });
+  if (pluginHandled) {
+    return pluginHandled;
   }
 
   throwIfAborted(params.ctx.abortSignal);
@@ -135,24 +161,12 @@ export async function executePollAction(params: {
   toolResult?: AgentToolResult<unknown>;
   pollResult?: MessagePollResult;
 }> {
-  if (!params.ctx.dryRun) {
-    const handled = await dispatchChannelMessageAction({
-      channel: params.ctx.channel,
-      action: "poll",
-      cfg: params.ctx.cfg,
-      params: params.ctx.params,
-      accountId: params.ctx.accountId ?? undefined,
-      gateway: params.ctx.gateway,
-      toolContext: params.ctx.toolContext,
-      dryRun: params.ctx.dryRun,
-    });
-    if (handled) {
-      return {
-        handledBy: "plugin",
-        payload: extractToolPayload(handled),
-        toolResult: handled,
-      };
-    }
+  const pluginHandled = await tryHandleWithPluginAction({
+    ctx: params.ctx,
+    action: "poll",
+  });
+  if (pluginHandled) {
+    return pluginHandled;
   }
 
   const result: MessagePollResult = await sendPoll({
