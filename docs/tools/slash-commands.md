@@ -25,9 +25,9 @@ Access to commands is controlled by three independent layers, applied in order:
 
 **Command access** (`commands.allowFrom`) controls slash commands and directives independently of channel access. Useful when you have multiple chatters but only want some to run commands. When not set, command access falls back to `commands.useAccessGroups` (uses channel allowlists).
 
-**Owner access** (`commands.ownerAllowFrom`) designates the privileged owner. The owner's identity is injected into the agent's system prompt as `Owner numbers: ...`, and owner-gated agent tools (e.g. `whatsapp_login`) are restricted to owners only. Owner status does not gate any slash commands — all slash commands use the same command access check. When not set, ownership is derived from channel allowlists (`channels.<provider>.allowFrom` / pairing) — so in single-user setups you usually don't need to set this explicitly.
+**Owner access** (`commands.ownerAllowFrom`) designates the privileged owner. The owner's identity is injected into the agent's system prompt as `Owner numbers: ...`, and owner-gated agent tools (e.g. `whatsapp_login`) are restricted to owners only. Slash commands themselves do not distinguish owner from non-owner — all use the same authorized-sender check — unless a provider enforces owner-for-commands (e.g. WhatsApp when `commands.allowFrom` is not set). When not set, ownership is derived from channel allowlists (`channels.<provider>.allowFrom` / pairing) — so in single-user setups you usually don't need to set this explicitly.
 
-> **Common setup:** Lock `commands.allowFrom` to yourself across each channel. Leave `commands.ownerAllowFrom` unset — the gateway will derive ownership from your channel allowlists. Only configure `ownerAllowFrom` explicitly if you want a different person to have owner-level command access than general command access.
+> **Common setup:** Lock `commands.allowFrom` to yourself across each channel. Leave `commands.ownerAllowFrom` unset — the gateway will derive ownership from your channel allowlists. Only configure `ownerAllowFrom` explicitly if you want a different person to have owner designation (system prompt identity + owner-gated tools) than command access.
 
 There are two related systems:
 
@@ -187,7 +187,7 @@ Notes:
 
 ## Debug overrides
 
-`/debug` lets you set **runtime-only** config overrides (memory, not disk). Owner-only. Disabled by default; enable with `commands.debug: true`.
+`/debug` lets you set **runtime-only** config overrides (memory, not disk). Disabled by default; enable with `commands.debug: true`. Requires command access (authorized sender).
 
 Examples:
 
@@ -206,7 +206,7 @@ Notes:
 
 ## Config updates
 
-`/config` writes to your on-disk config (`openclaw.json`). Owner-only. Disabled by default; enable with `commands.config: true`.
+`/config` writes to your on-disk config (`openclaw.json`). Disabled by default; enable with `commands.config: true`. Requires command access (authorized sender).
 
 Examples:
 
