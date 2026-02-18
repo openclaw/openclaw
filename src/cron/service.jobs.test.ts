@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { applyJobPatch } from "./service/jobs.js";
+import { applyJobPatch, createJob } from "./service/jobs.js";
+import type { CronServiceState } from "./service/state.js";
+import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
 describe("applyJobPatch", () => {
@@ -177,5 +179,104 @@ describe("applyJobPatch", () => {
       applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),
     ).not.toThrow();
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
+  });
+});
+
+function createMockState(now: number): CronServiceState {
+  return {
+    deps: {
+      nowMs: () => now,
+    },
+  } as unknown as CronServiceState;
+}
+
+describe("cron stagger defaults", () => {
+  it("defaults top-of-hour cron jobs to 5m stagger", () => {
+    const now = Date.parse("2026-02-08T10:00:00.000Z");
+    const state = createMockState(now);
+
+    const job = createJob(state, {
+      name: "hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    expect(job.schedule.kind).toBe("cron");
+    if (job.schedule.kind === "cron") {
+      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+    }
+  });
+
+  it("keeps exact schedules when staggerMs is explicitly 0", () => {
+    const now = Date.parse("2026-02-08T10:00:00.000Z");
+    const state = createMockState(now);
+
+    const job = createJob(state, {
+      name: "exact-hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    expect(job.schedule.kind).toBe("cron");
+    if (job.schedule.kind === "cron") {
+      expect(job.schedule.staggerMs).toBe(0);
+    }
+  });
+
+  it("preserves existing stagger when editing cron expression without stagger", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-keep-stagger",
+      name: "job-keep-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+    });
+
+    expect(job.schedule.kind).toBe("cron");
+    if (job.schedule.kind === "cron") {
+      expect(job.schedule.expr).toBe("0 */2 * * *");
+      expect(job.schedule.staggerMs).toBe(120_000);
+    }
+  });
+
+  it("applies default stagger when switching from every to top-of-hour cron", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-switch-cron",
+      name: "job-switch-cron",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+    });
+
+    expect(job.schedule.kind).toBe("cron");
+    if (job.schedule.kind === "cron") {
+      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+    }
   });
 });

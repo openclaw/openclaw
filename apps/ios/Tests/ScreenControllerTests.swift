@@ -2,25 +2,38 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
+@MainActor
+private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoordinator, WKWebView) {
+    let coordinator = ScreenWebViewCoordinator(controller: screen)
+    _ = coordinator.makeContainerView()
+    let webView = try #require(coordinator.managedWebView)
+    return (coordinator, webView)
+}
+
 @Suite struct ScreenControllerTests {
-    @Test @MainActor func canvasModeConfiguresWebViewForTouch() {
+    @Test @MainActor func canvasModeConfiguresWebViewForTouch() throws {
         let screen = ScreenController()
+        let (coordinator, webView) = try mountScreen(screen)
+        defer { coordinator.teardown() }
 
-        #expect(screen.webView.isOpaque == true)
-        #expect(screen.webView.backgroundColor == .black)
+        #expect(webView.isOpaque == true)
+        #expect(webView.backgroundColor == .black)
 
-        let scrollView = screen.webView.scrollView
+        let scrollView = webView.scrollView
         #expect(scrollView.backgroundColor == .black)
         #expect(scrollView.contentInsetAdjustmentBehavior == .never)
         #expect(scrollView.isScrollEnabled == false)
         #expect(scrollView.bounces == false)
     }
 
-    @Test @MainActor func navigateEnablesScrollForWebPages() {
+    @Test @MainActor func navigateEnablesScrollForWebPages() throws {
         let screen = ScreenController()
+        let (coordinator, webView) = try mountScreen(screen)
+        defer { coordinator.teardown() }
+
         screen.navigate(to: "https://example.com")
 
-        let scrollView = screen.webView.scrollView
+        let scrollView = webView.scrollView
         #expect(scrollView.isScrollEnabled == true)
         #expect(scrollView.bounces == true)
     }
@@ -34,6 +47,9 @@ import WebKit
 
     @Test @MainActor func evalExecutesJavaScript() async throws {
         let screen = ScreenController()
+        let (coordinator, _) = try mountScreen(screen)
+        defer { coordinator.teardown() }
+
         let deadline = ContinuousClock().now.advanced(by: .seconds(3))
 
         while true {

@@ -76,7 +76,7 @@ x-i18n:
 - `/approve <id> allow-once|allow-always|deny`（解决 exec 审批提示）
 - `/context [list|detail|json]`（解释"上下文"；`detail` 显示每个文件 + 每个工具 + 每个 Skill + 系统提示词大小）
 - `/whoami`（显示你的发送者 ID；别名：`/id`）
-- `/subagents list|stop|log|info|send`（检查、停止、记录或向当前会话的子智能体运行发送消息）
+- `/subagents list|kill|log|info|send|steer|spawn`（检查、控制或创建当前会话的子智能体运行）
 - `/config show|get|set|unset`（将配置持久化到磁盘，仅所有者；需要 `commands.config: true`）
 - `/debug show|set|unset|reset`（运行时覆盖，仅所有者；需要 `commands.debug: true`）
 - `/usage off|tokens|full|cost`（每响应使用量页脚或本地成本摘要）

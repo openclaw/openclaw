@@ -6,10 +6,12 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
 import {
+  applyQueueRuntimeSettings,
   applyQueueDropPolicy,
   buildCollectPrompt,
-  buildQueueSummaryPrompt,
+  clearQueueSummaryState,
   hasCrossChannelItems,
+  previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
 
@@ -47,22 +49,6 @@ type AnnounceQueueState = {
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
-function previewQueueSummaryPrompt(queue: AnnounceQueueState): string | undefined {
-  return buildQueueSummaryPrompt({
-    state: {
-      dropPolicy: queue.dropPolicy,
-      droppedCount: queue.droppedCount,
-      summaryLines: [...queue.summaryLines],
-    },
-    noun: "announce",
-  });
-}
-
-function clearQueueSummaryState(queue: AnnounceQueueState) {
-  queue.droppedCount = 0;
-  queue.summaryLines = [];
-}
-
 export function resetAnnounceQueuesForTests() {
   // Test isolation: other suites may leave a draining queue behind in the worker.
   // Clearing the map alone isn't enough because drain loops capture `queue` by reference.
@@ -82,16 +68,10 @@ function getAnnounceQueue(
 ) {
   const existing = ANNOUNCE_QUEUES.get(key);
   if (existing) {
-    existing.mode = settings.mode;
-    existing.debounceMs =
-      typeof settings.debounceMs === "number"
-        ? Math.max(0, settings.debounceMs)
-        : existing.debounceMs;
-    existing.cap =
-      typeof settings.cap === "number" && settings.cap > 0
-        ? Math.floor(settings.cap)
-        : existing.cap;
-    existing.dropPolicy = settings.dropPolicy ?? existing.dropPolicy;
+    applyQueueRuntimeSettings({
+      target: existing,
+      settings,
+    });
     existing.send = send;
     return existing;
   }
@@ -107,6 +87,10 @@ function getAnnounceQueue(
     summaryLines: [],
     send,
   };
+  applyQueueRuntimeSettings({
+    target: created,
+    settings,
+  });
   ANNOUNCE_QUEUES.set(key, created);
   return created;
 }
@@ -152,7 +136,7 @@ function scheduleAnnounceDrain(key: string) {
             continue;
           }
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt(queue);
+          const summary = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
           const prompt = buildCollectPrompt({
             title: "[Queued announce messages while agent was busy]",
             items,
@@ -171,7 +155,7 @@ function scheduleAnnounceDrain(key: string) {
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt(queue);
+        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
         if (summaryPrompt) {
           const next = queue.items[0];
           if (!next) {
