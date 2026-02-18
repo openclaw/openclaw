@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import { sendReactionWhatsApp } from "../../web/outbound.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
 
@@ -23,8 +24,25 @@ export async function handleWhatsAppAction(
     const accountId = readStringParam(params, "accountId");
     const fromMeRaw = params.fromMe;
     const fromMe = typeof fromMeRaw === "boolean" ? fromMeRaw : undefined;
+
+    // Validate chatJid against the configured allowFrom list before sending.
+    // Per-account allowFrom takes precedence over the channel-level allowFrom.
+    const whatsappCfg = cfg.channels?.whatsapp;
+    const accountCfg = accountId ? whatsappCfg?.accounts?.[accountId] : undefined;
+    const allowFrom = accountCfg?.allowFrom ?? whatsappCfg?.allowFrom;
+    const resolution = resolveWhatsAppOutboundTarget({
+      to: chatJid,
+      allowFrom: allowFrom ?? [],
+      mode: "implicit",
+    });
+    if (!resolution.ok) {
+      throw new Error(
+        `WhatsApp reaction blocked: chatJid "${chatJid}" is not in the configured allowFrom list.`,
+      );
+    }
+
     const resolvedEmoji = remove ? "" : emoji;
-    await sendReactionWhatsApp(chatJid, messageId, resolvedEmoji, {
+    await sendReactionWhatsApp(resolution.to, messageId, resolvedEmoji, {
       verbose: false,
       fromMe,
       participant: participant ?? undefined,
