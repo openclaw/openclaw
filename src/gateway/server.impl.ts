@@ -549,6 +549,7 @@ export async function startGatewayServer(
         );
 
         if (isSignOff) {
+          // Agent signed off — disarm watchdog
           replyEnforcer.onTranscriptUpdate({
             sessionKey,
             source: "agent",
@@ -557,6 +558,14 @@ export async function startGatewayServer(
           replyEnforcer.onAgentLifecycle({ sessionKey, phase: evt.data.phase });
         } else if (evt.data.phase === "error") {
           replyEnforcer.onAgentLifecycle({ sessionKey, phase: "error" });
+        } else {
+          // Agent replied without signing off — arm watchdog
+          // This is the core use case: agent promised an action but didn't deliver
+          replyEnforcer.onTranscriptUpdate({
+            sessionKey,
+            source: "agent",
+            text: text ?? "",
+          });
         }
       }
     }
