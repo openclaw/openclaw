@@ -102,7 +102,7 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
       } else {
         enqueueSystemEvent(text, {
           sessionKey,
-          contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
+          contextKey,
         });
       }
     } catch (err) {
