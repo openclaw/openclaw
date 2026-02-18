@@ -176,25 +176,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const isDirectMessage = await directTracker.isDirectMessage({
+      const isDmDetected = await directTracker.isDirectMessage({
         roomId,
         senderId,
         selfUserId,
       });
+
+      // Resolve group config early so explicit groups override DM detection (e.g. 2-member rooms)
+      const roomConfigInfo = resolveMatrixRoomConfig({
+        rooms: roomsConfig,
+        roomId,
+        aliases: roomAliases,
+        name: roomName,
+      });
+      const isDirectMessage = isDmDetected && !roomConfigInfo?.allowed;
       const isRoom = !isDirectMessage;
 
       if (isRoom && groupPolicy === "disabled") {
         return;
       }
-
-      const roomConfigInfo = isRoom
-        ? resolveMatrixRoomConfig({
-            rooms: roomsConfig,
-            roomId,
-            aliases: roomAliases,
-            name: roomName,
-          })
-        : undefined;
       const roomConfig = roomConfigInfo?.config;
       const roomMatchMeta = roomConfigInfo
         ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
