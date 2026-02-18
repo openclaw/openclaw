@@ -217,6 +217,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           }
         }
       } catch (err) {
+        // Reset flag so a stale forceRestarted doesn't cause a spurious restart next iteration.
+        forceRestarted = false;
         if (opts.abortSignal?.aborted) {
           throw err;
         }
