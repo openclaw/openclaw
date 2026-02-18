@@ -8,6 +8,7 @@ import {
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeBase64ToFile,
+  writeCameraClipPayloadToFile,
   writeUrlToFile,
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -219,16 +220,10 @@ export function registerNodesCameraCommands(nodes: Command) {
           const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload = parseCameraClipPayload(res.payload);
-          const filePath = cameraTempPath({
-            kind: "clip",
+          const filePath = await writeCameraClipPayloadToFile({
+            payload,
             facing,
-            ext: payload.format,
           });
-          if (payload.url) {
-            await writeUrlToFile(filePath, payload.url);
-          } else if (payload.base64) {
-            await writeBase64ToFile(filePath, payload.base64);
-          }
 
           if (opts.json) {
             defaultRuntime.log(

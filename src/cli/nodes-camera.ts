@@ -140,3 +140,26 @@ export async function writeBase64ToFile(filePath: string, base64: string) {
   await fs.writeFile(filePath, buf);
   return { path: filePath, bytes: buf.length };
 }
+
+export async function writeCameraClipPayloadToFile(params: {
+  payload: CameraClipPayload;
+  facing: CameraFacing;
+  tmpDir?: string;
+  id?: string;
+}): Promise<string> {
+  const filePath = cameraTempPath({
+    kind: "clip",
+    facing: params.facing,
+    ext: params.payload.format,
+    tmpDir: params.tmpDir,
+    id: params.id,
+  });
+  if (params.payload.url) {
+    await writeUrlToFile(filePath, params.payload.url);
+  } else if (params.payload.base64) {
+    await writeBase64ToFile(filePath, params.payload.base64);
+  } else {
+    throw new Error("invalid camera.clip payload");
+  }
+  return filePath;
+}
