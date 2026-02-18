@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  isSlackStreamingEnabled,
+  resolveSlackStreamingThreadHint,
+  shouldUseSlackNativeStreaming,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled when config is undefined", () => {
@@ -41,5 +45,29 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
+  });
+});
+
+describe("slack native streaming recipient gating", () => {
+  it("is disabled when team id is missing", () => {
+    expect(
+      shouldUseSlackNativeStreaming({
+        streamingEnabled: true,
+        threadTs: "1234.56",
+        recipientTeamId: undefined,
+        recipientUserId: "U123",
+      }),
+    ).toBe(false);
+  });
+
+  it("is disabled when user id is missing", () => {
+    expect(
+      shouldUseSlackNativeStreaming({
+        streamingEnabled: true,
+        threadTs: "1234.56",
+        recipientTeamId: "T123",
+        recipientUserId: undefined,
+      }),
+    ).toBe(false);
   });
 });

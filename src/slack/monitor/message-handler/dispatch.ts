@@ -43,15 +43,25 @@ export function resolveSlackStreamingThreadHint(params: {
   });
 }
 
-function shouldUseStreaming(params: {
+export function shouldUseSlackNativeStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
+  recipientTeamId: string | undefined;
+  recipientUserId: string | undefined;
 }): boolean {
   if (!params.streamingEnabled) {
     return false;
   }
   if (!params.threadTs) {
-    logVerbose("slack-stream: streaming disabled — no reply thread target available");
+    logVerbose("slack-stream: streaming disabled - no reply thread target available");
+    return false;
+  }
+  if (!params.recipientTeamId) {
+    logVerbose("slack-stream: streaming disabled - missing recipient team id");
+    return false;
+  }
+  if (!params.recipientUserId) {
+    logVerbose("slack-stream: streaming disabled - missing recipient user id");
     return false;
   }
   return true;
@@ -152,9 +162,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     incomingThreadTs,
     messageTs,
   });
-  const useStreaming = shouldUseStreaming({
+  const recipientTeamId = ctx.teamId.trim() || undefined;
+  const recipientUserId = message.user?.trim() || undefined;
+  const useStreaming = shouldUseSlackNativeStreaming({
     streamingEnabled,
     threadTs: streamThreadHint,
+    recipientTeamId,
+    recipientUserId,
   });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
@@ -194,10 +208,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           return;
         }
 
+        if (!recipientTeamId || !recipientUserId) {
+          logVerbose(
+            "slack-stream: missing recipient ids for stream start, falling back to normal delivery",
+          );
+          streamFailed = true;
+          await deliverNormally(payload, streamThreadTs);
+          return;
+        }
+
         streamSession = await startSlackStream({
           client: ctx.app.client,
-          channel: message.channel,
+          channelId: message.channel,
           threadTs: streamThreadTs,
+          recipientTeamId,
+          recipientUserId,
           text,
         });
         replyPlan.markSent();

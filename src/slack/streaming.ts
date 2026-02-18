@@ -32,8 +32,10 @@ export type SlackStreamSession = {
 
 export type StartSlackStreamParams = {
   client: WebClient;
-  channel: string;
+  channelId: string;
   threadTs: string;
+  recipientTeamId: string;
+  recipientUserId: string;
   /** Optional initial markdown text to include in the stream start. */
   text?: string;
 };
@@ -64,18 +66,20 @@ export type StopSlackStreamParams = {
 export async function startSlackStream(
   params: StartSlackStreamParams,
 ): Promise<SlackStreamSession> {
-  const { client, channel, threadTs, text } = params;
+  const { client, channelId, threadTs, recipientTeamId, recipientUserId, text } = params;
 
-  logVerbose(`slack-stream: starting stream in ${channel} thread=${threadTs}`);
+  logVerbose(`slack-stream: starting stream in ${channelId} thread=${threadTs}`);
 
   const streamer = client.chatStream({
-    channel,
+    channel: channelId,
     thread_ts: threadTs,
+    recipient_team_id: recipientTeamId,
+    recipient_user_id: recipientUserId,
   });
 
   const session: SlackStreamSession = {
     streamer,
-    channel,
+    channel: channelId,
     threadTs,
     stopped: false,
   };
@@ -131,7 +135,10 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
     }`,
   );
 
-  await session.streamer.stop(text ? { markdown_text: text } : undefined);
-
-  logVerbose("slack-stream: stream stopped");
+  try {
+    await session.streamer.stop(text ? { markdown_text: text } : undefined);
+    logVerbose("slack-stream: stream stopped");
+  } catch (err) {
+    logVerbose(`slack-stream: failed to stop stream (${String(err)})`);
+  }
 }
