@@ -27,7 +27,7 @@ export const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
 export const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
 export const ZAI_DEFAULT_MODEL_ID = "glm-5";
 
-export const DIGITALOCEAN_GRADIENT_BASE_URL = "https://api.digitalocean.com/v2/ai/v1";
+export const DIGITALOCEAN_GRADIENT_BASE_URL = "https://inference.do-ai.run/v1";
 export const DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_ID = "llama3.3-70b-instruct";
 export const DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_REF = `digitalocean/${DIGITALOCEAN_GRADIENT_DEFAULT_MODEL_ID}`;
 
