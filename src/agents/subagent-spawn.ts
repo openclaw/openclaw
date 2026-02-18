@@ -143,8 +143,7 @@ export async function spawnSubagentDirect(
     const defaultSubagents = cfg.agents?.defaults?.subagents as
       | (Record<string, unknown> & { contextScripts?: { run?: ContextScriptEntry[] } })
       | undefined;
-    const defaultContextScripts: ContextScriptEntry[] =
-      defaultSubagents?.contextScripts?.run ?? [];
+    const defaultContextScripts: ContextScriptEntry[] = defaultSubagents?.contextScripts?.run ?? [];
     const initialTargetConfig = resolveAgentConfig(cfg, initialTargetAgentId);
     const agentSubagents = (initialTargetConfig ?? resolveAgentConfig(cfg, requesterAgentId))
       ?.subagents as
