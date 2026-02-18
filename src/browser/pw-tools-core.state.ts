@@ -101,6 +101,33 @@ export async function emulateMediaViaPlaywright(opts: {
   await page.emulateMedia({ colorScheme: opts.colorScheme });
 }
 
+/**
+ * Clear Playwright's default media emulation override via CDP.
+ *
+ * When Playwright connects to an existing browser via `connectOverCDP()`,
+ * it sends `Emulation.setEmulatedMedia` with `prefers-color-scheme: light`
+ * (Playwright's hardcoded default). This overrides the user's OS/browser
+ * dark mode preference and persists after Playwright disconnects.
+ *
+ * This function sends an empty `prefers-color-scheme` value via CDP,
+ * which tells Chrome to stop overriding and use the system default.
+ */
+export async function clearMediaEmulationOverrideViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+}): Promise<void> {
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  await withCdpSession(page, async (session) => {
+    await session.send("Emulation.setEmulatedMedia" as any, {
+      media: "",
+      features: [
+        { name: "prefers-color-scheme", value: "" },
+      ],
+    });
+  });
+}
+
 export async function setLocaleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

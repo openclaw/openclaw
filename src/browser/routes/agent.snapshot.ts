@@ -115,6 +115,16 @@ export function registerBrowserAgentSnapshotRoutes(
         if (!pw) {
           return;
         }
+        // Clear Playwright's default colorScheme override for extension relay profiles
+        // so screenshots capture the user's actual OS/browser color scheme.
+        if (profileCtx.profile.driver === "extension") {
+          await pw.clearMediaEmulationOverrideViaPlaywright({
+            cdpUrl: profileCtx.profile.cdpUrl,
+            targetId: tab.targetId,
+          }).catch((err: unknown) => {
+            console.debug("[browser] failed to clear colorScheme override:", err);
+          });
+        }
         const snap = await pw.takeScreenshotViaPlaywright({
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
@@ -199,6 +209,19 @@ export function registerBrowserAgentSnapshotRoutes(
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       if ((labels || mode === "efficient") && format === "aria") {
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
+      }
+      // Clear Playwright's default colorScheme override for extension relay profiles.
+      // Playwright defaults to "light" when connecting via CDP, which overrides OS dark mode.
+      if (profileCtx.profile.driver === "extension") {
+        const pw0 = await getPwAiModule();
+        if (pw0) {
+          await pw0.clearMediaEmulationOverrideViaPlaywright({
+            cdpUrl: profileCtx.profile.cdpUrl,
+            targetId: tab.targetId,
+          }).catch((err: unknown) => {
+            console.debug("[browser] failed to clear colorScheme override:", err);
+          });
+        }
       }
       if (format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");

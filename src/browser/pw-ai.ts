@@ -24,6 +24,7 @@ export {
   cookiesClearViaPlaywright,
   cookiesGetViaPlaywright,
   cookiesSetViaPlaywright,
+  clearMediaEmulationOverrideViaPlaywright,
   downloadViaPlaywright,
   dragViaPlaywright,
   emulateMediaViaPlaywright,
