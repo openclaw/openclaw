@@ -41,6 +41,13 @@ let writeDelayConfig: WriteDelayConfig = {
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const realFsWriteFile = fs.writeFile;
 
+function payloadMentionsContainer(payload: string, containerName: string): boolean {
+  return (
+    payload.includes(`"containerName":"${containerName}"`) ||
+    payload.includes(`"containerName": "${containerName}"`)
+  );
+}
+
 function writeText(content: Parameters<typeof fs.writeFile>[1]): string {
   if (typeof content === "string") {
     return content;
@@ -52,6 +59,14 @@ function writeText(content: Parameters<typeof fs.writeFile>[1]): string {
     return Buffer.from(content.buffer, content.byteOffset, content.byteLength).toString("utf-8");
   }
   return "";
+}
+
+async function seedMalformedContainerRegistry(payload: string) {
+  await fs.writeFile(SANDBOX_REGISTRY_PATH, payload, "utf-8");
+}
+
+async function seedMalformedBrowserRegistry(payload: string) {
+  await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, payload, "utf-8");
 }
 
 beforeEach(() => {
@@ -70,7 +85,7 @@ beforeEach(() => {
     const payload = writeText(content);
     if (
       target.includes("containers.json") &&
-      payload.includes(`"containerName":"${writeDelayConfig.containerName}"`) &&
+      payloadMentionsContainer(payload, writeDelayConfig.containerName) &&
       writeDelayConfig.containerDelayMs > 0
     ) {
       await delay(writeDelayConfig.containerDelayMs);
@@ -78,7 +93,7 @@ beforeEach(() => {
 
     if (
       target.includes("browsers.json") &&
-      payload.includes(`"containerName":"${writeDelayConfig.browserName}"`) &&
+      payloadMentionsContainer(payload, writeDelayConfig.browserName) &&
       writeDelayConfig.browserDelayMs > 0
     ) {
       await delay(writeDelayConfig.browserDelayMs);
@@ -215,5 +230,29 @@ describe("registry race safety", () => {
 
     const registry = await readBrowserRegistry();
     expect(registry.entries).toHaveLength(0);
+  });
+
+  it("fails fast when container registry is malformed during update", async () => {
+    await seedMalformedContainerRegistry("{bad json");
+    await expect(updateRegistry(containerEntry())).rejects.toThrow();
+  });
+
+  it("fails fast when browser registry is malformed during update", async () => {
+    await seedMalformedBrowserRegistry("{bad json");
+    await expect(updateBrowserRegistry(browserEntry())).rejects.toThrow();
+  });
+
+  it("fails fast when container registry entries are invalid during update", async () => {
+    await seedMalformedContainerRegistry(`{"entries":[{"sessionKey":"agent:main"}]}`);
+    await expect(updateRegistry(containerEntry())).rejects.toThrow(
+      /Invalid sandbox registry format/,
+    );
+  });
+
+  it("fails fast when browser registry entries are invalid during update", async () => {
+    await seedMalformedBrowserRegistry(`{"entries":[{"sessionKey":"agent:main"}]}`);
+    await expect(updateBrowserRegistry(browserEntry())).rejects.toThrow(
+      /Invalid sandbox registry format/,
+    );
   });
 });

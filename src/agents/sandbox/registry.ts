@@ -38,6 +38,37 @@ type SandboxBrowserRegistry = {
 
 type RegistryReadMode = "strict" | "fallback";
 
+type RegistryEntry = {
+  containerName: string;
+};
+
+type RegistryFile<T extends RegistryEntry> = {
+  entries: T[];
+};
+
+type UpsertEntry = RegistryEntry & {
+  createdAtMs: number;
+  image: string;
+  configHash?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function isRegistryEntry(value: unknown): value is RegistryEntry {
+  return isRecord(value) && typeof value.containerName === "string";
+}
+
+function isRegistryFile<T extends RegistryEntry>(value: unknown): value is RegistryFile<T> {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const maybeEntries = value.entries;
+  return Array.isArray(maybeEntries) && maybeEntries.every(isRegistryEntry);
+}
+
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
   const lock = await acquireSessionWriteLock({ sessionFile: registryPath });
   try {
@@ -47,15 +78,15 @@ async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): 
   }
 }
 
-async function readRegistryFromFile<T>(
+async function readRegistryFromFile<T extends RegistryEntry>(
   registryPath: string,
   mode: RegistryReadMode,
-): Promise<{ entries: T[] }> {
+): Promise<RegistryFile<T>> {
   try {
     const raw = await fs.readFile(registryPath, "utf-8");
-    const parsed = JSON.parse(raw) as { entries?: unknown };
-    if (parsed && Array.isArray(parsed.entries)) {
-      return { entries: parsed.entries as T[] };
+    const parsed = JSON.parse(raw) as unknown;
+    if (isRegistryFile<T>(parsed)) {
+      return parsed;
     }
     if (mode === "fallback") {
       return { entries: [] };
@@ -76,9 +107,9 @@ async function readRegistryFromFile<T>(
   }
 }
 
-async function writeRegistryFile<T>(
+async function writeRegistryFile<T extends RegistryEntry>(
   registryPath: string,
-  registry: { entries: T[] },
+  registry: RegistryFile<T>,
 ): Promise<void> {
   await fs.mkdir(SANDBOX_STATE_DIR, { recursive: true });
   const payload = `${JSON.stringify(registry, null, 2)}\n`;
@@ -100,37 +131,49 @@ export async function readRegistry(): Promise<SandboxRegistry> {
   return await readRegistryFromFile<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, "fallback");
 }
 
-async function readRegistryForWrite(): Promise<SandboxRegistry> {
-  return await readRegistryFromFile<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, "strict");
+function upsertEntry<T extends UpsertEntry>(entries: T[], entry: T): T[] {
+  const existing = entries.find((item) => item.containerName === entry.containerName);
+  const next = entries.filter((item) => item.containerName !== entry.containerName);
+  next.push({
+    ...entry,
+    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+    image: existing?.image ?? entry.image,
+    configHash: entry.configHash ?? existing?.configHash,
+  });
+  return next;
 }
 
-async function writeRegistry(registry: SandboxRegistry) {
-  await writeRegistryFile<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, registry);
+function removeEntry<T extends RegistryEntry>(entries: T[], containerName: string): T[] {
+  return entries.filter((entry) => entry.containerName !== containerName);
 }
 
-export async function updateRegistry(entry: SandboxRegistryEntry) {
-  await withRegistryLock(SANDBOX_REGISTRY_PATH, async () => {
-    const registry = await readRegistryForWrite();
-    const existing = registry.entries.find((item) => item.containerName === entry.containerName);
-    const next = registry.entries.filter((item) => item.containerName !== entry.containerName);
-    next.push({
-      ...entry,
-      createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
-      image: existing?.image ?? entry.image,
-      configHash: entry.configHash ?? existing?.configHash,
-    });
-    await writeRegistry({ entries: next });
+async function withRegistryMutation<T extends RegistryEntry>(
+  registryPath: string,
+  mutate: (entries: T[]) => T[] | null,
+): Promise<void> {
+  await withRegistryLock(registryPath, async () => {
+    const registry = await readRegistryFromFile<T>(registryPath, "strict");
+    const next = mutate(registry.entries);
+    if (next === null) {
+      return;
+    }
+    await writeRegistryFile(registryPath, { entries: next });
   });
 }
 
+export async function updateRegistry(entry: SandboxRegistryEntry) {
+  await withRegistryMutation<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, (entries) =>
+    upsertEntry(entries, entry),
+  );
+}
+
 export async function removeRegistryEntry(containerName: string) {
-  await withRegistryLock(SANDBOX_REGISTRY_PATH, async () => {
-    const registry = await readRegistryForWrite();
-    const next = registry.entries.filter((item) => item.containerName !== containerName);
-    if (next.length === registry.entries.length) {
-      return;
+  await withRegistryMutation<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, (entries) => {
+    const next = removeEntry(entries, containerName);
+    if (next.length === entries.length) {
+      return null;
     }
-    await writeRegistry({ entries: next });
+    return next;
   });
 }
 
@@ -141,39 +184,22 @@ export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
   );
 }
 
-async function readBrowserRegistryForWrite(): Promise<SandboxBrowserRegistry> {
-  return await readRegistryFromFile<SandboxBrowserRegistryEntry>(
+export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
+  await withRegistryMutation<SandboxBrowserRegistryEntry>(
     SANDBOX_BROWSER_REGISTRY_PATH,
-    "strict",
+    (entries) => upsertEntry(entries, entry),
   );
 }
 
-async function writeBrowserRegistry(registry: SandboxBrowserRegistry) {
-  await writeRegistryFile<SandboxBrowserRegistryEntry>(SANDBOX_BROWSER_REGISTRY_PATH, registry);
-}
-
-export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
-  await withRegistryLock(SANDBOX_BROWSER_REGISTRY_PATH, async () => {
-    const registry = await readBrowserRegistryForWrite();
-    const existing = registry.entries.find((item) => item.containerName === entry.containerName);
-    const next = registry.entries.filter((item) => item.containerName !== entry.containerName);
-    next.push({
-      ...entry,
-      createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
-      image: existing?.image ?? entry.image,
-      configHash: entry.configHash ?? existing?.configHash,
-    });
-    await writeBrowserRegistry({ entries: next });
-  });
-}
-
 export async function removeBrowserRegistryEntry(containerName: string) {
-  await withRegistryLock(SANDBOX_BROWSER_REGISTRY_PATH, async () => {
-    const registry = await readBrowserRegistryForWrite();
-    const next = registry.entries.filter((item) => item.containerName !== containerName);
-    if (next.length === registry.entries.length) {
-      return;
-    }
-    await writeBrowserRegistry({ entries: next });
-  });
+  await withRegistryMutation<SandboxBrowserRegistryEntry>(
+    SANDBOX_BROWSER_REGISTRY_PATH,
+    (entries) => {
+      const next = removeEntry(entries, containerName);
+      if (next.length === entries.length) {
+        return null;
+      }
+      return next;
+    },
+  );
 }
