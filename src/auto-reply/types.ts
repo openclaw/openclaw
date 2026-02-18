@@ -45,9 +45,6 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
-  /** Called for real-time agent events (tool start/update/end, compaction, etc).
-   * Use this to stream tool execution events to channels that support real-time output. */
-  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
 };
 
 export type ReplyPayload = {

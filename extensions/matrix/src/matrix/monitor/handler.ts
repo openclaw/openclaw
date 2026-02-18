@@ -643,6 +643,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
+      // Check if real-time block reply streaming is enabled
+      const streamBlockReplies = cfg.channels?.matrix?.streamBlockReplies === true;
+
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
@@ -661,6 +664,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             });
             didSendReply = true;
           },
+          ...(streamBlockReplies
+            ? {
+                streamBlockReply: async (payload) => {
+                  // Stream block replies immediately, bypassing the queue
+                  await deliverMatrixReplies({
+                    replies: [payload],
+                    roomId,
+                    client,
+                    runtime,
+                    textLimit,
+                    replyToMode,
+                    threadId: threadTarget,
+                    accountId: route.accountId,
+                    tableMode,
+                  });
+                },
+              }
+            : {}),
           onError: (err, info) => {
             runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
           },
@@ -676,29 +697,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ...replyOptions,
           skillFilter: roomConfig?.skills,
           onModelSelected,
-          onAgentEvent: async (evt) => {
-            // Real-time tool event streaming: send tool execution events immediately
-            if (evt.stream === "tool") {
-              const phase = String(evt.data.phase ?? "");
-              const toolName = String(evt.data.name ?? "unknown");
-              const toolCallId = String(evt.data.toolCallId ?? "");
-              let message = "";
-              if (phase === "start") {
-                message = `🔧 Running tool: ${toolName}`;
-              } else if (phase === "update") {
-                message = `⚡ Tool updating: ${toolName}`;
-              } else if (phase === "end") {
-                message = `✅ Tool completed: ${toolName}`;
-              }
-              if (message) {
-                await sendMessageMatrix(roomId, message, {
-                  client,
-                  threadId: threadTarget,
-                  accountId: route.accountId,
-                });
-              }
-            }
-          },
         },
       });
       markDispatchIdle();

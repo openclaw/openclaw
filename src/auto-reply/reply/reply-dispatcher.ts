@@ -54,6 +54,9 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Optional function to stream block replies immediately, bypassing the queue.
+   * When provided, block replies will be delivered in real-time. */
+  streamBlockReply?: ReplyDispatchDeliverer;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -140,6 +143,27 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     const shouldDelay = kind === "block" && sentFirstBlock;
     if (kind === "block") {
       sentFirstBlock = true;
+    }
+
+    // For block replies with streaming enabled, deliver immediately without queuing
+    if (kind === "block" && options.streamBlockReply) {
+      // Execute streaming delivery in background without waiting
+      options
+        .streamBlockReply(normalized, { kind })
+        .catch((err) => {
+          options.onError?.(err, { kind });
+        })
+        .finally(() => {
+          pending -= 1;
+          if (pending === 1 && completeCalled) {
+            pending -= 1;
+          }
+          if (pending === 0) {
+            unregister();
+            options.onIdle?.();
+          }
+        });
+      return true;
     }
 
     sendChain = sendChain

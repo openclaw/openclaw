@@ -60,4 +60,6 @@ export const MatrixConfigSchema = z.object({
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,
+  /** Stream block replies (LLM generated text) in real-time, bypassing the message queue */
+  streamBlockReplies: z.boolean().optional(),
 });
