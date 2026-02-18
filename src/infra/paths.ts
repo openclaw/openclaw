@@ -9,7 +9,9 @@ import path from "node:path";
  */
 export function isPathWithinBase(baseDir: string, targetPath: string): boolean {
   // Explicitly reject empty paths — they are not valid archive entries.
-  if (targetPath === "") return false;
+  if (targetPath === "") {
+    return false;
+  }
 
   if (process.platform === "win32") {
     const normalizedBase = path.win32.normalize(path.win32.resolve(baseDir));
