@@ -8,6 +8,7 @@ import {
 } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
+  createForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
@@ -337,6 +338,36 @@ export async function handleTelegramAction(
   if (action === "stickerCacheStats") {
     const stats = getCacheStats();
     return jsonResult({ ok: true, ...stats });
+  }
+
+  if (action === "createForumTopic") {
+    if (!isActionEnabled("createForumTopic")) {
+      throw new Error("Telegram createForumTopic is disabled.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const name = readStringParam(params, "name", { required: true });
+    const iconColor = readNumberParam(params, "iconColor", { integer: true });
+    const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await createForumTopicTelegram(chatId ?? "", name, {
+      token,
+      accountId: accountId ?? undefined,
+      iconColor: iconColor ?? undefined,
+      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      topicId: result.topicId,
+      name: result.name,
+      chatId: result.chatId,
+    });
   }
 
   throw new Error(`Unsupported Telegram action: ${action}`);
