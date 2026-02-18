@@ -88,6 +88,10 @@ export type MatrixConfig = {
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /** Grace period (ms) for comparing event timestamps against startup time.
+   *  Accommodates clock skew between OpenClaw host and Matrix homeserver.
+   *  Default: 30000 (30 seconds). */
+  startupGraceMs?: number;
 };
 
 export type CoreConfig = {
