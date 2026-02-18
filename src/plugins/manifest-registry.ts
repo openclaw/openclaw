@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -61,6 +61,10 @@ const registryCache = new Map<string, { expiresAt: number; registry: PluginManif
 
 const DEFAULT_MANIFEST_CACHE_MS = 200;
 
+export function clearPluginManifestRegistryCache(): void {
+  registryCache.clear();
+}
+
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
   if (raw === "" || raw === "0") {
@@ -89,7 +93,14 @@ function buildCacheKey(params: {
   plugins: NormalizedPluginsConfig;
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
+  // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
+  const loadPaths = params.plugins.loadPaths
+    .map((p) => resolveUserPath(p))
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .toSorted();
+  return `${workspaceKey}::${JSON.stringify(loadPaths)}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
